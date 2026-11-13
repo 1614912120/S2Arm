@@ -3574,6 +3574,7 @@ static void sleep_until_ns(uint64_t dl) {   // absolute time on the monotonic cl
 // 4181 SaveIndicatorPanel entries and capped at 60 fps gives 0, which matches the ground truth), so uncapped is a semantically wrong way to run and must not be used as a criterion / cross-check / default. Unit tests set it directly with nvn_present_config
 // 降档原因（runtime/src/fps.c：0 无、1 热状态 ≥ 严重、回到一般后稳 30 秒恢复、2 低电量）；弱定义 = 没有帧率表模块的宿主（单测）不降档
 __attribute__((weak)) int s2a_fps_cap_reason(void) { return 0; }
+__attribute__((weak)) uint64_t nvn_be_args_patched(void) { return 0; }   // nvn_mtl.m: argument blocks patched (only uniform slots written again); other backends none
 // runtime/src/fps.c：帧率表键页槽的当前值（每 300 帧那行带出）；Metal 后端 nvn_mtl.m：本窗口最大渲染目标。别的后端 / 单测替身没有就报空 / 0
 __attribute__((weak)) void s2a_fps_slots_note(char *buf, size_t n) { (void)n; buf[0] = 0; }
 __attribute__((weak)) void nvn_be_rt_window(uint32_t *w, uint32_t *h, uint32_t *fmt) { *w = *h = *fmt = 0; }
@@ -3875,6 +3876,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         pl = l; pst = st; pf = fu; pudc = udc;
         static uint64_t pae, par; uint64_t ae_, ar_; nvn_be_args_stats(&ae_, &ar_);
         trow(f, "@args_enc", (double)(ae_ - pae)); trow(f, "@args_reuse", (double)(ar_ - par)); pae = ae_; par = ar_;
+        static uint64_t pap; uint64_t ap_ = nvn_be_args_patched(); trow(f, "@args_patch", (double)(ap_ - pap)); pap = ap_;
         static uint64_t puc, pus; uint64_t uc_, us_; nvn_be_use_stats(&uc_, &us_);
         static uint64_t pdo; uint64_t do_ = nvn_be_ds_omit(); trow(f, "@ds_omit", (double)(do_ - pdo)); pdo = do_;
         trow(f, "@use_call", (double)(uc_ - puc)); trow(f, "@use_skip", (double)(us_ - pus)); puc = uc_; pus = us_;
