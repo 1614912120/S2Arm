@@ -39,6 +39,7 @@ class FakeAdb:
         self.started = False
         self.receipt = None   # (contentRoot, artifactSha256)：App 导入成功时在 logcat 打的回执（正式包读不了 current.json）
         self.received, self.name, self.connects = {}, None, 0
+        self.digest = None    # 机上没装：真 adb 的 installed_hash 此时抛 RuntimeError（pm path 为空）
 
     def _serve(self, server):
         while True:
@@ -79,7 +80,11 @@ class FakeAdb:
         return False
 
     def installed_hash(self, package):
-        return '0' * 64 if self.wrong_hash else self.digest
+        if self.wrong_hash:
+            return '0' * 64
+        if self.digest is None:
+            raise RuntimeError('需要单体 APK；无法确定已安装 base APK 或发现 split APK')
+        return self.digest
 
     def shell(self, *args):
         self.calls.append(args)
@@ -221,6 +226,15 @@ class DeployTest(unittest.TestCase):
         self.assertIn(('install', '-r', out / 'game.apk'), adb.calls)
         self.assertTrue(any(x[-2:] == ('s2arm.graphics_mode', 'direct') for x in adb.calls))
         self.assertFalse(any('clear' in x or 'uninstall' in x for x in adb.calls))
+
+    def test_same_apk_already_installed_skips_install(self):
+        # 机上已是同一份 APK：不再 adb install（同版本重装在 vivo 上不弹确认也不返回、干等超时），照常直传、核哈希
+        adb = FakeAdb()
+        adb.digest = game_apk.sha256(self.apk)
+        out = self.deploy(adb, mode='direct')
+        self.assertFalse(any(x[0] == 'install' for x in adb.calls))
+        self.assertTrue(json.loads((out / 'deployment.json').read_text())['startupAccepted'])
+        self.assertTrue(adb.received)
 
     def test_direct_transfer_and_wake_before_install(self):
         # 直传：资源树逐字节进 App 的接收端；不碰共享存储（不 push、不出现 /sdcard）；LibraryActivity 只起一次且带 IMPORT_RECEIVE

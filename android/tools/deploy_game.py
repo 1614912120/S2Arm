@@ -213,7 +213,14 @@ def deploy_resources(apk, resources, adb, work, mode='auto', timeout=180, push_t
         raise ValueError('设备上的游戏仍在运行，不能安装。')
     adb.shell('input', 'keyevent', 'KEYCODE_WAKEUP')
     adb.shell('wm', 'dismiss-keyguard')
-    if 'Success' not in adb.call('install', '-r', apk):
+    # 机上已是同一份 APK（哈希相同）就不重装：同版本重装在部分机型上既不弹确认也不返回，干等到超时（11-14 vivo）
+    try:
+        same = adb.installed_hash(package) == artifact['apk']['sha256']
+    except RuntimeError:   # 没装 / 取不到：照常装
+        same = False
+    if same:
+        log('APK 与机上已装的相同，跳过安装')
+    elif 'Success' not in adb.call('install', '-r', apk):
         raise RuntimeError('设备未确认 APK 安装成功。')
     if adb.installed_hash(package) != artifact['apk']['sha256']:
         raise RuntimeError('安装后的 APK 哈希与冻结 APK 不符，停止部署')
