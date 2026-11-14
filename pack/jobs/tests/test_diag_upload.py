@@ -215,7 +215,7 @@ class DiagUploadTests(JobCase):
         finally:
             stall.set(); srv.shutdown(); srv.server_close()
         self.assertEqual(e.exception.code, "diag_upload_failed")
-        self.assertIn("上传诊断超过", str(e.exception)); self.assertIn("导出诊断包", str(e.exception))
+        self.assertIn("上传诊断超过", str(e.exception)); self.assertIn("网络太慢", str(e.exception)); self.assertIn("导出诊断包", str(e.exception))
         self.assertLess(took, 4.0)
         self.assertEqual(self.leftovers(), before)
         # 打包这步一直不完：同样按时限收尾，不去连上传服务
@@ -223,4 +223,5 @@ class DiagUploadTests(JobCase):
         with mock.patch.object(diag_upload, "TOTAL_S", 1.0), mock.patch.object(library, "diagnostics", lambda c: (time.sleep(3), real(c))), \
                 mock.patch.object(diag_upload, "send", side_effect=AssertionError("不该上传")), self.assertRaises(Failure) as e:
             t0 = time.monotonic(); diag_upload.upload(self.c)
-        self.assertIn("打包诊断超过", str(e.exception)); self.assertLess(time.monotonic() - t0, 2.5)
+        # 打包是本机整理日志：超时不能说成网络问题（11-14 玩家日志「打包诊断超过 90 秒（网络太慢…）」被读成网络问题）
+        self.assertIn("打包诊断超过", str(e.exception)); self.assertIn("和网络无关", str(e.exception)); self.assertNotIn("网络太慢", str(e.exception)); self.assertLess(time.monotonic() - t0, 2.5)

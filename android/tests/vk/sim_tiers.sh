@@ -19,7 +19,7 @@ tiers_json="$repo/android/tests/vk/profiles/s2a_sim_tiers.json"
 profiles_sha=b502e9b0d7508e06e6300af272548cf0ee32f380
 profiles_url=https://github.com/KhronosGroup/Vulkan-Profiles.git
 
-all=(no_bc no_d24 no_vertex_stores no_dual_src_blend no_calibrated_timestamps no_mirror_clamp no_depth_clamp no_vertex_divisor)
+all=(no_bc no_d24 no_vertex_stores no_dual_src_blend no_calibrated_timestamps no_mirror_clamp no_exact16 no_depth_clamp no_vertex_divisor)
 want=("$@"); [ ${#want[@]} -gt 0 ] || want=("${all[@]}")
 for t in "${want[@]}"; do
     case " ${all[*]} " in *" $t "*) ;; *) echo "未知档：${t}（可用：${all[*]}）" >&2; exit 64 ;; esac
@@ -140,6 +140,14 @@ check_tier() {
             [ "$rc" -eq 0 ] || red no_mirror_clamp "run.sh rc=${rc}，期望契约绿"
             has "$log" "C976m 镜像夹取：设备 mirror_clamp_to_edge=0" || red no_mirror_clamp "层没去掉 VK_KHR_sampler_mirror_clamp_to_edge"
             has "$log" "C976m 没有扩展：MIRROR_CLAMP_TO_EDGE 建采样器 rc=-1002（sampler_mirror_clamp_to_edge" || red no_mirror_clamp "缺扩展时 MIRROR_CLAMP_TO_EDGE 没回 UNSUPPORTED（#976：不静默换别的环绕）" ;;
+        no_exact16)
+            run_tier no_exact16 "$log" VK_KHRONOS_PROFILES_EXCLUDE_DEVICE_EXTENSIONS=VK_EXT_4444_formats || rc=$?
+            [ "$rc" -eq 0 ] || red no_exact16 "run.sh rc=${rc}，期望契约绿（16 位打包格式走退回格式 + 通道补偿）"
+            has "$log" "vk packed16 route: 4444=0" || red no_exact16 "层没去掉 VK_EXT_4444_formats"
+            for f in RGBA4 RGB565 A1BGR5; do
+                grep -qE "C975 ${f}：设备 路由 vk=[0-9]+ 通道补偿=1" "$log" || red no_exact16 "C975 ${f} 没在设备路由上走退回格式"
+                has "$log" "C975 ${f} 渲染目标：退回格式具名拒绝" || red no_exact16 "C975 ${f} 当渲染目标没具名报红"
+            done ;;
         no_depth_clamp)
             run_tier no_depth_clamp "$log" || rc=$?
             [ "$rc" -ne 0 ] || red no_depth_clamp "负对照竟然绿了：缺硬门槛 depthClamp 应建设备失败"

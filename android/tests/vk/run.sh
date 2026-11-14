@@ -33,7 +33,7 @@ fi
 # --zero-attr-core（#977）：同一套真 rp_draw + 真后端，跑零属性用例 t_replay_zero_attr.c。
 if [ "$mode" = "--indirect-core" ] || [ "$mode" = "--zero-attr-core" ]; then
     if [ "$mode" = "--indirect-core" ]; then
-        core_test=t_replay_indirect; core_shaders=(quad.vert quad.frag count_args.comp replay_drv0.vert replay_drv0.frag replay_drv0_args.comp)
+        core_test=t_replay_indirect; core_shaders=(replay_front_face.vert solid_green.frag quad.vert quad.frag count_args.comp replay_drv0.vert replay_drv0.frag replay_drv0_args.comp)
     else
         core_test=t_replay_zero_attr; core_shaders=(zattr.vert quad.frag)
     fi
@@ -138,6 +138,33 @@ inc=(-I "$repo/android/tests/vkhost"
      -I "$repo/android/native/nvn"
      -I "$repo/android/native/direct"
      -I "$repo/runtime/include")
+# #978 游戏屏障对通道外的计算派发生效（真 rp_dispatch / rp_buf / 后端，开同步校验）：
+#   --dispatch-barrier      传输写 → 游戏屏障 → 派发读：读回 i*6，同步校验 0 条；
+#   --dispatch-barrier-neg  检测器负控：不发游戏屏障，同步校验必须报写后读冒险（原始日志不回显、只报条数，留在 build/978-tests/）。
+if [ "$mode" = "--dispatch-barrier" ] || [ "$mode" = "--dispatch-barrier-neg" ]; then
+    "$glslc" --target-env=vulkan1.1 "$repo/android/tests/vk/shaders/bar_double.comp" -o "$out/shaders/bar_double.comp.spv"
+    src=("$repo/android/tests/vk/t_replay_dispatch_barrier.c")
+    for f in graphics/nvn/replay/rp_draw.c graphics/nvn/replay/rp_buf.c graphics/nvn/replay/rp_state.c graphics/nvn/replay/nvn_unimpl.c android/native/nvn/backend_vulkan.c android/native/direct/vk_device.c android/native/direct/gs_path.c android/native/capprobe/capprobe_host.c android/native/nvn/nvn_vk_format.c graphics/nvn/gfx/nvn/nvn_fmt_expand.c android/native/nvn/nvn_vk_bcdec.c android/native/nvn/nvn_vk_driver_cache.c android/native/direct/sha256.c; do src+=("$repo/$f"); done
+    cc -D_POSIX_C_SOURCE=200809L -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -DS2A_ANDROID_VK_BACKEND_NVN_VK=1 "${inc[@]}" "${src[@]}" -Wl,--gc-sections -lvulkan -lpthread -lm -o "$out/dispatch-barrier"
+    arm=barrier; if [ "$mode" = "--dispatch-barrier-neg" ]; then arm=none; fi
+    set +e
+    VK_DRIVER_FILES="$icd" VK_LAYER_PATH="$layer" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_LAYER_VALIDATE_SYNC=1 \
+        timeout 120 "$out/dispatch-barrier" "$out/shaders" "$arm" > "$out/db-log" 2>&1
+    rc=$?
+    set -e
+    mkdir -p "$repo/build/978-tests"; cp "$out/db-log" "$repo/build/978-tests/${mode#--}.log"
+    raw=$(grep -c 'SYNC-HAZARD-READ-AFTER-WRITE' "$out/db-log" || true)
+    other=$(grep -E 'Validation Error|VUID-|SYNC-HAZARD-' "$out/db-log" | grep -vc 'SYNC-HAZARD-READ-AFTER-WRITE' || true)
+    grep -E '^(device: |dispatch-barrier )' "$out/db-log" || true
+    echo "同步校验：写后读冒险 $raw 条，其余报错 $other 条；rc=$rc"
+    grep -q '^device: llvmpipe' "$out/db-log" || { echo '【红】不是 lavapipe 设备' >&2; exit 1; }
+    if [ "$arm" = barrier ]; then
+        if [ "$rc" -ne 0 ] || [ "$raw" -ne 0 ] || [ "$other" -ne 0 ]; then echo '【红】传输写 → 游戏屏障 → 派发读：读回或同步校验不对' >&2; exit 1; fi
+        echo '【绿】传输写 → 游戏屏障 → 派发读：读回 i*6，同步校验 0 条'; exit 0
+    fi
+    if [ "$raw" -lt 1 ] || [ "$other" -ne 0 ]; then echo '【红】负控未击中：不发游戏屏障时同步校验没报写后读冒险' >&2; exit 1; fi
+    echo 'PASS: 负控：不发游戏屏障时同步校验报写后读冒险'; exit 0
+fi
 if [ "$mode" = "--shown-only" ]; then
     [ -f "$repo/build/c883-ndk/vulkan/vulkan_core.h" ] || { echo 'NDK 29 Vulkan headers not staged' >&2; exit 2; }
     inc=(-I "$repo/build/c883-ndk" "${inc[@]}")
