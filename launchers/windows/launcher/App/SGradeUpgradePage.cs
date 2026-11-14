@@ -95,15 +95,17 @@ public sealed partial class EnvironmentWindow
         }
         void Group(string title, IEnumerable<JsonElement> rows, bool gold = false, bool gains = false)
         {
+            // 分组标题与游戏行要一眼分得开（11-14 体验走查：同号同色粗体分不清哪行是标题）：标题小一号、金 / 灰色、带款数，游戏行缩进（同 Mac SGradeUpgradeView）
+            var list = rows.ToList();
             if (title.Length > 0)
             {
-                var t = new TextBlock { Text = title, FontSize = 13.5, FontWeight = FontWeight.SemiBold };
+                var t = Muted($"{title} · {list.Count}", 12); t.FontWeight = FontWeight.SemiBold; t.Margin = new Thickness(0, 6, 0, 0);
                 if (gold) t.Foreground = new SolidColorBrush(SGold);
                 box.Children.Add(t);
             }
-            foreach (var g in rows)
+            foreach (var g in list)
             {
-                var line = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+                var line = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), Margin = new Thickness(title.Length > 0 ? 12 : 0, 0, 0, 0) };
                 line.Children.Add(new TextBlock { Text = S(g, "name"), FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis });
                 if (gains) { var gtx = Muted(Gains(g), 12); Grid.SetColumn(gtx, 1); line.Children.Add(gtx); }
                 box.Children.Add(line);

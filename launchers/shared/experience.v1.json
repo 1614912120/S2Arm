@@ -1200,6 +1200,7 @@
       {"id": "export.boost.widescreen", "zh-Hans": "满屏补丁 {0} 份", "en": "{0} full screen patch(es)"},
       {"id": "export.boost.gfx", "zh-Hans": "画面补丁 {0} 份", "en": "{0} graphics patches"},
       {"id": "export.boost.hint", "zh-Hans": "满屏、帧率补丁已默认打开；金手指默认关，想用哪条再打开——Mac 在「启动设置」，iPhone 在游戏里的「设置 › 金手指」。", "en": "Full screen and frame-rate patches are on by default. Cheats are off; turn on the ones you want \u2014 on Mac in Launch Settings, on iPhone in the game's Settings \u203a Cheats."},
+      {"id": "export.boost.hint.win", "zh-Hans": "满屏、帧率补丁已默认打开；金手指默认关，想用哪条再打开——Windows 在游戏库里这款游戏的菜单「金手指…」，iPhone 在游戏里的「设置 › 金手指」。", "en": "Full screen and frame-rate patches are on by default. Cheats are off; turn on the ones you want \u2014 on Windows from this game's menu in your library (Cheats\u2026), on iPhone in the game's Settings \u203a Cheats."},
       {"id": "export.done.macSize", "zh-Hans": "运行版本", "en": "Game files"},
       {"id": "export.done.install", "zh-Hans": "一键装到 iPhone", "en": "Install on iPhone"},
       {"id": "export.done.install_ipad", "zh-Hans": "一键装到 iPad", "en": "Install on iPad"},
