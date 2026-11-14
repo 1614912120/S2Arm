@@ -164,6 +164,33 @@ class JobsTests(unittest.TestCase):
                 core.resolve_path(self.root / "library")
         self.assertIs(caught.exception, error)
 
+    @unittest.skipUnless(os.name == "nt", "盘符 / UNC 只有 Windows 有（Windows 实机上跑）")
+    def test_library_keeps_mapped_drive_letter(self):
+        # 映射网络驱动器（Z: → \\NAS\share）：Path.resolve 换成内网地址。库根保留玩家选的盘符写法（存、显示、拼路径），
+        #   判越界照样按解析结果比；路上有 junction 时不保留（没法确认它指哪）
+        import core
+        real = Path(os.path.realpath(self.root)) / "nas-library"
+        (real / "games").mkdir(parents=True)
+        unc = Path(r"\\nas\share\nas-library")
+        resolve = Path.resolve
+
+        def as_unc(path, *args, **kwargs):
+            path = Path(os.path.abspath(path))
+            if path == real or real in path.parents:
+                return unc / path.relative_to(real)
+            return resolve(path, *args, **kwargs)
+
+        with patch.object(Path, "resolve", as_unc):
+            self.assertEqual(core.resolve_library_path(real), real)
+            self.assertEqual(core.resolve_path(real), unc)
+            self.assertEqual(core.contained(real, real / "games"), unc / "games")
+            context = Context(dict(self.request, taskId=str(uuid.uuid4()), privateRoot=str(self.root / "private-nas"), library=str(real)))
+            self.assertEqual(context.library, real)
+            target = real / "elsewhere"
+            target.mkdir()
+            subprocess.run(["cmd", "/c", "mklink", "/J", str(real / "junction"), str(target)], check=True, capture_output=True)
+            self.assertEqual(core.resolve_library_path(real / "junction"), unc / "junction")
+
     def catalogue(self, games):
         atomic(self.c.library / "catalog.json", dict(schema=1, games=games))
 
@@ -1537,6 +1564,20 @@ class JobsTests(unittest.TestCase):
             self.c.r["launchInputConfig"] = value
             self.assertNotIn("S2A_INPUT_CONFIG", build.runtime_env(self.c, self.game(), self.root))
 
+    def test_mac_runtime_env_passes_per_player_mappings(self):
+        # 玩家 2–4 的键位按玩家保存（input-pN.json，键位设置里选玩家）：起局时照玩家 1 同一套校验后交给宿主
+        #   （S2A_INPUT_CONFIG_P2..P4，front_mac.m 槽 i = 玩家 i+1 各照各的映射采样）；没存的那位不给，宿主照玩家 1 的键位
+        def mapping(code):
+            return dict(schema=1, keyboard={"A": {"code": code}}, mouse={"Y": 0}, gamepad={"A": "east"},
+                        axes={}, deadzone=.15, mouseOptions=dict(mode="off", sensitivityX=1, sensitivityY=1))
+        game = self.game()
+        atomic(layout.path(self.c, game["id"], "input-p2.json"), mapping(36))
+        atomic(layout.path(self.c, game["id"], "input-p4.json"), {"schema": 99})   # 存坏的映射：这位照玩家 1 的键位
+        env = build.runtime_env(self.c, game, self.root / "runtime")
+        self.assertEqual(json.loads(Path(env["S2A_INPUT_CONFIG_P2"]).read_text()), mapping(36))
+        self.assertNotIn("S2A_INPUT_CONFIG_P3", env)
+        self.assertNotIn("S2A_INPUT_CONFIG_P4", env)
+
     def test_launch_rejects_another_games_runtime_before_starting_process(self):
         game = self.game(); self.catalogue([game]); self.c.r["gameId"] = game["id"]
         with patch.object(build, "validate_runtime", return_value={"gameId": "0100000000000001"}), patch.object(self.c, "run") as run:
@@ -2799,6 +2840,32 @@ class JobsTests(unittest.TestCase):
             library.save_input(self.c)
         config["keyboard"] = {}
         config["axes"] = {"LX": {"source":"leftX"}, "LY": {"source":"leftX", "invert":True}}
+        with self.assertRaises(Failure):
+            library.save_input(self.c)
+
+    def test_save_input_keeps_player_one_file_and_writes_per_player_files(self):
+        # 键位按玩家保存（键位设置里选玩家）：玩家 1 / 没给 player 照旧写这款的 input.json；玩家 2–4 写 input-pN.json（起局 build.py 读它交给宿主）；
+        #   序号超出 1–4、没带 gameId 存玩家 2 起的键位都拒收
+        def mapping(code):
+            return dict(schema=1, keyboard={"A": {"code": code}}, mouse={}, gamepad={}, axes={}, deadzone=.15,
+                        mouseOptions=dict(mode="camera", sensitivityX=1, sensitivityY=1, invertX=False, invertY=False, recenter=True))
+        game = self.game(); self.catalogue([game]); self.c.r["gameId"] = game["id"]
+        self.c.r["config"] = mapping(14)
+        library.save_input(self.c)
+        self.assertTrue(layout.path(self.c, game["id"], "input.json").exists())
+        self.c.r["config"] = mapping(36)
+        for player in (2, 3, 4):
+            self.c.r["player"] = player
+            library.save_input(self.c)
+            self.assertTrue(layout.path(self.c, game["id"], f"input-p{player}.json").exists())
+        self.assertEqual(json.loads(layout.path(self.c, game["id"], "input.json").read_text()), mapping(14))
+        self.assertEqual(json.loads(layout.path(self.c, game["id"], "input-p2.json").read_text()), mapping(36))
+        for bad in (5, 0, "2"):
+            self.c.r["player"] = bad
+            with self.assertRaises(Failure):
+                library.save_input(self.c)
+        self.c.r.pop("gameId")
+        self.c.r["player"] = 2   # 默认键位只有玩家 1 的一份：没带 gameId 只能存玩家 1
         with self.assertRaises(Failure):
             library.save_input(self.c)
 
