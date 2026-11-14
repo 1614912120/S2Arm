@@ -32,6 +32,15 @@ LICENSE_MARKERS = [
                                 'assets/licenses/liblinkernsbypass-LICENSE.txt']),           # BSD-2-Clause
 ]
 
+# 许可文本不再在仓库里留副本：打包时从 third_party 原件拷入。这里逐字节核对；
+# 拷贝接线被拆掉时必须把 APK 校验判红（负对照）。
+LICENSE_EXACT = [
+    ('assets/licenses/libadrenotools-LICENSE.txt',
+     HERE / 'third_party/libadrenotools/LICENSE'),
+    ('assets/licenses/liblinkernsbypass-LICENSE.txt',
+     HERE / 'third_party/libadrenotools/lib/linkernsbypass/LICENSE'),
+]
+
 
 def verify(path):
     with zipfile.ZipFile(path) as apk, open(path, 'rb') as raw:
@@ -61,6 +70,11 @@ def verify(path):
         missing = [n for n in needs if n not in files]
         if missing:
             raise ValueError('APK lacks license files: ' + ', '.join(missing))
+        for entry, original in LICENSE_EXACT:
+            if entry not in files:
+                raise ValueError('APK lacks third-party license: ' + entry)
+            if apk.read(entry) != original.read_bytes():
+                raise ValueError(entry + ': does not match third_party original ' + str(original))
         # The host library carries the JNI ABI of the Java it was built with (NativeBridge.jniAbi()): it must be
         # this tree's, or every launch of this APK would be refused after the load.
         abi = jni_abi().encode()
