@@ -9476,6 +9476,21 @@ static uint64_t pool_seen_gpu(void) {
 typedef struct { uint32_t n, cap; uint32_t e[]; } pin_list;
 static pthread_mutex_t g_pin_mu = PTHREAD_MUTEX_INITIALIZER;
 static nvn_hmap g_pin = {.klen = 8}, g_pin_ret = {.klen = 8};
+// Unpinned but maybe still read: allocation → g_fence + 1 when the last entry naming it went (pin_del) and nobody had asked to retire it yet. A draw encoded before the entry
+//   changed may still read it, so it must stay resident until that submission completes. The retire request can come late: the completion handler drains the deferred queue on
+//   its own thread (defer_drain), takes the object out of the queue, and only then calls res_remove; if the submit thread replaced the entry in between, res_remove saw no pin
+//   and took the texture out of the residency set while the open submission still named it (11-14: t_nvn_pool_tex ⑩ red about 1 in 30 runs under load). pool_pin_retire
+//   defers such a request behind that fence. Pruned of completed fences as it grows (unpin_prune)
+static nvn_hmap g_unpin = {.klen = 8}; static uint32_t g_unpin_next = 1024;
+static uint64_t pin_done(void) { return __atomic_load_n(&g_done, __ATOMIC_ACQUIRE); }   // g_done without g_mu (g_res_mu / g_pin_mu are held here): a stale value only keeps an entry longer
+static void unpin_prune(void) {   // g_pin_mu held
+    uint64_t done = pin_done();
+    for (uint32_t i = 0; i < g_unpin.cap;) {
+        if (g_unpin.vals[i] && (uint64_t)(uintptr_t)g_unpin.vals[i] <= done) { void *k; memcpy(&k, g_unpin.keys + (size_t)i * 8, 8); nvn_hm_del(&g_unpin, &k); continue; }   // the backward shift may bring another entry to i
+        i++;
+    }
+    g_unpin_next = g_unpin.n * 2 + 1024;
+}
 static void **g_pin_new; static uint32_t g_pin_nnew, g_pin_cnew;   // retired while pinned since the last pool_gpu
 static int pool_pin_keys(void *o, void *k[4]) {   // the allocations a table entry naming o keeps (always the same for the same object: a view's parent and buffer never change)
     int n = 0; k[n++] = o;
@@ -9492,6 +9507,7 @@ static void pin_add(void *k, uint32_t code) {
     pin_list *l = nvn_hm_get(&g_pin, &k);
     if (!l || l->n == l->cap) { uint32_t c = l ? l->cap * 2 : 4; pin_list *g = realloc(l, sizeof *g + c * sizeof g->e[0]); if (!g) MDIE("pool pins: out of memory"); if (!l) g->n = 0; g->cap = c; l = g; nvn_hm_put(&g_pin, &k, l); }
     l->e[l->n++] = code;
+    if (g_unpin.n) nvn_hm_del(&g_unpin, &k);   // named again: the pins cover it
     pthread_mutex_unlock(&g_pin_mu);
 }
 static int pin_del(void *k, uint32_t code) {   // 1: no entry names k any more and res_remove was asked to retire it while pinned (the caller retires it now)
@@ -9499,21 +9515,24 @@ static int pin_del(void *k, uint32_t code) {   // 1: no entry names k any more a
     pthread_mutex_lock(&g_pin_mu);
     pin_list *l = nvn_hm_get(&g_pin, &k);
     if (l) { for (uint32_t j = 0; j < l->n; j++) if (l->e[j] == code) { l->e[j] = l->e[--l->n]; break; }
-        if (!l->n) { nvn_hm_del(&g_pin, &k); free(l); ret = nvn_hm_del(&g_pin_ret, &k) != NULL; } }
+        if (!l->n) { nvn_hm_del(&g_pin, &k); free(l); ret = nvn_hm_del(&g_pin_ret, &k) != NULL;
+            if (!ret) { nvn_hm_put(&g_unpin, &k, (void *)(uintptr_t)(g_fence + 1)); if (g_unpin.n >= g_unpin_next) unpin_prune(); } } }   // submit thread: g_fence + 1 = the open submission
     pthread_mutex_unlock(&g_pin_mu);
     return ret;
 }
 static int pool_pin_retire(void *r) {   // res_remove (g_res_mu held): 1 = pinned, stays resident
     if (!atomic_load_explicit(&g_ptab_any, memory_order_relaxed)) return 0;
     pthread_mutex_lock(&g_pin_mu);
-    int pinned = g_pin.n && nvn_hm_get(&g_pin, &r) != NULL;
+    int pinned = g_pin.n && nvn_hm_get(&g_pin, &r) != NULL, late = 0;
+    if (!pinned && g_unpin.n) { void *v = nvn_hm_del(&g_unpin, &r); late = v && (uint64_t)(uintptr_t)v > pin_done(); }   // unpinned this submission: retire behind it (g_unpin)
     if (pinned && !nvn_hm_get(&g_pin_ret, &r)) {
         nvn_hm_put(&g_pin_ret, &r, (void *)1);
         if (g_pin_nnew == g_pin_cnew) { uint32_t c = g_pin_cnew ? g_pin_cnew * 2 : 64; void **g = realloc(g_pin_new, c * sizeof *g); if (!g) MDIE("pool pins: out of memory"); g_pin_new = g; g_pin_cnew = c; }
         g_pin_new[g_pin_nnew++] = r;
     }
     pthread_mutex_unlock(&g_pin_mu);
-    return pinned;
+    if (late) defer_obj_release((__bridge id)r);   // g_res_mu held: defer_obj_release only takes g_deferred_mu, which nothing holds while taking another lock
+    return pinned || late;
 }
 // Entry i of table ti names o (NULL: the dummy)
 static void pool_ent_put(int ti, uint32_t i, void *o, uint64_t rid) {
@@ -9714,7 +9733,7 @@ static void pool_session_reset(void) {
         free(t->obj); res_remove(t->buf); *t = (pool_tab){0}; }
     pthread_mutex_lock(&g_pin_mu);
     for (uint32_t i = 0; i < g_pin.cap; i++) if (g_pin.vals[i]) free(g_pin.vals[i]);
-    nvn_hm_clear(&g_pin, NULL); nvn_hm_clear(&g_pin_ret, NULL); g_pin_nnew = 0;
+    nvn_hm_clear(&g_pin, NULL); nvn_hm_clear(&g_pin_ret, NULL); nvn_hm_clear(&g_unpin, NULL); g_pin_nnew = 0;
     pthread_mutex_unlock(&g_pin_mu);
     atomic_store(&g_ptab_any, 0);
     for (int s = 0; s < 2; s++) pool_dset_clear(&g_pdirty[s]);
