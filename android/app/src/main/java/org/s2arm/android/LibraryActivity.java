@@ -21,11 +21,16 @@ public final class LibraryActivity extends Activity {
     private final java.util.Map<String, String> names = new java.util.HashMap<>();
     private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
     private static final int PICK_PACKAGE = 1;
+    private static final int SAVE_DIAGNOSTICS = 2;
+    // Bundle name waiting for the system file picker (kept across activity recreation).
+    private String pendingSave;
+    private static final String STATE_PENDING_SAVE = "pendingDiagnosticSave";
     // A caller opts in to consuming one direct child of files/import/.
     public static final String EXTRA_IMPORT_STAGING = "org.s2arm.android.IMPORT_STAGING";
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        if (state != null) pendingSave = state.getString(STATE_PENDING_SAVE);
         // 与 iOS 同一个样子（shell/Sources/ShellUI/CoverFlowView.swift）：横屏封面流，点正中的卡片开始玩。
         //   导入 / 帧率显示 / 诊断包不在主页面：右上「游戏设置」「设置」两个圆钮打开右侧面板（iOS 的设置页还没整套搬过来，先放这三项）。
         float density = getResources().getDisplayMetrics().density;
@@ -56,8 +61,12 @@ public final class LibraryActivity extends Activity {
         more.addView(fpsOverlay);
         // #528 item 15: works without any game; the bundle goes to whatever app the player picks.
         Button exportButton = new Button(this); exportButton.setText(R.string.export_diagnostics);
-        exportButton.setOnClickListener(v -> exportDiagnostics(exportButton));
+        exportButton.setOnClickListener(v -> exportDiagnostics(exportButton, false));
         more.addView(exportButton);
+        // Some share sheets (Xiaomi's, for one) have no "save as file" target: the system file picker always does.
+        Button saveButton = new Button(this); saveButton.setText(R.string.save_diagnostics);
+        saveButton.setOnClickListener(v -> exportDiagnostics(saveButton, true));
+        more.addView(saveButton);
         root.addView(more, new android.widget.FrameLayout.LayoutParams(Math.round(320 * density), -1, android.view.Gravity.END));
         // 状态行只给玩家看得懂的：导入进度、失败原因；库清单（Games: 文件数 / 哈希…）只进日志，不上屏
         status = new TextView(this); status.setVisibility(android.view.View.GONE);
@@ -158,7 +167,7 @@ public final class LibraryActivity extends Activity {
         ui.postDelayed(() -> waitThenLaunch(titleId, tries + 1), 500);
     }
 
-    private void exportDiagnostics(Button button) {
+    private void exportDiagnostics(Button button, boolean saveToFile) {
         button.setEnabled(false);
         show(getString(R.string.export_diagnostics_running));
         android.content.Context app = getApplicationContext();
@@ -177,6 +186,13 @@ public final class LibraryActivity extends Activity {
                 button.setEnabled(true);
                 if (done == null) {
                     show(getString(R.string.export_diagnostics_failed, failure));
+                    return;
+                }
+                if (saveToFile) {
+                    pendingSave = done.getFileName().toString();
+                    Intent create = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                        .setType("application/zip").putExtra(Intent.EXTRA_TITLE, pendingSave);
+                    startActivityForResult(create, SAVE_DIAGNOSTICS);
                     return;
                 }
                 android.net.Uri uri = DiagnosticShareProvider.uri(this, done);
@@ -198,10 +214,39 @@ public final class LibraryActivity extends Activity {
             library.scanImports(staging);
         }
     }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        if (pendingSave != null) state.putString(STATE_PENDING_SAVE, pendingSave);
+    }
+
+    /** Copies the exported bundle into the document the player created in the system file picker. */
+    private void saveDiagnostics(android.net.Uri target, String name) {
+        android.content.Context app = getApplicationContext();
+        new Thread(() -> {
+            String error = null;
+            try (java.io.OutputStream out = app.getContentResolver().openOutputStream(target, "w")) {
+                if (out == null) throw new java.io.IOException("destination cannot be written");
+                DiagnosticBundleWriter.copyBundle(DiagnosticShareProvider.directory(app), name, out);
+            } catch (java.io.IOException | RuntimeException e) {
+                error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+            }
+            String failure = error;
+            runOnUiThread(() -> {
+                if (isDestroyed()) return;
+                show(failure == null ? getString(R.string.save_diagnostics_done, name) : getString(R.string.save_diagnostics_failed, failure));
+            });
+        }, "s2a-diag-save").start();
+    }
+
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request == PICK_PACKAGE && result == RESULT_OK && data != null && data.getData() != null) library.importTree(data.getData());
+        if (request == SAVE_DIAGNOSTICS) {
+            String name = pendingSave;
+            pendingSave = null;
+            if (result == RESULT_OK && data != null && data.getData() != null && name != null) saveDiagnostics(data.getData(), name);
+        }
     }
     @Override protected void onDestroy() { if (library != null) library.close(); super.onDestroy(); }
 }

@@ -14,6 +14,9 @@
     <string name="export_diagnostics_running">Exporting diagnostics…</string>
     <string name="export_diagnostics_done">Diagnostics ready: %1$s</string>
     <string name="export_diagnostics_failed">Diagnostics export failed: %1$s</string>
+    <string name="save_diagnostics">Save diagnostics to file…</string>
+    <string name="save_diagnostics_done">Diagnostics saved: %1$s</string>
+    <string name="save_diagnostics_failed">Saving diagnostics failed: %1$s</string>
     <string name="console_mode_handheld">Console mode: handheld (tap for docked)</string>
     <string name="console_mode_docked">Console mode: docked (tap for handheld)</string>
     <string name="console_mode_switched">Console mode switched.</string>

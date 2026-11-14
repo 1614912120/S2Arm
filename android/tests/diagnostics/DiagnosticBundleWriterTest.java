@@ -190,6 +190,31 @@ public final class DiagnosticBundleWriterTest {
         for (String bad : new String[] {"S2Arm-diag-0101-0000.zip", "../S2Arm-diag-0101-0001.zip", "S2Arm-diag-1112-0123.zip/..",
                                         "keep-me.txt", ".partial-1.zip", "S2Arm-diag-9999-9999.zip", "S2Arm-../x-0101-0000.zip", null})
             expect("不可分享：" + bad, null, DiagnosticBundleWriter.shareable(out, bad));
+        // 2c. Saving to a file the player picked: the exact bytes of our bundle, nothing else, never through a link.
+        java.io.ByteArrayOutputStream copy = new java.io.ByteArrayOutputStream();
+        long copied = DiagnosticBundleWriter.copyBundle(out, "S2Arm-diag-1112-0123-2.zip", copy);
+        byte[] original = Files.readAllBytes(out.resolve("S2Arm-diag-1112-0123-2.zip"));
+        expect("保存：字节数", (long) original.length, copied);
+        expect("保存：逐字节相同", true, java.util.Arrays.equals(original, copy.toByteArray()));
+        for (String bad : new String[] {"S2Arm-diag-0101-0000.zip", "../S2Arm-diag-0101-0001.zip", "keep-me.txt", "S2Arm-diag-9999-9999.zip", null}) {
+            java.io.ByteArrayOutputStream none = new java.io.ByteArrayOutputStream();
+            try {
+                DiagnosticBundleWriter.copyBundle(out, bad, none);
+                expect("保存拒收：" + bad, "IOException", "copied");
+            } catch (IOException e) {
+                expect("保存拒收：" + bad, "not a diagnostic bundle", e.getMessage());
+            }
+            expect("保存拒收时一个字节都不写：" + bad, 0, none.size());
+        }
+        try {
+            DiagnosticBundleWriter.copyBundle(out, "S2Arm-diag-1112-0123-2.zip", new java.io.OutputStream() {
+                @Override public void write(int b) throws IOException { throw new IOException("disk full"); }
+                @Override public void write(byte[] b, int off, int len) throws IOException { throw new IOException("disk full"); }
+            });
+            expect("目标写不进要报错", "IOException", "returned");
+        } catch (IOException e) {
+            expect("目标写不进的报错原样上抛", "disk full", e.getMessage());
+        }
         Files.delete(out.resolve("S2Arm-diag-0101-0000.zip"));
 
         // ---- 3. No logs at all (nothing played yet): a manifest-only bundle.
