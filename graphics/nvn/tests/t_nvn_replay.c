@@ -323,6 +323,24 @@ static void t_fence_sync(void) {
     uint64_t got = 0; CHECK(sync_published(&s, &got) == 1 && got == f0 + 64 && nvn_be_last_fence() == f0 + 64);
 }
 
+// CALL 目标核对替身（真身在 hle_nvn.c，本单测不链前端）：缺省都算活录制；用例把 g_call_reused 设成某个句柄，它就回 -1（块已被复用）
+static uint64_t g_call_reused;
+int nvn_cmd_call_resolve(uint64_t h, uint64_t *to) { *to = h; return g_call_reused && h == g_call_reused ? -1 : 0; }
+// #768338 安全阀：CALL 的目标块已被别的录制复用 → 跳过这次调用（子列表的设置不生效）、记一行红；CALL 之后的记录照常执行。
+//   反证：去掉 rp_exec.c 的 ck < 0 跳过，子列表照执行，alpha_ref 被写成 0.25
+static void t_call_reused(void) {
+    stream a = {0}, sub = {0};
+    p_alpha_ref *ar = put(&sub, OP_ALPHA_REF, sizeof *ar); ar->ref = 0.25f; end(&sub);
+    uint8_t *r = put(&a, OP_CALL, 8); uint64_t h = (uint64_t)(uintptr_t)sub.b; memcpy(r, &h, 8);
+    p_set_patch_size *ps = put(&a, OP_SET_PATCH_SIZE, sizeof *ps); ps->size = 6;
+    end(&a);
+    rp_S.alpha_ref = 0; int red0 = g_red_lines; g_call_reused = h;
+    submit1(&a); fake_complete(NVN_GPU_DONE_OK);
+    g_call_reused = 0;
+    if (rp_S.alpha_ref != 0 || rp_S.patch_size != 6 || g_red_lines - red0 != 1) printf("CALL 目标已复用：alpha_ref %.2f（期望 0）、patch_size %u（期望 6）、红行 +%d（期望 1）\n", rp_S.alpha_ref, (unsigned)rp_S.patch_size, g_red_lines - red0);
+    CHECK(rp_S.alpha_ref == 0 && rp_S.patch_size == 6 && g_red_lines - red0 == 1);
+}
+
 static void t_jump_call(void) {
     stream a = {0}, b = {0}, sub = {0};
     p_alpha_ref *ar = put(&sub, OP_ALPHA_REF, sizeof *ar); ar->ref = 0.5f; end(&sub);
@@ -3053,7 +3071,7 @@ int main(int argc, char **argv) {
     t_one_commit_per_submit();
     t_event_after_done();
     t_fence_sync();
-    t_jump_call();
+    t_jump_call(); t_call_reused();
     t_bad_record();
     t_dirty_bits();
     t_deferred_bind();
