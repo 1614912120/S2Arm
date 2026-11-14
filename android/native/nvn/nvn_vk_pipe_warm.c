@@ -537,6 +537,11 @@ static int pw_ensure_dir_locked(void) {
 static int pw_write_atomic(const char *path, const uint8_t *buf, size_t bytes) {
     char tmp[600];
     snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    {   // 目录由自己建：缓存目录原先是「现场编」第一次存结果时顺手建的，程序全从出包预编库取时（现场编 0 次）它不存在，清单就一直写不进去
+        char d[600]; snprintf(d, sizeof d, "%s", path);
+        char *sl = strrchr(d, '/');
+        if (sl && sl != d) { *sl = 0; if (mkdir(d, 0700) != 0 && errno == ENOENT) { char *up = strrchr(d, '/'); if (up && up != d) { *up = 0; (void)mkdir(d, 0700); *up = '/'; } (void)mkdir(d, 0700); } }
+    }
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
     if (fd < 0) return -1;
     size_t off = 0;

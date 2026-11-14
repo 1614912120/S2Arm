@@ -412,6 +412,10 @@ static void put_u64(uint8_t **p, uint64_t v) {
 static int write_atomic(const char *dir, const char *path, const uint8_t *buf, size_t len) {
     char tmp[NVK_PROG_WARM_MAX_PATH + 32];
     if (snprintf(tmp, sizeof tmp, "%s.tmp.%ld", path, (long)getpid()) >= (int)sizeof tmp) return -1;
+    {   // 目录由自己建（同 nvn_vk_pipe_warm.c pw_write_atomic：程序全从出包预编库取时没有现场编替它建目录）
+        char d[NVK_PROG_WARM_MAX_PATH + 32]; snprintf(d, sizeof d, "%s", dir);
+        if (mkdir(d, 0700) != 0 && errno == ENOENT) { char *up = strrchr(d, '/'); if (up && up != d) { *up = 0; (void)mkdir(d, 0700); *up = '/'; } (void)mkdir(d, 0700); }
+    }
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (fd < 0) return -1;
     size_t off = 0;
