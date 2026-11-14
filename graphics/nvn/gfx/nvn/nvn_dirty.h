@@ -3,6 +3,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+extern int (*nvn_dirty_far_fn)(uint64_t a, uint64_t n);          // 远端别名区判定（宿主填）：登记时远端池不登记、不加写保护
 void nvn_dirty_add_range(const void *mem, size_t size);           // Register a memory pool as a tracked range (the first call registers the page-fault hook and the host pre-write hook)
 void nvn_dirty_stat(int *live, int *peak, int *cap);                // number of registered memory pools, peak, tracking table capacity (for the memory readout line)
 void nvn_dirty_remove_range(const void *mem);                     // Pool destruction: restore protected pages to writable and mark invalid

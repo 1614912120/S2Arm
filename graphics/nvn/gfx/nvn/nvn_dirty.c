@@ -338,7 +338,19 @@ int nvn_dirty_replace_range(const void *mem, size_t size) {
 }
 uint64_t nvn_dirty_mapping_generation(void) { return atomic_load(&g_mapping_gen); }
 
+// 远端别名区判定（宿主填 runtime/src/far.c s2a_far_has，graphics/nvn/host_adapt.m；没填 = 没有远端，照常登记）。函数指针而不是弱引用：只链本文件的单测照常链得上
+int (*nvn_dirty_far_fn)(uint64_t a, uint64_t n);
+static _Atomic int g_far_skip_logged;
 void nvn_dirty_add_range(const void *mem, size_t size) {
+    // 远端别名区里的内存池不登记（11-14 D-GCMY：窗口 2048 MB、内存池全落在远端）。远端的游戏地址在宿主上没有映射（iPhone）或是护栏页（Mac），
+    //   内容在影子里：对游戏地址加只读保护，iPhone 上回 ENOMEM，一次失败就把全局「跟踪不可靠」置位，此后所有打包纹理一律当脏重传；
+    //   Mac 上反而会成功，把护栏页改成可读，游戏读到护栏里的 0 而不是影子。远端的写还走缺页代执行、改写器直达影子、SDK 内存函数快路径，
+    //   缺页跟踪本来也看不全。所以不登记：这些池的纹理查不到跟踪条目，按「可能写过」在用到时重传（只影响远端池，不连累别的）
+    int (*far)(uint64_t, uint64_t) = nvn_dirty_far_fn;
+    if (far && size && (far((uint64_t)(uintptr_t)mem, 1) || far((uint64_t)(uintptr_t)mem + size - 1, 1))) {
+        if (!atomic_exchange(&g_far_skip_logged, 1)) LOG("【黄】 dirty-page tracking: memory pool %p +%#zx is in the far alias region (no host mapping): not write-protected; its packaged textures are re-uploaded at use", mem, size);
+        return;
+    }
     static int inited;
     if (!inited) { inited = 1; g_pg = (uintptr_t)getpagesize(); g_shift = __builtin_ctzl(g_pg); dirty_tick_rate(&g_tb_num, &g_tb_den); }
     if (!atomic_exchange(&g_hooks_on, 1)) { dm_fault_hook_register(on_fault); dm_guest_write_prep_register(prep_write); }   // before any page of this session is protected

@@ -123,6 +123,10 @@ void dm_fault_hook_register(int (*fn)(void *addr, int is_write, void *uc)) { s2a
 static void (*g_wprep)(void *addr, size_t len);
 static void wprep_tramp(uint64_t addr, uint64_t len) { g_wprep((void *)(uintptr_t)addr, (size_t)len); }
 void dm_guest_write_prep_register(void (*fn)(void *addr, size_t len)) { g_wprep = fn; s2a_guest_write_prep_register(wprep_tramp); }
+// 远端别名区里的内存池不让 nvn_dirty 写保护（11-14 D-GCMY，见 nvn_dirty.c nvn_dirty_add_range）：判定用原生层的远端表
+int s2a_far_has(uint64_t a, uint64_t n);   // runtime/src/far.c（没开远端时恒 0）
+extern int (*nvn_dirty_far_fn)(uint64_t a, uint64_t n);
+__attribute__((constructor)) static void dirty_far_init(void) { nvn_dirty_far_fn = s2a_far_has; }
 // 直连层自己要写游戏内存前（贴图回写）：走 S2Arm 宿主写游戏内存的同一个入口，登记的写前回调从那里收到
 void dm_guest_write_prepare(void *addr, size_t len) { s2a_track_write_quiet((uint64_t)(uintptr_t)addr, (uint64_t)len); }
 // 崩溃等待点 / 资源行：直连层在 Metal 初始化时登记
