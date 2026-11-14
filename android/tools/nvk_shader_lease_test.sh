@@ -31,7 +31,7 @@ base += ['-I' + str(p) for p in inc]
 base += ['-idirafter', str(sysinc)]        # libc 头优先取宿主，NDK 只补 vulkan/*
 src = [repo/'android/tests/nvk_shader_prog_lease_test.c', native/'gfx_plat/nvk_shader.c', *libs]
 exe = out / 't'
-host_link.run(base + [str(p) for p in src] + ['-Wl,--gc-sections', '-lm', '-o', str(exe)],
+host_link.run(base + [str(p) for p in src] + ['-Wl,-dead_strip' if sys.platform == 'darwin' else '-Wl,--gc-sections', '-lm', '-o', str(exe)],   # 苹果 ld 不认 --gc-sections
               check=True, timeout=300, cwd=str(repo))
 print('built', exe)
 PYEOF
