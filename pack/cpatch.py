@@ -321,19 +321,24 @@ def _fit(As, vs, tol, only=None):
 
 
 def _movpair(w0, w1):
-    """movz Wd, #lo + movk Wd, #hi, lsl 16（相邻两条拼一个单精度）→ (Wd, 浮点值)；不是 → None"""
-    if w0 is None or w1 is None or w0 & 0xFFE00000 != 0x52800000 or w1 & 0xFFE00000 != 0x72A00000 or (w0 ^ w1) & 31: return None
-    return w0 & 31, struct.unpack('<f', struct.pack('<I', (((w1 >> 5) & 0xFFFF) << 16) | ((w0 >> 5) & 0xFFFF)))[0]
+    """movz Rd, #a, lsl 16·h + movk Rd, #b, lsl 16·(1−h)（h = 0 / 1：先低后高或先高后低；Rd 为 W 或 X，两条同宽）拼一个单精度 → (Rd 号, 浮点值)；不是 → None。
+    X 版 movz 清零高 32 位、movk 只填低 32 位，结果与 W 版同值（读值槽的 ldr Wd 同样零扩展到 Xd，替换后语义不变）。
+    11-14 补丁库体检：12 份宽屏补丁先写高半、5 份用 X 寄存器，原先只认 W 先低后高"""
+    if w0 is None or w1 is None or w0 & 0x7F800000 != 0x52800000 or w1 & 0x7F800000 != 0x72800000 or (w0 ^ w1) & 0x8000001F: return None
+    h0, h1 = (w0 >> 21) & 3, (w1 >> 21) & 3
+    if {h0, h1} != {0, 1}: return None
+    half = {h0: (w0 >> 5) & 0xFFFF, h1: (w1 >> 5) & 0xFFFF}
+    return w0 & 31, struct.unpack('<f', struct.pack('<I', (half[1] << 16) | half[0]))[0]
 
 
 MOVPAIR_GAP = 16   # movz 与 movk 之间最多隔 3 条（字节间距 4–16）：一款游戏的 21:9 补丁 movz w8 @+0x130、movk w8 @+0x138，中间隔一条原指令（11-14）
 
 
 def _movpair_at(get, o):
-    """o 处 movz Wd 往后 MOVPAIR_GAP 字节内找同一 Wd 的 movk（中途同一 Wd 又被 movz / movn 赋值就停）→ (Wd, 浮点值, 间距字节)；没有 → None。
+    """o 处 movz Rd（W / X，低半或高半，见 _movpair）往后 MOVPAIR_GAP 字节内找同一 Rd 补另一半的 movk（中途同一 Rd 又被 movz / movn / 别的 movk 赋值就停）→ (Rd 号, 浮点值, 间距字节)；没有 → None。
     get(偏移) → 那一处的字或 None（补丁写入表 / 程序映像都行）"""
     w0 = get(o)
-    if w0 is None or w0 & 0xFFE00000 != 0x52800000: return None
+    if w0 is None or w0 & 0x7F800000 != 0x52800000: return None
     for d in range(4, MOVPAIR_GAP + 4, 4):
         w1 = get(o + d)
         if w1 is None: continue
@@ -752,7 +757,7 @@ def port_writes(writes, A, im, text_end):
                 pr = _movpair_at(word, q)
                 if pr and pr[0] == rd and abs(pr[1] - t) <= 2e-3: tgap[q] = pr[2]; return True
                 return False
-            cands = [q for q in scan_w(0, text_end, lambda y: y & 0xFFE0001F == 0x52800000 | rd) if hit(q)]
+            cands = [q for q in scan_w(0, text_end, lambda y: y & 0x7F80001F == 0x52800000 | rd) if hit(q)]
         else:
             tb = struct.pack('<f', t); cands = [m.start() for m in re.finditer(re.escape(tb), im) if m.start() % 4 == 0 and m.start() >= text_end]
         cands = [q for q in near(cands, o) if q not in used]
