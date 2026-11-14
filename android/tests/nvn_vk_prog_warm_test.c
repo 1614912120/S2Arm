@@ -16,6 +16,11 @@
 #include "nvn_vk_prog_warm.h"
 #include "nvn_plat.h"
 #include "direct/compile_request.h"
+#ifdef __APPLE__   // 文件修改时间字段：Linux / 安卓是 st_mtim，苹果是 st_mtimespec（宿主测试在 macOS 上也编）
+#define S2A_ST_MTIM st_mtimespec
+#else
+#define S2A_ST_MTIM st_mtim
+#endif
 
 static int checks, failures;
 #define CHECK(cond, ...) do { checks++; if (!(cond)) { failures++; fprintf(stderr, "FAIL: "); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
@@ -221,8 +226,8 @@ int main(void) {
         nvk_prog_warm_save();   // 没有变化：直接返回，不动文件
         struct stat st2;
         CHECK(stat(file, &st2) == 0, "manifest file still there");
-        CHECK(st1.st_ino == st2.st_ino && st1.st_mtim.tv_sec == st2.st_mtim.tv_sec &&
-              st1.st_mtim.tv_nsec == st2.st_mtim.tv_nsec, "save without changes does not rewrite the file");
+        CHECK(st1.st_ino == st2.st_ino && st1.S2A_ST_MTIM.tv_sec == st2.S2A_ST_MTIM.tv_sec &&
+              st1.S2A_ST_MTIM.tv_nsec == st2.S2A_ST_MTIM.tv_nsec, "save without changes does not rewrite the file");
         struct nvk_prog_rec r = mkrec(3, 3);
         nvk_prog_warm_note(&r);
         nvk_prog_warm_save();
