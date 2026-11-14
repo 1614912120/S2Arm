@@ -501,3 +501,7 @@
 "settings.gameLanguage.restart" = "Takes effect the next time you open this game.";
 "settings.gameLanguage.fallback" = "This game doesn't have %@; it starts in %@.";
 "settings.gameLanguage.ja" = "日本語";
+"vpad.screenLock.title" = "Phone screen off";
+"vpad.screenLock.note" = "For external displays. Tap 3 times to restore.";
+"vpad.screenLock.hint" = "To restore the phone screen, tap 3 times in succession";
+"vpad.screenLock.unlock" = "Restore phone screen";
