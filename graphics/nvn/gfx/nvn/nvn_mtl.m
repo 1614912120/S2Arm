@@ -532,6 +532,36 @@ static void pidx_removing(int i) {   // before g_pools[i] = g_pools[--g_npool]: 
 static NSMutableArray *g_keep;                  // Holds the buffer references (pool_ent has non-owning pointers)
 static uint64_t g_pool_adds;
 static int g_pool_res_n;   // registered pools already in the residency set (for the memory readout; under g_mu)
+// A queue piece parked after it was submitted may still name a pool after the guest Finalizes it. Keep the buffer alive and resident until that piece is replayed or dropped.
+// The pool's normal deferred release is not merely allowed to run early: it also removes residency at its original fence, which can be before the later replay completes.
+typedef struct { void *buf; uint32_t refs; int retired; } xq_buf_hold;
+static xq_buf_hold *g_xq_bhold; static int g_xq_nbhold, g_xq_cbhold; static pthread_mutex_t g_xq_bhold_mu = PTHREAD_MUTEX_INITIALIZER;
+static void xq_buf_hold_add(void *buf) {
+    if (!buf) return; CFRetain(buf);
+    pthread_mutex_lock(&g_xq_bhold_mu);
+    int i = 0; while (i < g_xq_nbhold && g_xq_bhold[i].buf != buf) i++;
+    if (i == g_xq_nbhold) {
+        if (g_xq_nbhold == g_xq_cbhold) { int c = g_xq_cbhold ? g_xq_cbhold * 2 : 16; xq_buf_hold *p = realloc(g_xq_bhold, (size_t)c * sizeof *p); if (!p) MDIE("cross-queue buffer holds: out of memory"); g_xq_bhold = p; g_xq_cbhold = c; }
+        g_xq_bhold[g_xq_nbhold++] = (xq_buf_hold){buf, 0, 0};
+    }
+    g_xq_bhold[i].refs++; pthread_mutex_unlock(&g_xq_bhold_mu);
+}
+static int xq_buf_hold_retire(void *buf) {
+    int held = 0; pthread_mutex_lock(&g_xq_bhold_mu);
+    for (int i = 0; i < g_xq_nbhold; i++) if (g_xq_bhold[i].buf == buf) { g_xq_bhold[i].retired = held = 1; break; }
+    pthread_mutex_unlock(&g_xq_bhold_mu); return held;
+}
+static void xq_buf_hold_del(void *buf) {
+    if (!buf) return; int retired = 0;
+    pthread_mutex_lock(&g_xq_bhold_mu);
+    for (int i = 0; i < g_xq_nbhold; i++) if (g_xq_bhold[i].buf == buf) {
+        if (!--g_xq_bhold[i].refs) { retired = g_xq_bhold[i].retired; g_xq_bhold[i] = g_xq_bhold[--g_xq_nbhold]; }
+        break;
+    }
+    pthread_mutex_unlock(&g_xq_bhold_mu);
+    if (retired) defer_obj_release((__bridge id)buf);   // re-time residency removal behind the last replay that owned this hold
+    CFRelease(buf);
+}
 // Access bits of the raw pool table (gmem_map / gmem_scan): a pool the table lists but the host has not made resident, or made resident only for the table, gets a bit, which a raw
 // access sets when it chooses the pool's entry. Bits belong to pools, not entries, so a rebuilt table loses none set by submissions still running. Under g_mu
 enum { GSLOT_MAX = 65536 };
@@ -833,7 +863,7 @@ static void nvn_be_pool_del_body(const void *mem) {
     // The no-copy buffer goes through deferred release (out of the residency set and unreferenced after submitted commands complete). It used to be removed only from g_keep while the residency set still held a strong reference: after the pool was freed the buffer stayed alive wrapping that guest memory,
     // and a new pool at the same address wrapped it again. Engage's title demo cycles scenes; GPU allocated grew to 5.4 GB and resident memory to 3.6 GB in 850 s
     for (int i = 0; i < g_npool; i++)
-        if (g_pools[i].key == mem) { id<MTLBuffer> b = g_pools[i].buf; [g_keep removeObject:b]; defer_obj_release(b); if (g_pools[i].res) g_pool_res_n--;
+        if (g_pools[i].key == mem) { id<MTLBuffer> b = g_pools[i].buf; [g_keep removeObject:b]; if (!xq_buf_hold_retire((__bridge void *)b)) defer_obj_release(b); if (g_pools[i].res) g_pool_res_n--;
             if (!g_dead_pools) g_dead_pools = [NSHashTable weakObjectsHashTable];
             gslot_put(i);
             [g_dead_pools addObject:b]; pidx_removing(i); g_pools[i] = g_pools[--g_npool]; if (i < g_npool && g_pools[i].gslot) g_gslot_pool[g_pools[i].gslot - 1] = i;   // the moved pool's bit follows it
@@ -910,6 +940,7 @@ static inline const uint8_t *addr_cpu(uint64_t addr, uint64_t len) {
 }
 // *avail: bytes the GPU pointer has behind it up to the end of the pool's zero-copy buffer (mtl_add_pool rounds the pool's end up to a page). Audit #1534 P1-65 probe (encode_args)
 static inline uint64_t pool_buf_end(uintptr_t hi) { static uintptr_t pg; if (!pg) pg = (uintptr_t)getpagesize(); return (hi + pg - 1) & ~(pg - 1); }
+static int xq_addr_want(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_t *gpu, uint64_t *avail);   // nvn_xqueue.inc: only the state of the parked piece currently being replayed
 static inline int gpu_addr_want(uint64_t addr, uint64_t len, uint64_t want, void **buf, uint64_t *off, uint64_t *gpu, uint64_t *avail) {
     addr = nvn_ga2ca(addr);   // 同 nvn_be_addr
     const pc_ent *c = pc_get(addr, len);
@@ -923,6 +954,7 @@ static inline int gpu_addr_want(uint64_t addr, uint64_t len, uint64_t want, void
         pthread_mutex_lock(&g_mu); i = pool_find(addr, len);
         if (i >= 0) { pool_res(i); pc_put(i, addr); *buf = (__bridge void *)g_pools[i].buf; *off = addr - g_pools[i].base; *gpu = g_pools[i].gpu + *off; *avail = pool_buf_end(g_pools[i].hi) - addr; ok = 1; }
         pthread_mutex_unlock(&g_mu); }
+    if (!ok) ok = xq_addr_want(addr, len, buf, off, gpu, avail);
     return ok;
 }
 static inline int gpu_addr_avail(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_t *gpu, uint64_t *avail) { return gpu_addr_want(addr, len, len, buf, off, gpu, avail); }
