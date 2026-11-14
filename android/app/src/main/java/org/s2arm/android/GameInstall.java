@@ -295,7 +295,10 @@ final class GameInstall {
             long size = 0;
             try (InputStream in = source.open(e.path); FileOutputStream os = new FileOutputStream(tmp)) {
                 if (in == null) throw new GamePack.BadPack("package has no " + e.path);
-                for (int n; (n = in.read(buf)) > 0; ) {
+                // 按索引里的大小读够就停，不再为确认文件末尾多读一次：vivo 上 App 经共享存储（FUSE）读 1.7 GB 的大文件，
+                //   读完全部字节后那次「到末尾」的读曾一直不返回（11-13 一款 Unity 游戏导入超时）。存进去的就是索引那么长、按索引核过大小与 SHA-256 的内容；
+                //   源文件比索引长出来的部分不读（存的内容不受影响），短了照样报包坏（下面校验）
+                for (int n; size < e.size && (n = in.read(buf, 0, (int) Math.min(buf.length, e.size - size))) > 0; ) {
                     md.update(buf, 0, n); os.write(buf, 0, n); size += n; done[0] += n;
                     if (progress != null) progress.update(done[0], total);
                 }
