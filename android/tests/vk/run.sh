@@ -49,7 +49,7 @@ if [ "$mode" = "--indirect-core" ]; then
     rc=${PIPESTATUS[0]}
     set -e
     if [ "$rc" -ne 0 ] || grep -qE 'Validation Error|VUID-' "$out/run.log"; then
-        echo "【红】隔离回放用例失败或有 Vulkan 校验错误（rc=$rc）" >&2
+        echo "【红】隔离回放用例失败或有 Vulkan 校验错误（rc=${rc}）" >&2
         exit 1
     fi
     exit 0
