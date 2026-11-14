@@ -621,7 +621,12 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
                 uint8_t keys[6][8]; memset(keys, 0, sizeof keys);
                 memcpy(keys[0], stage_key(0), 8); memcpy(keys[1], stage_key(1), 8);
                 uint8_t *lb = NULL; size_t ll = 0; char lw[192] = "";
-                if (s2a_libpack_program_v1(lp, keys, 0x3, (uint32_t)pc.direct_abi, pc.profile_hash, pc.translator_closure, &lb, &ll, lw, sizeof lw) == S2A_LIBPACK_HIT) {
+                int lrc = s2a_libpack_program_v1(lp, keys, 0x3, (uint32_t)pc.direct_abi, pc.profile_hash, pc.translator_closure, &lb, &ll, lw, sizeof lw);
+                if (lrc != S2A_LIBPACK_HIT) {   // 没找到 / 容器里这一键坏：前几条把原因打出来（按键查，键 = 每阶段 8 字节控制键）
+                    static int nm; if (nm++ < 6) { char b[400]; snprintf(b, sizeof b, "出包预编库没取到（%s，键 %02x%02x%02x%02x… / %02x%02x%02x%02x…）：%s", lrc == S2A_LIBPACK_MISS ? "没有" : "坏",
+                        keys[0][0], keys[0][1], keys[0][2], keys[0][3], keys[1][0], keys[1][1], keys[1][2], keys[1][3], lw); nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b); }
+                }
+                if (lrc == S2A_LIBPACK_HIT) {
                     struct entry *le2 = build(lb, ll, views, nst);
                     free(lb);
                     if (!le2->failed) {
@@ -630,7 +635,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
                         *out = &e->prog; return 0;
                     }
                     free(le2); g_n_libpack_bad++;
-                    if (g_n_libpack_bad <= 4) { char b[200]; snprintf(b, sizeof b, "出包预编程序不可用、退回现编（第 %llu 个）", (unsigned long long)g_n_libpack_bad); nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b); }
+                    if (g_n_libpack_bad <= 4) { char b[200]; snprintf(b, sizeof b, "出包预编程序不可用、退回现编（第 %llu 个，键 %02x%02x%02x%02x…）", (unsigned long long)g_n_libpack_bad, keys[0][0], keys[0][1], keys[0][2], keys[0][3]); nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b); }
                 }
             }
         }
@@ -673,7 +678,8 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
         free(bytes);
         nvn_hm_put(&g_progs, sha, e);
         if (!e->failed && ((g_n_offline + g_n_cache + g_n_compiled) == 1 || (g_n_offline + g_n_cache + g_n_compiled) % 50 == 0)) {
-            char b[160]; snprintf(b, sizeof b, "程序累计：离线库 %llu、跨局缓存 %llu、现场编 %llu、失败 %llu", (unsigned long long)g_n_offline, (unsigned long long)g_n_cache, (unsigned long long)g_n_compiled, (unsigned long long)g_n_failed);
+            char b[260]; snprintf(b, sizeof b, "程序累计：出包预编 命中 %llu / 没有 %llu / 坏 %llu / 不可用 %llu、离线库 %llu、跨局缓存 %llu、现场编 %llu、失败 %llu",
+                (unsigned long long)g_n_libpack, (unsigned long long)s2a_libpack_misses(), (unsigned long long)s2a_libpack_rejects(), (unsigned long long)g_n_libpack_bad, (unsigned long long)g_n_offline, (unsigned long long)g_n_cache, (unsigned long long)g_n_compiled, (unsigned long long)g_n_failed);
             nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b);
         }
     }
