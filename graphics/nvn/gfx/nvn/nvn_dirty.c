@@ -339,6 +339,7 @@ int nvn_dirty_replace_range(const void *mem, size_t size) {
 uint64_t nvn_dirty_mapping_generation(void) { return atomic_load(&g_mapping_gen); }
 
 // 远端别名区判定（宿主填 runtime/src/far.c s2a_far_has，graphics/nvn/host_adapt.m；没填 = 没有远端，照常登记）。函数指针而不是弱引用：只链本文件的单测照常链得上
+// 弱链接[nvntest]：s2a_far_has（host_adapt.m 填上面的指针时取它；NVN 单测链 libnvn 不链原生层，按这行放行未定义）
 int (*nvn_dirty_far_fn)(uint64_t a, uint64_t n);
 static _Atomic int g_far_skip_logged;
 void nvn_dirty_add_range(const void *mem, size_t size) {
