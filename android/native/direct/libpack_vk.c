@@ -105,8 +105,8 @@ int s2a_libpack_get(const struct s2a_libpack *lp, const uint8_t key[8], unsigned
 
 // 阶段名 ↔ StageNo（DshVk.cs StageNo 表同值）/ NVN 位序 ↔ v1 阶段名
 static int lp_stage_no(const char *s) {
-    if (!strcmp(s, "vs")) return 0; if (!strcmp(s, "hs")) return 1; if (!strcmp(s, "ds")) return 2;
-    if (!strcmp(s, "gs")) return 3; if (!strcmp(s, "ps")) return 4; if (!strcmp(s, "cs")) return 5;
+    static const char *const names[] = {"vs", "hs", "ds", "gs", "ps", "cs"};
+    for (int i = 0; i < 6; i++) if (!strcmp(s, names[i])) return i;
     return -1;
 }
 // NVN 位 → 库内阶段名（vk 库只出 vs/ps/cs；gs/tcs/tes 给出 NULL → 程序 MISS）
@@ -342,8 +342,9 @@ static int lp_emit_bindings(struct jw *j, struct s2a_jv top, const char *lib_sta
                 if (!jf_u32(b, "reg", &v)) { snprintf(provenance, sizeof provenance, ",\"uboPtr\":%u", v); cb_off = 0x210 + v * 16; has_cb = 1; }
             }
             if (compute && has_cb) {
-                char pv[96]; snprintf(pv, sizeof pv, "%s", provenance);
-                snprintf(provenance, sizeof provenance, ",\"cbSlot\":%u,\"cbOffset\":%u%s", cb_slot, cb_off, pv);
+                char pv[sizeof provenance]; memcpy(pv, provenance, sizeof pv);
+                int pn = snprintf(provenance, sizeof provenance, ",\"cbSlot\":%u,\"cbOffset\":%u%s", cb_slot, cb_off, pv);
+                if (pn < 0 || (size_t)pn >= sizeof provenance) return lp_fail(why, why_size, "%s bindings[%u] provenance too long", lib_stage, i);
             }
             // gmem_map/gmem_log/geometry：宿主哨兵槽，无 guest 映射——storage_kind 留 0，消费端如实报不支持
         } else if (!strcmp(kind, "support")) {
