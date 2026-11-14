@@ -637,7 +637,7 @@ class Context:
 
     def require_source(self):
         required = ("runtime/include/s2a_native.h", "runtime/rewriter/rewriter.c", "services/nxaot.sh",
-                    "pack/nx_unpack/nx_unpack.csproj", "graphics/tools/shader_pack.sh", "tools/safe_killpg.sh")
+                    "pack/nx_unpack/nx_unpack.csproj", "tools/safe_killpg.sh")
         missing = [p for p in required if not (self.engine / p).is_file()]
         if missing:
             raise Failure("请选择完整的 S2Arm 源码目录，缺少：" + "、".join(missing), code="engine_incomplete")

@@ -89,10 +89,8 @@ DN=$("${S2A_PY:-python3}" "$H/display_name.py" "$CUR" --suffix "$DSUF") || { ech
 DT=$("${S2A_PY:-python3}" "$H/display_name.py" "$CUR" --title) || { rm -f "$TL0"; exit 1; }   # 游戏名单独写进 Info.plist（S2AGameTitle）：装机时加后缀（pack/jobs/install.py）同一函数拼
 PK=$(ipa_pkg_key "$C$([ "$SIGN" = dev ] || echo " sign=$SIGN")${S2A_BUNDLE_ID:+ bid=$BID} dn=$DN$([ "${ALLCAPS:-0}" = 1 ] && echo " allcaps")$([ "${NATIVE:-0}" = 1 ] && echo " native")" "$CUR" "$G") || exit 1   # 资源输入键算不出 = 失败（ipa_key.sh 已报红），不拿缺项的键去比
 [ -z "$SIKEY" ] || PK="$PK save=$SIKEY"
-# 登记前核管线归档（10-21 维护者：归档 0 KB 的包判红、不登记，免得调度把首遇全现编的包装上测试设备 / 给 维护者）
 # 登记说明带上没解出的追加内容（审计 P2-30：解不出不拦本体，但不许静默算全绿）
-reg() { local an; root_pso0_gate "$(dirname "$1")" "$G" || return 1; an=$(root_aoc_note "$(dirname "$1")"); an=${an#；}
-  if root_pso0 "$(dirname "$1")" > /dev/null; then S2A_PKG_NOTE="例外：归档 0 KB，${S2A_ALLOW_PSO0}${an:+；$an}" bash "$S2A_PRIVATE_TOOLS/sched.sh" pkg "$G" "$1" "$C"; else S2A_PKG_NOTE=$an bash "$S2A_PRIVATE_TOOLS/sched.sh" pkg "$G" "$1" "$C"; fi; }
+reg() { local an; an=$(root_aoc_note "$(dirname "$1")"); an=${an#；}; S2A_PKG_NOTE=$an bash "$S2A_PRIVATE_TOOLS/sched.sh" pkg "$G" "$1" "$C"; }
 [ -z "$AO" ] && root_stage_done "$CUR" pkg "$PK" && { rm -f "$TL0"; echo "🟢 $G 现行已是包 $PK$(root_aoc_note "$CUR")"; [ $REG = 1 ] && { reg "$CUR/pkg" || exit 1; }; exit 0; }
 # -H：产物根的 romfs 是指向 RomFS 共享存储的相对软链（pack/roots.sh），临时目录里照抄会悬空；跟随它克隆成真目录（同原先）
 if [ -n "$AO" ]; then AOT=$(mktemp -d) || exit 1; trap 'plock_release "$PL_PID"; _root_rm_red "$AOT" "$G 只出程序（临时工作根）"' EXIT; W=$AOT/root; TAG=; mkdir -p "$W" && for e in $(ls -A "$CUR"); do [ "$e" = pkg ] || cp -cRH "$CUR/$e" "$W/" || exit 1; done || { echo "【红】$G 只出程序：克隆产物根 $CUR 失败"; exit 1; }   # 不克隆 pkg/（上一版资源包几万个文件，快道的资源包取自登记快照）
