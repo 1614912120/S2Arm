@@ -1796,6 +1796,11 @@ void s2a_front_run(void (*guest_main)(void)) {
         NSApplication *app = NSApplication.sharedApplication;
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
         S2AMacDelegate *delegate = [S2AMacDelegate new]; app.delegate = delegate; g_delegate = delegate;
+        // 心跳（#1050）：每 10 秒一行实占 / 出帧 / 读写盘 / 缺页读入（runtime/src/energy.c s2a_heartbeat_mac；只此一处用，不进 native.h），后台串行队列上打，不占主线程
+        { void s2a_heartbeat_mac(void); static dispatch_source_t hb; dispatch_queue_t q = dispatch_queue_create("s2a.heartbeat", DISPATCH_QUEUE_SERIAL);
+          hb = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
+          dispatch_source_set_timer(hb, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), 10 * NSEC_PER_SEC, NSEC_PER_SEC);
+          dispatch_source_set_event_handler(hb, ^{ s2a_heartbeat_mac(); }); dispatch_resume(hb); }
         // 游戏日历（#863）：Mac 睡眠时游戏计数器停（同 Switch 睡眠），唤醒后把睡掉的时长补进 Ryujinx 稳态时钟
         [NSWorkspace.sharedWorkspace.notificationCenter addObserverForName:NSWorkspaceDidWakeNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; s2a_clock_catchup(); s2a_host_sleep_set(0); }];
         // 系统睡眠报给服务层（接口 v2.15）：psc 向游戏发休眠请求，唤醒时发唤醒请求
