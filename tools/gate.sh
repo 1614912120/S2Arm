@@ -54,6 +54,9 @@ apple_step() {
 # 固定 Python 解释器（11-07 维护者：android_widen_disabled_test 用 ${S2A_PY:-python3}，gate-host 门禁没设 S2A_PY 就落到 homebrew 裸 python3，缺 lz4 红；
 #   固定解释器 ~/.s2arm/venv 里按 tools/rewriter-requirements.txt 钉了版本、doctor.sh 预检核它）：没给 S2A_PY 且固定解释器在 → 各步统一用它
 [ -z "${S2A_PY:-}" ] && [ -x "$HOME/.s2arm/venv/bin/python3" ] && export S2A_PY=$HOME/.s2arm/venv/bin/python3
+# 单跑钩子的一部分（11-14 新门禁按组拆步）：GATE_HOOK_ONLY / GATE_HOOK_SKIP=<子项键…> → 本机整步跑的钩子带 GATE_ONLY / GATE_SKIP（钩子自己认键，认不得报红）；
+#   下文统一 unset GATE_ONLY / GATE_SKIP（远端计划用），这里先记下
+HONLY=${GATE_HOOK_ONLY:-}; HSKIP=${GATE_HOOK_SKIP:-}; unset GATE_HOOK_ONLY GATE_HOOK_SKIP
 TIER=${GATE_TIER:-full}; PLANM=${GATE_PLAN:-}; RER=${GATE_RERUN:-}; NOLQ=${GATE_NO_LOADQ:-}   # 列车起的门禁（下文 unset 前先记下：本机预跑令牌豁免它）
 # 预跑必须按路由（11-11 维护者：各线预跑不给改动清单 → 表外代码路径按全跑算，整份 482 步、墙钟中位 1535 秒，挤占门禁机上列车的槽）：
 #   合入前层（GATE_LAYER=pre）、角色不是列车 / 热修、没给 GATE_CHANGED、不是远端那一份（GATE_PLAN，它随 --env 收本机算好的清单）、
@@ -419,7 +422,9 @@ detwait() {   # 等本机步（LJ）跑完；期间有确定性步骤红 → 早
 GP=$$; ( while sleep "${GATE_BEAT_S:-300}" > /dev/null 2>&1 < /dev/null; kill -0 $GP 2> /dev/null; do echo "门禁进度 $(date '+%H:%M:%S')：本份已出 $(ls "$L"/*.rc 2> /dev/null | wc -l | tr -d ' ') 个步结论，其余仍在跑 / 排队"; done ) & HB=$!; disown $HB 2> /dev/null; trap 'pkill -P $HB 2> /dev/null; kill $HB 2> /dev/null' EXIT
 echo $HB > "$L/hb.pid"; [ -f tools/gate_reap.py ] && python3 tools/gate_reap.py $$ "$L" 2> /dev/null   # 收尸进程：本主进程被 KILL 时停掉在跑的步与心跳（见 tools/gate_reap.py）
 # 本机那份：整步本机的 + 拆出来的子项；gate-host 那份一次 维护方工具 跑完（带 @gate 共享数据，结果目录拉回 $L/r），两边同时跑
-for i in $(seq 1 $N); do s=${STEPS[$((i - 1))]}; [ "${WH[$i]}" = 本机 ] && { r1=${s#*	}; job "$i" "$(tcw "$i" "${r1%	*}")" "${s##*	}"; }; done
+for i in $(seq 1 $N); do s=${STEPS[$((i - 1))]}; [ "${WH[$i]}" = 本机 ] && { r1=${s#*	}; c=${r1%	*}
+  case ${s%%	*} in 钩子\ *) [ -n "$HSKIP" ] && c="export GATE_SKIP='$HSKIP'; $c"; [ -n "$HONLY" ] && c="export GATE_ONLY='$HONLY'; $c";; esac
+  if [ -n "$HONLY$HSKIP" ]; then job "$i" "$c" "${s##*	}"; else job "$i" "$(tcw "$i" "$c")" "${s##*	}"; fi; }; done   # 只跑一部分：不进按步结果缓存（缓存键不含子项键，部分绿会被当整步绿）
 { j=0; for i in ${LPI[@]+"${LPI[@]}"}; do s=${STEPS[$((i - 1))]}; r1=${s#*	}; job "$i.k$j" "export GATE_ONLY='${LPK[$j]}'; ${r1%	*}" "${s##*	}"; j=$((j + 1)); done; }
 [ ${#LJ[@]} -gt 0 ] && detwait
 # 收尾限时（11-11 合入运维线：门禁机上推测批 154 步 13:24 前全出结论，主进程却在这里的 wait 上又等了 50 分钟到远端时限，
