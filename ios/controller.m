@@ -1052,10 +1052,10 @@ __attribute__((visibility("default"), used)) void s2a_pad_stop_rumble(uint64_t s
 // ---------- 玩家 1 的六轴来源仲裁 ----------
 static const char *motion_src_name(int src) {
     switch (src) {
-        case S2A_MOTION_PHONE: return "手机陀螺仪";
-        case S2A_MOTION_GC: return "系统手柄";
+        case S2A_MOTION_PHONE: return "phone gyro";
+        case S2A_MOTION_GC: return "system controller";
         case S2A_MOTION_NS2: return "NS2 Pro";
-        default: return "无";
+        default: return "none";
     }
 }
 // 手机传感器开关缓存：真实开关在 phone_motion.m（幂等，重复调用只打一次日志）
