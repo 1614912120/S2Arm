@@ -615,7 +615,9 @@ public final class GameInstallTest {
         GameInstall.Source plainSrc = GameInstall.directory(v1);
         GameInstall.Source stallingSrc = path -> {
             java.io.InputStream real = plainSrc.open(path);
-            if (real == null || !stalled.add(path)) return real;
+            // 只让存进库的内容文件卡（大文件都走这条）；manifest / index / 启动描述由另一处一次读完
+            if (real == null || path.equals("manifest.json") || path.equals("index.tsv") || path.equals(GameInstall.ARTIFACT)
+                || !stalled.add(path)) return real;
             return new java.io.FilterInputStream(real) {
                 long pos;
                 @Override public int read(byte[] b, int o, int l) throws IOException {
