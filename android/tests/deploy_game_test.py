@@ -40,6 +40,9 @@ class FakeAdb:
         self.receipt = None   # (contentRoot, artifactSha256)：App 导入成功时在 logcat 打的回执（正式包读不了 current.json）
         self.received, self.name, self.connects = {}, None, 0
         self.digest = None    # 机上没装：真 adb 的 installed_hash 此时抛 RuntimeError（pm path 为空）
+        self.remote = {}      # 设备共享存储上已有文件的 SHA-256（路径 → 摘要），sha256sum 照它答
+        self.in_place = None  # App 收到的原地登记请求路径
+        self.in_place_refused = False
 
     def _serve(self, server):
         while True:
@@ -54,6 +57,10 @@ class FakeAdb:
                 f = conn.makefile('rb')
                 conn.sendall(b'READY 1\n')
                 head = f.readline().decode().rstrip('\n').split(' ', 2)
+                if head[0] == 'S2A-INPLACE':
+                    self.in_place = head[2]
+                    conn.sendall(b'OK in-place\n')
+                    continue
                 self.name = head[2]
                 while True:
                     line = f.readline().decode().rstrip('\n')
@@ -92,6 +99,17 @@ class FakeAdb:
             self.started = True
         if args[0] == 'date':
             return '10-26 12:00:00.000'
+        if args[0] == 'sha256sum':
+            if args[1] not in self.remote:
+                raise RuntimeError('adb shell failed: no such file')
+            return f'{self.remote[args[1]]}  {args[1]}'
+        if args[0] == 'logcat' and self.in_place:
+            if self.in_place_refused:
+                return f'Game in-place registration of {self.in_place} refused: in-place file does not match index.tsv (SHA-256): romfs/data'
+            imported = (f'Game registered in place: test [{TITLE}] -> sha256-0000 (files read where they are, nothing copied)'
+                        f' from in-place {self.in_place}')
+            accepted = f'Game startup accepted: {TITLE} session 1'
+            return '\n'.join((imported, accepted) if self.started else (imported,))
         if args[0] == 'logcat':
             accepted = f'Game startup accepted: {TITLE} session 1'
             if self.refused:
@@ -255,6 +273,57 @@ class DeployTest(unittest.TestCase):
         self.assertTrue(adb.name.startswith('deploy-'))
         launches = [x for x in adb.calls if x[:3] == ('am', 'start', '-W') and 'org.s2arm.android.MainActivity' in ' '.join(x)]
         self.assertEqual(len(launches), 1)
+
+    REMOTE = '/storage/emulated/0/S2Arm/Games/' + TITLE
+
+    def test_in_place_pushes_to_convention_dir_then_registers(self):
+        # 原地：整份推进 .<程序号>.part、推完换名成约定目录；给本包开「所有文件访问」；只发登记请求、不直传字节；照常启动
+        adb = FakeAdb()
+        out = self.deploy(adb, in_place=True)
+        part = '/storage/emulated/0/S2Arm/Games/.' + TITLE + '.part'
+        pushes = [x for x in adb.calls if x[0] == 'push']
+        self.assertEqual(pushes, [('push', out / 'resources', part)])
+        mv = adb.calls.index(('mv', part, self.REMOTE))
+        self.assertLess(adb.calls.index(('rm', '-rf', part)), adb.calls.index(pushes[0]))
+        self.assertLess(adb.calls.index(pushes[0]), adb.calls.index(('rm', '-rf', self.REMOTE)))
+        self.assertLess(adb.calls.index(('rm', '-rf', self.REMOTE)), mv)
+        package = f'org.s2arm.game.t{TITLE.lower()}'
+        self.assertIn(('appops', 'set', package, 'MANAGE_EXTERNAL_STORAGE', 'allow'), adb.calls)
+        self.assertEqual(adb.in_place, self.REMOTE)
+        self.assertEqual(adb.received, {})
+        receipt = json.loads((out / 'deployment.json').read_text())
+        self.assertEqual(receipt['inPlace'], self.REMOTE)
+        self.assertTrue(receipt['startupAccepted'])
+
+    def test_in_place_same_content_is_not_pushed_again(self):
+        # 设备上 index.tsv 与构建描述都相同：一个字节都不推；只有构建描述不同：只推它（覆盖到约定目录里）
+        resources = self.root / 'resources'
+        game_apk.resources(self.pack, self.apk, resources)
+        for artifact_same in (True, False):
+            with self.subTest(artifact_same=artifact_same):
+                adb = FakeAdb()
+                adb.remote = {f'{self.REMOTE}/index.tsv': deploy_game.digest(resources / 'index.tsv'),
+                              f'{self.REMOTE}/game-build-artifact.json':
+                                  deploy_game.digest(resources / 'game-build-artifact.json') if artifact_same else '0' * 64}
+                work = self.root / f'work-{artifact_same}'; work.mkdir()
+                deploy_game.deploy_resources(self.apk, resources, adb, work, require_current=False, in_place=True)
+                pushes = [x for x in adb.calls if x[0] == 'push']
+                want = [] if artifact_same else [('push', resources / 'game-build-artifact.json',
+                                                  f'{self.REMOTE}/game-build-artifact.json')]
+                self.assertEqual(pushes, want)
+                self.assertFalse(any(x[0] == 'mv' for x in adb.calls))
+                self.assertEqual(adb.in_place, self.REMOTE)
+
+    def test_in_place_partial_refresh_is_red_before_push(self):
+        # --refresh-existing 的资源目录没有 romfs：设备上又没有同一份内容，原地登记必缺文件，推之前就报
+        with self.assertRaisesRegex(RuntimeError, '原地使用要整份资源'):
+            self.deploy(FakeAdb(), in_place=True, refresh_existing=True)
+
+    def test_in_place_refusal_is_red_and_never_starts(self):
+        adb = FakeAdb(); adb.in_place_refused = True
+        with self.assertRaisesRegex(RuntimeError, '原地登记被拒绝：.*romfs/data'):
+            self.deploy(adb, in_place=True)
+        self.assertFalse(any('MainActivity' in ' '.join(map(str, x)) for x in adb.calls))
 
     def test_no_start_imports_only(self):
         adb = FakeAdb()

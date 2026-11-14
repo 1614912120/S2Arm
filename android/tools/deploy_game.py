@@ -2,6 +2,8 @@
 """部署签名游戏 APK 和绑定资源。默认导入后启动；--no-start 只导入。
 
 --pack 接受 make_pack 输出并冻结资源；--resources 接受已绑定资源目录。
+--in-place：资源目录 adb push 到手机共享存储的约定位置（/storage/emulated/0/S2Arm/Games/<程序号>），
+  再让 App 原地登记（不复制进私有目录，App 要「所有文件访问」，这里用 appops 给本包打开）；默认是直传进私有目录。
 所有设备操作须由外部设备租约保护。
 """
 import argparse
@@ -120,6 +122,9 @@ PUSH_MARGIN = 2
 PUSH_FLOOR_S = 120
 PUSH_PROGRESS_S = 5
 RECEIVE_CONNECT_S = 30      # App 开好套接字的最长等待
+# 原地使用的约定位置（LibraryActivity.IN_PLACE_DIR）：写 canonical 路径（/sdcard 是它的链接），App 登记、回执里都是这条
+IN_PLACE_DIR = '/storage/emulated/0/S2Arm/Games'
+ARTIFACT = 'game-build-artifact.json'
 
 
 def tree_bytes(path):
@@ -141,6 +146,84 @@ def import_wait_for(resources, timeout):
     return max(timeout, push_timeout_for(resources))
 
 
+def _remote_sums(adb, paths):
+    """设备上这几个文件的 SHA-256；不在的不出现在结果里（sha256sum 对缺的文件非零退出，所以逐个问）。"""
+    sums = {}
+    for path in paths:
+        try:
+            parts = adb.shell('sha256sum', path).split()
+        except RuntimeError:
+            continue
+        if len(parts) == 2 and parts[1] == path:
+            sums[path] = parts[0]
+    return sums
+
+
+def push_in_place(adb, resources, title, timeout, log):
+    """把资源目录放到共享存储的约定位置，返回设备上的路径。设备上已是同一份内容（index.tsv 相同）就不再整份推：
+    构建描述不同（换了 APK）只推它。整份推先进 .<程序号>.part、推完整再换名，半截不顶替旧的。"""
+    resources = Path(resources)
+    remote = f'{IN_PLACE_DIR}/{title}'
+    have = _remote_sums(adb, [f'{remote}/index.tsv', f'{remote}/{ARTIFACT}'])
+    if have.get(f'{remote}/index.tsv') == digest(resources / 'index.tsv'):
+        if have.get(f'{remote}/{ARTIFACT}') != digest(resources / ARTIFACT):
+            adb.call('push', resources / ARTIFACT, f'{remote}/{ARTIFACT}', timeout=120)
+            log(f'设备上 {remote} 已是同一份内容，只换构建描述')
+        else:
+            log(f'设备上 {remote} 已是同一份内容，不再推送')
+        return remote
+    index = (resources / 'index.tsv').read_text(encoding='utf-8').splitlines()
+    missing = [row.split('\t')[0] for row in index if row and not (resources / row.split('\t')[0]).is_file()]
+    if missing:
+        raise RuntimeError(f'资源目录缺 {len(missing)} 个索引文件（如 {missing[0]}），设备上也没有同一份内容；'
+                           '原地使用要整份资源（去掉 --refresh-existing）')
+    part = f'{IN_PLACE_DIR}/.{title}.part'
+    adb.shell('mkdir', '-p', IN_PLACE_DIR)
+    adb.shell('rm', '-rf', part)
+    t0 = time.monotonic()
+    log(f'推送资源目录到 {remote}（{tree_files(resources)} 文件，超时 {timeout}s）')
+    adb.call('push', resources, part, timeout=timeout)
+    adb.shell('rm', '-rf', remote)
+    adb.shell('mv', part, remote)
+    log(f'推送完成：{tree_bytes(resources) / 1e6:.0f} MB / {time.monotonic() - t0:.0f}s')
+    return remote
+
+
+def request_in_place(adb, package, remote):
+    """经同一个本地套接字（只认 adb 的 shell uid）请 App 原地登记 remote。协议见 ImportReceiver.java。"""
+    port = adb.call('forward', 'tcp:0', 'localabstract:s2arm-import.' + package, timeout=30).strip()
+    if not port.isdigit():
+        raise RuntimeError('adb forward 没给出端口：' + port[:200])
+    try:
+        s = _connect(port)
+        with s:
+            s.settimeout(60)
+            s.sendall(f'S2A-INPLACE 1 {remote}\n'.encode())
+            reply = _line(s)
+        if reply != 'OK in-place':
+            raise RuntimeError('App 拒收原地登记请求：' + reply[:300])
+    finally:
+        adb.call('forward', '--remove', 'tcp:' + port, timeout=30)
+
+
+def _connect(port):
+    """设备端还没监听时 adb 先接 TCP 再断：读到 App 的 READY 才算连上。"""
+    deadline = time.monotonic() + RECEIVE_CONNECT_S
+    while True:
+        s = None
+        try:
+            s = socket.create_connection(('127.0.0.1', int(port)), timeout=10)
+            if _line(s).split(' ')[0] == 'READY':
+                return s
+            raise ConnectionError('不是导入接收端')
+        except (OSError, ConnectionError):
+            if s is not None:
+                s.close()
+            if time.monotonic() > deadline:
+                raise RuntimeError(f'App 的导入接收端 {RECEIVE_CONNECT_S} 秒内没连上')
+            time.sleep(0.5)
+
+
 def _line(sock):
     b = bytearray()
     while not b.endswith(b'\n'):
@@ -160,20 +243,7 @@ def send_tree(adb, package, resources, name, timeout, log):
     if not port.isdigit():
         raise RuntimeError('adb forward 没给出端口：' + port[:200])
     try:
-        deadline = time.monotonic() + RECEIVE_CONNECT_S
-        while True:   # 设备端还没监听时 adb 先接 TCP 再断：读到 App 的 READY 才算连上
-            s = None
-            try:
-                s = socket.create_connection(('127.0.0.1', int(port)), timeout=10)
-                if _line(s).split(' ')[0] == 'READY':
-                    break
-                raise ConnectionError('不是导入接收端')
-            except (OSError, ConnectionError):
-                if s is not None:
-                    s.close()
-                if time.monotonic() > deadline:
-                    raise RuntimeError(f'App 的导入接收端 {RECEIVE_CONNECT_S} 秒内没连上')
-                time.sleep(0.5)
+        s = _connect(port)
         t0 = last = time.monotonic()
         sent = 0
         with s:
@@ -202,8 +272,9 @@ def send_tree(adb, package, resources, name, timeout, log):
 
 
 def deploy_resources(apk, resources, adb, work, mode='auto', timeout=180, push_timeout=None,
-                     start=True, refresh_existing=False, require_current=True, log=None):
+                     start=True, refresh_existing=False, require_current=True, log=None, in_place=False):
     """装 APK 后把资源树直传进 App 私有目录（send_tree），等 App 按 index.tsv 核完装进库的回执。
+    in_place：改为推到共享存储约定位置、请 App 原地登记（push_in_place / request_in_place），回执来源是「in-place <路径>」。
     log：进度回调。"""
     log = log or (lambda *a, **k: None)
     apk, resources, work = Path(apk), Path(resources), Path(work)
@@ -226,26 +297,40 @@ def deploy_resources(apk, resources, adb, work, mode='auto', timeout=180, push_t
         raise RuntimeError('安装后的 APK 哈希与冻结 APK 不符，停止部署')
     name = 'deploy-' + work.name
     library = package + '/org.s2arm.android.LibraryActivity'
+    est = push_timeout or push_timeout_for(resources)
+    if in_place:
+        remote = push_in_place(adb, resources, title, est, log)
+        # 本包要「所有文件访问」才读得到共享存储上的资源（安卓 11+；开发工具代玩家在设置页点开）
+        adb.shell('appops', 'set', package, 'MANAGE_EXTERNAL_STORAGE', 'allow')
+        origin = 'in-place ' + remote
+    else:
+        origin = 'import/' + name
     since = adb.shell('date', '+%m-%d %H:%M:%S.000')
     start_activity(adb, '-n', library, '--ez', IMPORT_RECEIVE_EXTRA, 'true')
-    est = push_timeout or push_timeout_for(resources)
-    log(f'资源树 {tree_files(resources)} 文件直传进 App（超时 {est}s，按字节估）')
-    send_tree(adb, package, resources, name, est, log)
+    if in_place:
+        request_in_place(adb, package, remote)
+    else:
+        log(f'资源树 {tree_files(resources)} 文件直传进 App（超时 {est}s，按字节估）')
+        send_tree(adb, package, resources, name, est, log)
     import_wait = import_wait_for(resources, timeout)
     deadline = time.monotonic() + import_wait
     while time.monotonic() < deadline:
         logs = own_lines(adb, package, adb.shell('logcat', '-d', '-v', 'brief', '-T', since, '-s', 'S2Arm:I'))
         (work / 'deploy.log').write_text(logs + '\n')
+        if in_place and 'Game in-place registration' in logs and 'refused:' in logs:
+            raise RuntimeError('原地登记被拒绝：' + next(line for line in logs.splitlines()
+                                                    if 'Game in-place registration' in line and 'refused:' in line)[-300:])
         if 'Game import of requested directory refused:' in logs or f'Game import of import/{name} refused:' in logs:
             raise RuntimeError('资源导入被拒绝' + ('；资源变化或首次部署请去掉 --refresh-existing' if refresh_existing else ''))
-        imported_ok = any(f'from import/{name}' in line and any(
-            text in line for text in ('Game installed:', 'Game already installed:', 'Game build artifact updated'))
+        imported_ok = any(line.endswith(f'from {origin}') and any(
+            text in line for text in ('Game installed:', 'Game already installed:', 'Game build artifact updated',
+                                      'Game registered in place:'))
             for line in logs.splitlines())
         if imported_ok:
             if require_current:
                 # 正式包不可调试，run-as 读不了 current.json；App 导入成功时在 logcat 打完整回执（GameLibrary「Game import receipt」）
                 receipt = next((line for line in logs.splitlines()
-                                if f'Game import receipt: {title} ' in line and line.endswith(f' from import/{name}')), None)
+                                if f'Game import receipt: {title} ' in line and line.endswith(f' from {origin}')), None)
                 if receipt is None:
                     raise RuntimeError('导入成功但设备没打出导入回执，无法核身份。')
                 if f' contentRoot={artifact["contentRoot"]} ' not in receipt or f' artifactSha256={artifact_hash} ' not in receipt:
@@ -279,13 +364,13 @@ def deploy_resources(apk, resources, adb, work, mode='auto', timeout=180, push_t
         raise RuntimeError('部署期间 APK 被其他安装替换，停止部署')
     receipt = dict(serial=adb.serial, package=package, packageName=package, apkSha256=artifact['apk']['sha256'],
                    contentRoot=artifact['contentRoot'], artifactSha256=artifact_hash, mode=mode,
-                   refreshExisting=refresh_existing, startupAccepted=start)
+                   refreshExisting=refresh_existing, startupAccepted=start, inPlace=remote if in_place else None)
     (work / 'deployment.json').write_text(json.dumps(receipt, indent=2) + '\n')
     return receipt
 
 
 def deploy(pack, apk, adb, output_root, mode='auto', refresh_existing=False, timeout=180, push_timeout=None,
-           start=True):
+           start=True, in_place=False):
     pack, apk = Path(pack).resolve(), Path(apk).resolve()
     title, _, _ = game_apk.nacp_info(pack / 'ctl/control.nacp')
     output_root = Path(output_root).resolve()
@@ -299,7 +384,7 @@ def deploy(pack, apk, adb, output_root, mode='auto', refresh_existing=False, tim
     resources = work / 'resources'
     game_apk.resources(pack, frozen, resources, refresh_existing=refresh_existing)
     deploy_resources(frozen, resources, adb, work, mode, timeout, push_timeout, start, refresh_existing,
-                     require_current=False, log=print)
+                     require_current=False, log=print, in_place=in_place)
     return work
 
 
@@ -314,6 +399,8 @@ def main():
     parser.add_argument('--refresh-existing', action='store_true')
     parser.add_argument('--timeout', type=int, default=180)
     parser.add_argument('--push-timeout', type=int, default=None, help='资源直传超时秒数；缺省按字节算（约 30 MB/s、2 倍余量）')
+    parser.add_argument('--in-place', action='store_true',
+                        help='推到共享存储 ' + IN_PLACE_DIR + '/<程序号> 后让 App 原地登记（不复制进私有目录）')
     start = parser.add_mutually_exclusive_group()
     start.add_argument('--start', dest='start', action='store_true')
     start.add_argument('--no-start', dest='start', action='store_false')
@@ -329,13 +416,14 @@ def main():
         adb = Adb(args.serial)
         if args.pack:
             work = deploy(args.pack, args.apk, adb, REPO / 'build/android-deploy', args.mode,
-                          args.refresh_existing, args.timeout, args.push_timeout, args.start)
+                          args.refresh_existing, args.timeout, args.push_timeout, args.start, args.in_place)
             receipt = json.loads((work / 'deployment.json').read_text())
         else:
             root = REPO / 'build/android-deploy'; root.mkdir(parents=True, exist_ok=True)
             work = Path(tempfile.mkdtemp(prefix='resources-', dir=root))
             receipt = deploy_resources(args.apk.resolve(strict=True), args.resources.resolve(strict=True), adb,
-                                       work, args.mode, args.timeout, args.push_timeout, args.start, log=print)
+                                       work, args.mode, args.timeout, args.push_timeout, args.start, log=print,
+                                       in_place=args.in_place)
         print(json.dumps(receipt, ensure_ascii=False))
     except (OSError, RuntimeError, ValueError, KeyError, subprocess.SubprocessError) as error:
         print('【红】部署失败：' + str(error), file=sys.stderr)

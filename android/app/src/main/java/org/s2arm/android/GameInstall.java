@@ -35,6 +35,11 @@ import java.util.TimeZone;
  * instead: one file at a time when only that path is refused, and every file (with no object
  * store) when the storage cannot hard-link at all. No Android types, so the unit test runs on a
  * plain JDK.
+ *
+ * <p>原地来源（installInPlace）：资源目录已经在共享存储上（玩家拷进去 / 电脑 adb push），内容文件不复制、不进
+ * objects/。版本目录只放元数据：manifest.json、index.tsv、构建描述、指纹表和 in-place.json（登记的根）；
+ * 登记时按 index 把每个文件的大小与 SHA-256 核一遍（读够索引大小就停），同时记下文件身份写进指纹表，之后起局靠
+ * 身份命中、不重算。删版本目录 / 清理对象库都只动私有目录，从不碰原地文件。
  */
 final class GameInstall {
     /** Where the package files come from: a directory (adb import/) or a picked document tree. */
@@ -62,6 +67,7 @@ final class GameInstall {
         boolean artifactRefreshed;       // same files, new artifact (e.g. a per-game APK upgrade)
         long storedBytes, sharedBytes;   // copied in this time / already stored (unchanged files)
         boolean linked;                  // revision files are hard links to shared objects (else plain copies)
+        String inPlaceRoot;              // 原地来源的根（内容没复制），否则 null
         Result(String titleId, String contentRoot, String previousContentRoot, GamePack.Info info, boolean alreadyActive) {
             this.titleId = titleId; this.contentRoot = contentRoot; this.previousContentRoot = previousContentRoot;
             this.info = info; this.alreadyActive = alreadyActive;
@@ -244,7 +250,8 @@ final class GameInstall {
         File active = new File(revisions, contentRoot), staging = new File(revisions, contentRoot + ".staging");
         BootContract.Current current = readCurrent(gameRoot);
         String previous = current == null ? null : current.contentRoot;
-        if (current != null && contentRoot.equals(previous) && active.isDirectory()) {
+        // 同一内容根、但当前是原地登记：这次是复制进私有目录，照常装（换掉原地登记）
+        if (current != null && contentRoot.equals(previous) && active.isDirectory() && !inPlace(active)) {
             if (GamePack.sha256(artifact).equals(current.artifactSha256))
                 return new Result(info.titleId, contentRoot, previous, info, true);
             return refreshArtifact(gameRoot, current, artifact, info);
@@ -315,6 +322,108 @@ final class GameInstall {
         BootContract.open(gameRoot);   // what the runtime will read
         prune(gameRoot, contentRoot, result.previousContentRoot);
         return result;
+    }
+
+    /**
+     * 原地登记一个共享存储上的资源目录：读它的 manifest / index / 构建描述，按 index 核每个文件的大小与 SHA-256（读够就停），
+     * 只把元数据和指纹表写进私有版本目录，内容文件留在原处。root 由玩家选定（文件夹选择器）或电脑经 adb 指定，
+     * 登记的是它的 canonical 路径；之后起局只认这个根之下的文件。
+     */
+    static Result installInPlace(File gamesDir, File root, ImportSourceCheck check, Progress progress)
+            throws GamePack.BadPack, BootContract.BadGame, IOException {
+        if (!root.isAbsolute()) throw new IOException("in-place root must be an absolute path: " + root);
+        if (!root.isDirectory()) throw new IOException("in-place game folder is missing or unreadable: " + root);
+        File canonical = root.getCanonicalFile();
+        BootContract.checkInPlaceRoot(canonical.getPath(), gamesDir);
+        Source source = check.checked(directory(canonical));
+        byte[] manifest = required(source, "manifest.json");
+        byte[] index = required(source, "index.tsv");
+        byte[] artifact = required(source, ARTIFACT);
+        List<GamePack.Entry> entries = GamePack.readIndex(manifest, index);
+        String contentRoot = "sha256-" + GamePack.sha256(index);
+        GamePack.Info info = new GamePack.Info();
+        GamePack.describe(info, verified(source, entry(entries, "ctl/control.nacp")));
+        try (GameStorage lease = GameStorage.acquireIn(gamesDir, info.titleId)) {
+            return installInPlaceLocked(gamesDir, canonical, progress, manifest, index, artifact, entries, contentRoot, info);
+        }
+    }
+
+    private static Result installInPlaceLocked(File gamesDir, File root, Progress progress, byte[] manifest, byte[] index,
+            byte[] artifact, List<GamePack.Entry> entries, String contentRoot, GamePack.Info info)
+            throws GamePack.BadPack, BootContract.BadGame, IOException {
+        File gameRoot = new File(gamesDir, info.titleId);
+        File revisions = new File(gameRoot, "revisions");
+        File active = new File(revisions, contentRoot), staging = new File(revisions, contentRoot + ".staging");
+        BootContract.Current current = readCurrent(gameRoot);
+        String previous = current == null ? null : current.contentRoot;
+        String artifactSha = GamePack.sha256(artifact);
+        if (current != null && contentRoot.equals(previous) && active.isDirectory()
+                && root.getPath().equals(inPlaceRoot(active))) {
+            // 同一个根、同一份内容：文件核对交给起局（指纹命中 / 变了的重算）；构建描述变了照常换
+            Result same = artifactSha.equals(current.artifactSha256)
+                ? new Result(info.titleId, contentRoot, previous, info, true) : refreshArtifact(gameRoot, current, artifact, info);
+            same.inPlaceRoot = root.getPath();
+            return same;
+        }
+        Result result = new Result(info.titleId, contentRoot, contentRoot.equals(previous) ? null : previous, info, false);
+        result.inPlaceRoot = root.getPath();
+        deleteTree(staging);
+        if (!staging.mkdirs()) throw new IOException("cannot create " + staging);
+        GameFingerprint.Reference fingerprint;
+        try {
+            long sum = 0;
+            for (GamePack.Entry e : entries) sum += e.size;
+            final long total = sum;
+            long[] done = {0};
+            // 首次登记：逐个文件按索引核大小与 SHA-256（只读不复制），前后两次 stat 身份一致才记进指纹表
+            GameFingerprint.Stamp[] checked = new GameFingerprint.Stamp[entries.size()];
+            for (int i = 0; i < entries.size(); i++) {
+                GamePack.Entry e = entries.get(i);
+                File file = BootContract.under(root, e.path, "in-place file");
+                if (!file.isFile()) throw new GamePack.BadPack("in-place file is missing: " + e.path + " (under " + root + ")");
+                GameFingerprint.Stamp before = GameFingerprint.stat(file);
+                if ((before != null ? before.size : file.length()) != e.size)
+                    throw new GamePack.BadPack("in-place file does not match index.tsv (size): " + e.path);
+                String sha = GameFingerprint.sha256Exact(file, e.size, n -> {
+                    done[0] += n;
+                    if (progress != null) progress.update(done[0], total);
+                });
+                if (!e.sha256.equals(sha))
+                    throw new GamePack.BadPack("in-place file does not match index.tsv (SHA-256): " + e.path);
+                GameFingerprint.Stamp after = GameFingerprint.stat(file);
+                if (before != null && !before.same(after)) throw new IOException("in-place file changed while hashing: " + e.path);
+                checked[i] = after;
+            }
+            writeSynced(new File(staging, "manifest.json"), manifest);
+            writeSynced(new File(staging, "index.tsv"), index);
+            writeSynced(new File(staging, ARTIFACT), artifact);
+            // 路径已过 checkInPlaceRoot（无引号 / 反斜杠 / 控制字符），原样放进 JSON 字符串
+            writeSynced(new File(staging, BootContract.IN_PLACE),
+                ("{\"version\": 1, \"root\": \"" + root.getPath() + "\"}\n").getBytes(StandardCharsets.UTF_8));
+            BootContract.validateRevision(gameRoot, "revisions/" + contentRoot + ".staging", contentRoot, ARTIFACT, artifactSha);
+            GameFingerprint.Verification verified = GameFingerprint.verifyPlaced(root, true, entries, java.util.Arrays.asList(checked));
+            fingerprint = GameFingerprint.write(staging, entries, contentRoot.substring(7), verified.stamps);
+            deleteTree(active);   // 同内容根的旧版本（复制进来的那份 / 旧登记）：换成这次的原地登记
+            if (!staging.renameTo(active)) throw new IOException("cannot move the staged revision into place");
+        } catch (GamePack.BadPack | BootContract.BadGame | IOException | RuntimeException e) {
+            deleteTree(staging);
+            throw e;
+        }
+        String kept = result.previousContentRoot;
+        writeCurrent(gameRoot, info.titleId, contentRoot, ARTIFACT, artifactSha, kept, fingerprint);
+        BootContract.open(gameRoot);
+        prune(gameRoot, contentRoot, result.previousContentRoot);
+        return result;
+    }
+
+    /** 这个版本目录是原地登记（内容不在本目录）。 */
+    static boolean inPlace(File revision) {
+        return Files.exists(new File(revision, BootContract.IN_PLACE).toPath(), LinkOption.NOFOLLOW_LINKS);
+    }
+
+    private static String inPlaceRoot(File revision) {
+        try { return BootContract.inPlaceRoot(revision, null); }
+        catch (BootContract.BadGame | IOException e) { return null; }
     }
 
     // 已核过的直接挪（adopt），否则复制并核对（store）
@@ -488,7 +597,8 @@ final class GameInstall {
     // keeps everything: better a leftover object than a revision missing a file.
     private static void collect(File gameRoot) {
         Set<String> used = new HashSet<>();
-        File[] kept = new File(gameRoot, "revisions").listFiles(f -> f.isDirectory() && !f.getName().endsWith(".staging"));
+        // 原地登记的版本目录不占对象：它的 index 不算引用（内容在共享存储上）
+        File[] kept = new File(gameRoot, "revisions").listFiles(f -> f.isDirectory() && !f.getName().endsWith(".staging") && !inPlace(f));
         if (kept != null) for (File r : kept) {
             // 逐行读：大包 index 30 万行 / 32 MB，整读成一个 String 再 split 会撑爆 App 的 256 MB 堆（11-14 真机安装收尾 OOM）
             try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(

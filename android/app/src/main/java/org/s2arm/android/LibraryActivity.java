@@ -20,7 +20,9 @@ public final class LibraryActivity extends Activity {
     private final Set<String> listed = new HashSet<>();
     private final java.util.Map<String, String> names = new java.util.HashMap<>();
     private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
-    private static final int PICK_PACKAGE = 1;
+    private static final int PICK_PACKAGE = 1, PICK_IN_PLACE = 2, ASK_LEGACY_READ = 3;
+    /** 原地使用的约定位置：文件夹选择器从这里打开（在的话）；deploy_game.py --in-place 也推到这下面。 */
+    static final String IN_PLACE_DIR = "S2Arm/Games";
     // A caller opts in to consuming one direct child of files/import/.
     public static final String EXTRA_IMPORT_STAGING = "org.s2arm.android.IMPORT_STAGING";
     /** 电脑直传资源包（ImportReceiver）：开本地套接字 s2arm-import.&lt;包名&gt;，只收 adb（shell uid）连进来的一次传输。 */
@@ -48,6 +50,10 @@ public final class LibraryActivity extends Activity {
         Button importButton = new Button(this); importButton.setText(R.string.import_game);
         importButton.setOnClickListener(v -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PICK_PACKAGE));
         more.addView(importButton);
+        // 原地使用：游戏文件已经在手机存储里（文件管理器 / 电脑拷进去），直接用那里的，不再拷一份进 App
+        Button inPlaceButton = new Button(this); inPlaceButton.setText(R.string.in_place_game);
+        inPlaceButton.setOnClickListener(v -> useInPlace());
+        more.addView(inPlaceButton);
         android.content.SharedPreferences display = getSharedPreferences("display", MODE_PRIVATE);
         fpsOverlay = new CheckBox(this);
         fpsOverlay.setText(R.string.fps_overlay_show);
@@ -233,7 +239,13 @@ public final class LibraryActivity extends Activity {
                         }
                         timer.interrupt();
                         long t0 = System.nanoTime();
-                        java.io.File dir = ImportReceiver.receive(c.getInputStream(), c.getOutputStream(), parent);
+                        ImportReceiver.Received got = ImportReceiver.receiveAny(c.getInputStream(), c.getOutputStream(), parent);
+                        if (got.inPlace) {   // 电脑已把资源目录 adb push 到共享存储：原地登记，不传字节
+                            android.util.Log.i("S2Arm", "Game in-place request: " + got.dir);
+                            runOnUiThread(() -> lib.registerInPlace(got.dir));
+                            return;
+                        }
+                        java.io.File dir = got.dir;
                         android.util.Log.i("S2Arm", "Game import received " + dir.getName() + " in " + (System.nanoTime() - t0) / 1000000 + " ms");
                         runOnUiThread(() -> lib.scanImports(dir.getAbsolutePath()));
                         return;
@@ -250,6 +262,57 @@ public final class LibraryActivity extends Activity {
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request == PICK_PACKAGE && result == RESULT_OK && data != null && data.getData() != null) library.importTree(data.getData());
+        if (request == PICK_IN_PLACE && result == RESULT_OK && data != null && data.getData() != null) {
+            String path;
+            try { path = GameLibrary.inPlacePath(android.provider.DocumentsContract.getTreeDocumentId(data.getData()),
+                android.os.Environment.getExternalStorageDirectory()); }
+            catch (IllegalArgumentException notTree) { path = null; }
+            if (path == null) { status.setTextColor(0xFFFF5252); show(getString(R.string.in_place_not_local)); return; }
+            library.registerInPlace(new java.io.File(path));
+        }
+    }
+
+    // 原地使用：读共享存储上别处来的文件要「所有文件访问」（安卓 11+）；没开就说明并带去系统设置页
+    //   （做法照 mamcjr/Swap2-Native MainActivity.needAccess / openAccessSettings，MIT）。安卓 10 走旧的读存储权限
+    private void useInPlace() {
+        if (android.os.Build.VERSION.SDK_INT >= 30 && !android.os.Environment.isExternalStorageManager()) {
+            new android.app.AlertDialog.Builder(this)
+                .setTitle(R.string.in_place_access_title)
+                .setMessage(getString(R.string.in_place_access_text))
+                .setPositiveButton(R.string.in_place_access_open, (dialog, which) -> openAllFilesAccess())
+                .setNegativeButton(R.string.library_switch_cancel, null)
+                .show();
+            return;
+        }
+        if (android.os.Build.VERSION.SDK_INT < 30 && checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {android.Manifest.permission.READ_EXTERNAL_STORAGE}, ASK_LEGACY_READ);
+            return;
+        }
+        pickInPlace();
+    }
+
+    private void openAllFilesAccess() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                android.net.Uri.parse("package:" + getPackageName())));
+        } catch (RuntimeException noPerAppPage) {   // 个别系统没有按应用的那一页：打开总列表
+            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+        }
+    }
+
+    private void pickInPlace() {
+        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        if (new java.io.File(android.os.Environment.getExternalStorageDirectory(), IN_PLACE_DIR).isDirectory())
+            pick.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, android.net.Uri.parse(
+                "content://com.android.externalstorage.documents/document/primary%3A" + IN_PLACE_DIR.replace("/", "%2F")));
+        startActivityForResult(pick, PICK_IN_PLACE);
+    }
+
+    @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(request, permissions, results);
+        if (request == ASK_LEGACY_READ && results.length == 1 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED)
+            pickInPlace();
     }
     @Override protected void onDestroy() { if (library != null) library.close(); super.onDestroy(); }
 }

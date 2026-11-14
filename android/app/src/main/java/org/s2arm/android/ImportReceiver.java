@@ -20,6 +20,8 @@ import java.nio.charset.StandardCharsets;
  *   F &lt;字节数&gt; &lt;相对路径&gt;    后面紧跟这么多字节，可重复
  *   END
  * 回一行：OK &lt;文件数&gt; &lt;字节数&gt; 或 ERR &lt;原因&gt;。
+ * 原地登记（资源目录电脑已 adb push 到共享存储，不传字节）：电脑发一行 S2A-INPLACE 1 &lt;绝对路径&gt;，回 OK in-place，
+ * 之后由 GameLibrary.registerInPlace 原地登记（GameInstall.installInPlace）。
  * 收进 parent/.&lt;名字&gt;.part，收完整才改名成 parent/&lt;名字&gt;（parent = 私有 files/import），
  * 收的同时逐文件算 SHA-256，收完把「相对路径 → SHA-256」登记在进程内（verified，别的 App 改不了内存）；
  * 之后照常走 GameLibrary.scanImports：安装时大小与 SHA-256 都对得上索引的文件直接改名挪进对象库（GameInstall.Source.adopt），
@@ -38,13 +40,34 @@ final class ImportReceiver {
     }
     private static final int MAX_LINE = 4096;
 
-    /** 收一次传输；成功返回落好的目录，失败抛异常（已回 ERR、临时目录已删）。 */
+    /** 一次连接的结果：dir 是收好的目录（直传），或电脑要原地登记的共享存储目录（inPlace）。 */
+    static final class Received {
+        final File dir;
+        final boolean inPlace;
+        Received(File dir, boolean inPlace) { this.dir = dir; this.inPlace = inPlace; }
+    }
+
+    /** 只收直传（原地登记请求当错报）。 */
     static File receive(InputStream rawIn, OutputStream out, File parent) throws IOException {
+        Received got = receiveAny(rawIn, out, parent);
+        if (got.inPlace) throw new IOException("in-place request where a transfer was expected");
+        return got.dir;
+    }
+
+    /** 收一次传输或一条原地登记请求；成功返回结果，失败抛异常（已回 ERR、临时目录已删）。 */
+    static Received receiveAny(InputStream rawIn, OutputStream out, File parent) throws IOException {
         InputStream in = new BufferedInputStream(rawIn, 1 << 20);
         File part = null;
         try {
             reply(out, "READY " + VERSION);
             String[] head = line(in).split(" ", 3);
+            if (head.length == 3 && head[0].equals("S2A-INPLACE") && head[1].equals(String.valueOf(VERSION))) {
+                String root = head[2];
+                if (!root.startsWith("/")) throw new IOException("in-place path is not absolute: " + root);
+                safePath(root.substring(1));
+                reply(out, "OK in-place");
+                return new Received(new File(root), true);
+            }
             if (head.length != 3 || !head[0].equals("S2A-IMPORT") || !head[1].equals(String.valueOf(VERSION)))
                 throw new IOException("bad header");
             String name = head[2];
@@ -85,7 +108,7 @@ final class ImportReceiver {
             part = null;
             VERIFIED.put(done.getCanonicalPath(), sums);
             reply(out, "OK " + files + " " + bytes);
-            return done;
+            return new Received(done, false);
         } catch (IOException | RuntimeException e) {
             if (part != null) GameInstall.deleteTree(part);
             try { reply(out, "ERR " + String.valueOf(e.getMessage()).replace('\n', ' ')); } catch (IOException ignored) { }

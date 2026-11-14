@@ -446,6 +446,9 @@ s2a_gate_step "$PY" "$android_dir/tests/debug_app_admission_test.py"
 s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" "$android_dir/tests/GameSessionAdmissionTest.java" "$android_dir/tests/GameFingerprintTest.java"
 s2a_gate_step java -cp "$out/java" org.s2arm.android.GameSessionAdmissionTest
 s2a_gate_step java -cp "$out/java" org.s2arm.android.GameFingerprintTest
+# 原地来源（游戏文件留在共享存储、只登记元数据）：首次核 SHA、身份命中、改 / 删 / 挪具名拒、只认登记的根、清理不碰原地文件
+s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" "$android_dir/tests/InPlaceSourceTest.java"
+s2a_gate_step java -cp "$out/java" org.s2arm.android.InPlaceSourceTest
 s2a_gate_step "$PY" "$android_dir/tests/android_file_stamp_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/verified_source_test.py"
 s2a_gate_step "$PY" "$android_dir/../graphics/vulkan/wsi/tests/startup_surface_test.py"

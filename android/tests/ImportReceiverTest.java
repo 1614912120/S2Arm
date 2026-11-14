@@ -69,6 +69,22 @@ public final class ImportReceiverTest {
         check(new File(got, "c.bin").isFile(), "mismatched file stays for the checked copy");
         File plain = new File(parent, "plain"); plain.mkdirs(); Files.write(new File(plain, "a.bin").toPath(), "hello".getBytes());
         check(!GameInstall.directory(plain).adopt("a.bin", helloSha, 5, new File(parent, "objects/y")), "not received here: never adopted");
+        // ⑥ 原地登记请求：不传字节，回 OK in-place，返回电脑给的绝对路径；相对 / 带 .. 的路径拒；只收直传的入口把它当错
+        out = new ByteArrayOutputStream();
+        ImportReceiver.Received req = ImportReceiver.receiveAny(new ByteArrayInputStream(stream(
+            "S2A-INPLACE 1 /storage/emulated/0/S2Arm/Games/0100000000ABCDEF\n")), out, parent);
+        check(req.inPlace && req.dir.getPath().equals("/storage/emulated/0/S2Arm/Games/0100000000ABCDEF"), "in-place request path");
+        check(out.toString().equals("READY 1\nOK in-place\n"), "in-place replies OK in-place (" + out + ")");
+        for (String bad : new String[] {"S2A-INPLACE 1 relative/x\n", "S2A-INPLACE 1 /a/../b\n", "S2A-INPLACE 2 /a\n"}) {
+            err = "";
+            try { ImportReceiver.receiveAny(new ByteArrayInputStream(stream(bad)), new ByteArrayOutputStream(), parent); }
+            catch (IOException e) { err = e.getMessage(); }
+            check(!err.isEmpty(), "refuses in-place request " + bad.trim());
+        }
+        err = "";
+        try { ImportReceiver.receive(new ByteArrayInputStream(stream("S2A-INPLACE 1 /a\n")), new ByteArrayOutputStream(), parent); }
+        catch (IOException e) { err = e.getMessage(); }
+        check(err.startsWith("in-place request where a transfer"), "transfer-only entry refuses in-place (" + err + ")");
         GameInstall.deleteTree(parent);
         if (failures > 0) { System.err.println(failures + " / " + checks + " failed"); System.exit(1); }
         System.out.println("ImportReceiver: ok (" + checks + " checks)");

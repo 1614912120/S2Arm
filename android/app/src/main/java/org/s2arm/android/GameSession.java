@@ -117,12 +117,14 @@ final class GameSession implements AutoCloseable {
             GameFingerprint.Timing.end(timing, "fingerprint_reference", phase);
             GameFingerprint.ApkStamp apkStamp = fingerprint == null ? null : fingerprint.apk;
             boolean apkStampChanged = false;
-            GameFingerprint.Verification checked = GameFingerprint.verify(revision, entries, indexSha, fingerprint, timing, game.artifact);
+            // 内容文件的根：原地来源是登记的共享存储目录（元数据和指纹表仍在私有版本目录），否则就是版本目录
+            File content = game.inPlaceRoot != null ? new File(game.inPlaceRoot) : revision;
+            GameFingerprint.Verification checked = GameFingerprint.verify(revision, content, entries, indexSha, fingerprint, timing, game.artifact);
             long resourceNanos = System.nanoTime() - resourceStart;
             GameFingerprint.replayStats(timing);
             phase = GameFingerprint.Timing.start(timing);
             // Index paths are already checked clean, so the admitted key is a plain join.
-            String admittedPrefix = revision.toPath().toAbsolutePath().normalize().toString() + File.separator;
+            String admittedPrefix = content.toPath().toAbsolutePath().normalize().toString() + File.separator;
             for (GamePack.Entry entry : entries) {
                 hashes.put(entry.path, entry.sha256); bytes += entry.size;
                 admitted.put(admittedPrefix + entry.path.replace('/', File.separatorChar), entry);
@@ -132,7 +134,7 @@ final class GameSession implements AutoCloseable {
             // Metadata is allowed only as metadata; runtime data must belong to this contentRoot.
             for (String path : new String[]{game.npdm, game.control})
                 if (!hashes.containsKey(path)) throw new IOException("runtime file is outside the content index: " + path);
-            File need = new File(new File(revision, game.npdm).getParentFile(), "addr_need.tsv");
+            File need = new File(new File(content, game.npdm).getParentFile(), "addr_need.tsv");
             if (Files.exists(need.toPath(), LinkOption.NOFOLLOW_LINKS)
                     && !admitted.containsKey(need.toPath().toAbsolutePath().normalize().toString()))
                 throw new IOException("addr_need.tsv is outside the content index");
@@ -272,8 +274,7 @@ final class GameSession implements AutoCloseable {
 
     private void recheckNativeMetadata() throws IOException {
         if (admittedFiles.isEmpty()) return; // Direct constructor is only used by host lifecycle fixtures.
-        File revision = new File(spec.gameRoot, spec.game.revisionDir);
-        File npdm = new File(revision, spec.game.npdm);
+        File npdm = new File(spec.game.contentDir(new File(spec.gameRoot)), spec.game.npdm);
         for (File file : new File[]{npdm, new File(npdm.getParentFile(), "addr_need.tsv")}) {
             String path = file.toPath().toAbsolutePath().normalize().toString();
             GamePack.Entry entry = admittedFiles.get(path);
@@ -312,7 +313,7 @@ final class GameSession implements AutoCloseable {
             region = spec.user.region == null ? "" : spec.user.region;
             timezone = spec.user.timezone;
             assetRoot = spec.game.hasApkModules() ? spec.game.apk.assetRoot : "";
-            revisionDir = new File(spec.gameRoot, spec.game.revisionDir).getPath();
+            revisionDir = spec.game.contentDir(new File(spec.gameRoot)).getPath();   // 原生按它读游戏文件：原地来源是登记的根
             npdmPath = new File(revisionDir, spec.game.npdm).getPath();
             this.stateDir = stateDir;
             programId = Long.parseUnsignedLong(titleId, 16);
