@@ -232,7 +232,6 @@ extension LauncherView {
             homeHint("B", loc.t("home.back"))
             homeHint("Y", loc.t("home.details"))
             homeHint("X", loc.t("home.filter"))
-            homeHint("+", loc.t("home.menu"))
         }.foregroundStyle(.white.opacity(0.6)).padding(.horizontal, 54).frame(height: 48)
     }
     private func homeHint(_ button: String, _ title: String) -> some View {
@@ -297,7 +296,6 @@ extension LauncherView {
             case .search:
                 navigation.focus("home.search")
                 navigation.editText(value: home.search, label: loc.t("home.search")) { home.search = $0 }; return true
-            case .menu: showHomeMenu = true; return true
             case .back:
                 if !home.search.isEmpty { home.search = "" }
                 else if let game = homeSelected { navigation.focus("card." + game.id) }
