@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -117,14 +118,11 @@ def direct_space_recheck(context, counters, now=None):
         gb = lambda n: f"{n / 1e9:.0f} GB"
         head = (f"磁盘空间不够：编译着色器这一步（{name.split('·')[-1]}）照现在的进度还要再占约 {gb(need)}，"
                 f"{where}只剩 {gb(free)}（已完成 {c['done']} / {c['total']}，这段已用掉 {gb(spent)}）。")
-        if getattr(context, "r", {}).get("spaceOverride") is True:
-            if not getattr(context, "_direct_space_warned", False):
-                context._direct_space_warned = True
-                context.diagnostic(head + "已按你的选择仍然继续；中途真写满会停下报错，游戏原件和存档不受影响。", "disk_full", severity="warning")
-            return
-        message = head + "请腾出空间或把游戏库换到空间更大的盘后再试；也可以点「仍然继续」。"
-        context.diagnostic(message, "disk_full")
-        raise Failure(message, code="disk_full")
+        # 按进度外推只当提示、不拦（不许堵门，11-14 定）：每单只提示一次，照常编；中途真写满时写盘报 ENOSPC，那才停、归 disk_full
+        if not getattr(context, "_direct_space_warned", False):
+            context._direct_space_warned = True
+            context.diagnostic(head + "这是按进度估的，照常继续；中途真写满会停下报错，游戏原件和存档不受影响。", "disk_full", severity="warning")
+        return
 
 
 class Cancelled(Exception):
@@ -279,8 +277,48 @@ def atomic(path, value):
         tmp.unlink(missing_ok=True)
 
 
+def _windows():
+    """resolve_path 的平台判断单独一处：单测只换它，不改全局 os.name（改了 pathlib 会去建 WindowsPath，在 Mac / Linux 上直接抛异常）"""
+    return os.name == "nt"
+
+
+def resolve_path(path):
+    """Resolve a path while keeping Windows ERROR_UNRECOGNIZED_VOLUME (1005) volumes usable.
+
+    Some mounted volumes allow normal file I/O but reject GetFinalPathNameByHandle. In that case,
+    use an absolute lexical path only after checking existing components for symlinks/junctions;
+    without real-path data, containment checks must not follow a reparse point unchecked.
+    """
+    path = Path(path).expanduser()
+    try:
+        return path.resolve()
+    except OSError as error:
+        if not _windows() or getattr(error, "winerror", None) != 1005:
+            raise
+        absolute = Path(os.path.abspath(path))
+        if not absolute.anchor or absolute.anchor.startswith("\\\\"):
+            raise
+        current = Path(absolute.anchor)
+        for part in absolute.parts[1:]:
+            current /= part
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                break
+            except OSError:
+                raise error
+            if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400):
+                raise error
+        return absolute
+
+
+def resolve_library_path(path):
+    """Resolve a selected library root, including mounted volumes with unsupported final-path queries."""
+    return resolve_path(path)
+
+
 def contained(root, path):
-    root, path = Path(root).resolve(), Path(path).resolve()
+    root, path = resolve_path(root), resolve_path(path)
     if path == root or root not in path.parents:
         raise Failure("操作路径不属于托管目录。")
     return path
@@ -457,7 +495,7 @@ def default_home(private, library=None):
             locations = []
         library = locations[0].get("path") if locations and isinstance(locations[0], dict) else None
     if library:
-        root = Path(library).expanduser().resolve()
+        root = resolve_library_path(library)
         if (root / LIBRARY_MARKER).is_file():
             return root
     return private
@@ -545,7 +583,7 @@ class Context:
         self.private.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.private, 0o700)
         self.engine = Path(request.get("engineDir") or ".").expanduser().resolve()
-        self.library = Path(request.get("library") or self.private / "unconfigured").expanduser().resolve()
+        self.library = resolve_library_path(request.get("library") or self.private / "unconfigured")
         import layout
         self.library = layout.relocate_default(self.private, self.library)   # 旧默认库（私有目录里的）已搬到 ~/S2Arm：照新位置用（游戏库结构 P3）
         self.logs = logs_root(self.private)   # 本任务的日志与任务记录（logs/jobs/）：固定在私有目录（剃刀 H6）
