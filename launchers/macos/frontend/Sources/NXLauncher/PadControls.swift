@@ -64,8 +64,12 @@ private struct PadControlModifier: ViewModifier {
     @Environment(\.isEnabled) private var enabled
     @Environment(\.padPreferred) private var preferred
     func body(content: Content) -> some View {
-        content.background(PadControlFrame(registry: registry, token: token, id: explicitID ?? identifier ?? "control." + token.uuidString,
-            scope: scope, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred))
+        content.background {
+            if registry != nil {
+                PadControlFrame(registry: registry, token: token, id: explicitID ?? identifier ?? "control." + token.uuidString,
+                    scope: scope, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred)
+            }
+        }
     }
 }
 private struct PadControlFrame: NSViewRepresentable {

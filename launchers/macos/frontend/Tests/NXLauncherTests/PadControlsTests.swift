@@ -51,6 +51,21 @@ import NXLauncher
         XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "choice" })
     }
 
+    func testSGradeCheckboxAcceptsControllerInput() async throws {
+        let state = ControlsState()
+        let navigation = LauncherPadNavigation()
+        let card = SGradeCardView(match: nil, failed: false, zh: false,
+            on: Binding(get: { state.enabled }, set: { state.enabled = $0 }), x: { $0 })
+        let window = host(card, navigation: navigation)
+        defer { navigation.detach(); window.close() }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "export.sgrade.toggle" })
+        navigation.focus("export.sgrade.toggle"); navigation.handle(.confirm)
+        XCTAssertTrue(state.enabled)
+        navigation.handle(.left)
+        XCTAssertFalse(state.enabled)
+    }
+
     private func host<V: View>(_ content: V, navigation: LauncherPadNavigation) -> NSWindow {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 500, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)

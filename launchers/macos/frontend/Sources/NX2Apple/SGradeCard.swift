@@ -74,7 +74,8 @@ struct SGradeCardView: View {
                         .foregroundStyle(Self.gold).overlay(Capsule().strokeBorder(Self.gold.opacity(0.55), lineWidth: 1))
                     if let on {
                         Spacer(minLength: 12)
-                        Toggle(x("toggle"), isOn: on).toggleStyle(PadToggleStyle(.checkbox)).font(.manrope(12.5, .medium)).tint(Self.gold)
+                        Toggle(x("toggle"), isOn: on).toggleStyle(.checkbox).font(.manrope(12.5, .medium)).tint(Self.gold)
+                            .controllerControl(id: "export.sgrade.toggle", activate: { on.wrappedValue.toggle() }, adjust: { on.wrappedValue = $0 > 0 })
                             .accessibilityIdentifier("export.sgrade.toggle")
                     }
                 }
