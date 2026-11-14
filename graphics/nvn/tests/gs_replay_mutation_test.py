@@ -24,6 +24,13 @@ sources = ['graphics/nvn/tests/t_nvn_replay.c','graphics/nvn/tests/nvn_clear_vie
            'graphics/nvn/gfx/nvn/nvn_tex.c','graphics/nvn/gfx/tex/nvn_deswizzle.c']
 base = [os.environ.get('CC','cc'),'-O2','-g','-Wall','-Wextra','-Wno-unused-parameter','-std=c11','-D_DEFAULT_SOURCE','-Werror',
         *('-I'+str(ROOT/x) for x in ('.','graphics/nvn/gfx/nvn','graphics/nvn/gfx/nvn/include','graphics/nvn/gfx/tex','graphics/nvn/replay'))]
+# 回放核心对平台 / 后端可选件的弱引用：苹果 ld 默认不认未定义弱符号，逐个允许缺（同一张表在 runtime/tests/mk/nvn_replay.mk）
+import re, sys
+if sys.platform == 'darwin':
+    mk = (ROOT/'runtime/tests/mk/nvn_replay.mk').read_text()
+    m = re.search(r'^NVN_REPLAY_WEAK_SYMS := (.+)$', mk, re.M)
+    assert m, 'NVN_REPLAY_WEAK_SYMS missing in nvn_replay.mk'
+    base += ['-Wl,-U,_' + x for x in m.group(1).split()]
 def run(name, code):
     path = OUT/(name+'.c'); path.write_text(code)
     exe = OUT/name
