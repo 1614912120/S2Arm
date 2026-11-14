@@ -248,6 +248,21 @@ got16, why16 = cpatch.port_writes([(0x130, mz(u16)), (0x138, mk(u16))], 21 / 9, 
 ck(f'⑯ movz / movk 隔几条也认、也移植（实得 识别 {[x[:2] for x in par16]} 剩 {left16}；隔 20 {far16}；中间重赋值 {mid16}；移植 {got16} {why16}）',
    [x[:2] for x in par16] == [(0x130, 'movpair')] and left16 == 0 and far16 == [] and mid16 == []
    and sorted(got16 or []) == [(0x200, mz(u16)), (0x208, mk(u16))])
+# ⑰ 先高后低、X 寄存器的 movz / movk（11-14 补丁库体检：12 份先写高半 movz w25,#hi,lsl16 + movk w25,#lo；5 份 mov x1,#lo + movk x1,#hi,lsl16）
+#    期望（手算）：两种都认成 movpair、剩余 0 字；W 与 X 混用（movz w8 + movk x8）不认；移植：新版 0x300 movz w25,#hi(16/9),lsl16 / 0x304 movk w25,#lo(16/9) →
+#    写 0x300 = movz w25,#hi(u),lsl16、0x304 = movk w25,#lo(u)
+mzh = lambda v, rd=25: (0x52A00000 | ((v >> 16) << 5) | rd).to_bytes(4, 'little')
+mkl = lambda v, rd=25: (0x72800000 | ((v & 0xFFFF) << 5) | rd).to_bytes(4, 'little')
+xz = lambda v, rd=1: (0xD2800000 | ((v & 0xFFFF) << 5) | rd).to_bytes(4, 'little')
+xk = lambda v, rd=1: (0xF2A00000 | ((v >> 16) << 5) | rd).to_bytes(4, 'little')
+hl17, _, lhl17 = cpatch.aspect_classify([(0x280, mzh(u16)), (0x288, mkl(u16))], 21 / 9)
+x17, _, lx17 = cpatch.aspect_classify([(0x2A0, xz(u16)), (0x2A4, xk(u16))], 21 / 9)
+mix17 = cpatch.aspect_classify([(0x2C0, mz(u16, 1)), (0x2C4, xk(u16))], 21 / 9)[0]
+im17 = bytearray(0x1000); im17[0x300:0x304] = mzh(r16); im17[0x304:0x308] = mkl(r16)
+got17, why17 = cpatch.port_writes([(0x280, mzh(u16)), (0x284, mkl(u16))], 21 / 9, bytes(im17), 0x800)
+ck(f'⑰ 先高后低 / X 寄存器的 movz / movk 也认、也移植（实得 先高后低 {[x[:2] for x in hl17]} 剩 {lhl17}；X {[x[:2] for x in x17]} 剩 {lx17}；W X 混用 {mix17}；移植 {got17} {why17}）',
+   [x[:2] for x in hl17] == [(0x280, 'movpair')] and lhl17 == 0 and [x[:2] for x in x17] == [(0x2A0, 'movpair')] and lx17 == 0 and mix17 == []
+   and sorted(got17 or []) == [(0x300, mzh(u16)), (0x304, mkl(u16))])
 sys.exit(bad)
 EOF
 rc=$?; [ $rc = 0 ] && echo "✅ cpatch_adapt_test 全过" || { echo "🔴 cpatch_adapt_test 有不通项"; exit 1; }
