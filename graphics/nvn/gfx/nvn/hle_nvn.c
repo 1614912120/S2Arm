@@ -1615,9 +1615,14 @@ static void used_set(cmd_t *o, uint64_t v) { __atomic_store_n(&o->used, v, __ATO
 //   不进命令内存、不发 OUT_OF_COMMAND_MEMORY（游戏自带驱动反汇编，SDK 4.4.1 与更新一代 sdk 同形）。按记录大小算会在游戏还没给命令内存时回调：
 //   Outlast 2（0100DE70085E8000，UE4）建 RHI 时只给控制内存就 BeginRecording、绑两个池，之后才建回调要用的命令内存环，回调读到未初始化的环指针崩在 main+0xf3a574
 #define DEV_CTL 0xFFFFu
+// 状态对象绑定（Blend / Color / ChannelMask / Multisample / Polygon / DepthStencil，OP_BIND_STATE）：记录里是宿主自己的状态快照（4 + 0x18 字节，连头 40），
+//   不是设备命令；按记录大小算就成了每条 40 设备字节。UE4 给每个 PSO 预先分好定长的命令内存（按真机驱动的用量），六种状态一叠就被我们估满，
+//   OUT_OF_COMMAND_MEMORY 回调里 UE4 断言「PSO CommandMemory OOM Event」中止（11-14 诊断 D-HSQE，0.3.10，选完存档即闪退）。
+//   真机一条状态绑定是几条寄存器方法；按上面「宁可估低」取一条方法的下限 8 字节（4 字节方法头 + 1 个数据字）
+#define DEV_STATE 8
 static const uint16_t g_dev_bytes[OP_COUNT_] = {
     [OP_END] = 8, [OP_CALL] = 16, [OP_SET_RT] = 96, [OP_BIND_PROGRAM] = 64, [OP_BIND_TEX1] = 24, [OP_DRAW] = 32, [OP_DRAW_IDX] = 48, [OP_DRAW_TEX] = 64,
-    [OP_DISPATCH] = 48, [OP_COPY_B2T] = 64, [OP_COPY_T2B] = 64, [OP_COPY_T2T] = 64, [OP_CLEAR_TEX] = 48, [OP_SET_TEX_POOL] = DEV_CTL, [OP_SET_SAMP_POOL] = DEV_CTL,
+    [OP_DISPATCH] = 48, [OP_COPY_B2T] = 64, [OP_COPY_T2B] = 64, [OP_COPY_T2T] = 64, [OP_CLEAR_TEX] = 48, [OP_SET_TEX_POOL] = DEV_CTL, [OP_SET_SAMP_POOL] = DEV_CTL, [OP_BIND_STATE] = DEV_STATE,
 };
 // NVN2 的带索引绘制按入口取驱动真值（draw_elements 设置），不走上表的 Maxwell 估算；间接绘制不是这三个入口，仍查表（0 = 查表）
 static __thread uint32_t t_dev_draw_idx;
