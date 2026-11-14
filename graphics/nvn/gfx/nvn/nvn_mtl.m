@@ -2406,6 +2406,7 @@ static void rt_keep_state(void);
 static void ghost_finish_submission(void);
 static void alias_dead_views(void);
 static void bcal_sweep_overwritten(void);
+int nvn_cmd_call_target(uint64_t h);   // hle_nvn.c：回放 CALL 核目标（#768338 安全阀）
 static const char *cctx_snap(void);   // What is in this submission (printed into the failure line on error; defined before nvn_be_exec)
 static void lc_land(void); static int g_nlc;   // lazy clears waiting (lc_push; fb_prepare lands them before a feedback read)
 static _Atomic int g_seg_inflight;   // main command buffers committed and not reported back yet (sub_cut)
@@ -15281,6 +15282,16 @@ void nvn_be_exec(const uint8_t *p) {
             case OP_BEGIN: break;
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
             case OP_CALL: { uint64_t t; memcpy(&t, a, 8);
+                {   // #768338 安全阀 + 探针（hle_nvn.c nvn_cmd_call_target）：目标块已被别的录制复用 → 记现场、跳过这次调用；目标已被覆盖但还在隔离区 → 照常执行，记一行
+                    int ck = nvn_cmd_call_target(t);
+                    if (ck < 0) { static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+                        if (k <= 8 || !(k & (k - 1))) MLOG("【红】 command-list call into reused host blocks: target %#llx is in the command-record area but is no recording's handle (its recording was overwritten and the blocks reused): call skipped; caller list %p, depth %d, frame %llu (%llu so far)",
+                                                           (unsigned long long)t, list, g_ret_n - base, (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)k);
+                        break; }
+                    if (ck > 0) { static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+                        if (k <= 8 || !(k & (k - 1))) MLOG("【黄】 command-list call into an overwritten recording still in quarantine: target %#llx (blocks intact, run as recorded); caller list %p, depth %d, frame %llu (%llu so far)",
+                                                           (unsigned long long)t, list, g_ret_n - base, (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)k); }
+                }
                 if (g_ret_n - base >= CALL_DEPTH_MAX || !call_push(p + h.size, list)) {
                     static int red; if (!red++) MLOG("【红】 command-list call nested %d deep (limit %d, or the return stack could not grow): skipped this call; the commands may call back into themselves (first case)", g_ret_n - base, CALL_DEPTH_MAX);
                     break; }

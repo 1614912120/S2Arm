@@ -1681,6 +1681,7 @@ typedef struct srec {
     snode *nodes;               // index nodes, set at EndRecording
     uintptr_t glo;              // start of the piece in the command buffer's current window
     uint64_t bytes, rbytes, frame;   // host bytes of the blocks / of the records; frame of release
+    uint8_t *begin;             // its handle (first record), registered in g_shh once ended
 } srec;
 static pthread_mutex_t g_sh_mu = PTHREAD_MUTEX_INITIALIZER;
 static sblk *g_sh_free[SH_NCLS];
@@ -1688,6 +1689,10 @@ typedef struct { uint8_t *mem; uint32_t cls, carved; } schunk;
 static schunk *g_sh_chunk; static int g_sh_nchunk, g_sh_cchunk, g_sh_carving[SH_NCLS];   // g_sh_carving: index + 1 of the chunk a class carves from
 static snode *g_sh_bkt[SH_NBKT];
 static srec g_sh_all = { .prev = &g_sh_all, .next = &g_sh_all };
+// 句柄登记（#768338 安全阀，g_sh_mu 下读写）：结束了的录制的句柄 → 1 活着 / 2 已被覆盖、还在隔离区（宿主块完好）；隔离期满块被复用时删掉。
+//   内容共用的常驻副本（sh_intern）一直是 1。回放的 CALL 按它核目标（nvn_cmd_call_target）
+static nvn_hmap g_shh = {.klen = 8};
+static void shh_set(const uint8_t *h, uintptr_t st) { if (!h) return; uintptr_t k = (uintptr_t)h; if (st) nvn_hm_put(&g_shh, &k, (void *)st); else nvn_hm_del(&g_shh, &k); }
 static srec *g_sh_qhead, *g_sh_qtail; static uint64_t g_sh_qbytes;
 static uint64_t g_sh_nlive, g_sh_live_bytes, g_sh_unanchored;
 typedef struct { uint64_t h; uint32_t len; struct sblk *b; } sintern;
@@ -1749,6 +1754,7 @@ static void sh_index(srec *r) {   // g_sh_mu held
         }
 }
 static void sh_free_rec(srec *r) {   // g_sh_mu held: blocks back to their classes
+    shh_set(r->begin, 0);
     for (sblk *b = r->blk, *nx; b; b = nx) { nx = b->next; b->next = g_sh_free[b->cls]; g_sh_free[b->cls] = b; }
     if (r->iv != r->ivs) free(r->iv);
     free(r);
@@ -1760,12 +1766,17 @@ static void sh_pump(void) {   // g_sh_mu held: reuse the blocks of recordings re
         g_sh_qbytes -= r->bytes; sh_free_rec(r);
     }
 }
+void s2a_hle_cmdshadow_quarantine_flush(void) {   // 单测：隔离区里的录制立即放回块池（同隔离期满）
+    pthread_mutex_lock(&g_sh_mu);
+    while (g_sh_qhead) { srec *r = g_sh_qhead; g_sh_qhead = r->next; g_sh_qbytes -= r->bytes; sh_free_rec(r); }
+    g_sh_qtail = NULL; pthread_mutex_unlock(&g_sh_mu);
+}
 static void sh_kill(srec *r) {   // g_sh_mu held: the recording is dead; unindex it and queue its blocks for reuse
     for (uint32_t i = 0; i < r->nnodes; i++) { snode *d = &r->nodes[i]; __atomic_store_n(d->pprev, d->next, __ATOMIC_RELEASE); if (d->next) d->next->pprev = d->pprev; }
     free(r->nodes); r->nodes = NULL; r->nnodes = 0;
     r->prev->next = r->next; r->next->prev = r->prev;
     g_sh_nlive--; g_sh_live_bytes -= r->bytes;
-    r->frame = dm_nvn_frame_count(); r->next = NULL; g_sh_qbytes += r->bytes;
+    r->frame = dm_nvn_frame_count(); r->next = NULL; g_sh_qbytes += r->bytes; shh_set(r->begin, 2);
     if (g_sh_qtail) g_sh_qtail->next = r; else g_sh_qhead = r;
     g_sh_qtail = r;
 }
@@ -1789,6 +1800,18 @@ static void sh_overwrite(uintptr_t lo, uintptr_t hi) {
     if (!any) return;
     pthread_mutex_lock(&g_sh_mu); sh_kill_range(lo, hi); pthread_mutex_unlock(&g_sh_mu);
 }
+// 回放的 CALL 核目标（#768338）：0 = 活录制的句柄，或不在命令记录区（单测手拼的列表等，不判）；1 = 已被覆盖、还在隔离区的录制（块完好，照常执行，探针记一行）；
+//   -1 = 落在命令记录区、却不是任何录制的句柄（那块已被别的录制复用）：跳进去就是执行不相干的内容（成环 / GPU 卡住），调用方跳过这次调用。
+//   真机上句柄就是设备地址，长期列表调用一段每帧重录的内存是合法写法；宿主每次重录换新句柄，旧句柄就悬空——根修是按设备地址解析（另案）
+int nvn_cmd_call_target(uint64_t h) {
+    uintptr_t k = (uintptr_t)h; int r = 0;
+    pthread_mutex_lock(&g_sh_mu);
+    uintptr_t st = (uintptr_t)nvn_hm_get(&g_shh, &k);
+    if (st == 1) r = 0; else if (st == 2) r = 1;
+    else for (int i = 0; i < g_sh_nchunk; i++) if (k >= (uintptr_t)g_sh_chunk[i].mem && k < (uintptr_t)g_sh_chunk[i].mem + SH_CHUNK) { r = -1; break; }
+    pthread_mutex_unlock(&g_sh_mu);
+    return r;
+}
 // A memory pool is finalized: the recordings in its memory can no longer run on the device (also where a game drops a whole command pool instead of re-recording it)
 static void cmdshadow_pool_gone(const uint8_t *mem, size_t n) {
     if (!mem || !n) return;
@@ -1800,6 +1823,7 @@ static void sh_shutdown(void) {   // session end: every recording and chunk goes
     for (srec *r = g_sh_qhead, *nx; r; r = nx) { nx = r->next; if (r->iv != r->ivs) free(r->iv); free(r); }
     for (int i = 0; i < g_sh_nchunk; i++) sh_chunk_unmap(g_sh_chunk[i].mem);
     free(g_sh_chunk); g_sh_chunk = NULL; g_sh_nchunk = g_sh_cchunk = 0;
+    free(g_shh.keys); free(g_shh.vals); nvn_hm_init(&g_shh, 8);
     memset(g_sh_carving, 0, sizeof g_sh_carving); memset(g_sh_free, 0, sizeof g_sh_free); memset(g_sh_bkt, 0, sizeof g_sh_bkt);
     g_sh_all.next = g_sh_all.prev = &g_sh_all; g_sh_qhead = g_sh_qtail = NULL; g_sh_qbytes = g_sh_nlive = g_sh_live_bytes = g_sh_unanchored = 0; free(g_sh_it); g_sh_it = NULL; g_sh_itcap = g_sh_itn = 0; g_sh_shared_n = 0;
     pthread_mutex_unlock(&g_sh_mu);
@@ -1928,7 +1952,7 @@ static int sh_intern(cmd_t *o, srec *r) {   // g_sh_mu held: 1 = r dropped, hand
         }
         copy = sh_blk_get(sizeof(sblk) + len, sizeof(sblk) + len); copy->next = NULL; memcpy(copy + 1, o->begin, len);
         for (i = hv & (g_sh_itcap - 1); g_sh_it[i].b; i = (i + 1) & (g_sh_itcap - 1)) {}
-        g_sh_it[i] = (sintern){hv, (uint32_t)len, copy}; g_sh_itn++;
+        g_sh_it[i] = (sintern){hv, (uint32_t)len, copy}; g_sh_itn++; shh_set((const uint8_t *)(copy + 1), 1);
     }
     r->prev->next = r->next; r->next->prev = r->prev; g_sh_nlive--; g_sh_live_bytes -= r->bytes;
     b->next = g_sh_free[b->cls]; g_sh_free[b->cls] = b;   // nothing points into it yet: the handle is handed out below
@@ -1942,7 +1966,7 @@ static void sh_end(cmd_t *o) {
     uint64_t h = r->rbytes + OP_RESERVE + sizeof(sblk); o->hint = (uint32_t)(h < 256 ? 256 : h > (1u << 20) ? (1u << 20) : h);
     pthread_mutex_lock(&g_sh_mu);
     if (sh_intern(o, r)) { pthread_mutex_unlock(&g_sh_mu); o->rec = NULL; return; }
-    sh_anchor_empty(o, r); r->open = 0;
+    sh_anchor_empty(o, r); r->open = 0; r->begin = o->begin; shh_set(r->begin, 1);
     uint64_t un = 0; if (r->niv) sh_index(r); else un = ++g_sh_unanchored;
     pthread_mutex_unlock(&g_sh_mu);
     if (un && (un == 1 || un % 1024 == 0)) LOG("【黄】[nvn] command recording without any of the game's memory: its host blocks stay until the session ends (%llu so far)", (unsigned long long)un);
