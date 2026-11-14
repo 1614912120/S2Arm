@@ -14,6 +14,9 @@ import java.util.List;
  * 首次按 index 核大小与 SHA-256，之后起局靠指纹表身份命中；文件被改 / 删 / 根被挪具名拒；只认登记的根；
  * 清理私有目录从不碰原地文件。夹具是 GameSessionAdmissionTest.fixture 的 8 文件包（exefs/main.npdm 与 modules/main.npdm
  * 同为 128 个零字节，所以对象库里是 7 个对象），期望值都按这个包手算。
+ * 原地起局的「命中 / 重算」：8 个文件里 4 个是可执行文件（exefs/main.npdm 和 main 模块的 image / fixups / gates；
+ * modules/main.npdm 不在 exefs 下、不算），每次整份重算；其余 4 个数据文件按身份命中，所以全好时是「命中 4 / 重算 4」，
+ * 碰过一个数据文件是「命中 3 / 重算 5」。
  */
 public final class InPlaceSourceTest {
     private static int checks;
@@ -38,7 +41,10 @@ public final class InPlaceSourceTest {
         }
     }
 
+    private static boolean tamperOnly;
+
     private static void counts(String line, int hit, int rehash) {
+        if (tamperOnly) return;
         check(line.startsWith("资源校验：指纹命中 " + hit + " / 重算 " + rehash + " / 用时 "), "unexpected resource counts: " + line);
     }
 
@@ -64,11 +70,18 @@ public final class InPlaceSourceTest {
     public static void main(String[] args) throws Exception {
         Path base = Files.createTempDirectory("s2a-inplace-");
         try {
+            if (args.length == 1 && args[0].equals("tamper-only")) {   // 负对照用：只跑「恢复身份的篡改」两条，不核计数
+                tamperOnly = true;
+                restoredIdentity(base);
+                System.out.println("InPlaceSource tamper-only: " + checks + " checks PASS");
+                return;
+            }
             exactHash(base);
             registerAndBoot(base);
             changedAndMissing(base);
             rootRules(base);
             storageSwitches(base);
+            restoredIdentity(base);
             System.out.println("InPlaceSource: " + checks + " checks PASS (synthetic host only)");
         } finally { GameInstall.deleteTree(base.toFile()); }
     }
@@ -101,7 +114,7 @@ public final class InPlaceSourceTest {
             "metadata-only revision: " + Arrays.toString(meta));
         check(objects(game) == 0, "in-place registration stores no objects");
         // 起局：登记时已核过 8 个文件并记下身份，全部命中、0 重算
-        counts(load(app, game), 8, 0);
+        counts(load(app, game), 4, 4);
         try (GameSession session = GameSession.load(GameSessionAdmissionTest.spec(app, game), app.toFile(), null, true)) {
             GameSession.FrozenStart start = session.begin(true, true, 1280, 720, 320, 60, BootSpec.ConsoleMode.HANDHELD);
             check(start.revisionDir.equals(root.toRealPath().toString()), "native reads game files from the in-place root: " + start.revisionDir);
@@ -114,18 +127,18 @@ public final class InPlaceSourceTest {
         // 碰一下修改时间：只重算这 1 个，表更新后下次又全命中
         Path readme = root.resolve("romfs/readme");
         Files.setLastModifiedTime(readme, FileTime.fromMillis(Files.getLastModifiedTime(readme).toMillis() + 5000));
-        counts(load(app, game), 7, 1);
-        counts(load(app, game), 8, 0);
+        counts(load(app, game), 3, 5);
+        counts(load(app, game), 4, 4);
         // 同一个根再登记一次：已在用，不重来
         check(GameInstall.installInPlace(games, root.toFile(), SAME, null).alreadyActive, "same root re-register is already active");
         // 根上多出来的文件（游戏读不到的位置）不挡；内容目录里多出来的游戏读得到，具名拒
         Files.writeString(root.resolve("notes.txt"), "player notes");
-        counts(load(app, game), 8, 0);
+        counts(load(app, game), 4, 4);
         Files.writeString(root.resolve("romfs/extra"), "x");
         String why = refusal(app, game);
         check(why != null && why.equals("in-place file is outside the content index: romfs/extra"), "stray content file: " + why);
         Files.delete(root.resolve("romfs/extra"));
-        counts(load(app, game), 8, 0);
+        counts(load(app, game), 4, 4);
     }
 
     private static void changedAndMissing(Path base) throws Exception {
@@ -151,7 +164,7 @@ public final class InPlaceSourceTest {
         check(why != null && why.equals("in-place file is missing: romfs/readme (under " + root.toRealPath() + ")"), "missing file: " + why);
         // 放回原样（新 inode / 新修改时间）：重算 1 个通过
         Files.write(readme, good);
-        counts(load(app, game), 7, 1);
+        counts(load(app, game), 3, 5);
         // 换成指向根外的符号链接（内容相同）：只认登记的根，拒
         Path outside = Files.write(base.resolve("outside-readme"), good);
         Files.delete(readme);
@@ -160,7 +173,7 @@ public final class InPlaceSourceTest {
         check(why != null && why.contains("escapes"), "link out of the root: " + why);
         Files.delete(readme);
         Files.write(readme, good);
-        counts(load(app, game), 7, 1);
+        counts(load(app, game), 3, 5);
         // 整个文件夹被挪走：具名拒
         String registered = root.toRealPath().toString();
         Path moved = root.resolveSibling("g2-moved");
@@ -173,7 +186,7 @@ public final class InPlaceSourceTest {
         check(why != null && why.startsWith("in-place game folder is no longer its registered path"), "linked folder: " + why);
         Files.delete(root);
         Files.move(moved, root);
-        counts(load(app, game), 8, 0);
+        counts(load(app, game), 4, 4);
         // 首次登记就核内容：坏文件不登记，什么都不写
         Path app3 = Files.createDirectories(base.resolve("app3"));
         Path bad = shared(base, "g3");
@@ -216,7 +229,7 @@ public final class InPlaceSourceTest {
         GameInstall.Result r = GameInstall.installInPlace(games, root.toFile(), SAME, null);
         check(!r.alreadyActive && r.inPlaceRoot != null, "same content switched to in place");
         check(objects(game) == 0, "objects of the replaced private copy collected: " + objects(game));
-        counts(load(app, game), 8, 0);
+        counts(load(app, game), 4, 4);
         // 反过来：同一份内容再复制进私有目录，照常装（不是「已安装」），原地登记没了
         GameInstall.Result back = GameInstall.install(games, GameInstall.directory(root.toFile()), null);
         check(!back.alreadyActive && BootContract.open(game.toFile()).inPlaceRoot == null, "copy replaces the in-place registration");
@@ -243,6 +256,34 @@ public final class InPlaceSourceTest {
         }
         check(names(game.resolve("revisions")).length == 2, "two revisions kept: " + Arrays.toString(names(game.resolve("revisions"))));
         check(before.equals(sums(root)), "pruning the in-place revision never touches the shared files");
+    }
+
+    // 原地改写内容、再把大小 / inode / 修改时间都恢复：数据文件照常命中（等于玩家打 mod），可执行模块必须重算后具名拒
+    private static void restoredIdentity(Path base) throws Exception {
+        Path app = Files.createDirectories(base.resolve("app6"));
+        Path root = shared(base, "g6");
+        GameInstall.installInPlace(app.resolve("games").toFile(), root.toFile(), SAME, null);
+        Path game = app.resolve("games/" + TITLE);
+        counts(load(app, game), 4, 4);
+        // ② 数据文件 romfs/readme：{7} → {8}，同 inode、同大小、修改时间恢复 → 照常起局，仍是命中 4 / 重算 4（readme 命中）
+        tamperKeepingIdentity(root.resolve("romfs/readme"), new byte[] {8});
+        counts(load(app, game), 4, 4);
+        // ① 可执行模块 main 的 image：{1,2,3,4} → {9,9,9,9}，同样手法 → 起局拒，错误写明是 main 模块的 image
+        tamperKeepingIdentity(root.resolve("modules/main.patched.bin"), new byte[] {9, 9, 9, 9});
+        String why = refusal(app, game);
+        check("in-place executable changed (SHA-256 differs from index.tsv): module main image modules/main.patched.bin".equals(why),
+            "tampered module with restored identity: " + why);
+    }
+
+    private static void tamperKeepingIdentity(Path file, byte[] bytes) throws IOException {
+        Object key = Files.readAttributes(file, "unix:ino,dev");
+        long size = Files.size(file);
+        FileTime time = Files.getLastModifiedTime(file);
+        check(bytes.length == size, "same-size tamper");
+        try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(file.toFile(), "rw")) { f.write(bytes); }
+        Files.setLastModifiedTime(file, time);
+        check(key.equals(Files.readAttributes(file, "unix:ino,dev")) && Files.size(file) == size
+            && time.equals(Files.getLastModifiedTime(file)), "identity restored after tamper: " + file);
     }
 
     // 资源包总字节数 +delta（manifest.json 的 total、构建描述 package.bytes）

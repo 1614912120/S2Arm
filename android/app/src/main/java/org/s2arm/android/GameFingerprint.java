@@ -32,7 +32,9 @@ import java.util.regex.Pattern;
  * <p>原地来源（BootContract.IN_PLACE）：表仍在私有版本目录（revision），核对的是共享存储上的内容根（content）。
  * 共享存储没有单写者约定，玩家 / 别的 App 可以改：身份（大小、dev、inode、修改时间纳秒）任何一项变了就按索引重算
  * SHA-256，对不上具名拒（「in-place file changed」），缺了具名拒（「in-place file is missing」）。和私有目录一样，
- * 保留大小 / 修改时间 / inode 的原地改写测不出，这是缓存不是认证。 */
+ * 保留大小 / 修改时间 / inode 的原地改写测不出，这是缓存不是认证。所以原地来源的可执行文件（revision 来源模块的
+ * image / fixups / gates / widen、exefs 下的 npdm：GameSession 给的 executables）每次起局都整份重算 SHA-256，不走身份命中；
+ * 数据文件（romfs 等）被改等于玩家打 mod，照旧按身份命中。 */
 final class GameFingerprint {
     private static final String PREFIX = ".s2a-fingerprint-";
     private static final Pattern TABLE = Pattern.compile("\\.s2a-fingerprint-[0-9a-f]{64}\\.tsv");
@@ -267,10 +269,17 @@ final class GameFingerprint {
     static Verification verify(File revision, File content, List<GamePack.Entry> entries, String indexSha, Reference ref,
                                Timing timing, String artifactName)
             throws IOException, BootContract.BadGame {
+        return verify(revision, content, entries, indexSha, ref, timing, artifactName, java.util.Collections.emptyMap());
+    }
+
+    // executables：路径 → 名字（如「module main image」）。这些文件身份命中也整份重算，对不上按名字报
+    static Verification verify(File revision, File content, List<GamePack.Entry> entries, String indexSha, Reference ref,
+                               Timing timing, String artifactName, Map<String,String> executables)
+            throws IOException, BootContract.BadGame {
         long phase = Timing.start(timing);
         List<Stamp> saved=read(revision,entries,indexSha,ref);
         Timing.end(timing, "fingerprint_table_read", phase);
-        return verify(content, entries, saved, timing, artifactName, !content.equals(revision));
+        return verify(content, entries, saved, timing, artifactName, !content.equals(revision), executables);
     }
 
     // Install-time staging: placed[n] is the stamp of a file whose size and SHA-256 were checked
@@ -284,7 +293,7 @@ final class GameFingerprint {
     static Verification verifyPlaced(File content, boolean inPlace, List<GamePack.Entry> entries, List<Stamp> placed)
             throws IOException, BootContract.BadGame {
         if (placed.size() != entries.size()) throw new IllegalArgumentException("placed stamps do not match the index");
-        return verify(content, entries, placed, null, null, inPlace);
+        return verify(content, entries, placed, null, null, inPlace, java.util.Collections.emptyMap());
     }
 
     /** 按索引里的大小读够就停的 SHA-256：不为确认末尾多读一次（vivo 上经共享存储 FUSE 读大文件，「读到末尾」那次 read
@@ -303,7 +312,8 @@ final class GameFingerprint {
     }
 
     private static Verification verify(File revision, List<GamePack.Entry> entries, List<Stamp> saved,
-                                       Timing timing, String artifactName, boolean inPlace)
+                                       Timing timing, String artifactName, boolean inPlace,
+                                       Map<String,String> executables)
             throws IOException, BootContract.BadGame {
         BootContract.UnderRoot scope=BootContract.underRoot(revision);
         long phase = Timing.start(timing);
@@ -376,10 +386,12 @@ final class GameFingerprint {
                     throw new IOException(inPlace ? "in-place file changed (size differs from index.tsv): "+e.path
                                                   : "revision file fails size / SHA-256: "+e.path);
                 if (timing != null) timing.replayPaths.add(file);
-                if (saved!=null && before!=null && before.same(saved.get(n))) {
+                boolean hit=saved!=null && before!=null && before.same(saved.get(n));
+                String executable=executables.get(e.path);
+                if (hit && executable==null) {
                     counters[0]++;
                 } else {
-                    counters[1]++; changed[0]=true;
+                    counters[1]++; if (!hit) changed[0]=true;
                     // Full recalculation still resolves through under(): hashing opens the
                     // canonical file, same as the old per-entry flow.
                     File hashed;
@@ -393,7 +405,8 @@ final class GameFingerprint {
                         throw (RuntimeException)error;
                     } finally { if (sampled) timing.sample(timing.paths,sampleStart); }
                     if (!e.sha256.equals(sha256Exact(hashed,e.size,null)))
-                        throw new IOException(inPlace ? "in-place file changed (SHA-256 differs from index.tsv): "+e.path
+                        throw new IOException(executable != null ? "in-place executable changed (SHA-256 differs from index.tsv): "+executable+" "+e.path
+                                            : inPlace ? "in-place file changed (SHA-256 differs from index.tsv): "+e.path
                                                       : "revision file fails size / SHA-256: "+e.path);
                     Stamp after=stat(hashed);
                     if (before!=null && !before.same(after))

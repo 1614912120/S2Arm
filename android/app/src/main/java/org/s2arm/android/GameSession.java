@@ -119,7 +119,23 @@ final class GameSession implements AutoCloseable {
             boolean apkStampChanged = false;
             // 内容文件的根：原地来源是登记的共享存储目录（元数据和指纹表仍在私有版本目录），否则就是版本目录
             File content = game.inPlaceRoot != null ? new File(game.inPlaceRoot) : revision;
-            GameFingerprint.Verification checked = GameFingerprint.verify(revision, content, entries, indexSha, fingerprint, timing, game.artifact);
+            // 原地来源：可执行文件（revision 来源模块的 image / fixups / gates / widen、exefs 下的 npdm）共享存储上谁都能写，
+            //   身份（大小 / inode / 修改时间）可以被恢复，所以每次起局整份重算 SHA-256；数据文件照旧按身份命中
+            Map<String, String> executables = new LinkedHashMap<>();
+            if (game.inPlaceRoot != null) {
+                for (BootContract.Module module : game.modules) {
+                    if (!"revision".equals(module.source)) continue;   // apk-asset 模块在 APK 里，按 APK 字节绑定
+                    String[] kinds = {"image", "fixups", "gates", "widen"};
+                    String[] paths = {module.image, module.fixups, module.gates, module.widen};
+                    for (int i = 0; i < paths.length; i++)
+                        if (paths[i] != null && !paths[i].isEmpty()) executables.put(paths[i], "module " + module.name + " " + kinds[i]);
+                }
+                executables.put(game.npdm, "npdm");
+                for (GamePack.Entry entry : entries)
+                    if (entry.path.startsWith("exefs/") && entry.path.endsWith(".npdm")) executables.putIfAbsent(entry.path, "npdm");
+            }
+            GameFingerprint.Verification checked = GameFingerprint.verify(revision, content, entries, indexSha, fingerprint, timing,
+                game.artifact, executables);
             long resourceNanos = System.nanoTime() - resourceStart;
             GameFingerprint.replayStats(timing);
             phase = GameFingerprint.Timing.start(timing);
