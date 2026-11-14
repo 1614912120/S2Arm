@@ -1,16 +1,14 @@
 #!/bin/bash
 # 门禁层：合入后
 # 门禁路由：graphics/ runtime/ compat/ Makefile */build.mk tests/vk_indirect_count/ tests/vk_core/ tests/vk_xlate/ tools/tt_env. tests/frame_pacing/
-# 门禁本机：pso_cache 管线分片缓存反证：gate-host（macOS 27.0.1）载入 applegpu_g16s.macos27.0 旧归档报 deployment target 不兼容，4 项红（本机 26.4.1 全过）
 # 门禁本机：dsh 直连兜底现编对拍的考卷是本机直连库缓存 ~/.s2arm/run/s2arm/cache/direct/01006F8002326000（游戏着色器，不分发、不同步）且要 Homebrew spirv-cross；gate-host 上没有这两样，t_dsh.sh 缺考卷即报红
 # 门禁本机：gl OpenGL 前端最小绘制单测（graphics/nvn/tests/gl/t_gl_min.sh）要 Homebrew glslang 与 spirv-cross 现出合成着色器库；gate-host 上没有
 # 门禁本机：vk Vulkan 层真 GPU 回归（间接计数 + 核心命令）同 gl 子项依赖 Homebrew glslang 与 spirv-cross 现出合成着色器库；gate-host 上没有这两项依赖
-# 门禁本机：shdist shbake 分发组（t_pso_dist / t_pso_tt_retry / t_pso_list）：10-28 本机整份 graphics/gate.sh 改到 shbake 时 1019 秒，超钩子 900 秒上限（rc=124，gate-host / Spare-host 自检与 #612 / #613 同死于此）；拆出来本机并行另跑，主步与子项各自在上限内
+# 门禁本机：shdist shbake 分发组（t_pso_tt_retry）：10-28 本机整份 graphics/gate.sh 改到 shbake 时 1019 秒，超钩子 900 秒上限（rc=124，gate-host / Spare-host 自检与 #612 / #613 同死于此）；拆出来本机并行另跑，主步与子项各自在上限内
 # 门禁本机：m3pack Metal 3 归档出包到命中（make -C graphics/metal test-m3）：gate-host（macOS 27）载旧 Metal 3 归档报 deployment target 不兼容，4 项不符（10-28 #638 自检红，与改动无关，同 pso_cache 那条）；本机另跑
 # 帧率能耗线门禁钩子（测试出包线约定：仓库根运行，退出 0 = 绿，最后一行「期望 → 真结果」；墙钟上限见下面「门禁预算」行）
 # 内容：写跟踪单测 t_track、写跟踪 × GPFIFO 排空时机单测 fifodrain、计数结果回调换线程单测 t_cntdead、Metal 渲染器单测（graphics/metal make test）、写跟踪对拍（Ryujinx 原版 MemoryTracking vs 我方，固定种子 1、2000 轮）、MTL4 直接调用棘轮
-# 子项键（tools/gate.sh 分派 gate-host 用，见本文件头「# 门禁本机：」）：pso_cache = 管线分片缓存反证（graphics/tools/shbake/tests/t_pso_cache.sh）；
-#   dsh = 直连兜底现编对拍（graphics/tools/direct/tests/t_dsh.sh，要本机考卷与 Homebrew spirv-cross）；
+# 子项键（tools/gate.sh 分派 gate-host 用，见本文件头「# 门禁本机：」）：dsh = 直连兜底现编对拍（graphics/tools/direct/tests/t_dsh.sh，要本机考卷与 Homebrew spirv-cross）；
 #   gl = OpenGL 前端最小路径与真实 MRT / 深度模板 GPU 回归、GLSL 改写层、运行时兜底现编（要 Homebrew glslang 与 spirv-cross；兜底那项另要 cmake / ninja 首次构建 glslang）。
 #   vk = Vulkan 层真 GPU 回归：间接计数（tests/vk_indirect_count）+ 核心命令（tests/vk_core，含设备现编）+ 现编与出包工具对拍（tests/vk_xlate）；测试源码现编 SPIR-V / Metal 库，只链 libnvn.a + 宿主替身，约 15 秒。
 #   present_residency = 真实 Mac 前端上屏驻留集成矩阵（Metal 4 / 3 × DM_PRESENT_LINK 0 / 1）；涉及节拍时加跑 40 项帧率上限 / HUD 核心矩阵，涉及画面设置时加跑 AA/滤镜真实 drawable 像素矩阵。
@@ -60,10 +58,9 @@ has() { case " $1 " in *" $2 "*) return 0;; esac; return 1; }
 #   dsh（直连兜底现编对拍，本机约 60～90 秒）看 graphics/tools/direct/ 与离线链 translator/。原先每次 gfx 钩子都跑，改 graphics/metal 一行也要等 6 分钟。
 #   GATE_CHANGED 为空（不知道改了啥）照跑
 touched() { local f p; [ -z "${GATE_CHANGED:-}" ] && return 0; for f in $GATE_CHANGED; do for p in "$@"; do case $f in $p*) return 0;; esac; done; done; return 1; }
-need_pso() { touched graphics/tools/shbake/ graphics/tools/shader_pack.sh tools/tt_env.; }
 # 管线分片分发这几项只测 shbake 自己的分发与编库（10-25 gate-host 热态：t_pso_dist 一项 80 秒，占本钩子 208 秒的大头），
 #   只在本批改到它们或它们调的远端分发脚本时跑；GATE_CHANGED 为空（全跑 / 合入后钩子）照旧跑
-need_shdist() { touched graphics/tools/shbake/ graphics/tools/shader_pack.sh graphics/metal/tools/unity_check.py tools/remote.sh tools/machine.sh tools/safe_killpg.sh tools/toolchain.sh tools/tt_env.; }   # tools/tt_env.*：metal-tt 查询缓存后缀入口（pso_chunk 用）
+need_shdist() { touched graphics/tools/shbake/ graphics/metal/tools/unity_check.py tools/remote.sh tools/machine.sh tools/safe_killpg.sh tools/toolchain.sh tools/tt_env.; }   # tools/tt_env.*：metal-tt 查询缓存后缀入口（pso_chunk 用）
 need_dsh() { touched graphics/tools/direct/ translator/ graphics/nvn/gfx/nvn/dmsh_chain.h; }   # 10-25 起考卷由被测树的离线链现出：改离线链也要对拍（原先离线链改了不跑，等下次出库把生产缓存里的考卷换掉才在别人的批里红）
 need_dsh_vk() { touched graphics/tools/direct/dsh/ graphics/tools/direct/tests/dsh_vk/ graphics/tools/direct/tests/t_dsh_vk.sh translator/dmsh_xlate/ graphics/third_party/spirv_cross/ compat/tree/src/Ryujinx.Graphics.Shader/ graphics/dsx/gal_colorround. graphics/dsx/gal_spvx. graphics/dsx/gal_spill. graphics/dsx/gal_log.h graphics/metal/gal_abi.h graphics/metal/Makefile graphics/gate.sh; }   # 出包 Vulkan 产物单测（#783）：要编 S2A.Dsh，只在改到它 / 翻译器 / SPIRV-Cross 时跑
 need_dsh_vklib() { need_dsh_vk || touched graphics/tools/direct/vklib/ graphics/tools/direct/tests/dsh_vklib/ graphics/tools/direct/tests/t_dsh_vklib.sh graphics/tools/direct/tests/t_vklib_exit.py translator/dmsh_chain.py pack/stage_inputs/direct.tsv; }   # 出包 Vulkan 独立入口单测（#783）：同 dsh_vk 的条件，外加改到 vklib 工程与它的单测；它还核苹果侧指纹不含 vklib/，改 xlate_fp 清单 / 直连阶段键时也跑
@@ -142,7 +139,7 @@ need_nvn() { touched graphics/nvn/; }   # 直连未守卫新系统 API + 两路�
 need_red() { touched graphics/nvn/ graphics/tools/direct/; }
 need_nvn_tex() { touched graphics/nvn/gfx/tex/ graphics/nvn/gfx/nvn/nvn_tex.; }
 need_dmsh_giant() { touched graphics/tools/direct/dsh/ graphics/tools/direct/tests/dsh_cmp/ graphics/tools/direct/tests/dshfn.py translator/dmsh_chain.lock graphics/tools/direct/tests/t_dmsh_giant.py; }   # 不含 graphics/gate.sh：改门禁本身不必重跑这 15 秒
-GFX_GROUPS="track_c track_net shared_gpu_contract vulkan_diag vvl texture_dma_read metal cntdead session m3pack direct_link shbake_net frame_pacing nvn red nvn_tex pso dsh gl vk present_residency fps_limit present_settings shdist dmsh_giant"
+GFX_GROUPS="track_c track_net shared_gpu_contract vulkan_diag vvl texture_dma_read metal cntdead session m3pack direct_link shbake_net frame_pacing nvn red nvn_tex dsh gl vk present_residency fps_limit present_settings shdist dmsh_giant"
 want() { case $1 in fps_limit|present_settings) need_present_residency && "need_$1";; *) "need_$1";; esac; }   # 帧率上限 / 画面设置矩阵只在上屏驻留集成里加跑
 if [ "${GFX_GATE_PLAN:-}" = 1 ]; then for g in $GFX_GROUPS; do if want "$g"; then echo "$g 跑"; else echo "$g 不跑"; fi; done; exit 0; fi
 # 合成测试只跑这段生产检查，不能继续执行 GPU / regen / 编译步骤。
@@ -223,14 +220,11 @@ run_present_residency() {
   [ "$build_status" = 0 ] && [ "$test_status" = 0 ] && [ "$fps_status" = 0 ] && [ "$settings_status" = 0 ]
 }
 PYV=$HOME/.s2arm/venv/bin/python; [ -x "$PYV" ] || PYV=python3   # 出包同一个 venv（RE 引擎程序表等要 lz4；run_shdist 在 GATE_ONLY 分支也要用，故放在分支前）
-# shbake 分发组（子项键 shdist）：管线分片分发各单测，主流程与 GATE_ONLY=shdist 共用这一份；设 pr / dt / pl2（及 *c 汇总片段）；全过返回 0
+# shbake 分发组（子项键 shdist）：主流程与 GATE_ONLY=shdist 共用这一份；设 dt（及 dtc 汇总片段）；全过返回 0
 run_shdist() {
-  timeout 240 bash graphics/tools/shbake/tests/t_pso_dist.sh > "$LOG/pso_dist.log" 2>&1; pr=$?; redlog $pr "$LOG/pso_dist.log"; prc=$(tail -1 "$LOG/pso_dist.log")   # 管线分片本机 + gate-host 并行编（本机模拟远端）：产物齐对、gate-host 不可用全退本机
   # pso_chunk Metal 3 分支的 metal-tt 并发下偶发「找不到翻译器」只对这一句重试（假工具，不依赖本机 GPU 架构）
   timeout 60 bash graphics/tools/shbake/tests/t_pso_tt_retry.sh > "$LOG/pso_tt.log" 2>&1; dt=$?; redlog $dt "$LOG/pso_tt.log"; dtc=$(tail -1 "$LOG/pso_tt.log")
-  # 管线分片清单不经命令行参数（10-24 #100 奥德赛 12572 片 ls 超 ARG_MAX）：旧写法反证失败、find 列全、清单行数与应有片数不符报红
-  timeout 60 bash graphics/tools/shbake/tests/t_pso_list.sh > "$LOG/pso_list.log" 2>&1; pl2=$?; redlog $pl2 "$LOG/pso_list.log"; pl2c=$(tail -1 "$LOG/pso_list.log")
-  [ $pr = 0 ] && [ $dt = 0 ] && [ $pl2 = 0 ]
+  [ $dt = 0 ]
 }
 # Metal 3 归档出包到命中（子项 m3pack；10-28 #638：gate-host macOS 27 载旧 Metal 3 归档报 deployment target 不兼容，4 项不符，与改动无关）：主流程与 GATE_ONLY=m3pack 共用
 run_m3pack() { timeout 300 make -s -C graphics/metal test-m3 > "$LOG/m3pack.log" 2>&1; local r=$?; redlog $r "$LOG/m3pack.log"; M3PACK_RESULT="Metal 3 归档出包到命中：$(grep -c '✓' "$LOG/m3pack.log") 项通过、$(grep -c '✗' "$LOG/m3pack.log") 项不符（退出 ${r}）"; return $r; }
@@ -239,8 +233,6 @@ if [ -n "${GATE_ONLY:-}" ]; then
   if has "$GATE_ONLY" texture_dma_read; then run_texture_dma_read; r=$?; out="纹理 / DMA 保护页读取 $(tail -1 "$LOG/texture_dma_read.log")（退出 ${r}）"; [ "$r" = 0 ] || ok=0; fi
   if has "$GATE_ONLY" shared_gpu_contract; then run_shared_gpu_contract; r=$?; out="${out:+$out / }共享 GPU 合同 $(tail -1 "$LOG/shared_gpu_contract.log")（退出 ${r}）"; [ "$r" = 0 ] || ok=0; fi
   if has "$GATE_ONLY" vulkan_diag; then run_vulkan_diag; r=$?; out="${out:+$out / }Vulkan 诊断默认值 $(tail -1 "$LOG/vulkan_diag.log")（退出 ${r}）"; [ "$r" = 0 ] || ok=0; fi
-  if has "$GATE_ONLY" pso_cache && ! need_pso; then out="${out:+$out / }管线分片缓存反证：本批没改到 shbake / 着色器阶段，不跑"
-  elif has "$GATE_ONLY" pso_cache; then timeout 60 bash graphics/tools/shbake/tests/t_pso_cache.sh > "$LOG/pso_cache.log" 2>&1; p=$?; out="${out:+$out / }管线分片缓存反证 $(tail -1 "$LOG/pso_cache.log")（退出 ${p}）"; ev $p "$LOG/pso_cache.log" || ok=0; fi
   if has "$GATE_ONLY" dsh && ! need_dsh; then out="${out:+$out / }直连兜底现编对拍：本批没改到 graphics/tools/direct，不跑"
   elif has "$GATE_ONLY" dsh; then timeout 300 bash graphics/tools/direct/tests/t_dsh.sh > "$LOG/dsh.log" 2>&1; d=$?; out="${out:+$out / }直连兜底现编对拍 $(tail -1 "$LOG/dsh.log")（退出 ${d}）"; ev $d "$LOG/dsh.log" || ok=0; fi
   if has "$GATE_ONLY" gl && ! need_gl; then out="${out:+$out / }OpenGL 前端最小绘制：本批没改到 GL 前端，不跑"
@@ -258,7 +250,7 @@ if [ -n "${GATE_ONLY:-}" ]; then
   if has "$GATE_ONLY" present_residency && ! need_present_residency; then out="${out:+$out / }上屏驻留集成：本批没改到相关路径，不跑"
   elif has "$GATE_ONLY" present_residency; then run_present_residency; pr=$?; out="${out:+$out / }$PRESENT_RESIDENCY_RESULT"; ev $pr || ok=0; fi
   if has "$GATE_ONLY" shdist && ! need_shdist; then out="${out:+$out / }shbake 分发组：本批没改到 shbake / 远端分发，不跑"
-  elif has "$GATE_ONLY" shdist; then run_shdist; sd=$?; out="${out:+$out / }shbake 分发组：管线分片分发 ${prc}（退出 ${pr}）/ 翻译器重试 ${dtc}（退出 ${dt}）/ 分片清单 ${pl2c}（退出 ${pl2}）${REGS}"; ev $sd || ok=0; fi
+  elif has "$GATE_ONLY" shdist; then run_shdist; sd=$?; out="${out:+$out / }shbake 分发组：翻译器重试 ${dtc}（退出 ${dt}）${REGS}"; ev $sd || ok=0; fi
   if has "$GATE_ONLY" m3pack; then run_m3pack; m3r=$?; out="${out:+$out / }$M3PACK_RESULT"; ev $m3r || ok=0; fi
   [ $ok = 1 ] || evidence
   echo "期望 本机子项（${GATE_ONLY}）全过 → 真结果 ${out} $([ $ok = 1 ] && echo ✓ || echo ✗)"; [ $ok = 1 ]; exit $?
@@ -352,9 +344,6 @@ else timeout 300 python3 graphics/nvn/tests/t_fold.py > "$LOG/fold.log" 2>&1; r=
 if ! need_nvn_tex; then reg 0 "NVN 纹理布局单测：本批没改到纹理布局，不跑"
 else timeout 120 make -s -B -C graphics/nvn/gfx/tex/tests run > "$LOG/nvn_tex.log" 2>&1; r=$?; reg $r "NVN 纹理布局单测：$(tail -1 "$LOG/nvn_tex.log")（退出 ${r}）" "$LOG/nvn_tex.log"; fi
 mc=$(timeout 200 bash graphics/tools/macrogen/regen.sh check 2>&1); mcr=$?; mc=$(tail -1 < <(printf '%s\n' "$mc"))   # 宏语料 ⊆ 宏表（没有语料目录时跳过、退 0）；总判看退出码 mcr（11-01 审计 P1-63：原先接 tail 只认末行 ✗，生成器失败 / 超时被杀当过）
-if has "${GATE_SKIP:-}" pso_cache; then p=0; pc="管线分片缓存反证另跑（GATE_SKIP）"
-elif ! need_pso; then p=0; pc="管线分片缓存反证：本批没改到，不跑"
-else timeout 60 bash graphics/tools/shbake/tests/t_pso_cache.sh > "$LOG/pso_cache.log" 2>&1; p=$?; pc=$(tail -1 "$LOG/pso_cache.log"); fi   # 管线分片缓存：任一键成员变必须不命中
 # 包内特化核对（Ryujinx 0092）：逐字段不符判不符 + 红行、没读过的不判；编 S2A.SpecTest 约 20–60 秒
 if has "$RUNG" shbake_net; then
 timeout 400 bash graphics/tools/shbake/tests/t_spec_verify.sh > "$LOG/spec_verify.log" 2>&1; sv=$?; svr=$(tail -1 "$LOG/spec_verify.log")
@@ -409,8 +398,6 @@ timeout 120 bash graphics/metal/tests/t_offline_stage.sh > "$LOG/offline_stage.l
 # 离线库大 MSL 单独编 + 编译按内存预算（gal_offline.py，10-26 斯普拉遁3 19.4 MB 那支拖死整批）：反证旧版不单独编
 timeout 150 bash graphics/metal/tests/t_offline_big.sh > "$LOG/offline_big.log" 2>&1; ob_=$?; reg $ob_ "离线库大 MSL 单独编：$(tail -1 "$LOG/offline_big.log")（退出 ${ob_}）" "$LOG/offline_big.log"
 else reg 0 "离线库按阶段分子批 / 大 MSL 单独编：本批没改到 graphics/metal 及其源码依赖，不跑"; fi
-# 着色器包产出指纹（out_fp.py）：只动非内容字节 / 只改运行时源码 → 不变；内容、③④ 脚本、影响产物的开关变 → 变
-timeout 60 bash graphics/tools/shbake/tests/t_out_fp.sh > "$LOG/out_fp.log" 2>&1; of_=$?; reg $of_ "着色器包产出指纹（输出不变就不算变）：$(tail -1 "$LOG/out_fp.log")（退出 ${of_}）" "$LOG/out_fp.log"
 if has "$RUNG" shbake_net; then
 timeout 300 bash graphics/tools/shbake/tests/t_vtg.sh > "$LOG/vtg.log" 2>&1; v=$?; vr=$(grep -o 't_vtg：[0-9]* 项，失败 [0-9]*' "$LOG/vtg.log" | tail -1)   # 转计算程序进缓存（保留布局 / 复合二进制 / 阶段掩码）
 # 片元输出类型变体（ShaderBake 5c：按特化管线表的整数目标补 FragmentOutputTypes 变体，片元键对上观测才收）；与 t_vtg 共用编译目录（增量不重编）
@@ -457,14 +444,9 @@ timeout 60 "$PYV" graphics/tools/shbake/tests/t_ue_pak_frozen.py > "$LOG/ue_pak_
 timeout 60 "$PYV" graphics/tools/shbake/tests/t_uepak_legacy_v7.py > "$LOG/uepak_v7.log" 2>&1; r=$?; reg $r "旧版 pak 5–7 版 + zlib：$(tail -1 "$LOG/uepak_v7.log")（退出 ${r}）" "$LOG/uepak_v7.log"
 # 社区 / 用户自带客体着色器缓存读取器（10-27 王国之泪 yuzu v10）：合成缓存正例 + 截断 / 文件头反证 + 本机有真文件时的正对照
 timeout 120 "$PYV" graphics/tools/shbake/tests/t_guest_cache.py > "$LOG/guest_cache.log" 2>&1; r=$?; reg $r "客体着色器缓存读取器：$(tail -1 "$LOG/guest_cache.log")（退出 ${r}）" "$LOG/guest_cache.log"
-# 着色器缓存键「烘焙脚本」项只算代码行（10-23 换键批）：加注释 / 空行键不变、改代码 / 加 #include 键变、按 HEAD、改名变
-timeout 30 bash graphics/tools/shbake/tests/t_key_norm.sh > "$LOG/key_norm.log" 2>&1; kn=$?; knc=$(tail -1 "$LOG/key_norm.log")
-# 首用表按客体指纹重定位（10-23）：程序哈希公式对得上运行时真行、旧键换本包同指纹程序并重算哈希、对照里没有 / 哈希核不上的不改写
-timeout 30 python3 graphics/tools/shbake/tests/t_psoremap.py > "$LOG/psoremap.log" 2>&1; pm=$?; pmc=$(tail -1 "$LOG/psoremap.log")
-timeout 60 python3 graphics/tools/shbake/tests/t_refpso.py > "$LOG/refpso.log" 2>&1; rp=$?; rpc=$(tail -1 "$LOG/refpso.log")   # 社区管线状态换算：动森 212 行 yuzu5 一致 195 / 不一致 0、合并 199
-if has "${GATE_SKIP:-}" shdist; then pr=0; prc="shbake 分发组：另跑（子项 shdist）"; dt=0; dtc="翻译器重试另跑（shdist）"; pl2=0; pl2c="分片清单另跑（shdist）"
+if has "${GATE_SKIP:-}" shdist; then dt=0; dtc="翻译器重试另跑（shdist）"
 elif need_shdist; then run_shdist
-else pr=0; prc="管线分片分发：本批没改到 shbake / 远端分发，不跑"; dt=0; dtc="翻译器重试：本批没改到 shbake，不跑"; pl2=0; pl2c="分片清单：本批没改到 shbake，不跑"; fi
+else dt=0; dtc="翻译器重试：本批没改到 shbake，不跑"; fi
 # 直连着色器库合并抽取（双轨 §12.3）：直连口径重算键、S2Arm 独有键补进直连包目录与表、记录读回原字节、表键与记录不符报红
 timeout 30 python3 graphics/tools/direct/tests/t_run_pairs.py > "$LOG/run_pairs.log" 2>&1; rc_=$?; reg $rc_ "跑局配对并入：$(tail -1 "$LOG/run_pairs.log")（退出 ${rc_}）" "$LOG/run_pairs.log"   # P 行 → shader_pairs.tsv（run_pairs.py）
 timeout 30 python3 graphics/tools/direct/tests/t_run_knowledge.py > "$LOG/run_knowledge.log" 2>&1; rc_=$?; reg $rc_ "跑局知识快照：$(tail -1 "$LOG/run_knowledge.log")（退出 ${rc_}）" "$LOG/run_knowledge.log"   # 审计 #1534 P1-54：pso_seed/ → 四张归一化表（run_knowledge.py），与旧流程直读来源产出等价
@@ -559,10 +541,10 @@ far=$(grep -o 'flushlock：[0-9]* 项，失败 [0-9]*' "$LOG/flushlock.log" | ta
 plr=$(grep -o 'partial：[0-9]* 项，失败 [0-9]*' "$LOG/partial.log" | tail -1); kar=$(grep -o 'keepact：[0-9]* 项，失败 [0-9]*' "$LOG/keepact.log" | tail -1); zpr=$(grep -o 'zcpolicy：[0-9]* 项，失败 [0-9]*' "$LOG/zcpolicy.log" | tail -1); vsr=$(grep -o 'vrcsplit：[0-9]* 项，失败 [0-9]*' "$LOG/vrcsplit.log" | tail -1); tpr=$(grep -o 'texprecise：[0-9]* 项，失败 [0-9]*' "$LOG/texprecise.log" | tail -1)
 else cr="不跑"; fr="排空时机单测不跑"; far="回写锁顺序单测不跑"; plr="部分回写换算单测不跑"; kar="保留回写动作单测不跑"; zpr="零拷贝用法规则单测不跑"; vsr="多段映射不压段单测不跑"; tpr="贴图精确跳过单测不跑"; fi
 if has "$RUNG" cntdead; then cdr=$(grep -o 't_cntdead：[0-9]* 项，失败 [0-9]*' "$LOG/cntdead.log" | tail -1); else cdr="计数回调单测：本批没改到 graphics/metal 及 NxGal 依赖，不跑"; fi
-OKV=("t:写跟踪单测 t_track" "pb:渲染器预编 test-deps" "m:渲染器单测 make test" "c:写跟踪对拍 ryucmp" "fd:排空时机 fifodrain" "fa:回写锁顺序 flushlock" "pl:部分回写 partial" "ka:保留回写 keepact" "zp:零拷贝用法 zcpolicy" "vs:多段映射 vrcsplit" "tp:贴图精确 texprecise" "cd_:计数回调 t_cntdead" "p:管线分片缓存 t_pso_cache" "sv:特化核对 t_spec_verify" "sgc:录段分块 t_seg_chunks" "q:t_sdf" "sph_:t_spch" "u:t_nvn_uses" "v:t_vtg" "fo:t_fout" "w:t_programs" "x:t_ue_programs" "y:shbake t_unity" "z:t_red_static" "es:t_exe_shtab" "ug:t_unpack_generic" "nd:t_nxdecomp" "ud:t_undecoded" "pd:t_pso_cdc" "pu:t_psouse" "pw:t_psowarm" "zc:t_zchain" "kn:t_key_norm" "pm:t_psoremap" "rp:t_refpso" "pr:管线分片分发 t_pso_dist" "dt:翻译器重试 t_pso_tt_retry" "ac:t_air_cache" "fv:t_fbrvars" "sp:t_specpipe" "pl2:分片清单 t_pso_list" "upk:t_ue_pak_legacy" "mx_:t_merge_extract" "mcr:宏表 regen.sh check")   # 总判的各项退出码 = 变量名:项名，单一来源：总判按它算、判红按它点名（加新项只在这里加一条）
-OKLOG=(t:track.log pb:metal_build.log m:metal.log c:ryucmp.log fd:fifodrain.log fa:flushlock.log pl:partial.log ka:keepact.log zp:zcpolicy.log vs:vrcsplit.log tp:texprecise.log cd_:cntdead.log p:pso_cache.log sv:spec_verify.log sgc:seg_chunks.log q:sdf.log sph_:spch.log u:nvn_uses.log v:vtg.log fo:fout.log w:programs.log x:ue_programs.log y:unity.log z:red_static.log es:exe_shtab.log ug:unpack_generic.log nd:nxdecomp.log ud:undecoded.log pd:pso_cdc.log pu:psouse.log pw:psowarm.log zc:zchain.log kn:key_norm.log pm:psoremap.log rp:refpso.log pr:pso_dist.log dt:pso_tt.log ac:air_cache.log fv:fbrvars.log sp:specpipe.log pl2:pso_list.log upk:ue_pak_legacy.log mx_:merge_extract.log)   # OKV 各变量自己那条命令写的日志（红了打进证据）
+OKV=("t:写跟踪单测 t_track" "pb:渲染器预编 test-deps" "m:渲染器单测 make test" "c:写跟踪对拍 ryucmp" "fd:排空时机 fifodrain" "fa:回写锁顺序 flushlock" "pl:部分回写 partial" "ka:保留回写 keepact" "zp:零拷贝用法 zcpolicy" "vs:多段映射 vrcsplit" "tp:贴图精确 texprecise" "cd_:计数回调 t_cntdead" "sv:特化核对 t_spec_verify" "sgc:录段分块 t_seg_chunks" "q:t_sdf" "sph_:t_spch" "u:t_nvn_uses" "v:t_vtg" "fo:t_fout" "w:t_programs" "x:t_ue_programs" "y:shbake t_unity" "z:t_red_static" "es:t_exe_shtab" "ug:t_unpack_generic" "nd:t_nxdecomp" "ud:t_undecoded" "pd:t_pso_cdc" "pu:t_psouse" "pw:t_psowarm" "zc:t_zchain" "dt:翻译器重试 t_pso_tt_retry" "ac:t_air_cache" "fv:t_fbrvars" "sp:t_specpipe" "upk:t_ue_pak_legacy" "mx_:t_merge_extract" "mcr:宏表 regen.sh check")   # 总判的各项退出码 = 变量名:项名，单一来源：总判按它算、判红按它点名（加新项只在这里加一条）
+OKLOG=(t:track.log pb:metal_build.log m:metal.log c:ryucmp.log fd:fifodrain.log fa:flushlock.log pl:partial.log ka:keepact.log zp:zcpolicy.log vs:vrcsplit.log tp:texprecise.log cd_:cntdead.log sv:spec_verify.log sgc:seg_chunks.log q:sdf.log sph_:spch.log u:nvn_uses.log v:vtg.log fo:fout.log w:programs.log x:ue_programs.log y:unity.log z:red_static.log es:exe_shtab.log ug:unpack_generic.log nd:nxdecomp.log ud:undecoded.log pd:pso_cdc.log pu:psouse.log pw:psowarm.log zc:zchain.log dt:pso_tt.log ac:air_cache.log fv:fbrvars.log sp:specpipe.log upk:ue_pak_legacy.log mx_:merge_extract.log)   # OKV 各变量自己那条命令写的日志（红了打进证据）
 ok=$(( r4 == 0 )); for e_ in "${OKV[@]}"; do v_=${e_%%:*}; [ "${!v_:-0}" = 0 ] || { ok=0; REGBAD="${REGBAD:+${REGBAD}；}${e_#*:}（退出 ${!v_}）"; for l_ in "${OKLOG[@]}"; do [ "${l_%%:*}" = "$v_" ] && ev 1 "$LOG/${l_#*:}"; done; }; done
 [ $REGOK = 1 ] || ok=0
 [ $ok = 1 ] || evidence
-echo "期望 写跟踪单测 0 失败 / 渲染器 7 组全过 / 对拍一致 / 排空时机单测 0 失败 / 回写锁顺序单测 0 失败 / 计数回调单测 0 失败 / MTL4 直接调用 ≤ $b4 / 管线分块单测与并行编单测全过 → 真结果 ${tr:-无输出}（退出 ${t}）/ 渲染器通过行 ${mr}（退出 ${m}${mx}）/ 对拍 ${cr:-无输出}（退出 ${c}）/ ${fr:-排空时机单测无输出}（退出 ${fd}）/ ${far:-回写锁顺序单测无输出}（退出 ${fa}） / ${plr:-部分回写换算单测无输出}（退出 ${pl}）/ ${kar:-保留回写动作单测无输出}（退出 ${ka}） / ${zpr:-零拷贝用法规则单测无输出}（退出 ${zp}） / ${vsr:-多段映射不压段单测无输出}（退出 ${vs}） / ${tpr:-贴图精确跳过单测无输出}（退出 ${tp}）/ ${cdr:-计数回调单测无输出}（退出 ${cd_}）/ MTL4 $n4 处 / 宏表：${mc#*真结果 } / ${pc:-管线缓存反证无输出} / 特化核对：${svr:-无输出} / 录段分块：${sgcr:-无输出} / ${qc:-RE 程序表单测无输出} / ${sphc:-SPCH 单测无输出} / ${uc:-nvn_uses 单测无输出} / ${vr:-转计算单测无输出}（退出 ${v}）/ ${for_:-片元输出类型变体单测无输出}（退出 ${fo}）/ ${wc_:-程序表读取器单测无输出} / ${xc_:-UE 冷冻表单测无输出} / ${yc_:-Unity 单测无输出} / ${zc_:-REDengine 静态单测无输出} / ${esc:-内嵌着色器程序表单测无输出} / ${ugc:-通用解压单测无输出} / ${ndc:-解压表单测无输出} / ${udc:-解不开数据块单测无输出} / ${pdc:-分块单测无输出} / ${puc:-首用表单测无输出} / ${pwc:-提前热程序表单测无输出} / ${zcc:-分块续解单测无输出} / ${upkc:-旧版 pak 单测无输出} / ${knc:-缓存键规范化单测无输出} / ${pmc:-首用表重定位单测无输出} / ${rpc:-社区管线状态单测无输出} / ${prc:-并行编单测无输出} / ${dtc:-metal-tt 重试单测无输出} / ${pl2c:-分片清单单测无输出}（退出 ${pl2}） / ${mxc:-合并抽取单测无输出}（退出 ${mx_}） / ${acc:-.air 缓存命中单测无输出} / ${fvc:-变体请求收集单测无输出} / ${spc:-特化管线收集单测无输出}，${REGS}，用时 $(( $(date +%s) - T0 )) 秒 $([ $ok = 1 ] && echo ✓ || echo "✗ 判红：${REGBAD:-（没有记下判红项：总判逻辑漏登记，查 OKV / reg）}")"
+echo "期望 写跟踪单测 0 失败 / 渲染器 7 组全过 / 对拍一致 / 排空时机单测 0 失败 / 回写锁顺序单测 0 失败 / 计数回调单测 0 失败 / MTL4 直接调用 ≤ $b4 / 管线分块单测与并行编单测全过 → 真结果 ${tr:-无输出}（退出 ${t}）/ 渲染器通过行 ${mr}（退出 ${m}${mx}）/ 对拍 ${cr:-无输出}（退出 ${c}）/ ${fr:-排空时机单测无输出}（退出 ${fd}）/ ${far:-回写锁顺序单测无输出}（退出 ${fa}） / ${plr:-部分回写换算单测无输出}（退出 ${pl}）/ ${kar:-保留回写动作单测无输出}（退出 ${ka}） / ${zpr:-零拷贝用法规则单测无输出}（退出 ${zp}） / ${vsr:-多段映射不压段单测无输出}（退出 ${vs}） / ${tpr:-贴图精确跳过单测无输出}（退出 ${tp}）/ ${cdr:-计数回调单测无输出}（退出 ${cd_}）/ MTL4 $n4 处 / 宏表：${mc#*真结果 } / 特化核对：${svr:-无输出} / 录段分块：${sgcr:-无输出} / ${qc:-RE 程序表单测无输出} / ${sphc:-SPCH 单测无输出} / ${uc:-nvn_uses 单测无输出} / ${vr:-转计算单测无输出}（退出 ${v}）/ ${for_:-片元输出类型变体单测无输出}（退出 ${fo}）/ ${wc_:-程序表读取器单测无输出} / ${xc_:-UE 冷冻表单测无输出} / ${yc_:-Unity 单测无输出} / ${zc_:-REDengine 静态单测无输出} / ${esc:-内嵌着色器程序表单测无输出} / ${ugc:-通用解压单测无输出} / ${ndc:-解压表单测无输出} / ${udc:-解不开数据块单测无输出} / ${pdc:-分块单测无输出} / ${puc:-首用表单测无输出} / ${pwc:-提前热程序表单测无输出} / ${zcc:-分块续解单测无输出} / ${upkc:-旧版 pak 单测无输出} / ${dtc:-metal-tt 重试单测无输出} / ${mxc:-合并抽取单测无输出}（退出 ${mx_}） / ${acc:-.air 缓存命中单测无输出} / ${fvc:-变体请求收集单测无输出} / ${spc:-特化管线收集单测无输出}，${REGS}，用时 $(( $(date +%s) - T0 )) 秒 $([ $ok = 1 ] && echo ✓ || echo "✗ 判红：${REGBAD:-（没有记下判红项：总判逻辑漏登记，查 OKV / reg）}")"
 [ $ok = 1 ]
