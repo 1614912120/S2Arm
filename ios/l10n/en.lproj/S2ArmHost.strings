@@ -488,6 +488,10 @@
 "settings.padFace.auto" = "Automatic (by key labels)";
 "settings.padFace.switch" = "Switch layout";
 "settings.padFace.xbox" = "Xbox layout";
+"vpad.screenLock.title" = "Simulated Screen Lock";
+"vpad.screenLock.note" = "Tap the screen 3 times in succession to exit";
+"vpad.screenLock.hint" = "To exit simulated screen lock, tap the screen 3 times in succession";
+"vpad.screenLock.unlock" = "Exit simulated screen lock";
 "vpad.menu.settings" = "Settings…";
 "vpad.menu.settings.note" = "Picture, full screen, 60 FPS, S-grade enhancements, controls, diagnostics";
 "play.group" = "Screen layout";

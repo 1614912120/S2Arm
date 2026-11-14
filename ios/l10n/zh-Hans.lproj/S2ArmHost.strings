@@ -488,6 +488,10 @@
 "settings.padFace.auto" = "自动（按键帽字母）";
 "settings.padFace.switch" = "Switch 布局";
 "settings.padFace.xbox" = "Xbox 布局";
+"vpad.screenLock.title" = "模拟锁屏";
+"vpad.screenLock.note" = "连续点击屏幕3次解除";
+"vpad.screenLock.hint" = "如需关闭模拟锁屏，请连续点击3次屏幕";
+"vpad.screenLock.unlock" = "解除模拟锁屏";
 "vpad.menu.settings" = "设置…";
 "vpad.menu.settings.note" = "画面、满屏、60 帧、S 级优化、操作、诊断";
 "play.group" = "屏幕布局";
