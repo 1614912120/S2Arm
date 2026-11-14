@@ -8,11 +8,12 @@ import XCTest
 // 手柄弹窗「两只怎么用」（#520 D）：连着两只 Joy-Con 才出这一段，标题 / 选中的那格跟连接程序报的玩家数走。
 //   设 S2A_SNAPSHOT_OUT=<目录> 存 ns2_single / ns2_pair / ns2_split（中英各一）供肉眼核对。
 @MainActor final class NS2PanelSnapshotTests: XCTestCase {
-    /// 不碰本机真的分配（偏好与 pad-order.json 都换成临时的）
+    /// 不碰本机真的分配，也不读取本机已连接手柄；状态与设备均由用例提供。
     static func isolated() -> NS2LauncherController {
         let suite = "s2arm-panel-test-" + UUID().uuidString
         return NS2LauncherController(socketURL: URL(fileURLWithPath: "/tmp/s2arm-panel-test.sock"), store: UserDefaults(suiteName: suite),
-                                     orderFile: FileManager.default.temporaryDirectory.appendingPathComponent(suite + ".json"))
+                                     orderFile: FileManager.default.temporaryDirectory.appendingPathComponent(suite + ".json"),
+                                     systemControllers: { [] }, notifications: NotificationCenter())
     }
     /// 面板：蓝牙手柄照工具栏那样交给分配整理（自动排进玩家位）
     static func panel(_ c: NS2LauncherController, _ systems: SystemControllers, _ zh: Bool) -> Switch2ProConnectionPopover {

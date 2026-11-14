@@ -172,7 +172,7 @@ struct InputSettingsSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Button { config.restoreTarget(selected, from: baseline); recording = nil } label: { Text(t("restoreKey")).frame(maxWidth: .infinity) }
-                .buttonStyle(LauncherSecondaryButtonStyle())
+                .controllerButtonStyle(LauncherSecondaryButtonStyle())
             Text(t("iconNote")).font(.manrope(11.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(16)
@@ -191,14 +191,14 @@ struct InputSettingsSheet: View {
                 .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .controllerButtonStyle(.plain)
         .background(on ? LauncherPalette.cream.opacity(0.10) : Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9))
         .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(on ? LauncherPalette.cream : Color.white.opacity(0.10), lineWidth: on ? 1.5 : 1).allowsHitTesting(false))
         .overlay(alignment: .trailing) {
             Button { config.keyboard[selected] = nil; recording = nil } label: {
                 Image(systemName: "xmark.circle").frame(width: 30, height: 38).contentShape(Rectangle())
             }
-            .buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel(t("key.clear")).padding(.trailing, 4)
+            .controllerButtonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel(t("key.clear")).padding(.trailing, 4)
         }
         .accessibilityLabel(t("keyboard")).accessibilityValue(names.key(config.keyboard[selected]))
     }
@@ -287,7 +287,7 @@ struct InputSettingsSheet: View {
             }
             HStack(spacing: 10) {
                 Button(t("restoreDefault")) { config = .standard; recording = nil; failure = nil }
-                    .buttonStyle(LauncherSecondaryButtonStyle()).disabled(saving)
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(saving)
                 LauncherDropdown(options: [("", t("preset"))] + InputConfig.Preset.allCases.map { ($0.rawValue, t("preset." + $0.rawValue)) },
                                  selection: "", label: t("preset"), style: .button) { value in
                     if let p = InputConfig.Preset(rawValue: value) { config = .preset(p); failure = nil }
@@ -301,13 +301,13 @@ struct InputSettingsSheet: View {
                     Text(t("unsaved")).font(.manrope(12)).foregroundStyle(.secondary)
                 }
                 Button(t("cancel")) { dismiss() }
-                    .buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).disabled(saving)
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).disabled(saving)
                 Button { save() } label: {
                     Text(t("save")).font(.manrope(13.5, .bold)).foregroundStyle(.black)
                         .padding(.horizontal, 22).padding(.vertical, 9)
                         .background(LauncherPalette.cream, in: Capsule()).contentShape(Capsule())
                 }
-                .buttonStyle(.plain).keyboardShortcut(.defaultAction).disabled(!canSave).opacity(canSave ? 1 : 0.45)
+                .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction).disabled(!canSave).opacity(canSave ? 1 : 0.45)
             }
         }
         .padding(.horizontal, 30).padding(.vertical, 16)
@@ -553,7 +553,7 @@ struct InputControllerMap: View {
                 .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(active ? LauncherPalette.cream : .clear, lineWidth: 2))
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .controllerButtonStyle(.plain)
         .accessibilityLabel(names.target(target)).accessibilityValue(names.short(config, target))
         .accessibilityAddTraits(active ? [.isSelected] : [])
         .help(names.target(target) + " · " + names.short(config, target))
@@ -587,7 +587,7 @@ struct InputControllerMap: View {
             }
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .controllerButtonStyle(.plain)
         .accessibilityLabel(names.target(target)).accessibilityValue(names.short(config, target))
         .accessibilityAddTraits(active ? [.isSelected] : [])
         .help(names.target(target) + " · " + names.short(config, target))

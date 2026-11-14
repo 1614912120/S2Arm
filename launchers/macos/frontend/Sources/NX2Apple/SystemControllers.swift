@@ -25,9 +25,11 @@ final class SystemControllers: ObservableObject {
         watcher.observe { [weak self] devices in Task { @MainActor in self?.gen1 = devices } }
         gen1Watcher = watcher
         let center = NotificationCenter.default
-        for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect] {
-            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in self?.refresh() }
+        for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect, NSApplication.didBecomeActiveNotification] {
+            observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                let connected = note.name == .GCControllerDidConnect ? note.object as? GCController : nil
+                let disconnected = note.name == .GCControllerDidDisconnect ? note.object as? GCController : nil
+                Task { @MainActor in self?.refresh(connected: connected, disconnected: disconnected) }
             })
         }
         refresh()
@@ -36,19 +38,34 @@ final class SystemControllers: ObservableObject {
     /// 单测：直接给一组手柄（不碰 GameController）
     init(pads: [Pad], gen1: [PlayerAssignment.Gen1Device] = []) { self.pads = pads; self.gen1 = gen1 }
 
+    deinit {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        assignTimer?.invalidate()
+    }
+
     /// 分配中认一代 Joy-Con 的手势：(设备 id, 0 左只 / 1 右只, 手势)；nil 停
     func watchGen1(_ onGesture: ((String, Int, Int) -> Void)?) {
         gen1Watcher?.watchGestures(onGesture.map { handler in { id, side, g in Task { @MainActor in handler(id, side, g) } } })
     }
 
-    func refresh() {
-        pads = GCController.controllers().compactMap { c in
+    func refresh(connected: GCController? = nil, disconnected: GCController? = nil) {
+        pads = Self.snapshot(GCController.controllers(), connected: connected, disconnected: disconnected)
+    }
+
+    /// 顶栏与弹窗共用同一设备判据；通知对象优先于尚未更新的枚举快照，按对象身份去重而非名称。
+    static func snapshot(_ controllers: [GCController], connected: GCController? = nil, disconnected: GCController? = nil) -> [Pad] {
+        var current = controllers.filter { $0 !== disconnected }
+        if let connected, connected !== disconnected { current.insert(connected, at: 0) }
+        var seen = Set<ObjectIdentifier>()
+        return current.compactMap { c in
+            guard seen.insert(ObjectIdentifier(c)).inserted else { return nil }
             guard c.extendedGamepad != nil || !c.physicalInputProfile.buttons.isEmpty else { return nil }
             let category = c.productCategory
             guard let family = Self.family(category: category, vendor: c.vendorName,
                                            xbox: c.extendedGamepad is GCXboxGamepad,
                                            playstation: c.extendedGamepad is GCDualSenseGamepad || c.extendedGamepad is GCDualShockGamepad) else { return nil }
-            return Pad(id: ObjectIdentifier(c), name: c.vendorName ?? category, family: family)
+            let name = c.vendorName.flatMap { $0.isEmpty ? nil : $0 } ?? (category.isEmpty ? "Game Controller" : category)
+            return Pad(id: ObjectIdentifier(c), name: name, family: family)
         }
     }
 

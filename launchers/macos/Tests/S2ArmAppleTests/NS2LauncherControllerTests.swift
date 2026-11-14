@@ -129,5 +129,6 @@ private final class NamedSystemController: GCController {
 
     init(_ name: String) { self.name = name; super.init() }
     override var vendorName: String? { name }
+    override var productCategory: String { "Fixture Controller" }
     override var extendedGamepad: GCExtendedGamepad? { gamepadSnapshot.extendedGamepad }
 }

@@ -1,3 +1,5 @@
+// Derived from NX2Apple (MIT; see frontend/NOTICE).
+// S2Arm: register controller actions and isolate an open dropdown's focus.
 import SwiftUI
 
 /// How a LauncherDropdown's button is drawn: `pill` is the round choice beside a launch option, `button` is
@@ -170,8 +172,10 @@ package struct LauncherDropdownList: View {
         .onDisappear(perform: stopKeys)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(label)
+        .accessibilityIdentifier("launcher.dropdown")
         .accessibilityAddTraits(.isModal)
         .accessibilityAction(.escape, close)
+        .controllerScope("dropdown")
     }
 
     private func row(_ option: (value: String, label: String), index: Int) -> some View {
@@ -189,13 +193,15 @@ package struct LauncherDropdownList: View {
                         in: RoundedRectangle(cornerRadius: 8))
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
-        .buttonStyle(.plain)
+        .controllerButtonStyle(.plain)
         .onHover { inside in
             if inside { highlighted = index } else if highlighted == index { highlighted = nil }
         }
         .accessibilityLabel(option.label)
         .accessibilityAddTraits(selected ? .isSelected : [])
         .accessibilityFocused($spoken, equals: index)
+        .controllerID("dropdown." + option.value)
+        .controllerPreferredFocus(selected)
     }
 
     private func startKeys() {
@@ -297,7 +303,7 @@ package struct LauncherDropdown: View {
                                                                             label: dropdown.label, choose: dropdown.choose)
                     }
                 } label: { dropdown.face(open: open, rowWidth: rowWidth) }
-                .buttonStyle(.plain)
+                .controllerButtonStyle(.plain)
                 .opacity(enabled ? 1 : 0.55)
                 .anchorPreference(key: LauncherDropdownAnchorKey.self, value: .bounds) { [dropdown.id: $0] }
             )
@@ -313,7 +319,7 @@ package struct LauncherDropdown: View {
         var body: some View {
             dropdown.accessible(
                 Button { open.toggle() } label: { dropdown.face(open: open, rowWidth: rowWidth) }
-                    .buttonStyle(.plain)
+                    .controllerButtonStyle(.plain)
                     .opacity(enabled ? 1 : 0.55)
                     .popover(isPresented: $open, arrowEdge: .bottom) {
                         LauncherDropdownList(options: dropdown.options, selection: dropdown.selection, label: dropdown.label,

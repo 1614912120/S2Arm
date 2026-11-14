@@ -29,21 +29,14 @@ struct TargetDeviceRow: View {
             Spacer(minLength: 12)
             // 连着两台以上（#272），或选过的那台不在线：列出连着的每台，选中的那台用于按机型优化和装到设备，记住到下次
             if many || (offline && !model.connectedDevices.isEmpty) {
-                Picker(x("device.choose"), selection: Binding(get: { device?["id"] as? String }, set: { model.chosenDevice = $0 })) {
-                    ForEach(Array(model.connectedDevices.enumerated()), id: \.offset) { _, d in
-                        Text(deviceLabel(d)).tag(d["id"] as? String)
-                    }
-                }
-                .labelsHidden().frame(width: 300).accessibilityIdentifier("export.device")
+                LauncherDropdown(options: model.connectedDevices.compactMap { d in (d["id"] as? String).map { ($0, deviceLabel(d)) } },
+                                 selection: device?["id"] as? String ?? "", label: x("device.choose"), style: .button) { model.chosenDevice = $0 }
+                    .frame(width: 300).controllerID("export.device")
             }
             if device == nil, !offline, !model.targetModels.isEmpty {
-                Picker(x("device.pick"), selection: $model.chosenModel) {
-                    Text(x("device.default")).tag(String?.none)
-                    ForEach(Array(model.targetModels.enumerated()), id: \.offset) { _, m in
-                        Text(m["name"] as? String ?? "").tag(m["productType"] as? String)
-                    }
-                }
-                .labelsHidden().frame(width: 190)
+                LauncherDropdown(options: [("", x("device.default"))] + model.targetModels.compactMap { m in (m["productType"] as? String).map { ($0, m["name"] as? String ?? "") } },
+                                 selection: model.chosenModel ?? "", label: x("device.pick"), style: .button) { model.chosenModel = $0.isEmpty ? nil : $0 }
+                    .frame(width: 190).controllerID("export.model")
             }
         }
         .padding(.horizontal, 14).padding(.vertical, 12)

@@ -48,7 +48,7 @@ struct InstallModeCard: View {
             .background(on ? Color.white.opacity(0.04) : .clear, in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(on ? LauncherPalette.cream.opacity(0.7) : Color.white.opacity(0.08)))
         }
-        .buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.5)
+        .controllerButtonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.5)
         .accessibilityIdentifier("env.installMode." + mode)
     }
 
@@ -65,13 +65,13 @@ struct InstallModeCard: View {
                     }
                     .foregroundStyle(LauncherPalette.cream.opacity(0.85))
                 }
-                .buttonStyle(.plain).padding(.horizontal, 14).accessibilityIdentifier("env.teamManual")
+                .controllerButtonStyle(.plain).padding(.horizontal, 14).accessibilityIdentifier("env.teamManual")
                 if showTeam || !enteredTeamCode.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(loc.t("s2arm.install.teamGuide")).font(.manrope(12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 8) {
                         Button(loc.t("s2arm.install.teamGuideOpen")) { model.openSigningProject() }
-                            .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("env.teamGuideOpen")
+                            .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("env.teamGuideOpen")
                         TextField(loc.t("s2arm.install.teamManualField"), text: $enteredTeamCode).textFieldStyle(.roundedBorder).font(.mono(12)).frame(width: 180)
                             .accessibilityIdentifier("env.teamId")
                     }
@@ -95,7 +95,7 @@ struct InstallModeLine: View {
             Text(ix(loc, "install.mode.summary").replacingOccurrences(of: "{0}", with: summary)).font(.manrope(13)).foregroundStyle(.secondary)
             Spacer(minLength: 12)
             Button(ix(loc, "install.mode.change")) { model.showEnvironment = true }
-                .buttonStyle(.plain).font(.manrope(12.5, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.85))
+                .controllerButtonStyle(.plain).font(.manrope(12.5, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.85))
                 .accessibilityIdentifier("export.installMode.change")
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
@@ -126,7 +126,7 @@ struct PhoneUpdateButton: View {
                     Text(t(model.installMode.mode == "export" ? "update.button.export" : "update.button.device")).font(.manrope(12.5, .semibold)).lineLimit(1)
                 }
             }
-            .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
+            .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
             .accessibilityIdentifier("top.phoneUpdate")
             .alert(t("update.confirm.title"), isPresented: Binding(get: { model.updateConfirm != nil }, set: { if !$0 { model.updateConfirm = nil } }),
                    presenting: model.updateConfirm) { u in

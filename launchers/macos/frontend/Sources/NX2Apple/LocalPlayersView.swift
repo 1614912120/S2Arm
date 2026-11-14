@@ -25,13 +25,13 @@ struct PlayerToolbarButton: View {
 
     var body: some View {
         Button { reload(); show.toggle() } label: {
-            Label(currentPlayer.map(name) ?? loc.t("s2arm.players.first"), systemImage: "person.crop.circle").font(.manrope(12.5, .semibold))
+            Label(currentPlayer.map(name) ?? loc.t("s2arm.players.first"), systemImage: "person.crop.circle")
                 .lineLimit(1).frame(maxWidth: 140)
         }
-        .buttonStyle(LauncherSecondaryButtonStyle())
-        .help(loc.t("s2arm.players.help"))
+        .controllerButtonStyle(ConsoleIconButtonStyle())
+        .help((currentPlayer.map(name) ?? loc.t("s2arm.players.first")) + " · " + loc.t("s2arm.players.help"))
         .accessibilityLabel(loc.t("s2arm.players.player") + "：" + (currentPlayer.map(name) ?? ""))
-        .accessibilityIdentifier("top.player")
+        .controllerID("top.player")
         .onAppear(perform: reload)
         .popover(isPresented: $show, arrowEdge: .bottom) { popover.frame(width: 340).padding(18) }
     }
@@ -42,7 +42,7 @@ struct PlayerToolbarButton: View {
             Text(loc.t("s2arm.players.intro")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             ForEach(players) { row($0) }
             if editing == .adding { field(loc.t("s2arm.players.add.confirm")) { commit { try store.add(text) } } }
-            else { Button { start(.adding, "") } label: { Label(loc.t("s2arm.players.add"), systemImage: "plus") }.buttonStyle(.borderless).accessibilityIdentifier("players.add") }
+            else { Button { start(.adding, "") } label: { Label(loc.t("s2arm.players.add"), systemImage: "plus") }.controllerButtonStyle(.borderless).accessibilityIdentifier("players.add") }
             if let error { Text(error).font(.manrope(12, .semibold)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true) }
         }
     }
@@ -65,9 +65,9 @@ struct PlayerToolbarButton: View {
                         if p.uid == current { Text(loc.t("s2arm.players.now")).font(.manrope(11, .semibold)).foregroundStyle(.green) }
                         Spacer()
                     }.contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityIdentifier("players.row." + (p.isFirst ? "first" : p.uid))
-                Button { start(.renaming(p.uid), p.name) } label: { Image(systemName: "pencil") }.buttonStyle(.borderless).help(loc.t("s2arm.players.rename"))
-                if !p.isFirst { Button { start(.removing(p.uid), "") } label: { Image(systemName: "trash") }.buttonStyle(.borderless).help(loc.t("s2arm.players.remove")) }
+                }.controllerButtonStyle(.plain).accessibilityIdentifier("players.row." + (p.isFirst ? "first" : p.uid))
+                Button { start(.renaming(p.uid), p.name) } label: { Image(systemName: "pencil") }.controllerButtonStyle(.borderless).help(loc.t("s2arm.players.rename"))
+                if !p.isFirst { Button { start(.removing(p.uid), "") } label: { Image(systemName: "trash") }.controllerButtonStyle(.borderless).help(loc.t("s2arm.players.remove")) }
             }
         }
     }

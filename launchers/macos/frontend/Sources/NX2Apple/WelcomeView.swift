@@ -89,7 +89,7 @@ struct WelcomeView: View {
         .overlay(alignment: .bottomTrailing) {
             if macReady, model.welcomeGame != nil {
                 Button { model.oneClickExport() } label: { LauncherHeroActionLabel(title: w("oneclick"), symbol: "shippingbox.fill") }
-                    .buttonStyle(.plain).keyboardShortcut(.defaultAction).disabled(model.busy)
+                    .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction).disabled(model.busy)
                     .padding(36)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
@@ -229,12 +229,12 @@ struct WelcomeView: View {
             case .waiting: Text(w("tool.waiting")).font(.manrope(12)).foregroundStyle(Color.white.opacity(0.58)).fixedSize()
             case .needs(let c):
                 if downloading(tool) != nil {
-                    Button(w("tool.cancel")) { model.stop() }.buttonStyle(LauncherSecondaryButtonStyle())
+                    Button(w("tool.cancel")) { model.stop() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                         .disabled(model.session?.phase == .stopping)
                 } else if tool.id == "apple" {
                     VStack(alignment: .trailing, spacing: 8) {
                         repairButton(c, primary: false)
-                        Button(loc.t("s2arm.env.recheck")) { model.checkEnvironment() }.buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.checking)
+                        Button(loc.t("s2arm.env.recheck")) { model.checkEnvironment() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.checking)
                     }
                 } else if model.repairQueue.contains(c) {
                     Text(w("tool.queued")).font(.manrope(12.5, .semibold)).foregroundStyle(.secondary).fixedSize()
@@ -332,10 +332,10 @@ struct WelcomeView: View {
                         .padding(.horizontal, 20).padding(.vertical, 10)
                         .background(LauncherPalette.cream, in: Capsule()).contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .controllerButtonStyle(.plain)
             } else {
                 Button(action: action) { Text(title).font(.manrope(13, .semibold)).fixedSize() }
-                    .buttonStyle(LauncherSecondaryButtonStyle())
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle())
             }
         }
         .disabled(!enabled).opacity(enabled ? 1 : 0.5)

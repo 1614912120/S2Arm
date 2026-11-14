@@ -183,7 +183,7 @@ struct PhoneJobPanel: View {
                 }
             }
             Button { NSWorkspace.shared.open(URL(fileURLWithPath: o.exportFolder)) } label: { LauncherHeroActionLabel(title: t("phone.export.open"), symbol: "folder") }
-                .buttonStyle(.plain).accessibilityIdentifier("phone.export.open")
+                .controllerButtonStyle(.plain).accessibilityIdentifier("phone.export.open")
         }
         .accessibilityIdentifier("phone.done")
     }
@@ -200,7 +200,7 @@ struct PhoneJobPanel: View {
             HStack(spacing: 12) {
                 if session.kind == .installUpdate {
                     Button { model.retryPhoneUpdate() } label: { LauncherHeroActionLabel(title: t("phone.retry"), symbol: "arrow.clockwise") }
-                        .buttonStyle(.plain).disabled(model.busy).accessibilityIdentifier("phone.retry")
+                        .controllerButtonStyle(.plain).disabled(model.busy).accessibilityIdentifier("phone.retry")
                 }
                 CopyReportButton(model: model, gameID: session.gameID, operations: [session.kind.rawValue], fallback: session.message)
             }
@@ -223,9 +223,9 @@ struct PhoneJobPanel: View {
             headline(seal: AnyView(StatusSeal(symbol: "exclamationmark", color: LauncherPalette.building)), title: title, subtitle: loc.backend(session.message))
             HStack(spacing: 12) {
                 Button { if let d = model.dropConfirm { model.confirmDrop(d) } } label: { LauncherHeroActionLabel(title: t("install.drop_confirm"), symbol: "arrow.right") }
-                    .buttonStyle(.plain).accessibilityIdentifier("phone.drop.confirm")
+                    .controllerButtonStyle(.plain).accessibilityIdentifier("phone.drop.confirm")
                 Button(t("phone.drop.cancel")) { model.dropConfirm = nil; model.backToLibrary() }
-                    .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("phone.drop.cancel")
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("phone.drop.cancel")
             }
         }
         .accessibilityIdentifier("phone.drop")

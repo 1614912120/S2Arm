@@ -97,7 +97,7 @@ struct SaveManageSheet: View {
                 }
                 if let game {
                     Button(t("save.folder.open")) { model.openSaveFolder(game) }
-                        .buttonStyle(LauncherSecondaryButtonStyle()).padding(.top, 8)
+                        .controllerButtonStyle(LauncherSecondaryButtonStyle()).padding(.top, 8)
                         .accessibilityIdentifier("save.folder.open")
                 }
             }
@@ -120,10 +120,10 @@ struct SaveManageSheet: View {
                 }
                 Spacer(minLength: 8)
                 if state.busy, state.running != .restore {
-                    Button(t("save.stop")) { state.stop() }.buttonStyle(LauncherSecondaryButtonStyle())
+                    Button(t("save.stop")) { state.stop() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                 }
                 Button(t("save.done")) { dismiss() }
-                    .buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
                     .disabled(state.running == .restore)
             }
             .padding(.horizontal, 30).padding(.vertical, 16)
@@ -186,18 +186,18 @@ struct SaveManageSheet: View {
                 if !s.recoveryFailed.isEmpty {
                     CardDivider()
                     CardRow(t("save.recoveryFailed"), dot: LauncherPalette.danger) {
-                        Button(t("save.reveal")) { reveal(s.recoveryFailed) }.buttonStyle(LauncherSecondaryButtonStyle())
+                        Button(t("save.reveal")) { reveal(s.recoveryFailed) }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                     }
                 }
                 if !s.previousBackup.isEmpty {
                     CardDivider()
                     CardRow(t("save.previous"), detail: t("save.previousDetail")) {
-                        Button(t("save.reveal")) { reveal(s.previousBackup) }.buttonStyle(LauncherSecondaryButtonStyle())
+                        Button(t("save.reveal")) { reveal(s.previousBackup) }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                     }
                 }
             } else {
                 CardRow(t(state.running == .status ? "save.working.status" : "save.unknown")) {
-                    Button(t("save.recheck")) { refresh() }.buttonStyle(LauncherSecondaryButtonStyle()).disabled(blocked)
+                    Button(t("save.recheck")) { refresh() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(blocked)
                 }
             }
         }
@@ -206,7 +206,7 @@ struct SaveManageSheet: View {
     private var backupCard: some View {
         CardGroup(t("save.backup")) {
             CardRow(t("save.backupRow"), detail: t("save.backupDetail")) {
-                Button(t("save.backupButton")) { backup() }.buttonStyle(LauncherSecondaryButtonStyle())
+                Button(t("save.backupButton")) { backup() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                     .disabled(blocked || state.status?.hasSave != true)
             }
         }
@@ -215,7 +215,7 @@ struct SaveManageSheet: View {
     private var restoreCard: some View {
         CardGroup(t("save.restore"), footnote: t("save.restoreNote") + "\n" + t("save.dropHint")) {
             CardRow(t("save.chooseRow"), detail: state.preview?.source.lastPathComponent ?? t("save.chooseDetail")) {
-                Button(t("save.choose")) { choose() }.buttonStyle(LauncherSecondaryButtonStyle()).disabled(blocked)
+                Button(t("save.choose")) { choose() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(blocked)
             }
             if let p = state.preview {
                 CardDivider()
@@ -238,7 +238,7 @@ struct SaveManageSheet: View {
                             .padding(.horizontal, 18).padding(.vertical, 8)
                             .background(LauncherPalette.cream, in: Capsule()).contentShape(Capsule())
                     }
-                    .buttonStyle(.plain).disabled(blocked).opacity(blocked ? 0.45 : 1)
+                    .controllerButtonStyle(.plain).disabled(blocked).opacity(blocked ? 0.45 : 1)
                 }
             }
         }

@@ -1,3 +1,5 @@
+// Derived from NX2Apple (MIT; see frontend/NOTICE).
+// S2Arm: register button/switch actions and expose custom slider adjustment to controllers.
 import SwiftUI
 
 package struct LauncherWindowChrome: NSViewRepresentable {
@@ -201,7 +203,7 @@ package struct LauncherSwitchStyle: ToggleStyle {
             .frame(width: 40, height: 24)
             .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .controllerButtonStyle(.plain)
         .opacity(enabled ? 1 : 0.45)
         .accessibilityAddTraits(configuration.isOn ? .isSelected : [])
     }
@@ -278,7 +280,7 @@ package struct LauncherSegmented: View {
                         .background(on ? LauncherPalette.cream : .clear, in: Capsule())
                         .contentShape(Capsule())
                 }
-                .buttonStyle(.plain)
+                .controllerButtonStyle(.plain)
                 .accessibilityAddTraits(on ? .isSelected : [])
             }
         }
@@ -318,5 +320,9 @@ package struct LauncherSlider: View {
             })
         }
         .frame(height: 22)
+        .controllerControl(activate: {}, adjust: { direction in
+            let increment = step > 0 ? step : (range.upperBound - range.lowerBound) / 100
+            change(min(max(value + Double(direction) * increment, range.lowerBound), range.upperBound))
+        })
     }
 }

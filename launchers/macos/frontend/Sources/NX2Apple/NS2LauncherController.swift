@@ -64,6 +64,10 @@ final class NS2LauncherController: ObservableObject {
     /// 标题：一只写型号；一对 Joy-Con 2 合成一位写「Joy-Con 2 (L + R)」；其余两只以上写「N 个 NS2 手柄」（同蓝牙手柄那块写数量，玩家在玩家列表）
     func title(simplifiedChinese zh: Bool) -> String {
         if hasSystemController, let systemControllerName { return systemControllerName }   // #901：只有系统手柄连着时写它的真实名字
+        return switchTitle(simplifiedChinese: zh)
+    }
+    /// Switch 专用通道的标题必须与该通道的状态配对，不能借用系统手柄名称。
+    func switchTitle(simplifiedChinese zh: Bool) -> String {
         let mergedPair = kind == 4 && players == 1
         let count = max(deviceCount, 0) + extras.reduce(0) { $0 + $1.devices.count }
         if count >= 2 && !(mergedPair && count == 2) { return zh ? "\(count) 个 Switch 2 手柄" : "\(count) Switch 2 controllers" }
@@ -139,11 +143,7 @@ final class NS2LauncherController: ObservableObject {
         return helperDetail
     }
     private func refreshSystemControllers(connected: GCController? = nil, disconnected: GCController? = nil) {
-        var controllers = systemControllers().filter { $0 !== disconnected }
-        // 通知里的设备是本次事件的真值；枚举快照尚未更新时也要及时显示连接 / 断开
-        if let connected { controllers.insert(connected, at: 0) }
-        let controller = controllers.first { $0.extendedGamepad != nil || !$0.physicalInputProfile.buttons.isEmpty }
-        systemControllerName = controller.map { $0.vendorName.flatMap { $0.isEmpty ? nil : $0 } ?? "Game Controller" }
+        systemControllerName = SystemControllers.snapshot(systemControllers(), connected: connected, disconnected: disconnected).first?.name
     }
 
     /// 面板状态（#520 UI 稿「连接状态」：固定 7 种，状态行只写这几个词；细节放下面一行）

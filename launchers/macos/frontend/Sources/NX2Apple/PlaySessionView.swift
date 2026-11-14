@@ -136,7 +136,7 @@ struct PlaySessionView: View {
                     Button { model.play(game, uiLanguage: uiLanguage) } label: {
                         Label(loc.t("s2arm.play.again"), systemImage: "play.fill").font(.manrope(13, .semibold))
                     }
-                    .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
                     .accessibilityIdentifier("play.again")
                 }
                 CopyReportButton(model: model, gameID: session.gameID, operations: ["launch"], fallback: session.message)
@@ -155,11 +155,11 @@ struct PlaySessionView: View {
         HStack(spacing: 14) {
             if finished == nil {
                 Button { model.stop() } label: { LauncherHeroActionLabel(title: loc.t("s2arm.play.stop"), symbol: "stop.fill") }
-                    .buttonStyle(.plain).disabled(session.phase == .stopping)
+                    .controllerButtonStyle(.plain).disabled(session.phase == .stopping)
                     .keyboardShortcut(".", modifiers: .command).accessibilityIdentifier("play.stop")
             } else {
                 Button { model.backToLibrary() } label: { LauncherHeroActionLabel(title: loc.t("s2arm.play.back"), symbol: "chevron.left") }
-                    .buttonStyle(.plain).keyboardShortcut(.defaultAction).accessibilityIdentifier("play.back")
+                    .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction).accessibilityIdentifier("play.back")
             }
             Spacer()
         }

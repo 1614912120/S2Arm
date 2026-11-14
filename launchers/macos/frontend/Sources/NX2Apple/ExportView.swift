@@ -53,7 +53,7 @@ struct ExportView: View {
             Button { model.exportFor = nil } label: {
                 Label(loc.t("s2arm.export.back"), systemImage: "chevron.left").font(.manrope(12.5, .semibold))
             }
-            .buttonStyle(LauncherSecondaryButtonStyle())
+            .controllerButtonStyle(LauncherSecondaryButtonStyle())
             .keyboardShortcut("[", modifiers: .command)
             .accessibilityIdentifier("export.back")
             HStack(alignment: .center, spacing: 24) {
@@ -64,7 +64,7 @@ struct ExportView: View {
                     .overlay(alignment: .bottomTrailing) { editBadge.padding(8) }
                     .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
                 }
-                .buttonStyle(.plain).disabled(model.busy || model.customizing)
+                .controllerButtonStyle(.plain).disabled(model.busy || model.customizing)
                 .help(loc.t("s2arm.custom.cover.help"))
                 .accessibilityLabel(loc.t("s2arm.custom.cover.help"))
                 .accessibilityIdentifier("export.cover")
@@ -76,7 +76,7 @@ struct ExportView: View {
                             Image(systemName: "pencil").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
                         }
                     }
-                    .buttonStyle(.plain).disabled(model.busy || model.customizing)
+                    .controllerButtonStyle(.plain).disabled(model.busy || model.customizing)
                     .help(loc.t("s2arm.custom.name.help"))
                     .accessibilityIdentifier("export.name")
                     .alert(loc.t("s2arm.custom.name.title"), isPresented: $renaming) {
@@ -87,7 +87,7 @@ struct ExportView: View {
                     }
                     if game.customCover {
                         Button(loc.t("s2arm.custom.cover.reset")) { model.customize(game, coverPath: "") }
-                            .buttonStyle(.plain).font(.manrope(12.5)).foregroundStyle(.secondary).underline()
+                            .controllerButtonStyle(.plain).font(.manrope(12.5)).foregroundStyle(.secondary).underline()
                             .disabled(model.busy || model.customizing).accessibilityIdentifier("export.cover.reset")
                     }
                     if model.customizing, let note = model.lockWaitNote {
@@ -130,7 +130,7 @@ struct ExportView: View {
                 Spacer()
                 if game.iphoneReady {
                     Button(loc.t(model.installKey("s2arm.export.installExisting")), action: install)
-                        .buttonStyle(.plain).font(.manrope(12.5, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.85))
+                        .controllerButtonStyle(.plain).font(.manrope(12.5, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.85))
                         .accessibilityIdentifier("export.install")
                 }
             }
@@ -233,7 +233,7 @@ struct ExportView: View {
             .contentShape(RoundedRectangle(cornerRadius: 14))
             .opacity(open ? 1 : 0.5)
         }
-        .buttonStyle(.plain)
+        .controllerButtonStyle(.plain)
         .disabled(!open || model.busy)
         .busyHint(model, disabled: open)
         .padTarget("export." + platform.rawValue, scope: "main", radius: 16) { model.toggleExport(platform) }
@@ -278,10 +278,10 @@ struct ExportView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("export.reason")
                 if blocker == .keys {
-                    Button(x("fix.keys")) { model.showKeys = true }.buttonStyle(LauncherSecondaryButtonStyle())
+                    Button(x("fix.keys")) { model.showKeys = true }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                 }
                 if case .game = blocker, !game.missing.isEmpty {
-                    Button(x("fix.readd")) { model.showAddGames = true }.buttonStyle(LauncherSecondaryButtonStyle())
+                    Button(x("fix.readd")) { model.showAddGames = true }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                 }
             } else {
                 Text(loc.t("s2arm.export.hint")).font(.manrope(13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -297,7 +297,7 @@ struct ExportView: View {
                 .background(LauncherPalette.cream, in: Capsule())
                 .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
+            .controllerButtonStyle(.plain)
             .disabled(blocker?.stopsStart == true)   // 缺文件 / 缺 keys 只在左边提示，不置灰（作业层核实）
             .opacity(blocker?.stopsStart == true ? 0.4 : 1)
             .busyHint(model, disabled: blocker == .busy)   // 别的任务（非出包）在跑：说在等谁（出包在跑时这里是「排队」，不置灰）

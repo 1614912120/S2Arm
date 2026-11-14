@@ -134,6 +134,13 @@ struct PackSpace: Equatable {
 
 @MainActor
 public final class S2ArmLauncherModel: ObservableObject {
+    let home = HomeLibraryState()
+    let gamepad = LauncherPadNavigation()
+    var playSessionActive: Bool {
+        guard let session, session.kind == .play else { return false }
+        if case .finished = session.phase { return false }
+        return true
+    }
     @Published private(set) var games: [GameSummary] = []
     @Published private(set) var loading = false
     /// 游戏库读回来过（成功或失败）：之前库是空的只说明还没读完，不能显示「还没有游戏」。
@@ -146,7 +153,9 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published var selectedID: String?
     /// 出包平台的勾选没能写盘。
     @Published private(set) var choiceError: String?
-    @Published var session: JobSession?   // 批量出包时编排作业一步换一款，+Batch.swift batchStepStarted 换会话
+    @Published var session: JobSession? {   // 批量出包时编排作业一步换一款，+Batch.swift batchStepStarted 换会话
+        didSet { if session?.started != oldValue?.started { sessionHidden = false } }
+    }
     /// 出包页开着的那一款（nil = 游戏库）。
     @Published var exportFor: String?
     /// 下游深度方案确认页（DownstreamConfirmSheet）：导出 iPhone 前弹，选完记下（downstreamChoice 作业）再接着导出这一单
@@ -1037,6 +1046,9 @@ public final class S2ArmLauncherModel: ObservableObject {
     }
 
     private func startPlay(_ game: GameSummary, uiLanguage: String?) {
+        // The helper accepts one consumer. Release the launcher's reader before
+        // the host can connect, including launches initiated by the control port.
+        gamepad.releaseRelay()
         let relaySocket = controller.relaySocketForGame()
         var controllerArguments: [String: String] = [
             "switch2ProAutoConnect": relaySocket == nil ? "0" : "1",   // 有通道就让游戏自己接（还没连上时游戏会重试）
@@ -1337,6 +1349,7 @@ public final class S2ArmLauncherModel: ObservableObject {
             session.stage = stage
             if event.ev == "stage", session.stages.last != stage { session.stages.append(stage) }
             if session.kind == .play, event.fields["stageKey"] as? String == "game_running" {   // 后端固定机读名（build.py begin key），不认中文阶段名
+                if let id = session.gameID { home.recordPlay(id) }
                 controllerGameStarted = true
                 controller.gameDidStart()
             }

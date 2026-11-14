@@ -45,6 +45,7 @@ struct FreeSpaceView: View {
                 Text(storage("title")).tag(true)
             }
             .pickerStyle(.segmented).labelsHidden().fixedSize().accessibilityIdentifier("space.mode")
+            .controllerControl(id: "space.mode", activate: { overviewMode.toggle() }, adjust: { overviewMode = $0 > 0 })
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 30).padding(.bottom, 20)
             if let error = model.spaceError {
@@ -68,7 +69,7 @@ struct FreeSpaceView: View {
                                     HStack(spacing: 14) {
                                         Text(Self.size(part.bytes)).font(.manrope(13, .semibold)).monospacedDigit()
                                             .foregroundStyle(part.bytes > 0 ? .primary : .secondary)
-                                        Toggle("", isOn: binding(part.id)).toggleStyle(.checkbox).labelsHidden()
+                                        Toggle("", isOn: binding(part.id)).toggleStyle(PadToggleStyle(.checkbox)).labelsHidden()
                                             .disabled(part.bytes == 0 || model.spaceFreeing)
                                             .accessibilityLabel(loc.backend(part.title))
                                     }
@@ -100,15 +101,15 @@ struct FreeSpaceView: View {
                 }
                 Spacer(minLength: 8)
                 if overviewMode {
-                    Button(storage("refresh")) { model.loadOverview() }.buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.overviewLoading)
+                    Button(storage("refresh")) { model.loadOverview() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.overviewLoading)
                 }
-                Button(loc.t("launch.done")) { dismiss() }.buttonStyle(LauncherSecondaryButtonStyle())
+                Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
                 if !overviewMode { Button { confirming = true } label: {
                     Text(loc.t("s2arm.space.free")).font(.manrope(13.5, .bold)).foregroundStyle(.black)
                         .padding(.horizontal, 22).padding(.vertical, 9)
                         .background(LauncherPalette.cream, in: Capsule())
                 }
-                .buttonStyle(.plain).disabled(!canFree).opacity(canFree ? 1 : 0.45) }
+                .controllerButtonStyle(.plain).disabled(!canFree).opacity(canFree ? 1 : 0.45) }
             }
             .padding(.horizontal, 30).padding(.vertical, 16)
         }

@@ -105,7 +105,7 @@ struct ImportSheet: View {
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
                             Button(resultText("view")) { detail = source }
-                                .buttonStyle(LauncherSecondaryButtonStyle())
+                                .controllerButtonStyle(LauncherSecondaryButtonStyle())
                                 .disabled(model.busy)
                                 .accessibilityIdentifier("import.details." + source.id)
                                 .focusable()
@@ -136,15 +136,15 @@ struct ImportSheet: View {
         HStack {
             if page == .results, detail == nil {
                 Button(common("cancel")) { model.cancelImport() }
-                    .buttonStyle(LauncherSecondaryButtonStyle())
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle())
             }
             Spacer()
             if let detail, page == .results {
                 Button(resultText("back")) { backFromDetails(detail) }
-                    .buttonStyle(LauncherSecondaryButtonStyle())
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle())
             } else if page == .results {
                 Button(resultText("back")) { model.backFromImportResults() }
-                    .buttonStyle(LauncherSecondaryButtonStyle())
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle())
                     .disabled(model.busy)
                 Button { model.retryImport() } label: {
                     Text(resultText("retry")).font(.manrope(13, .bold))
@@ -153,11 +153,11 @@ struct ImportSheet: View {
                         .background(LauncherPalette.cream.opacity(model.busy ? 0.45 : 1), in: RoundedRectangle(cornerRadius: 9))
                         .contentShape(RoundedRectangle(cornerRadius: 9))
                 }
-                .buttonStyle(.plain)
+                .controllerButtonStyle(.plain)
                 .disabled(model.busy)
             } else {
                 Button(common("cancel")) { cancel() }
-                    .buttonStyle(LauncherSecondaryButtonStyle())
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle())
                     .disabled(job?.phase == .stopping)
             }
         }
@@ -190,7 +190,7 @@ struct ImportSheet: View {
                         .background(fieldBackground)
                         .contentShape(RoundedRectangle(cornerRadius: 9))
                 }
-                .buttonStyle(.plain)
+                .controllerButtonStyle(.plain)
                 .disabled(source.diagnostic.isEmpty)
                 .accessibilityLabel(resultText("copy"))
                 .accessibilityValue(copyFeedback == nil ? "" : resultText("copied"))
@@ -278,7 +278,7 @@ struct ImportSheet: View {
             Text(w("drop")).font(.manrope(18, .bold))
             Text(common("or")).font(.manrope(12.5)).foregroundStyle(.secondary)
             Button { browse() } label: { Text(w("browse")).font(.manrope(14, .bold)).foregroundStyle(.black).padding(.horizontal, 20).padding(.vertical, 9).background(LauncherPalette.cream, in: Capsule()).contentShape(Capsule()) }
-                .buttonStyle(.plain).disabled(model.busy)
+                .controllerButtonStyle(.plain).disabled(model.busy)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(targeted ? LauncherPalette.cream.opacity(0.07) : LauncherPalette.surface.opacity(0.45), in: RoundedRectangle(cornerRadius: 16))
@@ -392,7 +392,7 @@ struct CopyReportButton: View {
 
     var body: some View {
         Button(loc.t("s2arm.diagUpload.button")) { showing = true }
-            .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("diag.upload")
+            .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("diag.upload")
             .sheet(isPresented: $showing) {
                 UploadDiagnosticsSheet(model: model, gameID: gameID, operations: operations, fallback: fallback) { showing = false }
                     .environmentObject(loc)
@@ -422,8 +422,8 @@ struct UploadDiagnosticsSheet: View {
                 Text(loc.t("s2arm.diagUpload.not")).font(.manrope(13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Spacer()
-                    Button(loc.t("s2arm.diagUpload.cancel")) { close() }.buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
-                    Button(loc.t("s2arm.diagUpload.send")) { send() }.buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction)
+                    Button(loc.t("s2arm.diagUpload.cancel")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                    Button(loc.t("s2arm.diagUpload.send")) { send() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("diag.upload.send")
                 }
             case .uploading:
@@ -431,21 +431,21 @@ struct UploadDiagnosticsSheet: View {
                 // 11-13：卡在这一步（网慢 / 代理半通）原先没有任何出口；作业层另有 90 秒总时限兜底
                 HStack {
                     Spacer()
-                    Button(loc.t("s2arm.diagUpload.cancel")) { cancelUpload() }.buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                    Button(loc.t("s2arm.diagUpload.cancel")) { cancelUpload() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
                         .accessibilityIdentifier("diag.upload.cancelSending")
                 }
             case .done(let receipt):
                 Text(loc.t("s2arm.diagUpload.done")).font(.manrope(13)).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {
                     Text(receipt.code).font(.system(size: 26, weight: .semibold, design: .monospaced)).textSelection(.enabled).accessibilityIdentifier("diag.upload.code")
-                    Button(copied ? loc.t("s2arm.export.copied") : loc.t("s2arm.diagUpload.copy")) { copy(receipt.code) }.buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("diag.upload.copy")
+                    Button(copied ? loc.t("s2arm.export.copied") : loc.t("s2arm.diagUpload.copy")) { copy(receipt.code) }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("diag.upload.copy")
                 }
                 Text(loc.t("s2arm.diagUpload.repo").replacingOccurrences(of: "{0}", with: receipt.repo)).font(.manrope(12.5)).foregroundStyle(.secondary).textSelection(.enabled)
                 HStack {
                     Spacer()
-                    Button(loc.t("s2arm.diagUpload.close")) { close() }.buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                    Button(loc.t("s2arm.diagUpload.close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
                     if let url = receipt.issueURL {   // 主按钮：系统浏览器打开预填好诊断码 / 版本 / 平台的新帖页
-                        Button(loc.t("s2arm.diagUpload.github")) { NSWorkspace.shared.open(url) }.buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction)
+                        Button(loc.t("s2arm.diagUpload.github")) { NSWorkspace.shared.open(url) }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction)
                             .accessibilityIdentifier("diag.upload.github")
                     }
                 }
@@ -454,8 +454,8 @@ struct UploadDiagnosticsSheet: View {
                     .accessibilityIdentifier("diag.upload.failed")
                 HStack {
                     Spacer()
-                    Button(loc.t("s2arm.diagUpload.close")) { close() }.buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
-                    Button(loc.t("s2arm.play.diagnostics")) { exportInstead() }.buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction)
+                    Button(loc.t("s2arm.diagUpload.close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                    Button(loc.t("s2arm.play.diagnostics")) { exportInstead() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("diag.upload.export")
                 }
             }

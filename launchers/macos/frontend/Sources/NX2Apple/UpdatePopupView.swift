@@ -75,14 +75,14 @@ struct UpdatePopupView: View {
             HStack {
                 if let link = releasePage(version) {
                     Button { NSWorkspace.shared.open(link) } label: { Text(t("update.popup.fullLog")).font(.manrope(13)).underline() }
-                        .buttonStyle(.plain).foregroundStyle(LauncherPalette.cream)
+                        .controllerButtonStyle(.plain).foregroundStyle(LauncherPalette.cream)
                 }
                 Spacer()
-                Button(t("update.popup.later")) { model.closeUpdatePopup() }.buttonStyle(LauncherSecondaryButtonStyle())
+                Button(t("update.popup.later")) { model.closeUpdatePopup() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                     .keyboardShortcut(.cancelAction).accessibilityIdentifier("update.popup.later")
                 Button { model.restartToUpdate() } label: { Text(t("update.popup.now")).font(.manrope(14, .bold)).foregroundStyle(.black)
                     .padding(.horizontal, 20).frame(height: 40).background(LauncherPalette.cream, in: Capsule()) }
-                    .buttonStyle(.plain).disabled(model.updateState != .ready).opacity(model.updateState == .ready ? 1 : 0.5)
+                    .controllerButtonStyle(.plain).disabled(model.updateState != .ready).opacity(model.updateState == .ready ? 1 : 0.5)
                     .accessibilityIdentifier("update.popup.now")
             }
         }
@@ -99,12 +99,12 @@ struct UpdatePopupView: View {
             HStack {
                 if let link = releasePage(version) {
                     Button { NSWorkspace.shared.open(link) } label: { Text(t("update.popup.fullLog")).font(.manrope(13)).underline() }
-                        .buttonStyle(.plain).foregroundStyle(LauncherPalette.cream)
+                        .controllerButtonStyle(.plain).foregroundStyle(LauncherPalette.cream)
                 }
                 Spacer()
                 Button { model.closeUpdatePopup() } label: { Text(t("update.after.ok")).font(.manrope(14, .bold)).foregroundStyle(.black)
                     .padding(.horizontal, 22).frame(height: 40).background(LauncherPalette.cream, in: Capsule()) }
-                    .buttonStyle(.plain).keyboardShortcut(.defaultAction).accessibilityIdentifier("update.after.ok")
+                    .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction).accessibilityIdentifier("update.after.ok")
             }
         }
     }
@@ -161,7 +161,7 @@ struct MessagesPanel: View {
                 }
                 if let link = releasePage(version) {
                     Button { NSWorkspace.shared.open(link) } label: { Text(t("update.popup.fullLog")).font(.manrope(12.5)).underline() }
-                        .buttonStyle(.plain).foregroundStyle(LauncherPalette.cream)
+                        .controllerButtonStyle(.plain).foregroundStyle(LauncherPalette.cream)
                 }
             } else {
                 HStack(spacing: 8) {
@@ -171,7 +171,7 @@ struct MessagesPanel: View {
                 Text((m["text"] as? [String: String])?[language] ?? "").font(.manrope(13.5)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                 if let link = (m["url"] as? String).flatMap(URL.init(string:)) {
                     Button { NSWorkspace.shared.open(link) } label: { Text(t("notice.details")).font(.manrope(12.5)).underline() }
-                        .buttonStyle(.plain).foregroundStyle(LauncherPalette.cream)
+                        .controllerButtonStyle(.plain).foregroundStyle(LauncherPalette.cream)
                 }
             }
         }

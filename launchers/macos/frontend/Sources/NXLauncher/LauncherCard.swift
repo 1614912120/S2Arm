@@ -1,3 +1,5 @@
+// Derived from NX2Apple (MIT; see frontend/NOTICE).
+// S2Arm: shared card actions participate in launcher controller navigation.
 import SwiftUI
 import AppKit
 import NXCore
@@ -141,7 +143,7 @@ package struct PathLink: View {
             } label: {
                 text.underline(hovering).foregroundStyle(hovering ? Color.primary : Color.secondary)
             }
-            .buttonStyle(.plain)
+            .controllerButtonStyle(.plain)
             .onHover { inside in
                 hovering = inside
                 if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
@@ -178,7 +180,7 @@ package struct CardDisclosure: View {
             CardRow(title, detail: detail, open: isOpen) { EmptyView() }
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .controllerButtonStyle(.plain)
     }
 }
 
@@ -201,7 +203,7 @@ package struct LauncherPageScroll<Content: View>: View {
                 if let id, id.hasPrefix("set.") { withAnimation(.easeInOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .center) } }
             }
         }
-        .buttonStyle(LauncherSecondaryButtonStyle())
+        .controllerButtonStyle(LauncherSecondaryButtonStyle())
     }
 }
 

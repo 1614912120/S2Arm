@@ -96,7 +96,7 @@ struct LaunchSettingsSheet: View {
             Spacer(minLength: 0)
             HStack {
                 Spacer()
-                Button(t("display.done")) { dismiss() }.buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                Button(t("display.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
             }
         }
         .padding(30)
@@ -122,7 +122,7 @@ struct LaunchSettingsSheet: View {
         switch item.type {
         case "page":
             CardRow(title, detail: item.detail(lang)) {
-                Button(t("display.open")) { dismiss(); openInput() }.buttonStyle(LauncherSecondaryButtonStyle())
+                Button(t("display.open")) { dismiss(); openInput() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                     .accessibilityIdentifier("launch." + item.id)
             }
         case "patches":
@@ -136,11 +136,9 @@ struct LaunchSettingsSheet: View {
         case "choice":
             let option = options[item.id]
             CardRow(title, detail: option?.available == false ? loc.backend(option?.reason ?? "") : item.detail(lang)) {
-                Picker("", selection: Binding(get: { option?.value as? String ?? "" }, set: { v in Task { await load([item.id: v]) } })) {
-                    ForEach(item.options, id: \.value) { o in Text(o.label[lang] ?? o.value).tag(o.value) }
-                }
-                .labelsHidden().pickerStyle(.menu).frame(width: 150).accessibilityLabel(title)
-                .accessibilityIdentifier("launch." + item.id)
+                LauncherDropdown(options: item.options.map { ($0.value, $0.label[lang] ?? $0.value) },
+                                 selection: option?.value as? String ?? "", label: title) { v in Task { await load([item.id: v]) } }
+                .frame(width: 150).controllerID("launch." + item.id)
                 .disabled(option?.available != true || saving || model.busy)
             }
         default:

@@ -40,13 +40,9 @@ struct EnvironmentView: View {
                     CardGroup(s("settings.language")) {
                         // 跟随系统 / 简体中文 / English：选了某种就记住（以后不再跟系统），选「跟随系统」回到按系统首选语言（11-13）
                         CardRow(s("settings.language"), detail: Lang.saved == nil ? loc.t("settings.language.system") + " · " + loc.lang.name : loc.lang.name) {
-                            Menu {
-                                Button(loc.t("settings.language.system")) { loc.choose("") }
-                                ForEach(Lang.all, id: \.self) { l in Button(l.name) { loc.choose(l.code) } }
-                            } label: {
-                                Label(loc.lang.name, systemImage: "globe")
-                            }
-                            .menuStyle(.borderlessButton).fixedSize().accessibilityIdentifier("settings.language")
+                            LauncherDropdown(options: [("", loc.t("settings.language.system"))] + Lang.all.map { ($0.code, $0.name) },
+                                             selection: Lang.saved?.code ?? "", label: s("settings.language"), style: .button) { loc.choose($0) }
+                                .controllerID("settings.language")
                         }
                     }
                     // 存放位置（社区贡献者补丁 #10）：游戏库、iPhone 包、磁盘空间集中在这一处；单款游戏放在哪看出包页的「存放位置」
@@ -55,21 +51,21 @@ struct EnvironmentView: View {
                         CardRow(s("settings.locations.library"), detail: loc.t("s2arm.env.library.detail"), detail2: library) {   // 路径放 detail2：以 / 开头就画成可点的路径链接（PathLink）
                             HStack(spacing: 8) {
                                 Button(s("settings.open")) { NSWorkspace.shared.open(URL(fileURLWithPath: library)) }
-                                    .buttonStyle(LauncherSecondaryButtonStyle()).disabled(library.isEmpty)
+                                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(library.isEmpty)
                                 Button(loc.t("s2arm.env.library.change")) { chooseLibrary() }
-                                    .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
+                                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
                             }
                         }
                         CardDivider()
                         let ipa = (library as NSString).appendingPathComponent("S2Arm.ipa")   // 出 iPhone 包时组在游戏库根
                         let ipaReady = !library.isEmpty && FileManager.default.fileExists(atPath: ipa)
                         CardRow(s("settings.locations.ipa"), detail: ipaReady ? "" : s("settings.locations.ipa_none"), detail2: ipaReady ? ipa : "") {
-                            if ipaReady { Button(loc.t("s2arm.export.revealIpa")) { model.revealIpa(ipa) }.buttonStyle(LauncherSecondaryButtonStyle()) }
+                            if ipaReady { Button(loc.t("s2arm.export.revealIpa")) { model.revealIpa(ipa) }.controllerButtonStyle(LauncherSecondaryButtonStyle()) }
                         }
                         CardDivider()
                         CardRow(s("settings.locations.space")) {
                             Button(s("storage.open")) { model.showEnvironment = false; model.spaceRequest = model.selectedID ?? model.games.first?.id }
-                                .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.games.isEmpty)
+                                .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.games.isEmpty)
                         }
                     }
                     InstallModeCard(model: model)   // 装到 iPhone 的方式（v0.3.0：签名 / 安装入口收在这一处）
@@ -94,10 +90,10 @@ struct EnvironmentView: View {
                             HStack(spacing: 8) {
                                 if model.cloudFolder != nil {
                                     Button(loc.t("s2arm.env.cloud.turnOff")) { do { try model.setCloudFolder(nil) } catch { model.reportFailure("s2arm.fail.cloudFolder", error) } }
-                                        .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("env.cloud.off")
+                                        .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("env.cloud.off")
                                 }
                                 Button(loc.t("s2arm.env.cloud.choose")) { chooseCloudFolder() }
-                                    .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("env.cloud.choose")
+                                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("env.cloud.choose")
                             }
                         }
                     }
@@ -105,7 +101,7 @@ struct EnvironmentView: View {
                     CardGroup(loc.t("s2arm.env.ai.group")) {
                         CardRow(loc.t("s2arm.env.ai.title"), detail: model.aiControlError.map(loc.backend) ?? loc.t("s2arm.env.ai.detail")) {
                             Toggle("", isOn: Binding(get: { model.aiControl }, set: { model.setAIControl($0) }))
-                                .toggleStyle(.switch).labelsHidden().disabled(ControlPort.forced)
+                                .toggleStyle(PadToggleStyle(.switch)).labelsHidden().disabled(ControlPort.forced)
                                 .accessibilityIdentifier("env.aiControl")
                         }
                     }
@@ -133,13 +129,13 @@ struct EnvironmentView: View {
                 Text(loc.t("s2arm.env.note")).font(.manrope(12)).foregroundStyle(.secondary).lineLimit(2)
                 Spacer(minLength: 8)
                 Button(loc.t("s2arm.env.recheck")) { model.checkEnvironment() }
-                    .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.checking || model.busy)
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.checking || model.busy)
                 Button { dismiss() } label: {
                     Text(loc.t("launch.done")).font(.manrope(13.5, .bold)).foregroundStyle(.black)
                         .padding(.horizontal, 22).padding(.vertical, 9)
                         .background(LauncherPalette.cream, in: Capsule())
                 }
-                .buttonStyle(.plain).keyboardShortcut(.defaultAction)
+                .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction)
             }
             .padding(.horizontal, 30).padding(.vertical, 16)
         }
@@ -148,6 +144,7 @@ struct EnvironmentView: View {
         .background(LauncherPalette.background)
         .font(.manrope(13))
         .preferredColorScheme(.dark)
+        .onExitCommand { dismiss() }
         .tint(LauncherPalette.cream)
     }
 
@@ -212,7 +209,7 @@ struct EnvironmentView: View {
                 Button(loc.t(key)) {
                     if model.provider.environment.repairStep(for: action) == .chooseLibrary { chooseLibrary() } else { model.repair(check) }
                 }
-                    .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy || model.checking)
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy || model.checking)
             }
         }
     }

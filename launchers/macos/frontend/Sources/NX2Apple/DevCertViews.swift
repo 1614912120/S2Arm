@@ -33,6 +33,7 @@ struct DevCertRow: View {
                 }
                 .pickerStyle(.segmented).labelsHidden().frame(width: 300)
                 .accessibilityIdentifier("export.sign.mode")
+                .controllerControl(id: "export.sign.mode", activate: { model.setDevCertActive(!on) }, adjust: { model.setDevCertActive($0 > 0) })
             }
             if on, let cert = model.devCert?.cert { details(cert) }
             Text(sx(loc, "switchNote")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -63,9 +64,9 @@ struct DevCertRow: View {
                 Label(loc.backend(t), systemImage: "exclamationmark.triangle").font(.manrope(12)).foregroundStyle(.yellow).fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 10) {
-                Button(sx(loc, "replace")) { model.showDevCertImport = true }.buttonStyle(LauncherSecondaryButtonStyle())
+                Button(sx(loc, "replace")) { model.showDevCertImport = true }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                     .accessibilityIdentifier("export.sign.replace")
-                Button(sx(loc, "delete")) { confirmDelete = true }.buttonStyle(LauncherSecondaryButtonStyle())
+                Button(sx(loc, "delete")) { confirmDelete = true }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                     .accessibilityIdentifier("export.sign.delete")
             }
             .padding(.top, 4)
@@ -119,9 +120,9 @@ struct DevCertSheet: View {
                     Text(sx(loc, "sheet.working")).font(.manrope(12.5)).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(sx(loc, "sheet.cancel")) { dismiss() }.buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                Button(sx(loc, "sheet.cancel")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
                 Button(sx(loc, "sheet.import")) { start() }
-                    .buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction)
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction)
                     .disabled(working || p12.isEmpty || profile.isEmpty)
                     .accessibilityIdentifier("export.sign.sheet.import")
             }
@@ -153,7 +154,7 @@ struct DevCertSheet: View {
                     panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
                     if panel.runModal() == .OK, let url = panel.url { path.wrappedValue = url.path }
                 }
-                .buttonStyle(LauncherSecondaryButtonStyle())
+                .controllerButtonStyle(LauncherSecondaryButtonStyle())
                 .accessibilityIdentifier("export.sign.sheet.choose." + id)
             }
             .padding(.horizontal, 12).padding(.vertical, 10)

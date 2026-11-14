@@ -40,7 +40,7 @@ struct InstallView: View {
                     // 手机作业三态统一（PhoneJobPanel）：钥匙串提示只在后端标了 keychainPrompt 的阶段挂（#266），在组件里
                     ScrollView { PhoneJobPanel(model: model, session: job).frame(maxWidth: .infinity, alignment: .leading) }
                     // 装机在后台照跑：关掉弹层回游戏库，顶部胶囊「正在装到 iPhone · 查看进度」能回来（#308，Mac 与 Windows 同一套）
-                    HStack { Spacer(); Button(text("install.background")) { dismiss() }.buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.background") }
+                    HStack { Spacer(); Button(text("install.background")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.background") }
                 }
                 .padding(.horizontal, 30).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -59,18 +59,18 @@ struct InstallView: View {
                                 CardRow(loc.backend(item.title), detail: loc.backend(item.detail), dot: dot(item)) {
                                     if !item.ok, item.id == "package", let game {
                                         Button(loc.t("s2arm.action.ipa")) { dismiss(); model.exportFor = game.id }
-                                            .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy).busyHint(model)
+                                            .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy).busyHint(model)
                                     }
                                     if !item.ok, item.id == "appleId" {
                                         // 团队号手填 / 引导项目收进环境检查「装到 iPhone 的方式」（v0.3.0）：这里只给一个去设置
                                         Button(BackendText.launcherText("install.mode.go_settings", language: loc.lang == .zh ? "zh-Hans" : "en")) {
                                             dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { model.showEnvironment = true }
                                         }
-                                        .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.goSettings")
+                                        .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.goSettings")
                                         Button(text("install.apple.open")) {
                                             if case .open(let url) = model.provider.environment.repairStep(for: "openXcode") { NSWorkspace.shared.open(url) }
                                         }
-                                        .buttonStyle(LauncherSecondaryButtonStyle())
+                                        .controllerButtonStyle(LauncherSecondaryButtonStyle())
                                     }
                                 }
                                 if item.id != r.items.last?.id { CardDivider() }
@@ -84,7 +84,7 @@ struct InstallView: View {
                     if let game, game.iphoneRestorable {
                         // 只换宿主后（手机上的 S2Arm 换了新版运行层）新版不好用：装回上一版
                         Button(text("install.restore")) { showRestoreConfirm = true }
-                            .buttonStyle(LauncherSecondaryButtonStyle())
+                            .controllerButtonStyle(LauncherSecondaryButtonStyle())
                             .disabled(model.busy).busyHint(model)
                             .confirmationDialog(text("install.restore_title"), isPresented: $showRestoreConfirm, titleVisibility: .visible) {
                                 Button(text("install.restore_confirm")) { model.restorePhone(game) }
@@ -95,7 +95,7 @@ struct InstallView: View {
                     }
                     if let game {
                         Button(text("install.remove")) { showRemoveConfirm = true }
-                            .buttonStyle(LauncherSecondaryButtonStyle())
+                            .controllerButtonStyle(LauncherSecondaryButtonStyle())
                             .disabled(model.busy).busyHint(model)
                             .confirmationDialog(text("install.remove_title"), isPresented: $showRemoveConfirm, titleVisibility: .visible) {
                                 Button(text("install.remove_confirm"), role: .destructive) { model.removeFromPhone(game) }
@@ -111,10 +111,10 @@ struct InstallView: View {
             }
             Divider().opacity(0.3)
             if model.installDone == gameID {
-                HStack { Spacer(); Button(text("install.close")) { model.installDone = nil; dismiss() }.buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction) }
+                HStack { Spacer(); Button(text("install.close")) { model.installDone = nil; dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction) }
                     .padding(.horizontal, 30).padding(.vertical, 16)
             } else if let job = installJob {
-                HStack { Spacer(); Button(loc.t("s2arm.job.cancel")) { model.stop() }.buttonStyle(LauncherSecondaryButtonStyle()).disabled(job.phase == .stopping) }
+                HStack { Spacer(); Button(loc.t("s2arm.job.cancel")) { model.stop() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(job.phase == .stopping) }
                     .padding(.horizontal, 30).padding(.vertical, 16)
             } else {
             HStack(spacing: 14) {
@@ -122,9 +122,9 @@ struct InstallView: View {
                 Spacer(minLength: 8)
                 if let ipa = model.installReadiness?.ipaPath, !ipa.isEmpty {
                     Button(loc.t("s2arm.export.revealIpa")) { model.revealIpa(ipa) }
-                        .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.revealIpa")
+                        .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.revealIpa")
                 }
-                Button(loc.t("launch.done")) { dismiss() }.buttonStyle(LauncherSecondaryButtonStyle())
+                Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                 Button {
                     if let game { model.clearInlineFailure(); model.install(game) }
                 } label: {
@@ -132,7 +132,7 @@ struct InstallView: View {
                         .padding(.horizontal, 22).padding(.vertical, 9)
                         .background(LauncherPalette.cream, in: Capsule())
                 }
-                .buttonStyle(.plain).keyboardShortcut(.defaultAction)
+                .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction)
                 // 不按清单置灰（维护者 11-11：玩家主动点装机不许前端挡）：清单可能是旧的（在外面登录好、插好线回来仍灰），
                 // 真做不下去的（没出 iPhone 版、没连设备、签名失败）作业层开头自己判、回真实原因；只在有作业在跑时置灰
                 .disabled(model.busy)
@@ -142,6 +142,7 @@ struct InstallView: View {
             .padding(.horizontal, 30).padding(.vertical, 16)
             }
         }
+        .onExitCommand { dismiss() }
         .task {
             // 开着、且启动器在前台时每几秒问一次（玩家插手机 / 点信任后界面自己变过来）；切到别的程序就不问（剃刀 M5：原先后台也一直起作业），
             //   切回来立刻问一次（下面 didBecomeActive）；关掉页面 Task 自动取消

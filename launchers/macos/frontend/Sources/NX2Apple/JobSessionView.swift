@@ -57,10 +57,10 @@ struct JobSessionView: View {
             HStack(spacing: 14) {
                 if finished == nil {
                     Button { model.stop() } label: { LauncherHeroActionLabel(title: loc.t("s2arm.job.cancel"), symbol: "stop.fill") }
-                        .buttonStyle(.plain).disabled(session.phase == .stopping).keyboardShortcut(".", modifiers: .command)
+                        .controllerButtonStyle(.plain).disabled(session.phase == .stopping).keyboardShortcut(".", modifiers: .command)
                 } else {
                     Button { model.backToLibrary() } label: { LauncherHeroActionLabel(title: loc.t("s2arm.play.back"), symbol: "chevron.left") }
-                        .buttonStyle(.plain).keyboardShortcut(.defaultAction)
+                        .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction)
                 }
                 Spacer()
             }
@@ -111,16 +111,16 @@ struct JobSessionView: View {
                     Button { model.stop() } label: {
                         LauncherHeroActionLabel(title: loc.t(session.kind == .play ? "s2arm.play.stop" : "s2arm.job.cancel"), symbol: "stop.fill")
                     }
-                    .buttonStyle(.plain).disabled(session.phase == .stopping)
+                    .controllerButtonStyle(.plain).disabled(session.phase == .stopping)
                     .keyboardShortcut(".", modifiers: .command)
                 } else {
                     Button { model.backToLibrary() } label: {
                         LauncherHeroActionLabel(title: loc.t("s2arm.play.back"), symbol: "chevron.left")
                     }
-                    .buttonStyle(.plain).keyboardShortcut(.defaultAction)
+                    .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction)
                     if let reveal = session.reveal, finished == .completed {
                         Button(loc.t("s2arm.job.reveal")) { revealInFinder(reveal) }
-                            .buttonStyle(LauncherSecondaryButtonStyle())
+                            .controllerButtonStyle(LauncherSecondaryButtonStyle())
                     }
                 }
                 Spacer()
