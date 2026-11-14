@@ -134,6 +134,51 @@ static int texture_classify(struct s2a_jv binding, const struct fd_stage *stage,
     return 0;
 }
 
+// v1 句柄字来源 {"slot":0..15,"offset":0..65535[,"sid":bool][,"pair":{"slot","offset","sid"}]}（libpack_vk.c lp_uword_emit；iOS nvn_refl.h TEXU / SAMPU）
+static int ubo_word_parse(struct s2a_jv o, struct fd_ubo_word *w) {
+    struct s2a_jv f = { NULL, 0 }, pr = { NULL, 0 }; uint32_t v = 0; int b = 0;
+    memset(w, 0, sizeof *w);
+    if (compute_unique_fields(o)) return -1;
+    if (s2a_jv_obj_find(o, "slot", &f) || s2a_jv_u32(f, &v) || v >= 16) return -1;
+    w->slot = (uint8_t)v;
+    if (s2a_jv_obj_find(o, "offset", &f) || s2a_jv_u32(f, &v) || v > 0xffff) return -1;
+    w->offset = (uint16_t)v;
+    if (!s2a_jv_obj_find(o, "sid", &f)) { if (s2a_jv_bool(f, &b)) return -1; w->sid = (uint8_t)(b != 0); }
+    if (!s2a_jv_obj_find(o, "pair", &pr)) {
+        if (compute_unique_fields(pr)) return -1;
+        if (s2a_jv_obj_find(pr, "slot", &f) || s2a_jv_u32(f, &v) || v >= 16) return -1;
+        w->pair_slot = (uint8_t)v;
+        if (s2a_jv_obj_find(pr, "offset", &f) || s2a_jv_u32(f, &v) || v > 0xffff) return -1;
+        w->pair_offset = (uint16_t)v;
+        if (s2a_jv_obj_find(pr, "sid", &f) || s2a_jv_bool(f, &b)) return -1;
+        w->pair_sid = (uint8_t)(b != 0); w->pair = 1;
+    }
+    return 0;
+}
+// texture 的 uboHandle / sampler（句柄在用户常量缓冲里，见 fd_binding.tex_ubo）。没有 uboHandle 返回 0、什么都不填
+static int ubo_texture_parse(struct s2a_jv b, struct fd_binding *dst, char *why, size_t why_size) {
+    struct s2a_jv u = { NULL, 0 }, sm = { NULL, 0 }, f = { NULL, 0 };
+    int has_u = !s2a_jv_obj_find(b, "uboHandle", &u), has_s = !s2a_jv_obj_find(b, "sampler", &sm);
+    if (!has_u) return has_s ? fail(why, why_size, "texture sampler source without uboHandle") : 0;
+    if (dst->kind != 2 || dst->slot >= 0 || dst->count != 1) return fail(why, why_size, "uboHandle only on a single texture without slot");
+    if (ubo_word_parse(u, &dst->tex_u) || dst->tex_u.sid) return fail(why, why_size, "texture uboHandle invalid");
+    dst->tex_ubo = 1; dst->samp_src = FD_SAMP_NONE;
+    if (!has_s) return 0;
+    char src[8] = ""; uint32_t v = 0;
+    if (compute_unique_fields(sm) || s2a_jv_obj_find(sm, "source", &f) || s2a_jv_str(f, src, sizeof src)) return fail(why, why_size, "texture sampler source invalid");
+    if (!strcmp(src, "ubo")) {
+        if (s2a_jv_obj_find(sm, "handle", &f) || ubo_word_parse(f, &dst->samp_u)) return fail(why, why_size, "texture sampler handle invalid");
+        dst->samp_src = FD_SAMP_UBO;
+    } else if (!strcmp(src, "id")) {
+        if (s2a_jv_obj_find(sm, "id", &f) || s2a_jv_u32(f, &v) || v > 0xffff) return fail(why, why_size, "texture sampler id invalid");
+        dst->samp_src = FD_SAMP_ID; dst->samp_val = (uint16_t)v;
+    } else if (!strcmp(src, "slot")) {
+        if (s2a_jv_obj_find(sm, "slot", &f) || s2a_jv_u32(f, &v) || v >= 128) return fail(why, why_size, "texture sampler slot outside 0..127");
+        dst->samp_src = FD_SAMP_SLOT; dst->samp_val = (uint16_t)v;
+    } else return fail(why, why_size, "unknown texture sampler source");
+    return 0;
+}
+
 static int parse_graphics(const uint8_t *bytes, size_t length, struct fd_program *out, int allow_vs_only, char *why, size_t why_size);
 int nvn_vk_program_parse_graphics(const uint8_t *bytes, size_t length, struct fd_program *out, char *why, size_t why_size) {
     return parse_graphics(bytes, length, out, 0, why, why_size);
@@ -267,6 +312,7 @@ static int parse_graphics(const uint8_t *bytes, size_t length, struct fd_program
             dst->is_support = (uint8_t)(dst->kind == 0 && !strcmp(dst->stage, "program"));
             dst->ubo_slot = (int16_t)(dst->slot >= 3 ? dst->slot - 3 : 0);
             dst->tex_slot = -1; dst->samp_slot = -1;
+            if (ubo_texture_parse(b, dst, why, why_size)) return -1;
             struct s2a_jv samp = { NULL, 0 }; uint32_t samp_v = 0;
             int has_samp = !s2a_jv_obj_find(b, "samp_slot", &samp);
             if (has_samp) {
@@ -277,7 +323,7 @@ static int parse_graphics(const uint8_t *bytes, size_t length, struct fd_program
                 dst->samp_slot = (int16_t)samp_v;
             } else if (dst->kind == 2 && dst->slot >= 8 && dst->slot < 72 && !(dst->slot & 1)) {
                 dst->tex_slot = (int16_t)((dst->slot - 8) / 2);
-            } else if (v2 && dst->kind == 2 && !(dst->count > 1 && dst->slot == 0)) {
+            } else if (v2 && dst->kind == 2 && !dst->tex_ubo && !(dst->count > 1 && dst->slot == 0)) {
                 return fail(why, why_size, "invalid texture source");
             }
             if (dst->kind == 2 && texture_classify(b,

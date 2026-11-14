@@ -2785,6 +2785,33 @@ static void t_separate_sampler(void) {
     nvn_be_tex_release(&t); pass_fresh();
 }
 
+// 句柄在用户常量缓冲里的贴图（NVN_RB_TEXU，iOS nvn_mtl.m ubo_packed 语义）：纹理字在常量槽 2 +0x10（= 7），同一句柄的另一半是
+//   常量槽 3 +0x8 的采样器号字（sid，左移 20 = 3 << 20）→ 打包句柄 7 | 3 << 20：纹理号 7（4x4 那张）、采样器号 3（ws = 5）。
+//   游戏改了常量缓冲里的纹理字（= 8，2x2 那张），下一笔就读到新的：句柄在编码这一刻从游戏内存读
+static void t_ubo_texture(void) {
+    pass_fresh(); g_resolve_rc = 0; g_gdraws = 0; nvn_unimpl_reset();
+    memset(g_pmem, 0, sizeof g_pmem); nvn_be_pool_add(g_pmem, sizeof g_pmem);
+    const uint64_t base = (uint64_t)(uintptr_t)g_pmem;
+    stream s = {0}; q_env(&s);
+    tex_t t7 = mk_tex(7040, 0x4000, NVN_FORMAT_RGBA8, 4, 4, 1, 0), t8 = mk_tex(7041, 0x8000, NVN_FORMAT_RGBA8, 2, 2, 1, 0);
+    samp_par sp = {0}; sp.ws = 5; nvn_be_reg_tex(7, &t7, NULL); nvn_be_reg_tex(8, &t8, NULL); nvn_be_reg_samp(3, &sp);
+    uint32_t tw = 7, sw = 3; memcpy(g_pmem + PG + 0x10, &tw, 4); memcpy(g_pmem + 2 * PG + 0x8, &sw, 4);
+    g_fprog.nent[1] = 1; nvn_gpu_layout_ent *e = &g_fprog.ent[1][0];
+    e->cls = NVN_GPU_RES_TEX_SAMP; e->src_kind = NVN_RB_TEXU; e->src_reg = 2; e->src_off = 0x10; e->src_reg2 = 0; e->count = 1;
+    g_fprog.nusrc = 1;
+    g_fprog.usrc[0] = (struct rp_usrc){ .tex = { .reg = 2, .off = 0x10, .pair = 1, .pair_reg = 3, .pair_off = 0x8, .pair_sid = 1 },
+                                        .samp_kind = NVN_RB_SAMPU, .samp = { .reg = 3, .off = 0x8, .sid = 1, .pair = 1, .pair_reg = 2, .pair_off = 0x10 } };
+    p_bind_buf *ub = put(&s, OP_BIND_UBO, sizeof *ub); ub->stage = 1; ub->index = 2; ub->addr = base + PG; ub->size = 64;
+    ub = put(&s, OP_BIND_UBO, sizeof *ub); ub->stage = 1; ub->index = 3; ub->addr = base + 2 * PG; ub->size = 64;
+    q_draw(&s); end(&s); submit1(&s); fake_complete(NVN_GPU_DONE_OK);
+    CHECK(g_gdraws == 1 && g_fb[1][0].u.ts.view && g_fb[1][0].u.ts.view->of->d.d.width == 4 && g_fb[1][0].u.ts.samp && g_fb[1][0].u.ts.samp->x == 5);
+    tw = 8; memcpy(g_pmem + PG + 0x10, &tw, 4);
+    stream again = {0}; q_draw(&again); end(&again); submit1(&again); fake_complete(NVN_GPU_DONE_OK);
+    CHECK(g_gdraws == 2 && g_fb[1][0].u.ts.view && g_fb[1][0].u.ts.view->of->d.d.width == 2 && g_fb[1][0].u.ts.samp && g_fb[1][0].u.ts.samp->x == 5);
+    CHECK(nvn_unimpl_kinds() == 0);
+    nvn_be_tex_release(&t7); nvn_be_tex_release(&t8); pass_fresh();
+}
+
 int main(int argc, char **argv) {
     t_state_persists();
     t_unimpl_names();
@@ -2846,6 +2873,7 @@ int main(int argc, char **argv) {
     t_gs_bind(); t_storage_sync_before_pass(); t_stage_dropped_clears_binds();
     t_decl_sampling();
     t_separate_sampler();
+    t_ubo_texture();
     t_present();
     t_view_pin();
     t_pass_3d_slice_view();
