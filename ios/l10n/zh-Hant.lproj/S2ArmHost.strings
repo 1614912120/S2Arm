@@ -501,3 +501,7 @@
 "settings.toggle.fullscreen" = "滿屏";
 "vpad.menu.settings" = "設定…";
 "vpad.menu.settings.note" = "畫面、滿屏、60 幀、S 級優化、操作、診斷";
+"vpad.screenLock.title" = "手機黑屏";
+"vpad.screenLock.note" = "外接顯示器時用，點三下恢復";
+"vpad.screenLock.hint" = "如需關閉手機黑屏，請連續點擊3次螢幕";
+"vpad.screenLock.unlock" = "恢復手機螢幕";
