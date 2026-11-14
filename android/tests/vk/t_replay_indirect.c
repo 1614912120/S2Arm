@@ -137,16 +137,22 @@ static void run_case(struct s2a_vk_device *d,const char *dir,int index,int mdi){
  if(neg)printf("boundary index=%d mode=%d reason=%s no-draw clear-unchanged\n",index,mdi,reason);
  if(mdi==2){REQUIRE(nvn_unimpl_count("draw","indirect_count_group_unavailable")==1);}rp_buf_gpu_write_land(key,id,0);rp_draw_reset();rp_buf_reset();nvn_gpu_shader_release(prog.sh[0]);nvn_gpu_shader_release(prog.sh[1]);nvn_gpu_view_release(target_view);nvn_gpu_tex_release(tex);int t=atomic_load(&retired)+1;nvn_gpu_buf_release(rb,retirement,NULL);struct timespec pause={0,1000000};for(int i=0;i<5000&&atomic_load(&retired)<t;i++)nanosleep(&pause,NULL);GPU(nvn_gpu_close(5000000000ull,&err));
 }
+#define CHECK REQUIRE
+#include "depth_blit_test.h"
 // Warm replay state is restored after the depth/stencil helper overwrites physical GPU state.
 static void run_depth_state_restore(struct s2a_vk_device *d,const char *dir) {
  nvn_gpu_open_desc od={0};od.host_device=d;od.app_label="real-depth-state-restore";GPU(nvn_gpu_open(&od,&err));
- memset(&prog,0,sizeof prog);prog.color_out_mask=15;
- prog.sh[0]=shader(dir,"depth_state.vert",NVN_GPU_SH_VS,NULL);prog.sh[1]=shader(dir,"solid_green.frag",NVN_GPU_SH_FS,NULL);
+ memset(&prog,0,sizeof prog);prog.color_out_mask=15;prog.nent[1]=1;
+ nvn_gpu_layout_ent *entry=&prog.ent[1][0];entry->set=0;entry->binding=0;entry->cls=NVN_GPU_RES_UBO;entry->src_kind=NVN_RB_CBUF;entry->src_reg=0;entry->count=1;entry->access=NVN_GPU_ACC_R;entry->stages=1u<<NVN_GPU_SH_FS;
+ nvn_gpu_layout layout={0};layout.ent=entry;layout.nent=1;
+ prog.sh[0]=shader(dir,"depth_state.vert",NVN_GPU_SH_VS,NULL);
+ nvn_gpu_shader_src fs={0};fs.stage=NVN_GPU_SH_FS;fs.kind=NVN_GPU_BLOB_SPIRV;fs.entry="main";fs.layout=&layout;fs.blob=depth_state_frag_spv;fs.bytes=sizeof depth_state_frag_spv;GPU(nvn_gpu_shader_load(&fs,&prog.sh[1],&err));
  nvn_gpu_tex_desc td={0};td.d.target=NVN_TEXTURE_TARGET_2D;td.d.format=NVN_FORMAT_RGBA8;td.d.width=td.d.height=64;td.d.depth=td.d.levels=1;td.usage=NVN_GPU_TEX_RENDER;
  nvn_gpu_tex tex=NULL;GPU(nvn_gpu_tex_create(&td,&tex,&err));GPU(nvn_gpu_view_create(tex,NULL,&target_view,&err));
  uint8_t sentinel[16416];memset(sentinel,0xa5,sizeof sentinel);nvn_gpu_buf rb=buffer(sizeof sentinel,sentinel);
  memset(&target_tex,0,sizeof target_tex);target_tex.d=td.d;target_tex.serial=1;memset(&target,0,sizeof target);target.n=1;target.color[0]=&target_tex;
  rp_state_reset();rp_draw_reset();nvn_unimpl_reset();rp_S.color.logic_op=3;rp_S.chmask.mask=15;rp_S.poly.mode=NVN_POLYGON_MODE_FILL;
+ float green[4]={0,1,0,1};memcpy(guest+256,green,sizeof green);rp_S.ubo[NVN_GPU_SH_FS][0].addr=(uint64_t)(uintptr_t)(guest+256);rp_S.ubo[NVN_GPU_SH_FS][0].size=sizeof green;
  GPU(nvn_gpu_cmd_begin(NULL,&active,&err));serial++;pass(active,1);rp_pass_flush(active);
  unsigned before=emitted;p_draw draw={0};draw.prim=4;draw.count=3;draw.instances=1;rp_draw(active,&draw,NULL,&draw);
  REQUIRE(emitted==before+1);REQUIRE(!nvn_unimpl_kinds());rp_pass_flush(active);
@@ -166,8 +172,6 @@ static void run_depth_state_restore(struct s2a_vk_device *d,const char *dir) {
  rp_draw_reset();rp_buf_reset();nvn_gpu_shader_release(prog.sh[0]);nvn_gpu_shader_release(prog.sh[1]);nvn_gpu_view_release(target_view);nvn_gpu_tex_release(tex);nvn_gpu_buf_release(rb,NULL,NULL);GPU(nvn_gpu_close(5000000000ull,&err));
  puts("depth-state: 4096 green pixels after helper; 32 sentinel bytes preserved");
 }
-#define CHECK REQUIRE
-#include "depth_blit_test.h"
 static void run_depth_copy(struct s2a_vk_device *d) {
  nvn_gpu_open_desc od={0};od.host_device=d;od.app_label="real-depth-copy";GPU(nvn_gpu_open(&od,&err));
  test_depth_blit();GPU(nvn_gpu_close(5000000000ull,&err));
