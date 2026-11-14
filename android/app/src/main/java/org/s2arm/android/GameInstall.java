@@ -490,8 +490,10 @@ final class GameInstall {
         Set<String> used = new HashSet<>();
         File[] kept = new File(gameRoot, "revisions").listFiles(f -> f.isDirectory() && !f.getName().endsWith(".staging"));
         if (kept != null) for (File r : kept) {
-            try {
-                for (String line : new String(GamePack.read(new File(r, "index.tsv")), StandardCharsets.UTF_8).split("\n")) {
+            // 逐行读：大包 index 30 万行 / 32 MB，整读成一个 String 再 split 会撑爆 App 的 256 MB 堆（11-14 真机安装收尾 OOM）
+            try (java.io.BufferedReader in = new java.io.BufferedReader(new java.io.InputStreamReader(
+                    new java.io.FileInputStream(new File(r, "index.tsv")), StandardCharsets.UTF_8), 1 << 16)) {
+                for (String line; (line = in.readLine()) != null; ) {
                     String[] col = line.split("\t");
                     if (col.length == 3) used.add(col[2]);
                 }
