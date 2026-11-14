@@ -293,19 +293,14 @@ final class GameInstall {
         try {
             MessageDigest md = GamePack.digest();
             long size = 0;
-            try (FileOutputStream os = new FileOutputStream(tmp)) {
-                // 按索引里的大小读够就停，不再为确认文件末尾多读一次（11-13：vivo 上读完全部字节后那次「到末尾」的读不返回）。
-                // 读卡住重开续读：vivo 上 App 读共享存储里 1.7 GB 的大文件，某次 read 会停在中途一直不返回（shell 读同一文件 1 秒读完）。
-                //   每次读在后台线程做，STALL_MS 内没读到字节就丢下那个流、重新打开、跳到已读位置接着读；连续 STALL_RETRIES 次都卡才报失败。
-                //   存进去的仍是按索引核过大小与 SHA-256 的内容
-                ResumableRead r = new ResumableRead(source, e.path);
-                try {
-                    for (int n; size < e.size && (n = r.read(buf, (int) Math.min(buf.length, e.size - size), size)) > 0; ) {
-                        md.update(buf, 0, n); os.write(buf, 0, n); size += n; done[0] += n;
-                        if (progress != null) progress.update(done[0], total);
-                    }
-                } finally {
-                    r.close();
+            try (InputStream in = source.open(e.path); FileOutputStream os = new FileOutputStream(tmp)) {
+                if (in == null) throw new GamePack.BadPack("package has no " + e.path);
+                // 按索引里的大小读够就停，不再为确认文件末尾多读一次：vivo 上 App 经共享存储（FUSE）读 1.7 GB 的大文件，
+                //   读完全部字节后那次「到末尾」的读曾一直不返回（11-13 一款 Unity 游戏导入超时）。存进去的就是索引那么长、按索引核过大小与 SHA-256 的内容；
+                //   源文件比索引长出来的部分不读（存的内容不受影响），短了照样报包坏（下面校验）
+                for (int n; size < e.size && (n = in.read(buf, 0, (int) Math.min(buf.length, e.size - size))) > 0; ) {
+                    md.update(buf, 0, n); os.write(buf, 0, n); size += n; done[0] += n;
+                    if (progress != null) progress.update(done[0], total);
                 }
                 os.getFD().sync();
             }
@@ -483,15 +478,9 @@ final class GameInstall {
     }
 
     private static byte[] required(Source source, String path) throws IOException, GamePack.BadPack {
-        ResumableRead r = new ResumableRead(source, path);   // 同 store：读卡住重开续读
-        try {
-            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
-            byte[] buf = new byte[1 << 16];
-            long at = 0;
-            for (int n; (n = r.read(buf, buf.length, at)) > 0; ) { out.write(buf, 0, n); at += n; }
-            return out.toByteArray();
-        } finally {
-            r.close();
+        try (InputStream in = source.open(path)) {
+            if (in == null) throw new GamePack.BadPack("package has no " + path);
+            return GamePack.readAll(in);
         }
     }
 
@@ -507,64 +496,5 @@ final class GameInstall {
         File[] children = Files.isSymbolicLink(f.toPath()) ? null : f.listFiles();
         if (children != null) for (File c : children) deleteTree(c);
         f.delete();
-    }
-
-    // ---- 读卡住重开续读（见 store）----
-    static long STALL_MS = 15000;      // 单次 read 多久没返回算卡住（宿主测试改小）
-    static int STALL_RETRIES = 5;      // 连续卡住几次报失败
-    static final class ResumableRead {
-        private final Source source; private final String path;
-        private InputStream in; private int stalls;
-        private final java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newCachedThreadPool(r -> {
-            Thread t = new Thread(r, "s2a-import-read"); t.setDaemon(true); return t; });
-        ResumableRead(Source source, String path) { this.source = source; this.path = path; }
-        /** 读到 buf[0, len)；at = 已读字节数（重开时跳到这里）。返回读到的字节数，-1 = 到末尾。 */
-        int read(byte[] buf, int len, long at) throws IOException, GamePack.BadPack {
-            while (true) {
-                InputStream cur = in;
-                try {
-                    if (cur == null) {
-                        InputStream opened = call(() -> source.open(path));
-                        if (opened == null) throw new GamePack.BadPack("package has no " + path);
-                        in = cur = opened;
-                        long skipped = 0;
-                        while (skipped < at) {
-                            final InputStream sk = cur; final long want = at - skipped;
-                            long k = call(() -> sk.skip(want));
-                            if (k <= 0) throw new IOException(path + ": reopened stream could not skip to " + at);
-                            skipped += k;
-                        }
-                    }
-                    final InputStream rd = cur;
-                    return call(() -> rd.read(buf, 0, len));
-                } catch (java.util.concurrent.TimeoutException stalled) {
-                    abandon(cur);
-                    if (++stalls > STALL_RETRIES) throw new IOException(path + ": read stalled " + stalls + " times at byte " + at);
-                    // 安卓上 System.err 进 logcat（W/System.err），宿主测试里进标准错误
-                    System.err.println("S2Arm: 导入读卡住（" + path + "，第 " + stalls + " 次，位置 " + at + "）：重开续读");
-                }
-            }
-        }
-        private <T> T call(java.util.concurrent.Callable<T> c) throws IOException, java.util.concurrent.TimeoutException {
-            java.util.concurrent.Future<T> f = pool.submit(c);
-            try {
-                return f.get(STALL_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt(); f.cancel(true); throw new IOException("import interrupted", ie);
-            } catch (java.util.concurrent.ExecutionException ee) {
-                Throwable c0 = ee.getCause();
-                if (c0 instanceof IOException) throw (IOException) c0;
-                throw new IOException(c0);
-            }
-        }
-        private void abandon(InputStream cur) {   // 卡住的流丢给后台关（关本身也可能卡），这边不等
-            in = null;
-            if (cur != null) pool.submit(() -> { try { cur.close(); } catch (IOException ignored) { } return null; });
-        }
-        void close() {
-            InputStream cur = in; in = null;
-            if (cur != null) try { cur.close(); } catch (IOException ignored) { }
-            pool.shutdownNow();
-        }
     }
 }
