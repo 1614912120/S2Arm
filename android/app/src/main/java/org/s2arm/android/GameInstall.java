@@ -261,15 +261,22 @@ final class GameInstall {
             for (GamePack.Entry e : entries) total += e.size;
             long[] done = {0};
             byte[] buf = new byte[1 << 20];
-            for (GamePack.Entry e : entries) {
+            // 本次放进来、放的同时已核过大小与 SHA-256 的文件（直传收下的 / 复制时边写边核的）：记下它们落盘后的身份，
+            //   下面的指纹核对按身份命中、不再把整包重读一遍（大包 16 GB 重读要十几分钟）。只有以前装过、当年只核了大小的共享对象，
+            //   和链接被拒后另复制出来的文件，才重算 SHA-256
+            GameFingerprint.Stamp[] checked = new GameFingerprint.Stamp[entries.size()];
+            for (int i = 0; i < entries.size(); i++) {
+                GamePack.Entry e = entries.get(i);
                 File out = new File(staging, e.path);
                 out.getParentFile().mkdirs();
                 if (!result.linked) {   // no shared store here: a checked copy in the revision itself
                     put(source, e, out, new File(objects, "tmp"), buf, progress, done, total);
                     result.storedBytes += e.size;
+                    checked[i] = GameFingerprint.stat(out);
                     continue;
                 }
                 File object = new File(objects, e.sha256.substring(0, 2) + "/" + e.sha256);
+                boolean fresh = false;
                 if (object.isFile() && object.length() == e.size) {   // stored by an earlier install, checked then
                     result.sharedBytes += e.size;
                     done[0] += e.size;
@@ -277,9 +284,11 @@ final class GameInstall {
                 } else {
                     put(source, e, object, new File(objects, "tmp"), buf, progress, done, total);
                     result.storedBytes += e.size;
+                    fresh = true;
                 }
                 try {
                     linker.link(out, object);
+                    if (fresh) checked[i] = GameFingerprint.stat(out);
                 } catch (IOException | UnsupportedOperationException | SecurityException linkFailure) {
                     // This path refuses a hard link (e.g. a SELinux label) although the probe
                     // worked: keep the install usable by copying the already verified object.
@@ -291,9 +300,10 @@ final class GameInstall {
             writeSynced(new File(staging, ARTIFACT), artifact);
             BootContract.validateRevision(gameRoot, "revisions/" + contentRoot + ".staging", contentRoot, ARTIFACT, GamePack.sha256(artifact));
             // Existing CAS objects were formerly only size-checked. Verify the actual
-            // installed bytes before a fingerprint can attest to any of them.
-            GameFingerprint.Verification checked = GameFingerprint.verify(staging, entries, contentRoot.substring(7), null);
-            fingerprint = GameFingerprint.write(staging, entries, contentRoot.substring(7), checked.stamps);
+            // installed bytes before a fingerprint can attest to any of them; files checked
+            // while they were placed above are matched by their stamp instead of re-read.
+            GameFingerprint.Verification verified = GameFingerprint.verifyPlaced(staging, entries, java.util.Arrays.asList(checked));
+            fingerprint = GameFingerprint.write(staging, entries, contentRoot.substring(7), verified.stamps);
 
             deleteTree(active);   // same content root but not active: a leftover, replaced by the checked copy
             if (!staging.renameTo(active)) throw new IOException("cannot move the staged revision into place");

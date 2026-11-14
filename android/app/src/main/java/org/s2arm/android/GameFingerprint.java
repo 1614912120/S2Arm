@@ -258,8 +258,22 @@ final class GameFingerprint {
         long phase = Timing.start(timing);
         List<Stamp> saved=read(revision,entries,indexSha,ref);
         Timing.end(timing, "fingerprint_table_read", phase);
+        return verify(revision, entries, saved, timing, artifactName);
+    }
+
+    // Install-time staging: placed[n] is the stamp of a file whose size and SHA-256 were checked
+    // while it was placed (null: not checked by this install, so it is hashed here).
+    static Verification verifyPlaced(File revision, List<GamePack.Entry> entries, List<Stamp> placed)
+            throws IOException, BootContract.BadGame {
+        if (placed.size() != entries.size()) throw new IllegalArgumentException("placed stamps do not match the index");
+        return verify(revision, entries, placed, null, null);
+    }
+
+    private static Verification verify(File revision, List<GamePack.Entry> entries, List<Stamp> saved,
+                                       Timing timing, String artifactName)
+            throws IOException, BootContract.BadGame {
         BootContract.UnderRoot scope=BootContract.underRoot(revision);
-        phase = Timing.start(timing);
+        long phase = Timing.start(timing);
         Map<String,Integer> ord=new LinkedHashMap<>(entries.size()*2);
         for (int n=0;n<entries.size();n++) ord.put(entries.get(n).path,n);
         Stamp[] fresh=new Stamp[entries.size()];
