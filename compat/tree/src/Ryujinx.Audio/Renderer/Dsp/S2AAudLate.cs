@@ -8,28 +8,32 @@ namespace Ryujinx.Audio.Renderer.Dsp
     /// DM_NVN_TSV 每帧取走清零成 @aud_wait_ms 列。慢帧归因「在等事件」时用它看音频占比。
     /// </summary>
     /// <remarks>
-    /// 没有 s2a_native 这个符号的构建（安卓 / 单测 / 别的宿主）就不记：守门一次失败后不再调（同 S2AOutputDiag.HudAudio）。
+    /// 只有苹果宿主定义 s2a_aud_late_note：运行时按名从主程序取函数指针（同 S2ADirect），不用 DllImport——
+    /// 安卓的 DirectPInvoke 会把 DllImport 静态链进单库，缺符号就链不过。取不到（安卓 / 单测 / 别的宿主）就不记。
     /// </remarks>
-    internal static class S2AAudLate
+    internal static unsafe class S2AAudLate
     {
-        [DllImport("s2a_native")] private static extern void s2a_aud_late_note(long ns);
+        private static readonly delegate* unmanaged<long, void> _note = Resolve();
 
-        private static bool _gone;
+        private static delegate* unmanaged<long, void> Resolve()
+        {
+            try
+            {
+                return NativeLibrary.TryGetExport(NativeLibrary.GetMainProgramHandle(), "s2a_aud_late_note", out nint f)
+                    ? (delegate* unmanaged<long, void>)f
+                    : null;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
 
         internal static void Note(long lateNs)
         {
-            if (_gone)
+            if (_note != null)
             {
-                return;
-            }
-
-            try
-            {
-                s2a_aud_late_note(lateNs);
-            }
-            catch (Exception e) when (e is DllNotFoundException || e is EntryPointNotFoundException || e is BadImageFormatException)
-            {
-                _gone = true;
+                _note(lateNs);
             }
         }
     }
