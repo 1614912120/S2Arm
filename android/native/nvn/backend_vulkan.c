@@ -5751,6 +5751,8 @@ void nvn_gpu_blit(nvn_gpu_cmd ch, nvn_gpu_view sv, const NVNcopyRegion *sr, nvn_
     // copy_region 的非正宽高有「整张」含义，不能直接把反向区域交给它。
     NVNcopyRegion normalized = *sr;
     int flip_x = sr->width < 0, flip_y = sr->height < 0;
+    // 不扩展同图自拷贝；不同 NVN 身份可能仍别名到同一个后端图像。
+    if ((flip_x || flip_y) && s == d) { set_sticky(c, NVN_GPU_E_UNSUPPORTED, "blit：同图镜像没接"); return; }
     if (flip_x || flip_y) {
         int64_t x = sr->xoffset, y = sr->yoffset, w = sr->width, h = sr->height;
         if (flip_x) { x += w; w = -w; }

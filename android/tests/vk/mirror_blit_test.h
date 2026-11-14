@@ -83,7 +83,7 @@ static void run_color_mirror(struct s2a_vk_device *device) {
         nvn_gpu_tex_release(mirror_images[0]);nvn_gpu_tex_release(mirror_images[1]);nvn_gpu_buf_release(output,NULL,NULL);cases++;
     }
     GPU(nvn_gpu_close(5000000000ull,&err));
-    for(unsigned bad=0;bad<6;bad++) {
+    for(unsigned bad=0;bad<7;bad++) {
         GPU(nvn_gpu_open(&od,&err));
         nvn_gpu_tex_desc desc={0};desc.d.target=NVN_TEXTURE_TARGET_2D;desc.d.format=NVN_FORMAT_RGBA8;
         desc.d.width=desc.d.height=12;desc.d.depth=desc.d.levels=desc.d.samples=1;desc.usage=NVN_GPU_TEX_RENDER|NVN_GPU_TEX_SAMPLED;
@@ -96,10 +96,10 @@ static void run_color_mirror(struct s2a_vk_device *device) {
         if(bad==3)to.width=0;
         if(bad==4){from.xoffset=13;from.width=-1;}
         if(bad==5){from.width=4;from.yoffset=2;from.height=-4;}
-        nvn_gpu_cmd command=NULL;GPU(nvn_gpu_cmd_begin(NULL,&command,&err));nvn_gpu_blit(command,views[0],&from,views[1],&to,0);
-        REQUIRE(nvn_gpu_cmd_commit(command,1,done,NULL,&err).code==NVN_GPU_E_ARG);
+        nvn_gpu_cmd command=NULL;GPU(nvn_gpu_cmd_begin(NULL,&command,&err));nvn_gpu_blit(command,views[0],&from,views[bad==6?0:1],&to,0);
+        REQUIRE(nvn_gpu_cmd_commit(command,1,done,NULL,&err).code==(bad==6?NVN_GPU_E_UNSUPPORTED:NVN_GPU_E_ARG));
         for(unsigned j=0;j<2;j++){nvn_gpu_view_release(views[j]);nvn_gpu_tex_release(images[j]);}
         GPU(nvn_gpu_close(5000000000ull,&err));
     }
-    printf("color mirror: %u cases, 6912 destination pixels, 3456 spare-layer pixels, 3072 sentinel bytes, 6 invalid regions rejected\n",cases);
+    printf("color mirror: %u cases, 6912 destination pixels, 3456 spare-layer pixels, 3072 sentinel bytes, 6 invalid regions rejected, 1 same-image mirror rejected\n",cases);
 }

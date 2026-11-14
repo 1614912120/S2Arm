@@ -2911,10 +2911,10 @@ static void t_color_copy_mirror(void) {
             CHECK(nvn_be_tex_gpu_owned(301) == 1 && nvn_be_tex_gpu_owned(300) == 0);
         }
     }
-    for (int bad = 0; bad < 10; bad++) {
+    for (int bad = 0; bad < 11; bad++) {
         pass_fresh(); g_nbl = g_nct = 0;
         tex_t a = mk_tex(302, 0, bad == 2 ? NVN_FORMAT_DEPTH24_STENCIL8 : bad == 3 ? NVN_FORMAT_R32UI : NVN_FORMAT_RGBA8, 16, 16, 1, 0), b = a;
-        b.serial = 303;
+        b.serial = bad == 10 ? a.serial : 303;
         if (bad == 4) a.d.target = b.d.target = NVN_TEXTURE_TARGET_3D;
         if (bad == 6) a.d.samples = b.d.samples = 4;
         stream s = {0}; p_copy_t2t *o = put_t2t(&s, &a, &b); o->sr = (NVNcopyRegion){0, 0, 0, 8, 8, 1}; o->dr = o->sr;
