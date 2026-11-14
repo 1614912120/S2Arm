@@ -393,30 +393,45 @@ final class GameFingerprint {
 
     static Reference write(File revision, List<GamePack.Entry> entries, String indexSha, List<Stamp> stamps) throws IOException {
         if (reserved(entries) || stamps.size()!=entries.size()) return null;
-        StringBuilder b=new StringBuilder("s2a-boot-fingerprint-v1\t").append(indexSha).append('\t').append(entries.size()).append('\n');
-        for (int i=0;i<entries.size();i++) {
-            Stamp s=stamps.get(i); if (s==null) return null;
-            b.append(entries.get(i).path).append('\t').append(s.size).append('\t').append(s.dev).append('\t')
-             .append(s.ino).append('\t').append(s.seconds).append('\t').append(s.nanos).append('\n');
-        }
-        byte[] bytes=b.toString().getBytes(StandardCharsets.UTF_8); if (bytes.length>MAX_TABLE) return null;
-        String sha=GamePack.sha256(bytes), name=PREFIX+sha+".tsv";
-        Path target=revision.toPath().resolve(name);
-        if (Files.exists(target,LinkOption.NOFOLLOW_LINKS)) {
-            if (!Files.isRegularFile(target,LinkOption.NOFOLLOW_LINKS))
-                throw new IOException("fingerprint target is not a regular file");
-            if (Files.size(target)<=MAX_TABLE && GamePack.sha256(Files.readAllBytes(target)).equals(sha))
-                return new Reference(name,sha,indexSha);
-        }
+        for (Stamp s : stamps) if (s==null) return null;
+        // 边写边算 SHA-256，不在内存里拼整张表：大包 30 万行约 32 MB，拼成一个 String 再取字节会撑爆
+        //   App 的 256 MB Java 堆（11-14 真机导入收尾 OutOfMemoryError，进程崩、导入作废）。
         // Own the temporary name format so interrupted writes remain recognizable on Android
         // regardless of the platform's createTempFile implementation.
         Path temp=revision.toPath().resolve(PREFIX+"tmp-"+UUID.randomUUID().toString().replace("-","")+".tsv");
         Files.createFile(temp);
         try {
-            try (FileOutputStream out=new FileOutputStream(temp.toFile())) { out.write(bytes); out.getFD().sync(); }
+            MessageDigest md=GamePack.digest();
+            long size;
+            try (FileOutputStream file=new FileOutputStream(temp.toFile());
+                 java.security.DigestOutputStream digest=new java.security.DigestOutputStream(file,md);
+                 java.io.BufferedOutputStream buf=new java.io.BufferedOutputStream(digest,1<<16)) {
+                byte[] head=("s2a-boot-fingerprint-v1\t"+indexSha+"\t"+entries.size()+"\n").getBytes(StandardCharsets.UTF_8);
+                buf.write(head); size=head.length;
+                StringBuilder line=new StringBuilder(256);
+                for (int i=0;i<entries.size();i++) {
+                    Stamp s=stamps.get(i);
+                    line.setLength(0);
+                    line.append(entries.get(i).path).append('\t').append(s.size).append('\t').append(s.dev).append('\t')
+                        .append(s.ino).append('\t').append(s.seconds).append('\t').append(s.nanos).append('\n');
+                    byte[] bytes=line.toString().getBytes(StandardCharsets.UTF_8);
+                    size+=bytes.length;
+                    if (size>MAX_TABLE) return null;
+                    buf.write(bytes);
+                }
+                buf.flush(); file.getFD().sync();
+            }
+            String sha=GamePack.hex(md.digest()), name=PREFIX+sha+".tsv";
+            Path target=revision.toPath().resolve(name);
+            if (Files.exists(target,LinkOption.NOFOLLOW_LINKS)) {
+                if (!Files.isRegularFile(target,LinkOption.NOFOLLOW_LINKS))
+                    throw new IOException("fingerprint target is not a regular file");
+                if (Files.size(target)<=MAX_TABLE && RuntimeLibrary.sha256(target.toFile()).equals(sha))
+                    return new Reference(name,sha,indexSha);
+            }
             Files.move(temp,target,StandardCopyOption.ATOMIC_MOVE,StandardCopyOption.REPLACE_EXISTING);
+            return new Reference(name,sha,indexSha);
         } finally { Files.deleteIfExists(temp); }
-        return new Reference(name,sha,indexSha);
     }
 
     // Called only under GameStorage. A SHA-named new table is in place before current switches.
