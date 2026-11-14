@@ -308,6 +308,7 @@ LJ=(); LJN=(); TKS=(); job() {   # job <编号> <命令> <上限>：先排令牌
     *) echo "75 0" > "$L/$1.rc"; echo "环境未就绪：拿不到门禁令牌（持锁进程起不来）" > "$L/$1.log"; return 0;; esac
   echo $((SECONDS - w0)) > "$L/$1.wait"; [ -n "$tk" ] && TKS+=("$tk")
   ( : > "$L/$1.started"; s0=$SECONDS
+  export S2A_GATE_STEP=1   # 本进程树是某一步（不是门禁自己的规划 / 路由）：新门禁按它只采集步本身读的文件
   trap "_sigrc '$1' 143 TERM" TERM; trap "_sigrc '$1' 130 INT" INT; trap "_sigrc '$1' 129 HUP" HUP; trap 'tok_put "$tk"' EXIT
   # 末尾另起一行 exit $?：bash 5 对「-c 串的最后一条简单命令」直接 exec，组长会变成被测命令本身、命令行里没有 .pg 路径，
   #   收尸进程（tools/gate_reap.py）按这个字样经 safe_killpg 认组就认不出（11-11 门禁机上列车 run_token_test ④ 红）；最后一条是内建命令就不会 exec
