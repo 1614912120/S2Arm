@@ -1626,6 +1626,36 @@ static void t_pass_depth_shadow(void) {
     pass_fresh();
 }
 
+// 不挂任何目标的绘制（NVN 允许：片元只写存储 / 只为遮挡计数；安卓真机一款大作每帧约 4 笔被跳过）。
+// 期望值手算：后端没有 NVN_GPU_CAP_NO_ATTACH_PASS → 不开通道、记 no_attachment 一笔、绘制 0 笔；
+//   有 → 通道 0 个颜色槽、无深度，尺寸 = 视口右下角（24×20）；下一笔视口 40×30 超出 → 收通道按 40×30 重开；
+//   再一笔视口 10×10 不超出 → 留在同一通道，裁剪按 40×30 夹（不夹成缺省的 1×1）= (0, 0, 10, 10)。
+static void vp_sc(stream *s, float w, float h) {
+    p_viewports *vp = put(s, OP_VIEWPORTS, sizeof *vp); vp->n = 1; vp->v[0][2] = w; vp->v[0][3] = h;
+    p_scissor *sc = put(s, OP_SCISSOR, sizeof *sc); sc->x = 0; sc->y = 0; sc->w = (int32_t)w; sc->h = (int32_t)h;
+}
+static void t_pass_no_attachment(void) {
+    pass_fresh(); g_caps_extra = 0;
+    int d0 = g_gdraws;
+    stream s = {0}; q_env(&s); put_set_rt(&s, NULL, NULL); vp_sc(&s, 24, 20); q_draw(&s); end(&s);
+    submit1(&s); fake_complete(NVN_GPU_DONE_OK);
+    CHECK(g_gdraws == d0 && g_npd == 0 && nvn_unimpl_count("pass", "no_attachment") == 1);
+    pass_fresh(); g_caps_extra = NVN_GPU_CAP_NO_ATTACH_PASS;
+    d0 = g_gdraws;
+    stream s2 = {0}; q_env(&s2); put_set_rt(&s2, NULL, NULL);
+    vp_sc(&s2, 24, 20); q_draw(&s2);
+    vp_sc(&s2, 40, 30); q_draw(&s2);
+    vp_sc(&s2, 10, 10); q_draw(&s2);
+    end(&s2);
+    submit1(&s2); fake_complete(NVN_GPU_DONE_OK);
+    CHECK(g_gdraws == d0 + 3 && g_npd == 2 && g_pass_ends == 2);
+    CHECK(g_pd[0].ncolor == 0 && !g_pd[0].depth.view && !g_pd[0].stencil.view && g_pd[0].w == 24 && g_pd[0].h == 20);
+    CHECK(g_pd[1].ncolor == 0 && g_pd[1].w == 40 && g_pd[1].h == 30);
+    CHECK(g_last_dyn.has_sc && g_last_dyn.sc[0] == 0 && g_last_dyn.sc[1] == 0 && g_last_dyn.sc[2] == 10 && g_last_dyn.sc[3] == 10);
+    CHECK(nvn_unimpl_kinds() == 0);
+    g_caps_extra = 0; pass_fresh();
+}
+
 // 块压缩贴图经「一块当一个像素」的非压缩视图当渲染目标（#709，对照 nvn_mtl.m bcrt_attach）：同深度影子一套，影子按块数建。
 // 期望值手算：64x32 的 BC1（RGBA_DXT1，一块 4x4、8 字节）配 RG32UI 视图 → 影子 16x8、一个像素 8 字节 → 行 128 字节、整张 1024 字节；
 // 基底那边的拷贝区域按像素给整级 64x32。BC3（RGBA_DXT5，一块 16 字节）16x16 配 RGBA32UI → 影子 4x4、行 64、整张 256。
@@ -2897,6 +2927,7 @@ int main(int argc, char **argv) {
     t_copy_b2t();
     t_pass_clear_fold();
     t_pass_depth_shadow();
+    t_pass_no_attachment();
     t_pass_bc_shadow();
     t_pass_bc_shadow_3d();
     t_autoflush();
