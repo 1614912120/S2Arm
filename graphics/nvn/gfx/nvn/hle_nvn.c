@@ -1866,13 +1866,26 @@ static void sh_grow(cmd_t *o, uint32_t need) {
 // (event OUT_OF_COMMAND_MEMORY, the device bytes needed), twice at most, then a host-lent window. cb_ok = 0 (CopyCommands) lends at once instead of calling back once the game
 // has given memory: Mario Tennis Aces's callback for a copy target calls through a null pointer (main+0x771678); with device counting a copy needs no more than the source's Used,
 // which is what the game sizes the target by, so only an estimate off from the game's own arithmetic could get there
+// 录制外命令与录制重入的读数（#372 诊断 D-EHK5：竞技场发黑那局只记了首例「command 15 … dropped」，丢了多少、丢在哪个命令缓冲上都不知道）：按命令号计数，
+//   前 8 例带命令缓冲地址与录制状态，与 BeginRecording 重入的地址对得上就是同一条录制被打断；每 300 帧有新增时打一行汇总
+static uint64_t g_frame;   // 定义在下面（帧计数），这里先声明
+static _Atomic uint64_t g_rec_out_op[64], g_rec_out_n, g_rec_reenter_n;
+static void rec_out_summary(uint64_t frame) {
+    static uint64_t said_out, said_re; uint64_t n = atomic_load(&g_rec_out_n), re = atomic_load(&g_rec_reenter_n);
+    if (n == said_out && re == said_re) return;
+    said_out = n; said_re = re; char by[512] = ""; size_t at = 0;
+    for (int i = 0; i < 64 && at < sizeof by - 24; i++) { uint64_t c = atomic_load(&g_rec_out_op[i]); if (c) at += (size_t)snprintf(by + at, sizeof by - at, "%s%d×%llu", at ? "、" : "", i, (unsigned long long)c); }
+    LOG("[nvn] 录制外命令到第 %llu 帧：丢了 %llu 条（按命令号：%s；号见 nvn_obj.h OP_*，15 = BIND_STATE）；BeginRecording 重入 %llu 次", (unsigned long long)frame, (unsigned long long)n, at ? by : "无", (unsigned long long)re);
+}
 static uint8_t *cmd_alloc_cb(cmd_t *o, uint32_t op, uint32_t size, int cb_ok) {
     size = (size + 7) & ~7u;
     srec *r = o->rec;
     if (!r) {   // Outside BeginRecording .. EndRecording no handle can reach the records (NVN does not allow it): taken and dropped
         static __thread uint8_t *scratch; static __thread uint32_t nscratch;
         if (size > nscratch) { uint8_t *t = realloc(scratch, size); if (!t) die("NVN command recording: scratch of %u bytes", size); scratch = t; nscratch = size; }
-        static int once; if (!once++) LOG("【红】 [nvn] command %u recorded outside BeginRecording / EndRecording: dropped (first case)", op);
+        uint64_t k = atomic_fetch_add(&g_rec_out_n, 1) + 1; atomic_fetch_add(&g_rec_out_op[op < 64 ? op : 63], 1);
+        if (k <= 8) LOG("【红】 [nvn] command %u recorded outside BeginRecording / EndRecording on command buffer %p (recording state %d, frame %llu): dropped (case %llu of the first 8; totals in the 「录制外命令」 line)",
+                        op, (void *)o, (int)o->recording, (unsigned long long)g_frame, (unsigned long long)k);
         put_hdr(scratch, op, size); return scratch;
     }
     uint32_t dv = dev_bytes(op, size);
@@ -1952,7 +1965,7 @@ static void sh_end(cmd_t *o) {
 // (nvn_obj.h draw_rec): Breath of the Wild sums one scratch recording per mesh and per shape and render pass into each model's prerecorded commands
 NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
     cmd_t *o = CB(c);
-    if (o->recording) { LOG("【红】 BeginRecording re-entered"); if (o->rec) sh_end(o); }
+    if (o->recording) { uint64_t k = atomic_fetch_add(&g_rec_reenter_n, 1) + 1; if (k <= 8) LOG("【红】 BeginRecording re-entered on command buffer %p (frame %llu, case %llu of the first 8)", (void *)o, (unsigned long long)g_frame, (unsigned long long)k); if (o->rec) sh_end(o); }
     srec *r = calloc(1, sizeof *r); if (!r) die("NVN command recording: no memory for a recording");
     r->iv = r->ivs; r->civ = 2; r->open = 1; r->glo = o->gcur;
     pthread_mutex_lock(&g_sh_mu); r->prev = g_sh_all.prev; r->next = &g_sh_all; g_sh_all.prev->next = r; g_sh_all.prev = r; g_sh_nlive++; pthread_mutex_unlock(&g_sh_mu);
@@ -3160,6 +3173,7 @@ static FILE *g_tsv;
 static void dump_frame(void) {
     static int inited, nframes = 3, calls = 1;
     nvn_be_tex_tick(g_frame);   // DM_NVN_ALLOCPROF: texture init / release summary every 300 frames
+    if (g_frame % 300 == 0) rec_out_summary(g_frame);   // 录制外命令 / 录制重入有新增才打（不论开没开调用计数）
     if (!inited) {
         inited = 1;
         const char *e = getenv("DM_NVN_FRAMES"); if (e) nframes = atoi(e);
