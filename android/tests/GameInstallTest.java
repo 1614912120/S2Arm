@@ -607,6 +607,39 @@ public final class GameInstallTest {
         check(BootContract.open(plainRoot).modules.size() == 1, "copied revision opens");
         GameInstall.deleteTree(plainGames);
 
+        // 读卡住重开续读：每个文件第一次打开的流读到第 3 字节后，下一次 read 永远不返回（vivo 共享存储的样子）；
+        //   重开后正常。期望：安装成功、能打开；卡过的文件数 > 0（用例不是空过）。不许重试时同一输入报「read stalled」
+        long stallMs = GameInstall.STALL_MS; int stallRetries = GameInstall.STALL_RETRIES;
+        GameInstall.STALL_MS = 200;
+        java.util.Set<String> stalled = new java.util.HashSet<>();
+        GameInstall.Source plainSrc = GameInstall.directory(v1);
+        GameInstall.Source stallingSrc = path -> {
+            java.io.InputStream real = plainSrc.open(path);
+            if (real == null || !stalled.add(path)) return real;
+            return new java.io.FilterInputStream(real) {
+                long pos;
+                @Override public int read(byte[] b, int o, int l) throws IOException {
+                    if (pos >= 3) { try { Thread.sleep(Long.MAX_VALUE); } catch (InterruptedException x) { throw new IOException(x); } }
+                    int n = super.read(b, o, (int) Math.min(l, 3 - pos));
+                    if (n > 0) pos += n;
+                    return n;
+                }
+            };
+        };
+        File stallGames = Files.createTempDirectory("s2a-games-stall").toFile();
+        GameInstall.Result st = GameInstall.install(stallGames, stallingSrc, null);
+        check(st.contentRoot.equals(r1) && BootContract.open(new File(stallGames, "0100000000ABCDEF")).modules.size() == 1,
+              "stalled read: reopened at the read position, install completes and opens");
+        check(!stalled.isEmpty(), "stalled read: at least one file actually stalled");
+        GameInstall.deleteTree(stallGames);
+        stalled.clear(); GameInstall.STALL_RETRIES = 0;
+        File stallGames2 = Files.createTempDirectory("s2a-games-stall2").toFile();
+        String stallErr = "";
+        try { GameInstall.install(stallGames2, stallingSrc, null); } catch (IOException | GamePack.BadPack | RuntimeException x) { stallErr = String.valueOf(x.getMessage()); }
+        check(stallErr.contains("read stalled"), "stalled read without retries: refused as read stalled (" + stallErr + ")");
+        GameInstall.deleteTree(stallGames2);
+        GameInstall.STALL_MS = stallMs; GameInstall.STALL_RETRIES = stallRetries;
+
         if (args.length == 1) {   // a package from tools/make_pack.py
             File real = Files.createTempDirectory("s2a-games-real").toFile();
             GameInstall.Result r = GameInstall.install(real, GameInstall.directory(new File(args[0])), null);
