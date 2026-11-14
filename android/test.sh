@@ -423,6 +423,7 @@ PY
 s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" \
     "$android_dir/app/src/main/java/org/s2arm/android/GamePack.java" \
     "$android_dir/app/src/main/java/org/s2arm/android/GameInstall.java" \
+    "$android_dir/app/src/main/java/org/s2arm/android/ImportReceiver.java" \
     "$android_dir/tests/GamePackTest.java" \
     "$android_dir/tests/GameInstallTest.java"
 s2a_gate_step java -cp "$out/java" org.s2arm.android.GamePackTest
@@ -467,6 +468,7 @@ s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" \
     "$android_dir/app/src/main/java/org/s2arm/android/GamePack.java" \
     "$android_dir/app/src/main/java/org/s2arm/android/GameFingerprint.java" \
     "$android_dir/app/src/main/java/org/s2arm/android/GameInstall.java" \
+    "$android_dir/app/src/main/java/org/s2arm/android/ImportReceiver.java" \
     "$android_dir/app/src/main/java/org/s2arm/android/NativeRewriter.java"
 # J09-S1：纯合成密钥；长空白回归由 PlayerKeysTest 启独立 JVM，10 秒限时并回收自身子进程。
 # 同入口区分系统祖先软链与 App 数据根/files/中间目录软链，并核旧权限恢复及 hardlink 不改 inode。

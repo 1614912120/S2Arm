@@ -21,13 +21,21 @@ import java.nio.charset.StandardCharsets;
  *   END
  * 回一行：OK &lt;文件数&gt; &lt;字节数&gt; 或 ERR &lt;原因&gt;。
  * 收进 parent/.&lt;名字&gt;.part，收完整才改名成 parent/&lt;名字&gt;（parent = 私有 files/import），
- * 之后照常走 GameLibrary.scanImports（逐文件按 index.tsv 核大小与 SHA-256，这里不重复校验内容）。
+ * 收的同时逐文件算 SHA-256，收完把「相对路径 → SHA-256」登记在进程内（verified，别的 App 改不了内存）；
+ * 之后照常走 GameLibrary.scanImports：安装时大小与 SHA-256 都对得上索引的文件直接改名挪进对象库（GameInstall.Source.adopt），
+ * 不再读一遍、复制一遍；对不上的照旧复制并核对。
  * 本类不碰安卓 API，套接字与对端身份（只认 adb 的 shell uid）在 LibraryActivity。
  */
 final class ImportReceiver {
     private ImportReceiver() { }
 
     static final int VERSION = 1;
+    private static final java.util.Map<String, java.util.Map<String, String>> VERIFIED = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 这个目录是本进程刚收进来的：返回边收边算的「相对路径 → SHA-256」，否则 null。 */
+    static java.util.Map<String, String> verified(File dir) {
+        try { return VERIFIED.get(dir.getCanonicalPath()); } catch (IOException e) { return null; }
+    }
     private static final int MAX_LINE = 4096;
 
     /** 收一次传输；成功返回落好的目录，失败抛异常（已回 ERR、临时目录已删）。 */
@@ -47,6 +55,7 @@ final class ImportReceiver {
             if (!part.mkdirs()) throw new IOException("cannot create " + part);
             long files = 0, bytes = 0;
             byte[] buf = new byte[1 << 20];
+            java.util.Map<String, String> sums = new java.util.HashMap<>();
             while (true) {
                 String l = line(in);
                 if (l.equals("END")) break;
@@ -58,19 +67,23 @@ final class ImportReceiver {
                 File target = new File(part, safePath(f[2]));
                 File dir = target.getParentFile();
                 if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot create " + dir);
+                java.security.MessageDigest md = GamePack.digest();
                 try (FileOutputStream os = new FileOutputStream(target)) {
                     for (long left = size; left > 0; ) {
                         int n = in.read(buf, 0, (int) Math.min(buf.length, left));
                         if (n < 0) throw new IOException("stream ended inside " + f[2]);
-                        os.write(buf, 0, n); left -= n;
+                        md.update(buf, 0, n); os.write(buf, 0, n); left -= n;
                     }
                 }
+                sums.put(f[2], GamePack.hex(md.digest()));
                 files++; bytes += size;
             }
             File done = new File(parent, name);
+            VERIFIED.remove(done.getCanonicalPath());
             GameInstall.deleteTree(done);
             if (!part.renameTo(done)) throw new IOException("cannot move " + part + " into place");
             part = null;
+            VERIFIED.put(done.getCanonicalPath(), sums);
             reply(out, "OK " + files + " " + bytes);
             return done;
         } catch (IOException | RuntimeException e) {

@@ -55,6 +55,20 @@ public final class ImportReceiverTest {
             catch (IOException e) { err = e.getMessage(); }
             check(!err.isEmpty(), "refuses header " + head.trim());
         }
+        // ⑤ 收进来的文件直接挪（adopt）：SHA-256 与大小对得上 → 改名到 target、内容不变；对不上 / 不是本进程收的目录 → false、原地不动
+        String helloSha = GamePack.hex(java.security.MessageDigest.getInstance("SHA-256").digest("hello".getBytes()));
+        ImportReceiver.receive(new ByteArrayInputStream(stream("S2A-IMPORT 1 adopt\n", "F 5 a/b.bin\n", "hello", "F 5 c.bin\n", "world", "END\n")),
+            new ByteArrayOutputStream(), parent);
+        File got = new File(parent, "adopt");
+        GameInstall.Source src = GameInstall.directory(got);
+        File target = new File(parent, "objects/he/" + helloSha);
+        check(src.adopt("a/b.bin", helloSha, 5, target), "verified file adopted");
+        check(Arrays.equals(Files.readAllBytes(target.toPath()), "hello".getBytes()) && !new File(got, "a/b.bin").exists(),
+              "adopted = moved, content unchanged");
+        check(!src.adopt("c.bin", helloSha, 5, new File(parent, "objects/x")), "sha mismatch not adopted");
+        check(new File(got, "c.bin").isFile(), "mismatched file stays for the checked copy");
+        File plain = new File(parent, "plain"); plain.mkdirs(); Files.write(new File(plain, "a.bin").toPath(), "hello".getBytes());
+        check(!GameInstall.directory(plain).adopt("a.bin", helloSha, 5, new File(parent, "objects/y")), "not received here: never adopted");
         GameInstall.deleteTree(parent);
         if (failures > 0) { System.err.println(failures + " / " + checks + " failed"); System.exit(1); }
         System.out.println("ImportReceiver: ok (" + checks + " checks)");

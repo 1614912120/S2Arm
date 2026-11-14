@@ -41,6 +41,9 @@ final class GameInstall {
     interface Source {
         /** null when the package has no such file. */
         InputStream open(String path) throws IOException;
+        /** 这份文件的内容已核过（SHA-256 与大小都等于索引）时，直接改名挪到 target、返回 true，不读不复制；
+         *  做不到返回 false，调用方照常复制并核对。直传收进来的文件走这条（ImportReceiver 边写边算过 SHA）。 */
+        default boolean adopt(String path, String sha256, long size, File target) throws IOException { return false; }
     }
 
     interface Progress { void update(long done, long total); }
@@ -86,14 +89,19 @@ final class GameInstall {
 
     static Source checkedImportSource(Source source, String installedPackage,
             boolean debuggable, boolean debugEntriesOpen) {
-        return path -> {
-            java.io.InputStream input = source.open(path);
-            if (input == null || !ARTIFACT.equals(path)) return input;
-            byte[] bytes;
-            try (java.io.InputStream in = input) { bytes = GamePack.readAll(in); }
-            try { BootContract.checkTestImport(bytes, installedPackage, debuggable, debugEntriesOpen); }
-            catch (BootContract.BadGame invalid) { throw new IOException(invalid.getMessage(), invalid); }
-            return new java.io.ByteArrayInputStream(bytes);
+        return new Source() {
+            @Override public InputStream open(String path) throws IOException {
+                java.io.InputStream input = source.open(path);
+                if (input == null || !ARTIFACT.equals(path)) return input;
+                byte[] bytes;
+                try (java.io.InputStream in = input) { bytes = GamePack.readAll(in); }
+                try { BootContract.checkTestImport(bytes, installedPackage, debuggable, debugEntriesOpen); }
+                catch (BootContract.BadGame invalid) { throw new IOException(invalid.getMessage(), invalid); }
+                return new java.io.ByteArrayInputStream(bytes);
+            }
+            @Override public boolean adopt(String path, String sha256, long size, File target) throws IOException {
+                return !ARTIFACT.equals(path) && source.adopt(path, sha256, size, target);   // 启动描述只走 open（要过准入检查）
+            }
         };
     }
 
@@ -166,7 +174,22 @@ final class GameInstall {
 
     static Source directory(File dir) {
         Path root = dir.toPath().toAbsolutePath().normalize();
-        return path -> {
+        return new Source() {
+            @Override public InputStream open(String path) throws IOException {
+                Path file = resolve(path);
+                return Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) ? Files.newInputStream(file) : null;
+            }
+            @Override public boolean adopt(String path, String sha256, long size, File target) throws IOException {
+                java.util.Map<String, String> got = ImportReceiver.verified(dir);
+                if (got == null || !sha256.equals(got.get(path))) return false;
+                Path file = resolve(path);
+                if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS) || Files.size(file) != size) return false;
+                target.getParentFile().mkdirs();
+                Files.move(file, target.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+                target.setReadOnly();
+                return true;
+            }
+            private Path resolve(String path) throws IOException {
             Path relative = root.getFileSystem().getPath(path);
             if (relative.isAbsolute()) throw new IOException("package path escapes its directory");
             for (Path segment : relative)
@@ -182,8 +205,8 @@ final class GameInstall {
                 part = part.resolve(segment);
                 if (Files.isSymbolicLink(part)) throw new IOException("package source contains a symbolic link");
             }
-            return Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)
-                ? Files.newInputStream(file) : null;
+            return file;
+            }
         };
     }
 
@@ -242,7 +265,7 @@ final class GameInstall {
                 File out = new File(staging, e.path);
                 out.getParentFile().mkdirs();
                 if (!result.linked) {   // no shared store here: a checked copy in the revision itself
-                    store(source, e, out, new File(objects, "tmp"), buf, progress, done, total);
+                    put(source, e, out, new File(objects, "tmp"), buf, progress, done, total);
                     result.storedBytes += e.size;
                     continue;
                 }
@@ -252,7 +275,7 @@ final class GameInstall {
                     done[0] += e.size;
                     if (progress != null) progress.update(done[0], total);
                 } else {
-                    store(source, e, object, new File(objects, "tmp"), buf, progress, done, total);
+                    put(source, e, object, new File(objects, "tmp"), buf, progress, done, total);
                     result.storedBytes += e.size;
                 }
                 try {
@@ -282,6 +305,17 @@ final class GameInstall {
         BootContract.open(gameRoot);   // what the runtime will read
         prune(gameRoot, contentRoot, result.previousContentRoot);
         return result;
+    }
+
+    // 已核过的直接挪（adopt），否则复制并核对（store）
+    private static void put(Source source, GamePack.Entry e, File target, File tmpDir, byte[] buf,
+                            Progress progress, long[] done, long total) throws IOException, GamePack.BadPack {
+        if (source.adopt(e.path, e.sha256, e.size, target)) {
+            done[0] += e.size;
+            if (progress != null) progress.update(done[0], total);
+            return;
+        }
+        store(source, e, target, tmpDir, buf, progress, done, total);
     }
 
     // One package file into the object store: copied with its size and SHA-256 checked, flushed,
