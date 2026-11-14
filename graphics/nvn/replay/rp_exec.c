@@ -81,6 +81,7 @@ enum { SUB_STEP = 64 };       // 一次提交在时间线上占 64 个值：最�
 static uint32_t g_mid;         // 这次提交已经用掉几个中间值
 static uint64_t g_split_base;  // 上次中途交段时的累计绘制笔数
 static int g_ret_n;            // OP_CALL 嵌套深度
+int nvn_cmd_call_target(uint64_t h);   // hle_nvn.c：CALL 目标核对（0 活 / 不在命令记录区，1 隔离中，-1 块已复用）
 
 static void red(const char *fmt, const char *why) { char b[256]; snprintf(b, sizeof b, fmt, why); nvn_plat_log(NVN_PLAT_LOG_RED, "replay", b); }
 static void pre_done(void *user, const nvn_gpu_done *d) {
@@ -467,6 +468,12 @@ void nvn_be_exec(const uint8_t *p) {
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
             case OP_CALL: { uint64_t t; memcpy(&t, a, 8);
                 if (g_ret_n >= 64) { nvn_unimpl("rec", "call_depth_over_64", p); break; }
+                {   // #768338 安全阀（同 nvn_mtl.m OP_CALL，判据在 hle_nvn.c nvn_cmd_call_target）：目标落在命令记录区却不是任何录制的句柄
+                    //   （它的录制被覆盖、块已被别的录制复用）→ 记红、跳过这次调用，不执行不相干的内容；还在隔离区的旧录制照常执行
+                    int ck = nvn_cmd_call_target(t);
+                    if (ck < 0) { static unsigned n; if (n++ < 8) { char m[200]; snprintf(m, sizeof m, "command-list call into reused host blocks: target %#llx is no recording's handle, call skipped (depth %d)", (unsigned long long)t, g_ret_n);
+                        nvn_plat_log(NVN_PLAT_LOG_RED, "replay", m); } break; }
+                }
                 g_ret_n++; nvn_be_exec((const uint8_t *)(uintptr_t)t); g_ret_n--;
                 break; }
             case OP_SIGNAL_EVENT: { volatile uint32_t *val; uint32_t m, v; memcpy(&val, a, 8); memcpy(&m, (const uint8_t *)a + 8, 4); memcpy(&v, (const uint8_t *)a + 12, 4);
