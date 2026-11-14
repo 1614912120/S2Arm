@@ -30,8 +30,10 @@
 #import "settings.h"
 #import "vpad_cheats.h"   // 齿轮菜单：金手指面板
 #import "s2a_l10n.h"
+// 弱链接[lab,touchtest]：s2a_ios_ext_connected（extdisplay.m 提供外屏连接查询，输入工作台 / 触屏单测不链接）
 // 弱链接[lab]：s2a_hud_brief_show（ios/hud.m 简版性能浮层；输入工作台不链 hud.m / 原生核，取不到就不显示）
 void s2a_hud_brief_show(UIView *root, BOOL on) __attribute__((weak_import));
+BOOL s2a_ios_ext_connected(void) __attribute__((weak_import));
 #import "app_settings.h"   // 齿轮菜单：存档管理 / 更多设置（s2a_settings_runtime / s2a_settings_present）
 #import "play_layout.h"
 #include "s2a_docs.h"   // iOS 进程级容器 Documents（s2a_container_docs）
@@ -495,6 +497,14 @@ typedef BOOL (^VPFlag)(void);
     // 性能浮层（hud.m 简版：右上角「帧率 · 内存」），改完立即显示 / 收起
     [items addObject:[self live:@"vp.hud.brief" title:S2AL(@"vpad.menu.hud") note:S2AL(@"vpad.menu.hud.note") on:^BOOL{ return [d boolForKey:@"S2APerfHUD"]; } disabled:nil
                             run:^{ BOOL on = ![d boolForKey:@"S2APerfHUD"]; [d setBool:on forKey:@"S2APerfHUD"]; if (s2a_hud_brief_show) s2a_hud_brief_show(ws.superview, on); }]];
+    // 只在外接显示器场景存在时提供，避免没有用途的菜单项占位。
+    if (s2a_ios_ext_connected && s2a_ios_ext_connected()) {
+        UIAction *screenLock = [UIAction actionWithTitle:S2AL(@"vpad.screenLock.title") image:[UIImage systemImageNamed:@"lock.fill"] identifier:@"vpad.screenLock.action" handler:^(__unused UIAction *action) {
+            [ws afterMenu:^{ [ws showScreenLock]; }];
+        }];
+        screenLock.subtitle = S2AL(@"vpad.screenLock.note");
+        [items addObject:screenLock];
+    }
     // S 级优化（11-13 统一入口：同整页设置的「S 级优化」组、游戏库设置、启动器）：金色 S 子菜单，里面「社区补丁…」（这款有才列）与「金手指…」，
     //   打开的页与整页设置里点进去的是同一页（cpatch_settings.m / vpad_cheats.m）；页开着时虚拟手柄不收触控
     {
@@ -521,11 +531,6 @@ typedef BOOL (^VPFlag)(void);
     //   原先「画面…」与「更多设置」两项打开的是同一页，11-13 合成一项
     UIAction *full = vp_act(S2AL(@"vpad.menu.settings"), @"gearshape", NO, ^{ [ws afterMenu:^{ [ws openFullSettings]; }]; }); full.subtitle = S2AL(@"vpad.menu.settings.note");
     [items addObject:full];
-    UIAction *screenLock = [UIAction actionWithTitle:S2AL(@"vpad.screenLock.title") image:[UIImage systemImageNamed:@"lock.fill"] identifier:@"vpad.screenLock.action" handler:^(__unused UIAction *action) {
-        [ws afterMenu:^{ [ws showScreenLock]; }];
-    }];
-    screenLock.subtitle = S2AL(@"vpad.screenLock.note");
-    [items addObject:screenLock];
     // 故障报修（11-13 维护者定：各页面齿轮菜单最下面）：写一句发生了什么（可不填）→ 打包上传、给短码（diag.m s2a_diag_report）
     [items addObject:vp_act(S2AL(@"diag.report.title"), @"exclamationmark.bubble", NO, ^{ [ws afterMenu:^{ void s2a_diag_report(void); s2a_diag_report(); }]; })];
     return items;

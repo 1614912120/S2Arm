@@ -512,9 +512,9 @@
 "settings.padFace.auto" = "自動（按鍵帽字母）";
 "settings.padFace.switch" = "Switch 佈局";
 "settings.padFace.xbox" = "Xbox 佈局";
-"vpad.screenLock.title" = "模擬鎖定螢幕";
-"vpad.screenLock.note" = "連續點擊螢幕3次解除";
-"vpad.screenLock.hint" = "如需關閉模擬鎖定螢幕，請連續點擊3次螢幕";
-"vpad.screenLock.unlock" = "解除模擬鎖定螢幕";
+"vpad.screenLock.title" = "手機黑屏";
+"vpad.screenLock.note" = "外接顯示器時用，點三下恢復";
+"vpad.screenLock.hint" = "如需關閉手機黑屏，請連續點擊3次螢幕";
+"vpad.screenLock.unlock" = "恢復手機螢幕";
 "vpad.menu.settings" = "設定…";
 "vpad.menu.settings.note" = "畫面、滿屏、60 幀、S 級優化、操作、診斷";
