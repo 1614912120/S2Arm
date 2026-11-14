@@ -9476,7 +9476,7 @@ static uint64_t pool_seen_gpu(void) {
 typedef struct { uint32_t n, cap; uint32_t e[]; } pin_list;
 static pthread_mutex_t g_pin_mu = PTHREAD_MUTEX_INITIALIZER;
 static nvn_hmap g_pin = {.klen = 8}, g_pin_ret = {.klen = 8};
-// Unpinned but maybe still read: allocation → g_fence + 1 when the last entry naming it went (pin_del) and nobody had asked to retire it yet. A draw encoded before the entry
+// Unpinned but maybe still read: allocation → g_fence + 1 when the last entry naming it went (pin_del), whether or not a retire request came already. A draw encoded before the entry
 //   changed may still read it, so it must stay resident until that submission completes. The retire request can come late: the completion handler drains the deferred queue on
 //   its own thread (defer_drain), takes the object out of the queue, and only then calls res_remove; if the submit thread replaced the entry in between, res_remove saw no pin
 //   and took the texture out of the residency set while the open submission still named it (11-14: t_nvn_pool_tex ⑩ red about 1 in 30 runs under load). pool_pin_retire
@@ -9516,7 +9516,7 @@ static int pin_del(void *k, uint32_t code) {   // 1: no entry names k any more a
     pin_list *l = nvn_hm_get(&g_pin, &k);
     if (l) { for (uint32_t j = 0; j < l->n; j++) if (l->e[j] == code) { l->e[j] = l->e[--l->n]; break; }
         if (!l->n) { nvn_hm_del(&g_pin, &k); free(l); ret = nvn_hm_del(&g_pin_ret, &k) != NULL;
-            if (!ret) { nvn_hm_put(&g_unpin, &k, (void *)(uintptr_t)(g_fence + 1)); if (g_unpin.n >= g_unpin_next) unpin_prune(); } } }   // submit thread: g_fence + 1 = the open submission
+            nvn_hm_put(&g_unpin, &k, (void *)(uintptr_t)(g_fence + 1)); if (g_unpin.n >= g_unpin_next) unpin_prune(); } }   // submit thread: g_fence + 1 = the open submission. Also when ret: a second retire request may still be on its way (the pool's finalize and the serial's delete each queue one)
     pthread_mutex_unlock(&g_pin_mu);
     return ret;
 }
