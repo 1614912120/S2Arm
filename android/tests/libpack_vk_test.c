@@ -92,6 +92,25 @@ static const char *VS_BUFFER_JSON =
     "{\"msl_name\":\"gal_ubo_len\",\"kind\":\"ubolen\",\"arg_id\":4}],"
     "\"vertex_inputs\":[{\"location\":1},{\"location\":3}]}";
 
+// 计算键：c0 驱动常量段 / 用户 cbuf / 三种存储来源 / 组合纹理 + 采样器半边 / support / Metal 专用 ubolen，
+//   外加一条拿不到 guest 映射的 gmem_map（另一键，用来核「如实拒」）。arg_id 0..7 → binding = arg×6+5。
+static const char *CS_JSON =
+    "{\"key\":\"c0c1c2c3c4c5c6c7_b\",\"stage\":\"cs\",\"dm_ctl\":\"c0c1c2c3c4c5c6c7\",\"bindings\":["
+    "{\"msl_name\":\"cp_c0\",\"kind\":\"drvcb\",\"bank\":0,\"arg_id\":0},"
+    "{\"msl_name\":\"cp_c4\",\"kind\":\"cbuf\",\"reg\":1,\"arg_id\":1},"
+    "{\"msl_name\":\"cp_s0\",\"kind\":\"sbuf\",\"index\":0,\"reg\":2,\"rw\":true,\"arg_id\":2},"
+    "{\"msl_name\":\"cp_s1\",\"kind\":\"sbuf_ubo\",\"index\":1,\"reg\":1,\"off\":32,\"rw\":false,\"arg_id\":3},"
+    "{\"msl_name\":\"cp_s2\",\"kind\":\"ubo_ptr\",\"index\":2,\"reg\":3,\"rw\":true,\"arg_id\":4},"
+    "{\"msl_name\":\"cp_t_tcb_8\",\"kind\":\"tex\",\"reg\":4,\"arg_id\":5},"
+    "{\"msl_name\":\"cp_t_tcb_8Smplr\",\"kind\":\"samp_tex\",\"reg\":4,\"arg_id\":6},"
+    "{\"msl_name\":\"support_buffer\",\"kind\":\"support\",\"arg_id\":7},"
+    "{\"msl_name\":\"gal_ubo_len\",\"kind\":\"ubolen\",\"arg_id\":8}]}";
+static const char *CS_GMEM_JSON =
+    "{\"key\":\"d0d1d2d3d4d5d6d7_b\",\"stage\":\"cs\",\"dm_ctl\":\"d0d1d2d3d4d5d6d7\",\"bindings\":["
+    "{\"msl_name\":\"cp_s0\",\"kind\":\"gmem_map\",\"index\":0,\"rw\":true,\"arg_id\":0}]}";
+// 最小合法 SPIR-V 头（magic / 1.0 / generator 0 / bound 1 / schema 0）：计算解析只核头；纹理分类证不出时按 source 缺省当普通纹理
+static const uint32_t CS_SPV[5] = { 0x07230203u, 0x00010000u, 0u, 1u, 0u };
+
 static int has(const uint8_t *j, const char *sub) { return j && strstr((const char *)j, sub) != NULL; }
 
 int main(void) {
@@ -335,6 +354,100 @@ int main(void) {
                   "记录越出分片 → REJECT（不是按长度盲读）");
             s2a_libpack_close(l2);
         }
+    }
+
+    // ---- 计算键：合成 kind "compute" 的 v1，过 nvn_vk_program_parse_compute，绑定号与槽按手算 ----
+    {
+        snprintf(g_dir, sizeof g_dir, "%s/cs", tmpl);
+        CHECK(mkdir(g_dir, 0700) == 0, "create compute pack directory");
+        struct trec rc4[4] = {
+            { .key = 0xc0c1c2c3c4c5c6c7, .kind = 1,  .len = (uint32_t)strlen(CS_JSON) },
+            { .key = 0xc0c1c2c3c4c5c6c7, .kind = 52, .len = sizeof CS_SPV },
+            { .key = 0xd0d1d2d3d4d5d6d7, .kind = 1,  .len = (uint32_t)strlen(CS_GMEM_JSON) },
+            { .key = 0xd0d1d2d3d4d5d6d7, .kind = 52, .len = sizeof CS_SPV },
+        };
+        const uint8_t *pc[4] = { (const uint8_t *)CS_JSON, (const uint8_t *)CS_SPV, (const uint8_t *)CS_GMEM_JSON, (const uint8_t *)CS_SPV };
+        size_t nc[4] = { strlen(CS_JSON), sizeof CS_SPV, strlen(CS_GMEM_JSON), sizeof CS_SPV };
+        CHECK(mk_pack(rc4, 4, pc, nc, 1) == 0, "compute pack written");
+        struct s2a_libpack *cl = NULL;
+        CHECK(s2a_libpack_open(&cl, g_dir) == 1 && cl, "open compute pack");
+        const uint8_t kc[8] = { 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7 };
+        uint8_t *j = NULL; size_t jl = 0; char w[192] = "";
+        uint64_t h0 = s2a_libpack_hits();
+        int rc = cl ? s2a_libpack_compute_v1(cl, kc, 1, "h", "c", &j, &jl, w, sizeof w) : -9;
+        CHECK(rc == 0 && j && jl == strlen((const char *)j), "cs key → HIT");
+        CHECK(s2a_libpack_hits() == h0 + 1, "compute hit counter +1");
+        CHECK(has(j, "\"kind\":\"compute\"") && has(j, "\"hasUnalignedStorageBuffer\":false")
+              && has(j, "\"c0Reads\":null") && has(j, "\"supportReads\":null")
+              && has(j, "\"supportLayout\":{\"requiredSize\":2608}"), "compute 顶层四事实：false / null / null / 2608");
+        // 手算：binding = arg×6+5 → 5,11,17,23,29,35,(41 半边不出),47,(53 ubolen 不出)
+        CHECK(has(j, "\"kind\":\"uniform\",\"stage\":\"cs\",\"set\":0,\"binding\":5,\"count\":1,\"slot\":0}"), "drvcb bank0 → uniform b5 slot0");
+        CHECK(has(j, "\"kind\":\"uniform\",\"stage\":\"cs\",\"set\":0,\"binding\":11,\"count\":1,\"slot\":4}"), "cbuf reg1 → uniform b11 slot4");
+        CHECK(has(j, "\"binding\":17,\"count\":1,\"cbSlot\":0,\"cbOffset\":816,\"nvnSlot\":2,\"rw\":true"), "sbuf reg2 → b17 c0+0x330(816) nvnSlot2 rw");
+        CHECK(has(j, "\"binding\":23,\"count\":1,\"cbSlot\":4,\"cbOffset\":32,\"uboSlot\":1,\"uboOffset\":32,\"rw\":false"), "sbuf_ubo reg1 off32 → b23 c4+32");
+        CHECK(has(j, "\"binding\":29,\"count\":1,\"cbSlot\":0,\"cbOffset\":576,\"uboPtr\":3,\"rw\":true"), "ubo_ptr reg3 → b29 c0+0x240(576)");
+        CHECK(has(j, "\"kind\":\"texture\",\"stage\":\"cs\",\"set\":0,\"binding\":35,\"count\":1,\"slot\":16}"), "tex reg4 → b35 slot 8+4×2=16");
+        CHECK(has(j, "\"kind\":\"support\",\"stage\":\"program\",\"set\":0,\"binding\":47,\"count\":1}"), "support → b47 program");
+        CHECK(!has(j, "\"binding\":41") && !has(j, "\"binding\":53"), "采样器半边 / ubolen 不出行");
+        {
+            static struct nvn_vk_compute_program cp; char pw[192] = "";
+            int prc = j ? nvn_vk_program_parse_compute(j, jl, &cp, pw, sizeof pw) : -9;
+            if (prc) printf("  parse_compute: %s\n", pw);
+            CHECK(prc == 0, "合成计算 v1 过 nvn_vk_program_parse_compute");
+            CHECK(cp.binding_count == 7, "9 条反射 -1 半边 -1 ubolen = 7 条");
+            CHECK(cp.c0_reads_unknown == 1 && cp.support_reads_unknown == 1 && !cp.has_unaligned_storage_buffer
+                  && cp.support_bytes == 2608 && cp.stage.present && cp.stage.spirv_bytes == sizeof CS_SPV,
+                  "解析：c0/support 读集未知、对齐 false、support 2608、cs 段在");
+            int seen = 0;
+            for (int i = 0; i < cp.binding_count; i++) {
+                const struct fd_binding *b = &cp.bindings[i]; const struct nvn_vk_compute_storage *sg = &cp.storage[i];
+                if (b->binding == 5 && b->kind == 0 && b->slot == 0 && !b->is_support) seen |= 1;
+                if (b->binding == 11 && b->kind == 0 && b->slot == 4 && b->ubo_slot == 1) seen |= 2;
+                if (b->binding == 17 && b->kind == 1 && sg->mapping == NVK_STORAGE_NVN && sg->index == 2 && sg->writable) seen |= 4;
+                if (b->binding == 23 && b->kind == 1 && sg->mapping == NVK_STORAGE_UBO_ADDRESS && sg->index == 1 && sg->offset == 32 && !sg->writable) seen |= 8;
+                if (b->binding == 29 && b->kind == 1 && sg->mapping == NVK_STORAGE_UBO_PTR && sg->index == 3 && sg->writable) seen |= 16;
+                if (b->binding == 35 && b->kind == 2 && b->tex_slot == 4 && !b->texel_buffer) seen |= 32;
+                if (b->binding == 47 && b->is_support && b->stage_idx == -1) seen |= 64;
+            }
+            CHECK(seen == 127, "解析后七条逐条：c0 槽0 / ubo1 / NVN 存储槽2 / UBO 内指针 c4+32 / UBO 本体 3 / 纹理槽4 / support");
+            nvn_vk_program_free_compute(&cp);
+        }
+        free(j); j = NULL;
+        // 负控：拿不到 guest 映射的存储（gmem_map）合成照出、解析器如实拒（调用方据此记 lp_bad 退回现编）
+        const uint8_t kg[8] = { 0xd0, 0xd1, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7 };
+        rc = cl ? s2a_libpack_compute_v1(cl, kg, 1, "h", "c", &j, &jl, w, sizeof w) : -9;
+        {
+            static struct nvn_vk_compute_program cp; char pw[192] = "";
+            CHECK(rc == 0 && j && nvn_vk_program_parse_compute(j, jl, &cp, pw, sizeof pw) != 0,
+                  "gmem_map 存储无 guest 映射 → 解析器拒（不伪造出处）");
+            nvn_vk_program_free_compute(&cp);
+        }
+        free(j); j = NULL;
+        // 负控：拿图形键（stage vs）当计算键 → REJECT；缺席键 → MISS
+        uint64_t r0 = s2a_libpack_rejects(), m0 = s2a_libpack_misses();
+        const uint8_t ka[8] = { 0xde, 0xad, 0xbe, 0xef, 0x00, 0x11, 0x22, 0x33 };
+        CHECK(cl && s2a_libpack_compute_v1(cl, ka, 1, "h", "c", &j, &jl, w, sizeof w) == 1 && !j, "缺席 cs 键 → MISS");
+        CHECK(s2a_libpack_misses() == m0 + 1, "compute miss counter +1");
+        s2a_libpack_close(cl);
+        const uint8_t kv[8] = { 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef };
+        // 用自带一份 vs json+spv 的新容器（前面 reject 段已把顶层目录的 lib.idx 改写过）
+        snprintf(g_dir, sizeof g_dir, "%s/cs", tmpl);
+        struct trec rv[2] = {
+            { .key = 0x0123456789abcdef, .kind = 1,  .len = (uint32_t)strlen(VS_JSON) },
+            { .key = 0x0123456789abcdef, .kind = 52, .len = sizeof libpack_vert_spv },
+        };
+        const uint8_t *pv[2] = { (const uint8_t *)VS_JSON, libpack_vert_spv };
+        size_t nv[2] = { strlen(VS_JSON), sizeof libpack_vert_spv };
+        CHECK(mk_pack(rv, 2, pv, nv, 1) == 0, "vs-only pack written");
+        cl = NULL; w[0] = 0;
+        CHECK(s2a_libpack_open(&cl, g_dir) == 1 && s2a_libpack_compute_v1(cl, kv, 1, "h", "c", &j, &jl, w, sizeof w) == -1 && !j
+              && strstr(w, "stage is 'vs' not 'cs'"), "vs 键当 cs 取 → stage 不符 REJECT");
+        s2a_libpack_close(cl);
+        CHECK(s2a_libpack_rejects() == r0 + 1, "compute reject counter +1");
+        char path[400]; snprintf(path, sizeof path, "%s/cs/lib.idx", tmpl); unlink(path);
+        snprintf(path, sizeof path, "%s/cs/lib.000.pak", tmpl); unlink(path);
+        snprintf(path, sizeof path, "%s/cs", tmpl); rmdir(path);
+        snprintf(g_dir, sizeof g_dir, "%s", tmpl);
     }
 
     s2a_libpack_close(lp);
