@@ -52,7 +52,8 @@ uint64_t nvn_ga2ca(uint64_t a){return a;}
 int nvn_dpool_base(const void *p,int t){(void)p;(void)t;return 0;}
 const prog_t *nvn_prog_snap_get(uint64_t s,uint8_t k[6][8],uint8_t *o,uint8_t t[6]){(void)s;(void)k;(void)o;(void)t;return NULL;}
 int rp_shader_resolve(const struct rp_shader_req *q,const struct rp_prog **o){(void)q;*o=&prog;return 0;}
-int rp_depth_zero(void){return 0;}int rp_origin_lower_left(void){return 1;}
+static int fixture_origin=1;
+int rp_depth_zero(void){return 0;}int rp_origin_lower_left(void){return fixture_origin;}
 void rp_perf_add(int i,uint64_t n){(void)i;(void)n;}uint64_t rp_seg_serial(void){return serial;}
 uint64_t rp_sub_serial(void){return serial;}uint64_t rp_sub_fence(void){return 1;}
 int rp_fence_done(uint64_t f){(void)f;return 1;}
@@ -198,6 +199,30 @@ static void run_depth_copy(struct s2a_vk_device *d) {
  nvn_gpu_open_desc od={0};od.host_device=d;od.app_label="real-depth-copy";GPU(nvn_gpu_open(&od,&err));
  test_depth_blit();GPU(nvn_gpu_close(5000000000ull,&err));
 }
+// Independent oracle: StateUpdater flips API winding when queue flip is off,
+// EnumConversion inverts GAL for Vulkan, and C80 defines the viewport sign.
+// For this NDC-CCW triangle, the table says which raw NVN state must draw.
+static void run_front_origin(struct s2a_vk_device *d,const char *dir) {
+ static const unsigned visible[2][2][2]={{{0,1},{1,0}},{{1,0},{0,1}}};
+ nvn_gpu_open_desc od={0};od.host_device=d;od.app_label="NVN-front-origin-matrix";GPU(nvn_gpu_open(&od,&err));
+ memset(&prog,0,sizeof prog);prog.color_out_mask=15;
+ prog.sh[0]=shader(dir,"replay_front_face.vert",NVN_GPU_SH_VS,NULL);prog.sh[1]=shader(dir,"solid_green.frag",NVN_GPU_SH_FS,NULL);
+ nvn_gpu_tex_desc td={0};td.d.target=NVN_TEXTURE_TARGET_2D;td.d.format=NVN_FORMAT_RGBA8;td.d.width=td.d.height=64;td.d.depth=td.d.levels=1;td.usage=NVN_GPU_TEX_RENDER|NVN_GPU_TEX_SAMPLED;
+ nvn_gpu_tex tex=NULL;GPU(nvn_gpu_tex_create(&td,&tex,&err));GPU(nvn_gpu_view_create(tex,NULL,&target_view,&err));nvn_gpu_buf rb=buffer(16384,NULL);
+ memset(&target_tex,0,sizeof target_tex);target_tex.d=td.d;target_tex.serial=1;memset(&target,0,sizeof target);target.n=1;target.color[0]=&target_tex;
+ rp_state_reset();rp_draw_reset();nvn_unimpl_reset();rp_S.color.logic_op=3;rp_S.chmask.mask=15;rp_S.poly.mode=NVN_POLYGON_MODE_FILL;rp_S.poly.cull=NVN_FACE_BACK;
+ unsigned wrong=0,cases=0;
+ for(unsigned api=0;api<2;api++)for(unsigned flip=0;flip<2;flip++)for(unsigned ll=0;ll<2;ll++){
+  if(rp_S.poly.front!=api){rp_S.poly.front=api;rp_pso_dirty=1;}s2a_nvn_rast_flip=(int)flip;fixture_origin=(int)ll;
+  GPU(nvn_gpu_cmd_begin(NULL,&active,&err));serial++;pass(active,1);rp_pass_flush(active);
+  p_draw draw={0};draw.prim=4;draw.count=3;draw.instances=1;rp_draw(active,&draw,NULL,&draw);rp_pass_flush(active);REQUIRE(!nvn_unimpl_kinds());
+  nvn_gpu_copy_tex_buf(active,tex,0,0,NULL,rb,0,256,16384);GPU(nvn_gpu_cmd_commit(active,1000+cases,done,NULL,&err));GPU(nvn_gpu_fence_wait(1000+cases,5000000000ull,&err));
+  const uint8_t *out=nvn_gpu_buf_cpu(rb);unsigned bad=0;for(unsigned i=0;i<4096;i++)if(out[4*i]||out[4*i+1]!=(visible[api][flip][ll]?255:0)||out[4*i+2]||out[4*i+3]!=255)bad++;
+  printf("front-origin api=%u queue-flip=%u origin-ll=%u expected=%s wrong-pixels=%u\n",api,flip,ll,visible[api][flip][ll]?"green":"culled",bad);if(bad)wrong++;cases++;
+ }
+ fixture_origin=1;s2a_nvn_rast_flip=0;rp_draw_reset();rp_buf_reset();nvn_gpu_shader_release(prog.sh[0]);nvn_gpu_shader_release(prog.sh[1]);nvn_gpu_view_release(target_view);nvn_gpu_tex_release(tex);nvn_gpu_buf_release(rb,NULL,NULL);GPU(nvn_gpu_close(5000000000ull,&err));
+ printf("front-origin matrix cases=%u failed=%u\n",cases,wrong);REQUIRE(!wrong);
+}
 int main(int argc,char **argv) {
  int depth_only=argc==3&&!strcmp(argv[2],"--depth-only");
  if(argc!=2&&!depth_only)return 2;
@@ -208,6 +233,7 @@ int main(int argc,char **argv) {
   for(int index=0;index<3;index++)for(int mode=10;mode<=22;mode++){if(!index&&((mode>=13&&mode<=15)||mode>=20))continue;run_case(&d,argv[1],index,mode);}
   run_null_storage(&d,argv[1]);run_null_storage(&d,argv[1]);
   run_depth_state_restore(&d,argv[1]);
+  run_front_origin(&d,argv[1]);
  }
  run_depth_copy(&d);
  uint64_t dq=nvn_vk_dbg_dq_recs();REQUIRE(getenv("S2A_REPLAY_INDIRECT_DQ")?dq>0:dq==0);
