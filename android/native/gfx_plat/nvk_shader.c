@@ -608,7 +608,9 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
         // 出包预编库（LibPack，shaders/direct/b-<DMSH_CHAIN>-vk，出包 direct 段编好随包装进来；同 iOS 按每阶段 8 字节键取）：
         //   取到的 v1 程序走同一个 build；build 不过（绑定映射 / 解析不认）就当没命中、退回现编——不把失败记成这份输入的终态。
         //   跨局缓存排在它前面：那是本机按现场事实编的，比出包推导的准。开关 debug.s2a.no_libpack=1 关掉（对照用）
-        if (!bytes && root && nst == 2 && !nvn_plat_flag("no_libpack", 0)) {
+        static nvn_hmap lp_bad; static int lp_bad_init;   // 取到但 build 不过的输入：记住，下次直接走现编（不再取一遍、拼一遍）
+        if (!lp_bad_init) { nvn_hm_init(&lp_bad, 32); lp_bad_init = 1; }
+        if (!bytes && root && nst == 2 && !nvn_plat_flag("no_libpack", 0) && !nvn_hm_get(&lp_bad, sha)) {
             static struct s2a_libpack *lp; static char lp_root[1024]; static int lp_red;
             if (!lp || strcmp(lp_root, root)) {
                 char dir[1200]; snprintf(dir, sizeof dir, "%s/shaders/direct/b-%s-vk", root, DMSH_CHAIN);
@@ -631,10 +633,10 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
                     free(lb);
                     if (!le2->failed) {
                         g_n_libpack++; nvn_hm_put(&g_progs, sha, le2); e = le2;
-                        if (g_n_libpack == 1 || g_n_libpack % 50 == 0) { char b[200]; snprintf(b, sizeof b, "程序累计：出包预编 %llu（不可用退回现编 %llu）、现场编 %llu", (unsigned long long)g_n_libpack, (unsigned long long)g_n_libpack_bad, (unsigned long long)g_n_compiled); nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b); }
+                        if (g_n_libpack == 1 || g_n_libpack % 10 == 0) { char b[200]; snprintf(b, sizeof b, "程序累计：出包预编 %llu（不可用退回现编 %llu）、现场编 %llu", (unsigned long long)g_n_libpack, (unsigned long long)g_n_libpack_bad, (unsigned long long)g_n_compiled); nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b); }
                         *out = &e->prog; return 0;
                     }
-                    free(le2); g_n_libpack_bad++;
+                    free(le2); g_n_libpack_bad++; nvn_hm_put(&lp_bad, sha, (void *)1);
                     if (g_n_libpack_bad <= 4) { char b[200]; snprintf(b, sizeof b, "出包预编程序不可用、退回现编（第 %llu 个，键 %02x%02x%02x%02x…）", (unsigned long long)g_n_libpack_bad, keys[0][0], keys[0][1], keys[0][2], keys[0][3]); nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b); }
                 }
             }
@@ -677,7 +679,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
         e = build(bytes, len, views, nst);
         free(bytes);
         nvn_hm_put(&g_progs, sha, e);
-        if (!e->failed && ((g_n_offline + g_n_cache + g_n_compiled) == 1 || (g_n_offline + g_n_cache + g_n_compiled) % 50 == 0)) {
+        if (!e->failed && ((g_n_offline + g_n_cache + g_n_compiled) <= 1 || (g_n_offline + g_n_cache + g_n_compiled) % 10 == 0)) {
             char b[260]; snprintf(b, sizeof b, "程序累计：出包预编 命中 %llu / 没有 %llu / 坏 %llu / 不可用 %llu、离线库 %llu、跨局缓存 %llu、现场编 %llu、失败 %llu",
                 (unsigned long long)g_n_libpack, (unsigned long long)s2a_libpack_misses(), (unsigned long long)s2a_libpack_rejects(), (unsigned long long)g_n_libpack_bad, (unsigned long long)g_n_offline, (unsigned long long)g_n_cache, (unsigned long long)g_n_compiled, (unsigned long long)g_n_failed);
             nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b);
