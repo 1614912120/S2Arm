@@ -10,6 +10,11 @@
   - find_span 里「奇数代际」的判断在命中侧与记录侧各有一道（与 g_prep_miss 同款）：只去掉其中一道答案不变，所以下面的变异体两道一起去。
   - 池备忘的区间上界 lim：池互不重叠时去掉它答案不变（只在池嵌套时才影响候选是谁）。
 
+「红在哪条断言」的判法：期望可以给几条同义断言（元组），任一条出现就算拦在了对的性质上；同一条性质在用例里往往不止一处断言
+（例如「装不下就不算命中」有越过池尾、池间空隙两处），不把「必须是哪一条」钉死，用例加项、挪位置时才不会误红。
+变异体若在红行之后崩溃，红行要已经刷出到管道里才看得到（t_nvn_replay.c 的 CHECK 红行立刻 fflush）；判红在别处时，
+报错会带上进程怎么结束的（退出码 / 被哪个信号杀）和最先的几条红行，不只是输出末尾。
+
 用法：python3 dirty_span_memo_mutation_test.py [dirty|pool]   （缺省两半都跑）
 """
 import os
@@ -66,7 +71,8 @@ pool_mutations = [
      '0x200 + 0x10, 8) && rp_pool_find'),
     ('池备忘装不下也算命中',
      [('if (addr - m->a > m->n || len > m->n - (addr - m->a)) return 0;   // 候选是它但装不下：锁内二分同样判不命中，交给锁内', '/* 变异：不判装不装得下 */')],
-     'pm_check(B + 0xf80, 0x100)'),
+     ('pm_check(B + 0xf80, 0x100)',    # 越过 P0 尾
+      'pm_check(B + 0x1800, 0x10)')),  # P0 与 P1 之间的空隙：候选是 P0、装不下；两条都是「候选是它但装不下」
     ('池备忘给错长度', [('if (size) *size = m->n;', 'if (size) *size = m->n + 1;')], 'pm_check(B + 0x800, 0x100)'),
     ('池备忘关着也查', [('if (!on) return 0;', '/* 变异：关着也查 */')], 'pm_hits() == hz && pm_lookups() == lz'),
 ]
@@ -120,11 +126,17 @@ def run_pool(name, code):
 
 def expect_red(name, r, want):
     out = r.stdout + r.stderr
+    wants = (want,) if isinstance(want, str) else tuple(want)
     if r.returncode == 0:
         raise SystemExit(name + '：变异体居然通过了（单测没拦住）')
-    if want not in out:
-        raise SystemExit(name + '：红在别处，期望断言含 %r\n%s' % (want, out[-1500:]))
-    print('  %s：已拦住（红在「%s」）' % (name, want), flush=True)
+    seen = next((w for w in wants if w in out), None)
+    if seen is None:
+        ended = '被信号 %d 杀掉' % -r.returncode if r.returncode < 0 else '退出码 %d' % r.returncode
+        reds = [l for l in out.splitlines() if '【红】' in l]
+        raise SystemExit('%s：红在别处（进程%s，输出里共 %d 条红行），期望断言含 %s\n  最先的几条红行：\n%s\n  输出末尾：\n%s'
+                         % (name, ended, len(reds), ' 或 '.join(repr(w) for w in wants),
+                            '\n'.join('    ' + l for l in reds[:6]) or '    （没有）', out[-800:]))
+    print('  %s：已拦住（红在「%s」）' % (name, seen), flush=True)
 
 
 def main():

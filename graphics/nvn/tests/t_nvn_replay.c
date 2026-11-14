@@ -18,7 +18,9 @@
 #include <string.h>
 
 static int g_fail, g_checks;
-#define CHECK(c) do { g_checks++; if (!(c)) { g_fail++; printf("【红】 %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
+// 红行立刻刷出：dirty_span_memo_mutation_test.py 经管道读本进程的输出，管道上 stdio 整块缓冲；变异体放行池外访问后，
+// 后面的用例可能读写池外而崩溃（崩不崩取决于平台的静态布局），没刷出的红行会随进程一起丢，脚本就看不到「红在哪条断言」。
+#define CHECK(c) do { g_checks++; if (!(c)) { g_fail++; printf("【红】 %s:%d  %s\n", __FILE__, __LINE__, #c); fflush(stdout); } } while (0)
 
 // ---------- 平台替身 ----------
 static int g_red_lines; static char g_last_red[200];
