@@ -588,6 +588,8 @@ s2a_gate_step python3 "$android_dir/codecs/tests/build_test.py"
 s2a_gate_step "$PY" "$android_dir/codecs/tests/managed_test.py"
 # #1131：宿主原生构建契约——后端路由 / NativeAOT 静态归档校验 / docker↔host 产物等价核对。
 s2a_gate_step "$PY" "$android_dir/tests/build_backend_test.py"
+# 宿主准备编排：首次（缓存里还没有固定 .NET SDK）先引导 SDK 再算依赖清单，一次写出完成标记。
+s2a_gate_step "$PY" "$android_dir/tests/host_prepare_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/archive_check_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/compare_apks_test.py"
 s2a_gate_step "$PY" "$android_dir/tools/test_compare_apks.py"
