@@ -415,6 +415,7 @@ static void on_crash(int sig, siginfo_t *si, void *ctx) {
     { void s2a_guest_va_report(const char *); s2a_guest_va_report("崩溃时"); }   // 窗口里游戏真映射了多少、落在哪
     { void s2a_diag_stamp_report(void), s2a_lockwake_report(void); s2a_diag_stamp_report(); s2a_lockwake_report(); }
     { void s2a_svc_count_report(const char *); s2a_svc_count_report("崩溃"); }   // 诊断打点（S2A_DIAG_STAMP 设了才打）
+    { void s2a_gate_ipc_recent(const char *); s2a_gate_ipc_recent("崩溃线程"); }   // 崩的这条线程最近 16 次 IPC（服务名 / 命令 / 结果，gate.c）
     LOG("线程表："); s2a_thread_dump();
     { void s2a_direct_wait_dump(void); s2a_direct_wait_dump(); }   // 直连模式：各等待点（s2a_crash_wait_dump_register 登记）
     { int s2a_dump_threads(const char *why); char w[64]; snprintf(w, sizeof w, "崩溃 信号 %d", sig); s2a_dump_threads(w); }
