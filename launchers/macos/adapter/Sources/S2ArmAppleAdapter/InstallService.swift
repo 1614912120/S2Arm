@@ -154,6 +154,15 @@ public final class InstallService {
                              skipped: r["skipped"] as? [String] ?? [])
     }
 
+    /// 推到手机（exportPush，pack/jobs/install.py push_export_job）：把「S2Arm 自签导出」里的完整 .img 推进手机上自签 S2Arm 的「放这里导入」。
+    ///   gameId 为 nil = 文件夹里全部；→ 推进去的文件名。推不了抛 JobFailure（原因 + 下一步：连线 / 信任 / 先装 S2Arm.ipa）
+    public func exportPush(gameId: String?, device: String? = nil, events: EventSink = .discard) async throws -> [String] {
+        var extra: [String: Any] = [:]
+        if let gameId, !gameId.isEmpty { extra["gameId"] = gameId }
+        if let device, !device.isEmpty { extra["device"] = device }
+        return try await client.perform("exportPush", extra: extra, events: events).result["pushed"] as? [String] ?? []
+    }
+
     // ---- 开发者证书（v0.2.4，pack/jobs/devcert.py）----
 
     /// 现况 + 体检；device = 连着的手机 UDID（判在不在设备列表），不给就不判。
@@ -194,11 +203,14 @@ public final class InstallService {
     ///   有要重新出包的款且没 acceptStale → 作业以 container_stale 失败（界面先问玩家）
     ///   device：连着多台时装到哪台（同 install；不给 = 只连着一台）
     /// acceptDropped：同 install——玩家已确认手机上只在别的电脑装过的游戏这次带不上（作业层 container_would_drop）
-    public func updatePhone(acceptStale: Bool = false, acceptDropped: Bool = false, accept: Set<String> = [], device: String? = nil, events: EventSink = .discard) async throws -> [String: Any] {
+    /// mode：这次按「一键装到 iPhone」（install）/「导出自己签名安装」（export）走，nil = 按设置里的装法；sgradeUpgrade：「S 级优化升级」页发起，壳已是本版也重组装上
+    public func updatePhone(acceptStale: Bool = false, acceptDropped: Bool = false, accept: Set<String> = [], mode: String? = nil, sgradeUpgrade: Bool = false, device: String? = nil, events: EventSink = .discard) async throws -> [String: Any] {
         var extra: [String: Any] = acceptStale ? ["acceptStale": true] : [:]
         if acceptDropped { extra["acceptDropped"] = true }
         for key in accept { extra[key] = true }
         if let device { extra["device"] = device }
+        if let mode { extra["mode"] = mode }
+        if sgradeUpgrade { extra["sgradeUpgrade"] = true }
         return try await client.perform("installUpdate", extra: extra, events: events).result
     }
 

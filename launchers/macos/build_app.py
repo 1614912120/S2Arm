@@ -100,6 +100,10 @@ def bundle_shell(engine_json, dest, env):
     shutil.copytree(cache, dest, symlinks=True)
 
 
+SPARKLE_FEED = "https://dl.s2arm.com/appcast/mac.xml"
+SPARKLE_PUBLIC_KEY = "WoZkGLOTuLU2zl0gsPX+4sTKRsIN9ahBEfj0ulkqOqc="   # 验签公钥（Ed25519）；对应私钥只在发版机，不进仓库
+
+
 def main():
     os.environ["MACOSX_DEPLOYMENT_TARGET"] = runtime_sources.deployment_target()   # clang、cmake、rustc 都读它：包内自己编的程序不能比声明的系统高
     parser = argparse.ArgumentParser(description=__doc__)
@@ -118,7 +122,8 @@ def main():
                SWIFTPM_MODULECACHE_OVERRIDE=str(output / "swift-cache"))
     sdk_version = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-version"],
                                           env=env, text=True).strip()
-    command = ["swift", "build", "--disable-sandbox", "--cache-path", str(output / "spm-cache"),
+    # --disable-keychain：拉 Sparkle 二进制包时 SwiftPM 缺省去钥匙串找 github.com 凭据，钥匙串弹授权框等人点，无人值守的出包机就一直挂着（11-13 v0.3.10 候选卡 14 分钟）
+    command = ["swift", "build", "--disable-sandbox", "--disable-keychain", "--cache-path", str(output / "spm-cache"),
                "--package-path", str(ROOT / "launchers/macos"), "--scratch-path", str(output / "spm"), "-c", "release",
                # 不把出包机的源码绝对路径（#filePath / 断言位置）编进发布版：只映射源码目录（整个仓库根会连带改写 build/ 下的模块缓存路径）
                "-Xswiftc", "-file-prefix-map", "-Xswiftc", f"{ROOT / 'launchers/macos/Sources'}=Sources",
@@ -142,6 +147,13 @@ def main():
     macos.mkdir(parents=True)
     resources.mkdir()
     shutil.copy2(Path(bindir) / front["executable"], macos / front["executable"])
+    # 应用内更新（Sparkle 2，v0.3.10 起）：SwiftPM 把二进制包里的 Sparkle.framework 放在产物目录，原样（含符号链接）放进 Contents/Frameworks
+    sparkle = Path(bindir) / "Sparkle.framework"
+    if front["key"] == "apple":
+        if not sparkle.is_dir():
+            raise SystemExit(f"🔴 没找到 Sparkle.framework（{sparkle}）：swift build 没拉下 Sparkle 二进制包")
+        (app / "Contents/Frameworks").mkdir(parents=True)
+        shutil.copytree(sparkle, app / "Contents/Frameworks/Sparkle.framework", symlinks=True)
     # Switch 2 Pro 蓝牙连接由启动器旁的独立进程持有，游戏经本机通道读输入（docs/mac-switch2-pro.md）
     subprocess.run(["make", "-C", str(ROOT), "S2A_MAC_FRONTEND=1", "build/S2ArmNS2Connection"], env=env, check=True)
     shutil.copy2(ROOT / "build/S2ArmNS2Connection", macos / "S2ArmNS2Connection")
@@ -158,6 +170,11 @@ def main():
         print(f"补丁库：收 {len(took)} 款（{' '.join(took) or '无'}），跳过 {len(skipped)} 款（没验过）")
     else:
         print("🟡 没设 S2A_RELEASE_PATCHES：本版启动器不带补丁库")
+    # 社区补丁与金手指本地库（11-13 维护者：随启动器装在本地、云端兜底）：完整快照放 Resources/CommunityPatches/patches-v2.tar，
+    #   出包时 pack/jobs/patches.py 本地优先、按云端清单增量。来源 S2A_PATCH_SNAPSHOT（本机文件）> 下载站；取不到不挡打包（出包时照样向云端要）
+    sys.path.insert(0, str(ROOT / "tools")); import patch_pack
+    why = patch_pack.stage_snapshot(str(resources / "CommunityPatches"))
+    print("社区补丁快照：" + ("已放进 Resources/CommunityPatches" if not why else f"🟡 {why}，本版启动器不带本地补丁库"))
     # 脱敏规则只有一份（tools/redact.py，诊断报告与任务日志共用）：任务代码在引擎准备好之前也要脱敏，随 Jobs 一起带
     shutil.copy2(ROOT / "tools/redact.py", resources / "Jobs" / "redact.py")
     shutil.copy2(ROOT / "tools/sha256_fast.py", resources / "Jobs" / "sha256_fast.py")   # 导入算原件 SHA（pack/jobs/core.py digest，Windows 走 CNG）
@@ -172,6 +189,7 @@ def main():
     # 内置 Python 一律带 -B：-I 会忽略 PYTHONDONTWRITEBYTECODE，不带 -B 就往 App 包里写 __pycache__，签名封存被破坏（11-02 beta.4 走查：
     #   AI 用 s2armctl 后 codesign 报「a sealed resource is missing or invalid」，系统按新身份看待 App，文件访问授权可能失效）
     shutil.copy2(ROOT / "launchers/macos/Branding/wordmark-transparent.png", resources / "wordmark-transparent.png")   # 没封面时的字标
+    shutil.copy2(ROOT / "launchers/macos/Branding/s-gold.png", resources / "s-gold.png")   # 出包页 S 级优化卡片的金色 S（make_s_gold.py 由应用图标生成）
     # App 图标（#882 定稿 D「交错双柄」）
     subprocess.run(["bash", str(ROOT / "launchers/macos/make_icns.sh"), str(resources / "S2Arm.icns")], check=True)
     # 开源替代共享字体随应用分发（维护者 10-23：玩家不用找字体、不作检测项）：pack/fonts/make_open_fonts.py 生成（来源钉版本 + sha256，产物可重现），
@@ -211,12 +229,21 @@ def main():
                 NSHighResolutionCapable=True, CFBundleDevelopmentRegion="en", CFBundleLocalizations=["en", "zh-Hans"],
                 NSBluetoothAlwaysUsageDescription="连接 Switch 2 Pro 手柄，接收按键与体感并发送游戏震动。",
                 **release_identity(resources / "Engine/engine.json"))
+    # Sparkle：appcast 地址、验签公钥（Ed25519，私钥只在发版机 ~/.s2arm/.secrets/sparkle_ed25519）；不开定时检查（查新版走启动时的公告 / 消息）
+    info.update(SUFeedURL=SPARKLE_FEED, SUPublicEDKey=SPARKLE_PUBLIC_KEY, SUEnableAutomaticChecks=False, SUAutomaticallyUpdate=False)
     info["UTExportedTypeDeclarations"] = [dict(UTTypeIdentifier="org.s2arm.save-backup", UTTypeDescription="S2Arm Save Backup",
         UTTypeConformsTo=["public.zip-archive"], UTTypeTagSpecification={"public.filename-extension": ["s2asave"]})]
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     # 启动器本体同样去掉调试映射（见 bundle_engine.strip_debug_maps），再签整个 App
     subprocess.run(["xcrun", "strip", "-S", str(app / "Contents/MacOS" / front["executable"])], env=env, check=True)
     subprocess.run(["codesign", "--force", "--sign", "-", str(macos / "S2ArmNS2Connection")], env=env, check=True)
+    # Sparkle 里面的程序由里往外签（发版签名 sign_release.sh 同样由里往外）：XPC 服务 / Updater.app / Autoupdate → 框架本身
+    fw = app / "Contents/Frameworks/Sparkle.framework"
+    if fw.is_dir():
+        inner = sorted(list((fw / "Versions/B/XPCServices").glob("*.xpc")) + [fw / "Versions/B/Updater.app", fw / "Versions/B/Autoupdate"],
+                       key=lambda p: -len(p.parts))
+        for p in [p for p in inner if p.exists()] + [fw]:
+            subprocess.run(["codesign", "--force", "--sign", "-", str(p)], env=env, check=True)
     subprocess.run(["codesign", "--force", "--sign", "-", str(app)], env=env, check=True)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], env=env, check=True)
     print("最低系统检查：", verify_minimum_macos(app, runtime_sources.deployment_target()), "个 Mach-O")

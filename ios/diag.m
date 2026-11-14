@@ -6,7 +6,7 @@
 //       manifest.json、logs/host.log + logs/host-<起局时刻>.log（本局 + 机上归档的最近 9 局；单份超 8 MB 只留头 2 MB + 尾 6 MB）、
 //       logs/frames.tsv、logs/threads.txt、logs/unpack.log（有就放）、metrickit/*.json（MetricKit 崩溃 / 卡顿诊断原样 JSON）、
 //       shaders/*（现编着色器的输入：编到一半进程没了留下的 .inflight.*、翻译器报错留下的 .fail.*，有就放）、
-//       diagrun/*.png（诊断局的出图与颜色目标，总量 ≤ 20 MB）。
+//       diagrun/*.png（诊断局的出图与颜色目标，总量 ≤ 20 MB）、pso/<程序号>.tsv（本机管线记录，只有着色器键，总量 ≤ 8 MB）。
 //   脱敏：App 数据目录 / 安装目录换成 <APP> / <BUNDLE>，设备名、UDID 去掉；存档（bis/user/save）、资源包、密钥都不放。
 //   交出（11-13 起）：入口②③④是「上传给开发者」——传到 diag.s2arm.com，玩家拿到短码、只复制短码；上传失败退回系统分享面板（AirDrop / 存到文件 / 微信）。
 //         入口①仍直接弹分享面板。包同时留在 Documents/diag/（只留最近 3 个，Mac 前端「拉回诊断」能拉到）。
@@ -54,6 +54,8 @@ static NSArray<NSString *> *archived_logs(void) {
 static NSString *const kOpenToggle = @"S2ADiagExportOnOpen";   // Settings.bundle 里的开关
 static UIViewController *g_vc;
 static BOOL g_prompted, g_exporting;
+// 「故障报修」里玩家写的一句「发生了什么」（选填）：随这一份包写进 manifest.json 顶层 note（收件服务存进元数据、取件写进定位卡「玩家说」），传完清掉
+static NSString *g_report_note;
 static __weak UIAlertController *g_promptAlert;   // 「把上次的诊断发给我们？」正显示着时指向它：导出要先把它关掉再弹分享面板，不叠在一起
 
 // ---------- 单次会话日志的摘要（manifest.sessions 一项；只在导出诊断包的后台线程算）----------
@@ -241,6 +243,28 @@ static NSURL *build_zip(NSUInteger cap, BOOL slim, NSString **err) {
             [fm createDirectoryAtPath:[W stringByAppendingPathComponent:@"diagrun"] withIntermediateDirectories:YES attributes:nil error:nil];
             if ([fm copyItemAtPath:src toPath:[W stringByAppendingPathComponent:rel] error:nil]) { [files addObject:@{@"path": rel, @"bytes": @(n), @"truncated": @NO}]; used += n; }
         } }
+    // 本机管线记录（11-13 维护者：玩家上传的诊断收进随包种子；取件 diag_pickup.py harvest_pso 收进众包 zc_crowd.tsv）：多款容器各款 games/<号>/wire/<号>/pso_user.tsv、
+    //   单款包 wire/<号>/pso_user.tsv（nvn_mtl.m pso_user_path），原样放 pso/<号>.tsv——只有着色器键与管线状态的十六进制，不含个人信息、不过脱敏。
+    //   单份超过 4 MB 跳过、合计至多 8 MB；同一款只放一份（多款容器那份优先）
+    {   NSMutableArray *srcs = [NSMutableArray array];
+        NSString *G = [D stringByAppendingPathComponent:@"games"], *Wd = [D stringByAppendingPathComponent:@"wire"];
+        for (NSString *gid in [[fm contentsOfDirectoryAtPath:G error:nil] sortedArrayUsingSelector:@selector(compare:)])
+            [srcs addObject:@[gid, [[[[G stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"wire"] stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"pso_user.tsv"]]];
+        for (NSString *gid in [[fm contentsOfDirectoryAtPath:Wd error:nil] sortedArrayUsingSelector:@selector(compare:)])
+            [srcs addObject:@[gid, [[Wd stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"pso_user.tsv"]]];
+        NSCharacterSet *notHex = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789ABCDEF"] invertedSet];
+        NSMutableSet *seen = [NSMutableSet set]; unsigned long long used = 0;
+        for (NSArray *e in srcs) {
+            NSString *gid = [e[0] uppercaseString];
+            if (gid.length != 16 || [gid rangeOfCharacterFromSet:notHex].location != NSNotFound || [seen containsObject:gid]) continue;
+            NSDictionary *at = [fm attributesOfItemAtPath:e[1] error:nil];
+            if (![at.fileType isEqualToString:NSFileTypeRegular]) continue;   // 不跟链接
+            unsigned long long n = at.fileSize;
+            if (!n || n > (4ull << 20) || used + n > (8ull << 20)) continue;
+            NSString *rel = [NSString stringWithFormat:@"pso/%@.tsv", gid];
+            [fm createDirectoryAtPath:[W stringByAppendingPathComponent:@"pso"] withIntermediateDirectories:YES attributes:nil error:nil];
+            if ([fm copyItemAtPath:e[1] toPath:[W stringByAppendingPathComponent:rel] error:nil]) { [files addObject:@{@"path": rel, @"bytes": @(n), @"truncated": @NO}]; used += n; [seen addObject:gid]; }
+        } }
     if (copyFailed) {
         [fm removeItemAtPath:W error:nil];
         if (err) *err = S2AL(@"diag.error.redact");
@@ -256,6 +280,7 @@ static NSURL *build_zip(NSUInteger cap, BOOL slim, NSString **err) {
     NSDictionary *manifest = @{
         @"schema": @1, @"exported_at": [iso stringFromDate:NSDate.date],
         @"tester": @{@"id": tester_id(), @"group": @"", @"note": @""},
+        @"note": g_report_note ?: @"",
         @"app": @{@"bundle": bundle, @"version": [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"", @"commit": commit,
                   // 包号：单款包 S2ABuildID；多款容器的壳没有按款包号，记壳号 S2AShellId（同 s2a_catalogue.json shell_id）
                   @"build_id": [NSBundle.mainBundle objectForInfoDictionaryKey:@"S2ABuildID"] ?: [NSBundle.mainBundle objectForInfoDictionaryKey:@"S2AShellId"] ?: @"",
@@ -439,7 +464,37 @@ static void upload_now(void) {
     UIViewController *host = diag_host();
     if (g_exporting || !host) return;
     LOG("诊断包：开始打包上传");
-    build_async(^(NSURL *zip, NSString *err) { busy_done(); if (!zip) build_failed(host, err); else upload_zip(host, zip); });
+    build_async(^(NSURL *zip, NSString *err) { g_report_note = nil; busy_done(); if (!zip) build_failed(host, err); else upload_zip(host, zip); });
+}
+// 「故障报修」（11-13 维护者定：各页面的小齿轮菜单最下面；游戏库在设置页最下面）：说清会传什么，给一个可不填的文本框写「发生了什么」，
+//   点「上传」照现有流程打包上传、给短码。不填也能传，不做任何必填校验
+void s2a_diag_report(void) {
+    UIViewController *host = diag_host();
+    if (g_exporting || !host) return;
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:S2AL(@"diag.report.title") message:S2AL(@"diag.report.message") preferredStyle:UIAlertControllerStyleAlert];
+    [a addTextFieldWithConfigurationHandler:^(UITextField *f) { f.placeholder = S2AL(@"diag.report.placeholder"); f.clearButtonMode = UITextFieldViewModeWhileEditing; f.accessibilityIdentifier = @"diag.report.note"; }];
+    __weak UIAlertController *wa = a;
+    [a addAction:[UIAlertAction actionWithTitle:S2AL(@"common.cancel") style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:S2AL(@"diag.upload.go") style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) { (void)x;
+        NSString *t = [wa.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        g_report_note = t.length ? t : nil;
+        LOG("诊断包：故障报修（玩家%s写说明，%lu 字）", g_report_note ? "" : "没", (unsigned long)t.length);
+        upload_now(); }]];
+    present_over(host, a);
+}
+void s2a_shell_report_problem(void) { s2a_diag_report(); }   // 游戏库设置页「故障报修」（shell/Sources/S2ArmShellBridge/include/s2a_shell.h，壳里有空的弱定义）
+// 页面左上角的小齿轮（加载页 / 提示页 / 帮助页；游戏中用虚拟按键自己的齿轮、游戏库用库界面的齿轮）：菜单最下面「故障报修」
+void s2a_report_gear_attach(UIView *page) {
+    if (!page) return;
+    UIButton *g = [UIButton buttonWithType:UIButtonTypeSystem]; g.accessibilityIdentifier = @"page.gear"; g.accessibilityLabel = S2AL(@"diag.report.title");
+    [g setImage:[UIImage systemImageNamed:@"gearshape.fill"] forState:UIControlStateNormal]; g.tintColor = UIColor.whiteColor;
+    g.backgroundColor = [UIColor colorWithWhite:0 alpha:0.45]; g.layer.cornerRadius = 18; g.alpha = 0.9; g.translatesAutoresizingMaskIntoConstraints = NO;
+    g.showsMenuAsPrimaryAction = YES;
+    g.menu = [UIMenu menuWithTitle:@"" children:@[[UIAction actionWithTitle:S2AL(@"diag.report.title") image:[UIImage systemImageNamed:@"exclamationmark.bubble"] identifier:nil
+        handler:^(__unused UIAction *x) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ s2a_diag_report(); }); }]]];
+    [page addSubview:g];
+    [NSLayoutConstraint activateConstraints:@[[g.widthAnchor constraintEqualToConstant:36], [g.heightAnchor constraintEqualToConstant:36],
+        [g.leadingAnchor constraintEqualToAnchor:page.safeAreaLayoutGuide.leadingAnchor constant:12], [g.topAnchor constraintEqualToAnchor:page.safeAreaLayoutGuide.topAnchor constant:12]]];
 }
 // 「上传给开发者」（四指菜单 / 提示页按钮，主线程调）：先说清会传什么、不传什么，玩家点了才传
 void s2a_diag_upload(void) {
@@ -506,15 +561,25 @@ static NSString *mk_dir(void) {
 @end
 static S2ADiagMK *g_mk;
 
-// 问一句「把上次的诊断发给我们？」（每次启动最多问一次）
+// 崩溃恢复关掉了什么（金手指 / 补丁 / 60 帧的名字，app.m 游戏库容器或本文件单款壳记）：上次死在前台时和诊断询问并成一个提示说，不另弹横幅（11-13 维护者：两个弹层叠在一起）
+static NSString *g_crash_off;
+void s2a_dprompt_notice(NSString *title, NSString *body, double delay, double seconds);   // dprompt.m
+void s2a_diag_note_crash_off(NSString *names) { g_crash_off = [names copy]; }
+// 不弹询问时（已问过 / 自动化局 / 正在导出），关掉了什么仍要告诉玩家：退回只有「知道了」的提示条
+static void crash_off_notice_only(void) {
+    if (!g_crash_off) return;
+    s2a_dprompt_notice(S2AL(@"crash.off.title"), [NSString stringWithFormat:S2AL(@"crash.off.body"), g_crash_off], 0, 8); g_crash_off = nil;
+}
+// 问一句「把上次的诊断发给我们？」（每次启动最多问一次）；崩溃恢复刚关掉东西时，同一个提示先说关掉了什么
 void s2a_diag_prompt(NSString *why) {
     // 已经在导出（或分享面板开着）就不问了：玩家正在发，问了只会和分享面板叠在一起
-    if (g_prompted || !g_vc) return; g_prompted = YES;
+    if (g_prompted || !g_vc) { crash_off_notice_only(); return; } g_prompted = YES;
     // 自动化 / 开发工具起的局（s2a_unattended.h）不问：日志由工具拉回，弹窗只会挡住整局
-    if (s2a_unattended()) { LOG("诊断：%s；自动化局不问「把上次的诊断发给我们？」", why.UTF8String); return; }
-    if (g_exporting || [g_vc.presentedViewController isKindOfClass:UIActivityViewController.class]) return;
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:S2AL(@"diag.prompt.title")
-        message:[NSString stringWithFormat:S2AL(@"diag.prompt.message"), why] preferredStyle:UIAlertControllerStyleAlert];
+    if (s2a_unattended()) { LOG("诊断：%s；自动化局不问「把上次的诊断发给我们？」", why.UTF8String); crash_off_notice_only(); return; }
+    if (g_exporting || [g_vc.presentedViewController isKindOfClass:UIActivityViewController.class]) { crash_off_notice_only(); return; }
+    NSString *off = g_crash_off; g_crash_off = nil;
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:off ? S2AL(@"crash.off.title") : S2AL(@"diag.prompt.title")
+        message:off ? [NSString stringWithFormat:S2AL(@"crash.off.prompt"), off] : [NSString stringWithFormat:S2AL(@"diag.prompt.message"), why] preferredStyle:UIAlertControllerStyleAlert];
     [a addAction:[UIAlertAction actionWithTitle:S2AL(@"diag.prompt.no") style:UIAlertActionStyleCancel handler:nil]];
     [a addAction:[UIAlertAction actionWithTitle:S2AL(@"diag.prompt.send") style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) { (void)x; upload_now(); }]];
     UIViewController *top = g_vc; while (top.presentedViewController) top = top.presentedViewController;
@@ -568,6 +633,19 @@ void s2a_diag_menu_hold(uint64_t press) {
         if (s2a_pad_plus_press() == press) s2a_diag_open_menu();
     });
 }
+// 上局死在前台、当时开着金手指 / 玩家开的未验证社区补丁（ios/game_options.m s2a_ios_crash_suspects）：自动关掉、横幅告诉玩家（11-13 维护者改定：不问）。
+//   多款容器在游戏库点开始时已处理（app.m crash_auto_off，社区补丁要在装载前关），这里只剩单款壳：金手指关了马上生效（服务层每秒重载），补丁下次启动生效。
+//   关掉了什么不另弹横幅，交给紧接着的诊断询问一并说（s2a_diag_prompt）
+NSArray<NSDictionary *> *s2a_ios_crash_suspects(void);
+void s2a_ios_crash_turn_off(NSArray<NSDictionary *> *items);
+static void crash_auto_off(void) {
+    NSArray<NSDictionary *> *items = s2a_ios_crash_suspects();
+    if (!items.count) return;
+    s2a_ios_crash_turn_off(items);
+    NSString *names = [[items valueForKey:@"name"] componentsJoinedByString:S2AL(@"common.listSeparator")];
+    LOG("崩溃恢复：上一局开着 %s 时死在前台，已关掉（玩家可在设置里再开）", names.UTF8String);
+    s2a_diag_note_crash_off(names);   // 紧接着的诊断询问一并说
+}
 void s2a_diag_attach(UIViewController *vc) {
     g_vc = vc;
     // 四指长按 1.5 秒（原生层线 10-23：三指会误触——两拇指压摇杆 + 再按住一个键正好三指；四指玩游戏时不会出现）。
@@ -586,7 +664,7 @@ void s2a_diag_attach(UIViewController *vc) {
       LOG("诊断包：上次会话标记 %s（主线程 %.2f ms，不读日志）→ %s", prev == S2A_SESMARK_FG ? "前台未收尾" : prev == S2A_SESMARK_BG ? "后台" : "无（正常收尾）", (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0) / 1e6, prev == S2A_SESMARK_FG ? "提示导出" : "不提示");
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         check_toggle();
-        if (prev == S2A_SESMARK_FG) s2a_diag_prompt(S2AL(@"diag.prompt.abnormalExit"));
+        if (prev == S2A_SESMARK_FG) { crash_auto_off(); s2a_diag_prompt(S2AL(@"diag.prompt.abnormalExit")); }
       }); }
 }
 // 进后台 / 回前台（app.m 生命周期通知，主线程）：改写会话标记，在后台被划掉 / 被系统回收不算异常

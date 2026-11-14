@@ -89,6 +89,7 @@ s2armctl state | errors [游戏号] | logs <任务号|游戏号> [--lines N]
 | `xcode_setup_required` | human | 请玩家打开 Xcode 同意许可、等组件装完（可能要输开机密码），然后 `s2armctl env` |
 | `xcode_sdk_too_old` | human | 请玩家在 App Store 更新 Xcode，然后 `s2armctl env` |
 | `metal_unavailable` 缺 Metal 编译组件 | human | 请玩家在 S2Arm「设置 → 运行与构建环境」点「一键下载」，然后 `s2armctl env` |
+| `metal_download_unreachable` 下不了 Metal 编译组件 | human | 连不上苹果的组件服务器：请玩家检查网络 / 换代理后再点「一键下载」；不行就从苹果开发者网站下 Metal Toolchain 的 .dmg，终端运行 `xcodebuild -importComponent MetalToolchain -importPath <dmg>`，然后 `s2armctl env` |
 | `ios_platform_missing` 缺 Xcode 的 iOS 平台组件 | human | 请玩家在 S2Arm「设置 → 运行与构建环境」的「iOS 平台组件」点「一键下载」（约 8 GB），然后 `s2armctl env`；只在 Mac 上玩不需要 |
 | `dotnet_sdk_missing` | human | 请玩家在同一处点安装，然后 `s2armctl env` |
 | 等系统授权（`next` 说 S2Arm 要读某个文件夹） | human | 请玩家在屏幕上的系统框里点「允许」 |
@@ -148,6 +149,7 @@ s2armctl state | errors [游戏号] | logs <任务号|游戏号> [--lines N]
 | `free_app_limit` | human | 这台 iPhone 上免费签名的自签 App 已满 3 个：请玩家删掉一个不玩的自签 App 再装 |
 | `app_other_signer` | human | 手机上已有用别的签名装的 S2Arm（包名相同，系统不让覆盖）：请玩家继续用原签名工具更新它，或在 iPhone 上删掉它（先导出存档）再装 |
 | `bundle_id_switched`（警告） | auto | 原包名被别的签名占用，已自动换新包名装好；告诉玩家手机上可能有两个 S2Arm，旧的不需要可删（先导出存档） |
+| `signing_server_unreachable` | human | 连不上 Impactor 签名要用的服务器 mac-ani.jkcoxson.com（已自动重试一次）：请玩家检查网络、换 DNS 或开关代理，然后重装 |
 | `apple_session_expired` | human | Apple ID 登录过期（Apple 1100）：请玩家在 Impactor「设置」里移除账号、再添加账号重新登录，然后重装 |
 | `app_id_taken` | human | 包名在苹果那边已被占用（Apple 错误 9401）：请玩家确认登录的是当初装 S2Arm 的 Apple ID，或付费账号到 developer.apple.com 删掉 io.s2arm.games 开头的旧包名 |
 | `free_appid_limit` | human | 免费 Apple ID 7 天内最多注册 10 个包名，已用满（Apple 错误 9120）；删 App 不退额度，别让玩家删：请玩家等几天（最早那批满 7 天恢复），或在 Xcode 换一个 Apple ID 登录（你不代做），或用付费开发者账号 |

@@ -106,6 +106,7 @@ struct nvn_gpu_view_s {
     struct { uint16_t idx; uint32_t gen; VkFramebuffer fb; } fbs[6];
     uint8_t nfbs, fbs_overflow;   // 溢出（同一个视图用在 6 个以上帧缓冲里）：销毁时退回全表扫
     struct nvn_gpu_view_s *all_next;
+    struct nvn_gpu_view_s **all_pprev;   // 指向「指着我的那个指针」（链头 g.views，或前一个视图的 all_next）：摘链 O(1)，见 view_unlink_locked
 };
 
 struct nvn_gpu_shader_s {
@@ -320,6 +321,18 @@ static uint64_t g_life_ns[8], g_life_n[8];
 static uint64_t now_ns(void);
 static int g_draw_tm; static uint64_t g_draw_ns[3];   // 绘制入口分段计时：描述符 / 状态 / 顶点索引与绘制调用
 static void draw_tm_init(void) { if (!g_draw_tm) g_draw_tm = nvn_plat_flag("nvk_gputime", 0) != 0; }   // 与 GPU 时间戳同一个开关
+// 回放线程取 g_mu（nvk_gputime 开着才计）：先 trylock，没拿到的记「真等了几次、等了多久」。持 g_mu 的别的线程（游戏工作线程销毁视图、
+// 完成线程摘段）会把回放线程挡在这里；回放耗时里有多少是在这儿干等，看这一项。只用在回放线程独占的录制路径上（cmd_ref_at / 附件视图 / 建视图）。
+static uint64_t g_gmu_n, g_gmu_wait_n, g_gmu_wait_ns;
+static void gmu_lock_rt(void) {
+    if (!g_draw_tm) { pthread_mutex_lock(&g_mu); return; }
+    __atomic_fetch_add(&g_gmu_n, 1, __ATOMIC_RELAXED);
+    if (pthread_mutex_trylock(&g_mu) == 0) return;
+    const uint64_t t0 = now_ns();
+    pthread_mutex_lock(&g_mu);
+    __atomic_fetch_add(&g_gmu_wait_n, 1, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&g_gmu_wait_ns, now_ns() - t0, __ATOMIC_RELAXED);
+}
 static uint64_t g_pl_ns, g_pl_n, g_pl_steps;   // 取图形管线：命中查找的累计纳秒 / 次数 / 比过的条数
 static struct nvn_gpu_pipe_s *g_pipe_ht[PIPE_HT_N];   // 图形管线的散列桶（见 pipe_hash）；持 g_mu
 // ---- 驱动管线缓存（#822）：后端建的每条管线都带同一个 VkPipelineCache；会话收尾把驱动给的数据写进 open_desc.cache_dir，
@@ -667,10 +680,44 @@ static void destroy_tex_locked(struct nvn_gpu_vk *vk, struct nvn_gpu_tex_s *t) {
     free(t);
 }
 
+// ---- 视图全局链 vk->views：头插 + 反向指针，摘链 O(1) ----
+// 原先 destroy_view_locked 摘链是从链头线性找自己（单向链）：世界场景现存视图 2.3 万个、每帧拆 56 个，整段在持 g_mu 时走；
+// 真机取样（旧路径，世界阶段、去掉托底线程后 43303 个样本）：销毁视图的函数 9467 个 = 21.9%，其中这个摘链循环 9341 个 = 21.6%；两条游戏工作线程里它分别占各自样本的 65.2% / 71.1%（见 docs/坑记录.md）。
+// all_pprev 指向「指着我的那个指针」，摘自己不再要找。诊断开关 nvk_ulist=0 退回旧的线性找（同一局里对照用；反向指针照旧维护，
+// 运行中来回切也安全），缺省开。调用方持 g_mu。
+static uint64_t g_dv_steps_total;   // 旧路径走过的节点数（会话累计；用例读，缺省路径恒为 0）
+static int g_ulist_cur = -1, g_fbdrop_cur = -1;   // 开关缓存（-1 = 还没读）；每 256 次调用重读一次，用例钩子（nvn_vk_dbg_view_stat 5）可立刻作废
+static int view_ulist_on(void) { static uint32_t k; if (g_ulist_cur < 0 || !(++k & 255)) g_ulist_cur = nvn_plat_flag("nvk_ulist", 1) != 0; return g_ulist_cur; }
+static void view_link_locked(struct nvn_gpu_vk *vk, struct nvn_gpu_view_s *v) {
+    v->all_next = vk->views;
+    if (vk->views) vk->views->all_pprev = &v->all_next;
+    v->all_pprev = &vk->views;
+    vk->views = v;
+}
+static void view_unlink_locked(struct nvn_gpu_vk *vk, struct nvn_gpu_view_s *v) {
+    struct nvn_gpu_view_s **pp;
+    if (view_ulist_on()) {
+        pp = v->all_pprev;
+        if (!pp) return;   // 没链在表上（整表释放之后才会误调到）：不当成 O(N) 去找
+    } else {
+        uint64_t steps = 0;
+        pp = &vk->views;
+        while (*pp && *pp != v) { pp = &(*pp)->all_next; steps++; }
+        __atomic_fetch_add(&g_dv_steps_total, steps, __ATOMIC_RELAXED);
+        if (!*pp) return;
+    }
+    *pp = v->all_next;
+    if (v->all_next) v->all_next->all_pprev = pp;
+    v->all_next = NULL;
+    v->all_pprev = NULL;
+}
+// 诊断读数（nvk_gputime 开着才计）：销毁视图的次数、整个函数的用时、其中摘链的用时；见 nvn_gpu_present 里的「视图销毁」那一行。
+static uint64_t g_dv_ns[2], g_dv_n;
+
 static void destroy_view_locked(struct nvn_gpu_vk *vk, struct nvn_gpu_view_s *v) {
-    struct nvn_gpu_view_s **pp = &vk->views;
-    while (*pp && *pp != v) pp = &(*pp)->all_next;
-    if (*pp) *pp = v->all_next;
+    const uint64_t dv0 = g_draw_tm ? now_ns() : 0;
+    view_unlink_locked(vk, v);
+    const uint64_t dv1 = g_draw_tm ? now_ns() : 0;
     LIFE_T0;
     pc_drop_view_fast(v, v->att); pc_drop_view_fast(v, v->img); pc_drop_view_fast(v, v->view); LIFE_ADD(6);
     if (v->att) vkDestroyImageView(vk->d, v->att, NULL);
@@ -685,6 +732,12 @@ static void destroy_view_locked(struct nvn_gpu_vk *vk, struct nvn_gpu_view_s *v)
     if (t) {
         if (t->refs > 0) t->refs--;
         if (t->released && t->refs == 0) destroy_tex_locked(vk, t);
+    }
+    if (g_draw_tm && dv0) {
+        const uint64_t dv2 = now_ns();
+        __atomic_fetch_add(&g_dv_ns[0], dv2 - dv0, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&g_dv_ns[1], dv1 - dv0, __ATOMIC_RELAXED);
+        __atomic_fetch_add(&g_dv_n, 1, __ATOMIC_RELAXED);
     }
 }
 
@@ -730,7 +783,7 @@ static void ref_drop(void *obj, int type) {
 #define cmd_ref(c, obj, type) cmd_ref_at((c), (obj), (type), __func__, __LINE__)
 static void cmd_ref_at(struct nvn_gpu_cmd_s *c, void *obj, int type, const char *fn, int line) {
     if (!obj) return;
-    pthread_mutex_lock(&g_mu);
+    gmu_lock_rt();
     if (ref_released(obj, type)) {   // release 之后再录制使用 = 契约违规（粘滞 E_ARG）
         pthread_mutex_unlock(&g_mu);
         static const char *const names[] = {"?", "buf", "tex", "view", "samp"};
@@ -2826,12 +2879,16 @@ nvn_gpu_rc nvn_gpu_pipe_get(const nvn_gpu_pipe_desc *d, int mode, nvn_gpu_pipe *
     gp.layout = p->layout;
     gp.renderPass = p->pass;
     gp.subpass = 0;
+    const uint64_t pl_t0 = now_ns();   // 驱动编译管线是同步的：超过 3 毫秒就打一行（走路/进新场景时会集中出现）
     if (vkCreateGraphicsPipelines(g.d, g_plc, 1, &gp, NULL, &p->pipe) != VK_SUCCESS) {
         nvn_gpu_rc bad = fail(err, NVN_GPU_E_COMPILE, "vkCreateGraphicsPipelines 失败");
         destroy_pipe_objects(p);
         return bad;
     }
     plc_created();
+    { const uint64_t dt = now_ns() - pl_t0;   // 编译耗时：>3 毫秒单独记一行（正常建管线在 0.2–1 毫秒）
+      static int slow = -1; if (slow < 0) slow = nvn_plat_flag("nvk_hitch_log", 0) != 0;
+      if (slow && dt > 3000000ull) { char b[160]; snprintf(b, sizeof b, "图形管线编译 %.1f 毫秒", (double)dt / 1e6); nvn_plat_log(NVN_PLAT_LOG_INFO, "pipe", b); } }
     for (int st = 0; st < 5; st++) {
         struct nvn_gpu_shader_s *sh = d->st[st].sh;
         if (!sh) continue;
@@ -2953,11 +3010,15 @@ nvn_gpu_rc nvn_gpu_cpipe_get(const nvn_gpu_stage_desc *cs, int mode, nvn_gpu_pip
     cp.stage.module = sh->mod;
     cp.stage.pName = sh->entry;
     cp.layout = p->layout;
+    const uint64_t pc_t0 = now_ns();   // 同图形管线：超过 3 毫秒打一行，用来对长帧
     if (vkCreateComputePipelines(g.d, g_plc, 1, &cp, NULL, &p->pipe) != VK_SUCCESS) {
         destroy_pipe_objects(p);
         return fail(err, NVN_GPU_E_COMPILE, "vkCreateComputePipelines 失败");
     }
     plc_created();
+    { const uint64_t dt = now_ns() - pc_t0;
+      static int slowc = -1; if (slowc < 0) slowc = nvn_plat_flag("nvk_hitch_log", 0) != 0;
+      if (slowc && dt > 3000000ull) { char b[160]; snprintf(b, sizeof b, "计算管线编译 %.1f 毫秒", (double)dt / 1e6); nvn_plat_log(NVN_PLAT_LOG_INFO, "pipe", b); } }
     p->stage_nent[NVN_GPU_SH_CS] = sh->nent;
     p->stage_push_off[NVN_GPU_SH_CS] = sh->push_off;
     p->stage_push_bytes[NVN_GPU_SH_CS] = sh->push_bytes;
@@ -2992,7 +3053,7 @@ nvn_gpu_rc nvn_gpu_cpipe_get(const nvn_gpu_stage_desc *cs, int mode, nvn_gpu_pip
 static VkImageView view_attachment(struct nvn_gpu_view_s *v) {
     struct nvn_gpu_tex_s *t = v->tex;
     if (!v->swizzled && v->levels == 1 && v->layers == 1 && v->type == VK_IMAGE_VIEW_TYPE_2D && v->aspect == t->aspect) return v->view;
-    pthread_mutex_lock(&g_mu);
+    gmu_lock_rt();
     int image3d = t->target == NVN_TEXTURE_TARGET_3D && t->depth > 1;
     if (!v->att && !(image3d && !t->array_compatible)) {
         VkImageViewCreateInfo ci;
@@ -3085,18 +3146,40 @@ static VkFramebuffer pc_fb(const VkFramebufferCreateInfo *fi, int *cached, int *
     pthread_mutex_unlock(&g_pc_mu);
     return fb;
 }
-static void pc_drop_view(VkImageView v) {
-    if (!v) return;
+static uint64_t g_pc_scan_n;   // 全表扫的次数（会话累计；用例读：缺省档下视图销毁不该再扫）
+static uint32_t pc_drop_view_n(VkImageView v) {   // 全表扫：拆掉含这个句柄的帧缓冲，返回拆了几个
+    uint32_t n = 0;
+    if (!v) return 0;
+    __atomic_fetch_add(&g_pc_scan_n, 1, __ATOMIC_RELAXED);
     pthread_mutex_lock(&g_pc_mu);
     for (uint32_t i = 0; i < PC_FB_N; i++) { struct pc_fb *e = &g_pc_fb[i]; if (!e->fb) continue;
-        for (uint32_t k = 0; k < e->natt; k++) if (e->v[k] == v) { vkDestroyFramebuffer(g.d, e->fb, NULL); memset(e, 0, sizeof *e); e->tomb = 1; break; } }
+        for (uint32_t k = 0; k < e->natt; k++) if (e->v[k] == v) { vkDestroyFramebuffer(g.d, e->fb, NULL); memset(e, 0, sizeof *e); e->tomb = 1; n++; break; } }
     pthread_mutex_unlock(&g_pc_mu);
+    return n;
 }
+static void pc_drop_view(VkImageView v) { (void)pc_drop_view_n(v); }
 // 视图销毁：先按反查表只拆它当过附件的那些帧缓冲（真机上一帧 30 个视图销毁，全表扫会和开通道抢同一把锁）。
-// 反查表溢出过、或表里的项都对不上（槽被复用过、拆过了）才退回全表扫。
+// 反查表溢出过才退回全表扫。原先「反查表里一项也没有」（视图从没当过已缓存帧缓冲的附件，或前一次调用已经拆过、nfbs 被清零）也退回全表扫：
+// 8192 项约 0.9 MB、每次约 25 微秒，世界场景每帧拆 56 个视图 × 至少一次，读数「从帧缓冲表里摘」1.48 毫秒/帧（nvk_fbdrop=0 时；缺省 0.39），还全在持 g_mu 的销毁路径上，
+// 与本段「溢出才退回」的本意不符。反查表在每次缓存新帧缓冲时把全部附件视图都记过（pc_fb_note_desc），表是空的就不可能有它的句柄。
+// 诊断开关 nvk_fbdrop：0 = 旧行为（表是空的也全表扫）；1 = 缺省；2 = 自检（每次之后再全表扫一遍，扫到残留报红并顺手拆掉）。
+static int fbdrop_mode(void) { static uint32_t k; if (g_fbdrop_cur < 0 || !(++k & 255)) g_fbdrop_cur = nvn_plat_flag("nvk_fbdrop", 1); return g_fbdrop_cur; }
+static uint64_t g_fbdrop_resid;   // 自检档扫到的残留帧缓冲数（用例读；缺省档恒为 0）
+static void pc_drop_resid_check(VkImageView v) {
+    uint32_t n = pc_drop_view_n(v);
+    if (!n) return;
+    __atomic_fetch_add(&g_fbdrop_resid, n, __ATOMIC_RELAXED);
+    nvn_plat_log(NVN_PLAT_LOG_RED, "gpu", "帧缓冲缓存里有反查表没记到的项（视图销毁时全表扫到残留，已拆）");
+}
 static void pc_drop_view_fast(struct nvn_gpu_view_s *view, VkImageView v) {
     if (!v) return;
-    if (!view || view->fbs_overflow || !view->nfbs) { pc_drop_view(v); return; }
+    const int mode = fbdrop_mode();
+    if (!view || view->fbs_overflow) { pc_drop_view(v); return; }
+    if (!view->nfbs) {
+        if (mode <= 0) pc_drop_view(v);
+        else if (mode >= 2) pc_drop_resid_check(v);
+        return;
+    }
     pthread_mutex_lock(&g_pc_mu);
     for (uint8_t i = 0; i < view->nfbs; i++) {
         uint16_t idx = view->fbs[i].idx; if (idx >= PC_FB_N) continue;
@@ -3106,6 +3189,7 @@ static void pc_drop_view_fast(struct nvn_gpu_view_s *view, VkImageView v) {
     }
     pthread_mutex_unlock(&g_pc_mu);
     view->nfbs = 0; view->fbs_overflow = 0;
+    if (mode >= 2) pc_drop_resid_check(v);
 }
 // 记录「这个视图当过这个帧缓冲的附件」（反查表满 6 项就不再记，销毁时退回全表扫）
 static void pc_fb_note(struct nvn_gpu_view_s *view, int slot, uint32_t gen, VkFramebuffer fb) {
@@ -3527,7 +3611,7 @@ static int cmd_ref_texel_view(struct nvn_gpu_cmd_s *c, nvn_gpu_view handle, uint
     VkFormatFeatureFlags need = cls == NVN_GPU_RES_TBUF ? VK_FORMAT_FEATURE_UNIFORM_TEXEL_BUFFER_BIT
                                                          : VK_FORMAT_FEATURE_STORAGE_TEXEL_BUFFER_BIT;
     uint32_t cap = cls == NVN_GPU_RES_TBUF ? NVN_GPU_FMT_SAMPLE : NVN_GPU_FMT_STORAGE;
-    pthread_mutex_lock(&g_mu);
+    gmu_lock_rt();
     struct nvn_gpu_view_s *v = g.views;
     while (v && v != handle) v = v->all_next;
     if (!v || v->released || !v->buffer_view || !(v->buffer_features & need) || !(v->buffer_caps & cap)) {
@@ -4317,11 +4401,26 @@ static void lay_rest_at_commit(struct nvn_gpu_cmd_s *c) {
     }
 }
 
-static int copy_region(const struct nvn_gpu_tex_s *t, uint32_t level, const NVNcopyRegion *r, VkOffset3D *off, VkExtent3D *ext) {
+// 压缩格式（块 > 1）：区域可以按整块给到 mip 边缘之外（小于一块的 mip，例如 2×2，游戏照 NVN 给 4×4），
+//   只要没超过边缘所在的那一整块，就裁到边（Vulkan 对压缩格式本来就要求区域到边为止）；超过整块照旧非法。
+static void copy_region_block_clamp(const struct nvn_gpu_tex_s *t, uint32_t w, uint32_t h, NVNcopyRegion *rr) {
+    nvn_fmt_info f;
+    if (!nvn_fmt_info_of(t->nvn_format, &f) || (f.bw <= 1 && f.bh <= 1) || rr->xoffset < 0 || rr->yoffset < 0) return;
+    uint32_t bw = f.bw > 1 ? f.bw : 1, bh = f.bh > 1 ? f.bh : 1;
+    uint32_t aw = (w + bw - 1) / bw * bw, ah = (h + bh - 1) / bh * bh;
+    if (rr->width > 0 && (uint32_t)rr->xoffset < w && (uint32_t)rr->xoffset + (uint32_t)rr->width > w &&
+        (uint32_t)rr->xoffset + (uint32_t)rr->width <= aw) rr->width = (int)(w - (uint32_t)rr->xoffset);
+    if (rr->height > 0 && (uint32_t)rr->yoffset < h && (uint32_t)rr->yoffset + (uint32_t)rr->height > h &&
+        (uint32_t)rr->yoffset + (uint32_t)rr->height <= ah) rr->height = (int)(h - (uint32_t)rr->yoffset);
+}
+
+static int copy_region(const struct nvn_gpu_tex_s *t, uint32_t level, const NVNcopyRegion *r_in, VkOffset3D *off, VkExtent3D *ext) {
     uint32_t w = t->w >> level, h = t->h >> level, d = t->depth >> level;
     if (!w) w = 1;
     if (!h) h = 1;
     if (!d) d = 1;
+    NVNcopyRegion clamped; const NVNcopyRegion *r = r_in;
+    if (r_in) { clamped = *r_in; copy_region_block_clamp(t, w, h, &clamped); r = &clamped; }
     if (t->target == NVN_TEXTURE_TARGET_3D) {
         if (r && (r->width > 0 || r->height > 0)) {
             uint32_t rz = (uint32_t)(r->depth > 0 ? r->depth : 1);
@@ -4361,7 +4460,10 @@ static int check_copy_params(const struct nvn_gpu_tex_s *t, uint32_t level, cons
     return 0;
 }
 
+// 建贴图（vkCreateImage + 要显存 + 建默认视图）在真机上单张 0.3–2 毫秒；走路/进新场景时会成批出现，
+// 所以超过 3 毫秒的单独记一行，用来和「长帧」对时间（见坑记录续 34）。
 nvn_gpu_rc nvn_gpu_tex_create(const nvn_gpu_tex_desc *d, nvn_gpu_tex *out, nvn_gpu_err *err) {
+    const uint64_t tc_t0 = now_ns();
     if (!session_accepting()) return fail(err, NVN_GPU_E_STOPPED, "会话正在关闭 / 未打开");
     if (!out) return fail(err, NVN_GPU_E_ARG, "out 为空");
     *out = NULL;
@@ -4523,6 +4625,9 @@ nvn_gpu_rc nvn_gpu_tex_create(const nvn_gpu_tex_desc *d, nvn_gpu_tex *out, nvn_g
     g.texs = t;
     pthread_mutex_unlock(&g_mu);
     *out = t;
+    { const uint64_t dt = now_ns() - tc_t0;   // 建贴图超过 3 毫秒单独记一行（走路 / 进新场景时会成批出现；nvk_hitch_log 开时才记）
+      static int slowt = -1; if (slowt < 0) slowt = nvn_plat_flag("nvk_hitch_log", 0) != 0;
+      if (slowt && dt > 3000000ull) { char b[160]; snprintf(b, sizeof b, "建贴图 %.1f 毫秒（%ux%u）", (double)dt / 1e6, d->d.width, d->d.height); nvn_plat_log(NVN_PLAT_LOG_INFO, "tex", b); } }
     return rc(NVN_GPU_OK);
 }
 
@@ -4639,10 +4744,9 @@ nvn_gpu_rc nvn_gpu_view_create(nvn_gpu_tex th, const view_t *v, nvn_gpu_view *ou
     o->levels = levels;
     o->base_layer = base_layer;
     o->layers = layers;
-    pthread_mutex_lock(&g_mu);
+    gmu_lock_rt();
     t->refs++;   // 视图让贴图活到视图 release
-    o->all_next = g.views;
-    g.views = o;
+    view_link_locked(&g, o);
     pthread_mutex_unlock(&g_mu);
     *out = o;
     return rc(NVN_GPU_OK);
@@ -4695,7 +4799,7 @@ nvn_gpu_rc nvn_gpu_view_create_buf(nvn_gpu_buf b, uint64_t off, uint64_t bytes, 
     }
     found->refs++;
     v->buf = found; v->nvn_format = fmt; v->buffer_format = f; v->buffer_features = features; v->buffer_caps = caps;
-    v->all_next = g.views; g.views = v;
+    view_link_locked(&g, v);
     pthread_mutex_unlock(&g_mu);
     *out = v;
     return rc(NVN_GPU_OK);
@@ -4827,6 +4931,15 @@ static void copy_buf_tex_impl(nvn_gpu_cmd ch, nvn_gpu_buf bh, uint64_t off, uint
     struct nvn_gpu_buf_s *b = bh;
     if (t && t->bc_decoded) {   // 压缩字节进现解贴图：在段里解码（#697），不直拷
         if (!b) { set_sticky(c, NVN_GPU_E_ARG, "缓冲为空"); return; }
+        NVNcopyRegion r3;
+        if (t->target == NVN_TEXTURE_TARGET_3D) {   // 与下面直拷同一口径：3D 贴图的 layer 是切片号（#697 Mali：32×32×32 的 BC 贴图按 layer 1 进来被判「层越界」）
+            if (layer >= t->depth) { set_sticky(c, NVN_GPU_E_ARG, "3D 贴图 slice %u 越界（depth=%u）", layer, t->depth); return; }
+            memset(&r3, 0, sizeof r3);
+            if (r) r3 = *r;
+            if (r3.depth <= 0) r3.depth = 1;
+            r3.zoffset = (int)layer;
+            r = &r3; layer = 0;
+        }
         bc_copy_from_buf(c, t, level, layer, r, b, off, row_bytes, image_bytes);
         return;
     }
@@ -5135,10 +5248,19 @@ static int bc_src_check(struct nvn_gpu_cmd_s *c, struct nvn_gpu_tex_s *t, uint32
                         uint64_t row_bytes, uint64_t image_bytes, VkOffset3D *offp, VkExtent3D *extp, int *bbp,
                         uint64_t *bwp, uint64_t *bhp, uint64_t *slice_stridep) {
     VkOffset3D off; VkExtent3D ext; int bb = 0;
-    if (level >= t->levels || layer >= t->layers || copy_region(t, level, r, &off, &ext) ||
-        !ext.width || !ext.height || !ext.depth ||
-        !nvn_vk_bcdec_route(t->nvn_format, NULL, NULL, NULL, NULL, &bb)) {
-        set_sticky(c, NVN_GPU_E_ARG, "BC 上传子资源或区域非法"); return 0;
+    // 原先四种原因合成一句「子资源或区域非法」，真机读数分不出是哪一种（#697 Mali）：逐条报，带上数值
+    if (level >= t->levels || layer >= t->layers) {
+        set_sticky(c, NVN_GPU_E_ARG, "BC 上传子资源越界：级 %u / 共 %u，层 %u / 共 %u", level, t->levels, layer, t->layers); return 0;
+    }
+    if (!nvn_vk_bcdec_route(t->nvn_format, NULL, NULL, NULL, NULL, &bb)) {
+        set_sticky(c, NVN_GPU_E_ARG, "BC 上传：格式 %#x 没有现解路线", t->nvn_format); return 0;
+    }
+    if (copy_region(t, level, r, &off, &ext) || !ext.width || !ext.height || !ext.depth) {
+        uint32_t mw = t->w >> level, mh = t->h >> level, md = t->depth >> level;
+        set_sticky(c, NVN_GPU_E_ARG, "BC 上传区域超出这一级：级 %u（%ux%ux%u），区域 (%d,%d,%d) %dx%dx%d，目标 %u",
+                   level, mw ? mw : 1, mh ? mh : 1, md ? md : 1, r ? r->xoffset : 0, r ? r->yoffset : 0, r ? r->zoffset : 0,
+                   r ? r->width : 0, r ? r->height : 0, r ? r->depth : 0, t->target);
+        return 0;
     }
     uint32_t mw = t->w >> level, mh = t->h >> level; if (!mw) mw = 1; if (!mh) mh = 1;
     if ((off.x & 3) || (off.y & 3) || ((ext.width & 3) && (uint32_t)off.x + ext.width != mw) ||
@@ -5922,6 +6044,33 @@ void nvn_gpu_stats(nvn_gpu_stat_fn fn, void *user, int take) {
     fn(user, "pipe_cache_saves_ok", __atomic_load_n(&g_plcw_ok, __ATOMIC_RELAXED));           // 其中写成功的
     fn(user, "pipe_cache_saves_failed", __atomic_load_n(&g_plcw_fail, __ATOMIC_RELAXED));     // 其中写失败的（只记日志；收尾时会再试）
     fn(user, "pipe_cache_saves_same", __atomic_load_n(&g_plcw_same, __ATOMIC_RELAXED));       // 触发了但数据大小与上次保存一致、没写的次数
+}
+
+// 用例读：视图全局链与帧缓冲缓存的当前账。0 现存视图数；1 旧路径（nvk_ulist=0）摘链累计走过的节点数（缺省路径恒为 0）；
+// 2 帧缓冲缓存里现存的项数；3 自检档（nvk_fbdrop=2）扫到的残留数（缺省档恒为 0）；
+// 4 视图链的结构违例数（每个节点：前驱指针指回自己、后继的反向指针指回本节点的 all_next，应恒为 0）；
+// 5 让 nvk_ulist / nvk_fbdrop 两个开关的缓存作废（用例改了开关值后立刻生效，返回 0）；6 帧缓冲缓存全表扫的累计次数。
+uint64_t nvn_vk_dbg_view_stat(int which) {
+    uint64_t r = 0;
+    switch (which) {
+    case 0: pthread_mutex_lock(&g_mu); for (struct nvn_gpu_view_s *x = g.views; x; x = x->all_next) r++; pthread_mutex_unlock(&g_mu); break;
+    case 1: r = __atomic_load_n(&g_dv_steps_total, __ATOMIC_RELAXED); break;
+    case 2: pthread_mutex_lock(&g_pc_mu); for (uint32_t i = 0; i < PC_FB_N; i++) if (g_pc_fb[i].fb) r++; pthread_mutex_unlock(&g_pc_mu); break;
+    case 3: r = __atomic_load_n(&g_fbdrop_resid, __ATOMIC_RELAXED); break;
+    case 5: g_ulist_cur = g_fbdrop_cur = -1; break;
+    case 6: r = __atomic_load_n(&g_pc_scan_n, __ATOMIC_RELAXED); break;
+    case 4:
+        pthread_mutex_lock(&g_mu);
+        for (struct nvn_gpu_view_s *x = g.views; x; x = x->all_next) {
+            if (!x->all_pprev || *x->all_pprev != x) r++;
+            if (x->all_next && x->all_next->all_pprev != &x->all_next) r++;
+        }
+        if (g.views && g.views->all_pprev != &g.views) r++;
+        pthread_mutex_unlock(&g_mu);
+        break;
+    default: break;
+    }
+    return r;
 }
 
 // 测试钩子：让某个 signal 的段在 fence 等待时报失败（走真实的失败终止路径）。

@@ -30,6 +30,7 @@ import LauncherPadBridge
         try await Task.sleep(for: .milliseconds(300))
         host.layoutSubtreeIfNeeded()
         let targets = model.gamepad.controlTargets(in: window)
+        XCTAssertTrue(targets.contains { $0.id == "library.sgradeUpgrade" }, "合并主线后首页仍须提供可用手柄操作的 S 级优化升级入口")
         let cards = targets.filter { $0.id.hasPrefix("card.") }
         XCTAssertGreaterThanOrEqual(cards.count, 5, "Home 首屏必须能浏览一排游戏")
         let firstCard = try XCTUnwrap(cards.min { $0.frame.minX < $1.frame.minX })

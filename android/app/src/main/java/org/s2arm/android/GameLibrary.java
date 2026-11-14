@@ -38,6 +38,8 @@ final class GameLibrary {
         void onStatus(String text);
         default void onGameReady(GameSession session) { }
         default void onGameAvailable(String titleId, String name) { }
+        /** 游戏库界面用：名字不带版本号；art 是这款的封面（商店横图 banner.jpg 优先，其次游戏图标 icon.jpg），都没有为 null。 */
+        default void onGameAvailable(String titleId, String name, File art) { onGameAvailable(titleId, name); }
     }
 
     private final Context context;
@@ -70,6 +72,12 @@ final class GameLibrary {
     private void status(String text) {
         Log.i("S2Arm", text);
         listener.onStatus(text);
+    }
+
+    /** 失败：日志照旧记原始英文串（工具按它认），界面给玩家文案（原因 + 下一步 + 细节）。 */
+    private void failure(String logText, int what, Throwable error) {
+        Log.i("S2Arm", logText);
+        listener.onStatus(PlayerError.text(context, what, error));
     }
 
     /** Resume without an import target only reports the library. */
@@ -107,7 +115,7 @@ final class GameLibrary {
                     listener.onGameReady(session);
                 } catch (BootContract.BadGame | GamePack.BadPack | IOException | RuntimeException error) {
                     if (timing != null) for (String line : timing.lines()) Log.d("S2ArmBootTiming", line);
-                    status("Game admission failed: " + error.getMessage());
+                    failure("Game admission failed: " + error.getMessage(), R.string.player_err_start, error);
                 }
             });
             return;
@@ -132,14 +140,14 @@ final class GameLibrary {
                             }
                         }
                         @Override public void refused(File source, Exception error) {
-                            status("Game import of requested directory refused: " + error.getMessage());
+                            failure("Game import of requested directory refused: " + error.getMessage(), R.string.player_err_import, error);
                         }
                         @Override public void cleanupDeferred(File source, IOException error) {
                             status("Imported staging cleanup deferred: " + error.getMessage());
                         }
                     });
             } catch (IOException error) {
-                status("Game import deferred: " + error.getMessage());
+                failure("Game import deferred: " + error.getMessage(), R.string.player_err_import, error);
             }
             status(describe());
         });
@@ -167,11 +175,12 @@ final class GameLibrary {
                             DebugGate.open()), progress());
                         status("Game " + outcome(r));
                     } catch (GamePack.BadPack | BootContract.BadGame | IOException | RuntimeException e) {
-                        status("Game import refused" + (root.isEmpty() ? "" : " (" + root.substring(0, root.length() - 1) + ")") + ": " + e.getMessage());
+                        failure("Game import refused" + (root.isEmpty() ? "" : " (" + root.substring(0, root.length() - 1) + ")") + ": " + e.getMessage(),
+                            R.string.player_err_import, e);
                     }
                 }
             } catch (GamePack.BadPack | IOException | RuntimeException e) {
-                status("Game import refused: " + e.getMessage());
+                failure("Game import refused: " + e.getMessage(), R.string.player_err_import, e);
             }
             status(describe());
         });
@@ -264,7 +273,8 @@ final class GameLibrary {
                 state = boot.summary() + "; refused: " + mismatch;
             } else {
                 state = boot.summary() + "; launch requires session admission";
-                listener.onGameAvailable(boot.titleId, info.name + " " + info.version);
+                File revision = new File(g, boot.revisionDir), banner = new File(revision, "banner.jpg"), icon = new File(revision, "icon.jpg");
+                listener.onGameAvailable(boot.titleId, info.name, banner.isFile() ? banner : icon.isFile() ? icon : null);
             }
             sb.append(String.format(Locale.ROOT, "\n%s %s [%s]: %d files, %.1f MiB; %s", info.name, info.version, info.titleId,
                 boot.packageFiles, boot.packageBytes / 1048576.0, state));

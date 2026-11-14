@@ -93,7 +93,10 @@ public class MainActivity extends Activity
     private final Runnable saveAtomicSample = new Runnable() {
         @Override public void run() {
             if (!gameMode || gameStopping || !runtimeLoaded) return;
-            if (NativeBridge.pollSaveAtomic() != 0)
+            int bits = NativeBridge.pollSaveAtomic();
+            // 负数 = 状态未知（服务层缺导出，native 已报红）：不当原因位、不提示，本局不再轮询
+            if (bits < 0) { Log.e("S2Arm", "存档原子提交状态未知（pollSaveAtomic=" + bits + "），本局不提示"); return; }
+            if (bits != 0)
                 android.widget.Toast.makeText(MainActivity.this, SAVE_ATOMIC_NOTICE, android.widget.Toast.LENGTH_LONG).show();
             saveAtomicProbe.postDelayed(this, 1000);
         }
@@ -278,7 +281,7 @@ public class MainActivity extends Activity
             @Override public void onStatus(String text) { runOnUiThread(() -> {
                 if (isDestroyed()) return;
                 games.setText(text);
-                if (text.startsWith("Game admission failed:")) {
+                if (text.startsWith(getString(R.string.player_err_start))) {   // GameLibrary 起局失败（Game admission failed）
                     panel.setVisibility(android.view.View.VISIBLE);
                     games.setTextColor(0xFFFF5252);
                 }
@@ -289,7 +292,7 @@ public class MainActivity extends Activity
                     if (gameSession == null) {
                         gameSession = ready;
                         try { GameResume.publish(getCacheDir(), android.os.Process.myPid(), ready.spec); }
-                        catch (java.io.IOException error) { status.setText("Game startup failed: " + error.getMessage()); stopGame("session receipt failed", false); return; }
+                        catch (java.io.IOException error) { Log.e("S2Arm", "Game startup failed", error); status.setText(PlayerError.text(MainActivity.this, R.string.player_err_start, error)); stopGame("session receipt failed", false); return; }
                     }
                     tryStartGame();
                 });
@@ -595,7 +598,7 @@ public class MainActivity extends Activity
         } catch (java.io.IOException | RuntimeException | LinkageError error) {
             Log.e("S2Arm", "Game startup failed", error);
             panel.setVisibility(android.view.View.VISIBLE);
-            status.setText("Game startup failed: " + error.getMessage());
+            status.setText(PlayerError.text(this, R.string.player_err_start, error));
             stopGame("game startup failed", false);
         }
     }

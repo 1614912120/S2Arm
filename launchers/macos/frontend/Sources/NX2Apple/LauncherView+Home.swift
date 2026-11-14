@@ -90,6 +90,11 @@ extension LauncherView {
             Spacer(minLength: 16)
             Text("\(homeGames.count) / \(model.games.count)").font(.manrope(11.5)).monospacedDigit()
                 .foregroundStyle(.white.opacity(0.6)).fixedSize().accessibilityIdentifier("home.count").padding(.trailing, 6)
+            Button { model.sgradeUpgradeOpen = true } label: {
+                Image(nsImage: SGradeCardView.sGold).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 18, height: 18)
+            }.controllerButtonStyle(ConsoleIconButtonStyle()).disabled(model.busy || model.games.isEmpty)
+                .controllerID("library.sgradeUpgrade")
+                .help(txt("sgrade.upgrade.button")).accessibilityLabel(txt("sgrade.upgrade.button"))
             Button { showHomeSearch.toggle() } label: {
                 Image(systemName: "magnifyingglass").overlay(alignment: .topTrailing) {
                     if !home.search.isEmpty { Circle().fill(LauncherPalette.cream).frame(width: 5, height: 5).offset(x: 5, y: -3) }
@@ -198,6 +203,9 @@ extension LauncherView {
         } label: {
             GameArtwork(covers: covers, cover: game.cover).frame(width: artworkSide, height: artworkSide)
                 .clipped().clipShape(RoundedRectangle(cornerRadius: 15))
+                .overlay(alignment: .topLeading) {
+                    if game.sgrade { SGradeBadge(size: max(24, artworkSide / 9)) }
+                }
                 .overlay(alignment: .topTrailing) {
                     if home.favorites.contains(game.id) {
                         Image(systemName: "heart.fill").font(.system(size: 10)).padding(6).background(.black.opacity(0.6), in: Circle()).padding(8)
@@ -236,12 +244,16 @@ extension LauncherView {
     private func homePrimarySymbol(_ game: GameSummary) -> String {
         if model.busy { return "arrow.up.forward.app" }
         if game.playable { return model.cloudSyncing ? "arrow.triangle.2.circlepath" : "play.fill" }
-        return game.iphoneReady ? "iphone.and.arrow.forward" : "shippingbox"
+        if game.iphoneReady { return model.installMode.mode == "export" ? "square.and.arrow.up" : "iphone.and.arrow.forward" }
+        return "shippingbox"
     }
     func homePrimaryTitle(_ game: GameSummary) -> String {
         if model.busy { return loc.t("home.currentTask") }
         if game.playable { return loc.t(model.cloudSyncing ? "s2arm.cloud.syncing" : "library.play") }
-        if game.iphoneReady { return txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install") }
+        if game.iphoneReady {
+            return txt(model.installMode.mode == "export" ? "export.done.export"
+                       : game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install")
+        }
         return loc.t("home.prepare")
     }
     func homePrimary(_ game: GameSummary) {
