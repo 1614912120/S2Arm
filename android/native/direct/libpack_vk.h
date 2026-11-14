@@ -51,6 +51,14 @@ int s2a_libpack_program_v1(const struct s2a_libpack *lp, const uint8_t keys[6][8
                            uint32_t direct_abi, const char *profile_hash, const char *translator_closure,
                            uint8_t **json, size_t *json_len, char *why, size_t why_size);
 
+// 计算程序命中：单个 cs 键（rp_S.skey[5]）→ kind "compute" 的 s2a-direct-program-v1（malloc，调用方 free），
+//   按 nvn_vk_program_parse_compute 的合同合成：绑定号 = arg_id×6+5、每条 count 1、storage 带 cbSlot/cbOffset
+//   出处与 rw、c0 驱动常量段挂 slot 0；c0Reads / supportReads 写 null（_b.json 给不出，解析器认可的「未知」），
+//   hasUnalignedStorageBuffer 写 false（批翻链按缺省 false 翻）。返回码与计数口径同 program_v1。
+int s2a_libpack_compute_v1(const struct s2a_libpack *lp, const uint8_t key[8],
+                           uint32_t direct_abi, const char *profile_hash, const char *translator_closure,
+                           uint8_t **json, size_t *json_len, char *why, size_t why_size);
+
 uint64_t s2a_libpack_hits(void);
 uint64_t s2a_libpack_misses(void);
 uint64_t s2a_libpack_rejects(void);

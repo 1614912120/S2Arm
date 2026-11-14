@@ -7,6 +7,7 @@
 //   或 0x5A + (reg-128)×2；img 句柄在 0x120 区 → slot = 0x48 + reg×2。
 #include "libpack_vk.h"
 #include "jv.h"   // 跨度式 JSON：_b.json 有长串字段（pos_slice 表 base64），s2a_json 短串上限吃不下
+#include "../nvn/nvn_vk_program_result.h"   // SUPPORT_DEFAULT_BYTES：计算结果的 supportLayout.requiredSize
 
 #include <errno.h>
 #include <stdarg.h>
@@ -179,8 +180,10 @@ static int lp_fail(char *why, size_t why_size, const char *fmt, ...) {
 
 // 一个键的 _b.json bindings[] → v1 content.bindings[]（追加进 jw；sep 管逗号）
 // stage_no = 本段 StageNo（绑定号换算用它），v1_stage = v1 阶段名标签
+// compute = 1：计算结果合同（nvn_vk_program_parse_compute）比图形严——每条带 count、storage 带
+//   cbSlot/cbOffset 出处、c0 驱动常量段（drvcb bank 0）挂 slot 0；图形输出逐字节不变。
 static int lp_emit_bindings(struct jw *j, struct s2a_jv top, const char *lib_stage,
-                            int stage_no, const char *v1_stage, int *sep, char *why, size_t why_size) {
+                            int stage_no, const char *v1_stage, int compute, int *sep, char *why, size_t why_size) {
     struct s2a_jv arr;
     if (s2a_jv_obj_find(top, "bindings", &arr) || !s2a_jv_is_array(arr))
         return lp_fail(why, why_size, "%s: no bindings array", lib_stage);
@@ -198,7 +201,7 @@ static int lp_emit_bindings(struct jw *j, struct s2a_jv top, const char *lib_sta
         size_t ml = strlen(msl);
         int sampler_half = (ml > 5 && !strcmp(msl + ml - 5, "Smplr"));
         const char *v1kind = NULL; uint32_t slot = 0; int has_slot = 0;
-        char provenance[96] = "";   // storage 三元出处（nvnSlot / uboSlot+uboOffset / uboPtr）
+        char provenance[128] = "";   // storage 三元出处（nvnSlot / uboSlot+uboOffset / uboPtr）
         if (sampler_half) continue;
         if (!strcmp(kind, "tex") || !strcmp(kind, "tbuf") || !strcmp(kind, "tex_pool")) {
             uint32_t reg = 0; int has_reg = !jf_u32(b, "reg", &reg);
@@ -224,23 +227,36 @@ static int lp_emit_bindings(struct jw *j, struct s2a_jv top, const char *lib_sta
                         //   （11-13 一款 Unity 游戏全库 11052 个着色器逐个核：这四种在 _b.json 里 21599 处、.spv 里 0 处），v1 不出行
         } else if (!strcmp(kind, "drvcb")) {
             v1kind = "uniform";   // 宿主常量：真实 UBO 描述符、无 guest 槽（消费端还没接，按无槽如实拒）
+            // 计算：bank 是 NVN cbuf 号本身（Dsh.cs Reflect：fp_c<n>，n∉{1,3..16} 记 drvcb+bank）。c0 = 驱动常量段，
+            //   v1 槽 0（现编结果同号，消费端 NVN_RB_DRV0）；c2 = 句柄表，槽 2 交给解析器如实拒；其余 bank 不挂槽
+            uint32_t bank = 0;
+            if (compute && !jf_u32(b, "bank", &bank) && (bank == 0 || bank == 2)) { slot = bank; has_slot = 1; }
         } else if (!strcmp(kind, "geometry") || !strcmp(kind, "sbuf") || !strcmp(kind, "sbuf_ubo")
                    || !strcmp(kind, "ubo_ptr") || !strcmp(kind, "gmem_map") || !strcmp(kind, "gmem_log")) {
             v1kind = "storage";
             uint32_t v = 0;
+            // 计算另带 cbSlot/cbOffset（地址字在哪个 cbuf 的哪个字节）：都由 _b.json 的同一事实换出，不另造——
+            //   sbuf reg = (cb_offset×4 − 0x310)/16（Dsh.cs SSBO("cs") = 0x310）→ c0 + 0x310 + reg×16；
+            //   ubo_ptr reg = (off − 0x210)/16 → c0 + 0x210 + reg×16；sbuf_ubo reg = cb_slot − 3、off = cb_offset×4 → c(reg+3) + off
+            uint32_t cb_slot = 0, cb_off = 0; int has_cb = 0;
             if (!strcmp(kind, "sbuf")) {
-                if (!jf_u32(b, "reg", &v)) snprintf(provenance, sizeof provenance, ",\"nvnSlot\":%u", v);
+                if (!jf_u32(b, "reg", &v)) { snprintf(provenance, sizeof provenance, ",\"nvnSlot\":%u", v); cb_off = 0x310 + v * 16; has_cb = 1; }
             } else if (!strcmp(kind, "sbuf_ubo")) {
                 uint32_t off = 0;
-                if (!jf_u32(b, "reg", &v) && !jf_u32(b, "off", &off))
-                    snprintf(provenance, sizeof provenance, ",\"uboSlot\":%u,\"uboOffset\":%u", v, off);
+                if (!jf_u32(b, "reg", &v) && !jf_u32(b, "off", &off)) {
+                    snprintf(provenance, sizeof provenance, ",\"uboSlot\":%u,\"uboOffset\":%u", v, off); cb_slot = v + 3; cb_off = off; has_cb = 1; }
             } else if (!strcmp(kind, "ubo_ptr")) {
-                if (!jf_u32(b, "reg", &v)) snprintf(provenance, sizeof provenance, ",\"uboPtr\":%u", v);
+                if (!jf_u32(b, "reg", &v)) { snprintf(provenance, sizeof provenance, ",\"uboPtr\":%u", v); cb_off = 0x210 + v * 16; has_cb = 1; }
+            }
+            if (compute && has_cb) {
+                char pv[96]; snprintf(pv, sizeof pv, "%s", provenance);
+                snprintf(provenance, sizeof provenance, ",\"cbSlot\":%u,\"cbOffset\":%u%s", cb_slot, cb_off, pv);
             }
             // gmem_map/gmem_log/geometry：宿主哨兵槽，无 guest 映射——storage_kind 留 0，消费端如实报不支持
         } else if (!strcmp(kind, "support")) {
             // v1：程序级支撑缓冲。set/binding 仍是本段的 arg_id 换算号；stage 标签 "program"
-            jw_fmt(j, "%s{\"kind\":\"support\",\"stage\":\"program\",\"set\":0,\"binding\":%u}", *sep ? "," : "", binding);
+            jw_fmt(j, "%s{\"kind\":\"support\",\"stage\":\"program\",\"set\":0,\"binding\":%u%s}", *sep ? "," : "", binding,
+                   compute ? ",\"count\":1" : "");
             *sep = 1;
             continue;
         } else {
@@ -256,6 +272,7 @@ static int lp_emit_bindings(struct jw *j, struct s2a_jv top, const char *lib_sta
         }
         jw_fmt(j, "%s{\"kind\":\"%s\",\"stage\":\"%s\",\"set\":0,\"binding\":%u", *sep ? "," : "", v1kind, v1_stage, binding);
         *sep = 1;
+        if (compute) jw_str(j, ",\"count\":1");   // 计算合同必填；.spv 里每个成员是单个描述符（数组形的 tex_c2a 等无槽，解析器另拒）
         if (has_slot) jw_fmt(j, ",\"slot\":%u", slot);
         if (provenance[0]) jw_str(j, provenance);
         if (!strcmp(v1kind, "storage")) jw_fmt(j, ",\"rw\":%s", rw ? "true" : "false");
@@ -266,7 +283,7 @@ static int lp_emit_bindings(struct jw *j, struct s2a_jv top, const char *lib_sta
 
 // 一个阶段：取键的 _b.json + _b.spv → 校验 → 往 jw 写 stage 项与 bindings 项。
 // 返回 0 成功 / 1 miss / -1 reject
-static int lp_stage_emit(struct s2a_libpack *lp, const uint8_t key[8], unsigned nvn,
+static int lp_stage_emit(struct s2a_libpack *lp, const uint8_t key[8], unsigned nvn, int compute,
                          struct jw *stages, struct jw *binds, int *bind_sep, uint32_t *stage_mask,
                          char *why, size_t why_size) {
     const char *lib_stage = lp_nvn_stage_name(nvn);
@@ -313,7 +330,7 @@ static int lp_stage_emit(struct s2a_libpack *lp, const uint8_t key[8], unsigned 
         if (!s2a_jv_obj_find(top, "tex_scales", &ts) && s2a_jv_is_array(ts) && s2a_jv_arr_count(ts) > 0)
             { lp_fail(why, why_size, "%s has tex_scales entries (scaled-access bindings not mapped)", khex); goto done; }
         const char *v1_stage = lp_v1_stage_name(st);
-        if (lp_emit_bindings(binds, top, st, stage_no, v1_stage, bind_sep, why, why_size)) goto done;
+        if (lp_emit_bindings(binds, top, st, stage_no, v1_stage, compute, bind_sep, why, why_size)) goto done;
         jw_fmt(stages, "%s{\"stage\":\"%s\",\"spirv\":\"", *stage_mask ? "," : "", v1_stage);
         jw_b64(stages, spv, sn);
         if (mask) jw_fmt(stages, "\",\"attributeReadMask\":%u}", mask);
@@ -345,7 +362,7 @@ int s2a_libpack_program_v1(const struct s2a_libpack *lp_c, const uint8_t keys[6]
     for (unsigned nvn = 0, idx = 0; nvn < 6 && idx < 6; nvn++) {
         if (!(stages & (1u << nvn))) continue;
         char sw[192] = "";
-        int rc = lp_stage_emit(lp, keys[idx], nvn, &st, &bd, &sep, &got, sw, sizeof sw);
+        int rc = lp_stage_emit(lp, keys[idx], nvn, 0, &st, &bd, &sep, &got, sw, sizeof sw);
         idx++;
         if (rc == 0) continue;
         // 半程序不命中：任一所需阶段拿不到，整个程序按该段的 miss/reject 计
@@ -375,4 +392,44 @@ out:
     else if (worst == S2A_LIBPACK_MISS) atomic_fetch_add(&g_misses, 1);
     else atomic_fetch_add(&g_rejects, 1);
     return worst;
+}
+
+// 计算程序：单键（rp_S.skey[5]）的 _b.json（stage "cs"）+ _b.spv → kind "compute" 的 v1 结果，
+//   接受口径 = nvn_vk_program_parse_compute（与现编结果同一个 build_compute）。计算合同多出的四个顶层事实：
+//   hasUnalignedStorageBuffer：false——dsh 批翻链的翻译器（translator/dmsh_xlate）不覆写
+//     IGpuAccessor.QueryHasUnalignedStorageBuffer，接口缺省 false，这份 .spv 就是按 false 翻的（照实）；
+//   c0Reads：null——_b.json 只有 drv_reads（按 MSL 文本的 vec4 粒度 + dynamic 标），给不出合同要的
+//     字节精度读集；null 是解析器认可的「未知」，运行时按完整驱动 c0 布局填；
+//   supportReads：null——_b.json 不带 support 读集，同上按「未知」写，运行时整块按恒等值填；
+//   supportLayout.requiredSize：SUPPORT_DEFAULT_BYTES（2608）——dmsh_xlate 编进的是同一份 compat
+//     Ryujinx.Graphics.Shader，SupportBuffer.RequiredSize 就是它；图形库路径不写 supportLayout，解析器也按这个数。
+//   绑定号 = arg_id×6 + 5。计数口径同 program_v1（hit / miss / reject 三个计数器共用）。
+int s2a_libpack_compute_v1(const struct s2a_libpack *lp_c, const uint8_t key[8],
+                           uint32_t direct_abi, const char *profile_hash, const char *translator_closure,
+                           uint8_t **json, size_t *json_len, char *why, size_t why_size) {
+    struct s2a_libpack *lp = (struct s2a_libpack *)lp_c;
+    if (!lp || !lp->p.idx || !key || !json || !json_len) return S2A_LIBPACK_INVALID;
+    *json = NULL; *json_len = 0;
+    struct jw st = {0}, bd = {0};
+    int sep = 0; uint32_t got = 0;
+    int rc = lp_stage_emit(lp, key, 5, 1, &st, &bd, &sep, &got, why, why_size);
+    if (rc == 0 && got != (1u << 5)) rc = S2A_LIBPACK_MISS;
+    if (rc == 0) {
+        struct jw j = {0};
+        jw_fmt(&j, "{\"schema\":\"s2a-direct-program-v1\",\"content\":{\"contract\":\"s2a-direct-program-content-v1\",\"identity\":{\"directABI\":%u,\"translatorClosure\":\"%s\",\"profileHash\":\"%s\"},\"kind\":\"compute\","
+                   "\"hasUnalignedStorageBuffer\":false,\"c0Reads\":null,\"supportReads\":null,\"stages\":[",
+               direct_abi, translator_closure ? translator_closure : "", profile_hash ? profile_hash : "");
+        jw_put(&j, st.b ? (char *)st.b : "", st.n);
+        jw_str(&j, "],\"bindings\":[");
+        jw_put(&j, bd.b ? (char *)bd.b : "", bd.n);
+        jw_fmt(&j, "],\"supportLayout\":{\"requiredSize\":%u}}}", SUPPORT_DEFAULT_BYTES);
+        if (j.oom) { free(j.b); lp_fail(why, why_size, "v1 synthesis out of memory"); rc = S2A_LIBPACK_REJECT; }
+        else { *json = j.b; *json_len = j.n; }
+    } else if (rc > 0) rc = S2A_LIBPACK_MISS;
+    else rc = S2A_LIBPACK_REJECT;
+    free(st.b); free(bd.b);
+    if (rc == S2A_LIBPACK_HIT) atomic_fetch_add(&g_hits, 1);
+    else if (rc == S2A_LIBPACK_MISS) atomic_fetch_add(&g_misses, 1);
+    else atomic_fetch_add(&g_rejects, 1);
+    return rc;
 }
