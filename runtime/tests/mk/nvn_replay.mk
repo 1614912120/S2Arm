@@ -6,12 +6,18 @@
 NVN_REPLAY_DIR := graphics/nvn/replay
 NVN_REPLAY_CORE := $(NVN_REPLAY_DIR)/rp_exec.c $(NVN_REPLAY_DIR)/rp_copy_t2b.c $(NVN_REPLAY_DIR)/rp_clear_tex.c $(NVN_REPLAY_DIR)/rp_state.c $(NVN_REPLAY_DIR)/rp_entry.c $(NVN_REPLAY_DIR)/rp_res.c $(NVN_REPLAY_DIR)/rp_buf.c $(NVN_REPLAY_DIR)/rp_pass.c $(NVN_REPLAY_DIR)/rp_present.c $(NVN_REPLAY_DIR)/rp_draw.c $(NVN_REPLAY_DIR)/nvn_unimpl.c \
   graphics/nvn/gfx/nvn/nvn_tex.c graphics/nvn/gfx/tex/nvn_deswizzle.c
+# 回放核心对平台 / 后端的可选件写的是弱引用（缺实现 = 地址为空、走不到调用）。ELF 链接器认未定义弱符号，苹果 ld 默认不认：
+#   逐个列名允许缺（-U），不用 dynamic_lookup 一刀切——真漏掉的强符号照样链接红。新增弱引用要补进这张表
+NVN_REPLAY_WEAK_SYMS := nvk_fu_frame_ms nvk_fu_item_ms nvk_fu_unsafe_ms nvk_pipe_warm_note_prog nvn_gpu_stats nvn_vk_pipe_demand_kick nvn_vk_pipe_demand_mark nvn_vk_pipe_demand_marks nvn_vk_pipe_demand_on nvn_vk_pipe_demand_wait s2a_fu_budget_left_ms s2a_fu_budget_spend s2a_fu_rt_fresh_now s2a_fu_rt_mark_fresh s2a_fu_rt_mark_seen s2a_fu_rt_seen_steady s2a_fu_wait_decide
+ifeq ($(shell uname -s),Darwin)
+NVN_REPLAY_WEAK := $(foreach s,$(NVN_REPLAY_WEAK_SYMS),-Wl,-U,_$(s))
+endif
 NVN_REPLAY_SCAN = perl -0pe 's\#/\*.*?\*/\#\#gs; s\#//[^\n]*\#\#g' $(NVN_REPLAY_DIR)/rp_*.c $(NVN_REPLAY_DIR)/rp_*.h $(NVN_REPLAY_DIR)/nvn_unimpl.c $(NVN_REPLAY_DIR)/nvn_unimpl.h $(NVN_REPLAY_DIR)/nvn_plat.h
 .PHONY: native-test-nvn_replay
 native-test-nvn_replay:
 	@mkdir -p $(BUILD)/tests
 	$(CC) $(CFLAGS) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -I. -Igraphics/nvn/gfx/nvn -Igraphics/nvn/gfx/nvn/include -Igraphics/nvn/gfx/tex -I$(NVN_REPLAY_DIR) \
-	  -o $(BUILD)/tests/t_nvn_replay graphics/nvn/tests/t_nvn_replay.c graphics/nvn/tests/nvn_clear_view_unused.c $(NVN_REPLAY_CORE) -lm
+	  -o $(BUILD)/tests/t_nvn_replay graphics/nvn/tests/t_nvn_replay.c graphics/nvn/tests/nvn_clear_view_unused.c $(NVN_REPLAY_CORE) $(NVN_REPLAY_WEAK) -lm
 	@bad=$$($(NVN_REPLAY_SCAN) | grep -nE '\b(MTL[A-Za-z0-9_]*|CAMetal[A-Za-z]*|Vk[A-Z][A-Za-z0-9]*|VK_[A-Z0-9_]+|vk[A-Z][A-Za-z]*|ANativeWindow|AHardwareBuffer|OHNativeWindow|__system_property_get|getenv)\b|#(include|import) *[<"](Metal|QuartzCore|vulkan|android|jni|hilog)' || true); \
 	  if [ -n "$$bad" ]; then echo "【红】 回放核心出现图形 API / 平台专有内容（注释外）：$$bad"; exit 1; fi; \
 	  echo "分层扫描：回放核心注释外图形 API / 平台专有 0 处"
@@ -25,7 +31,7 @@ TEST_TARGETS += native-test-nvn_replay
 native-test-nvn_res:
 	@mkdir -p $(BUILD)/tests
 	$(CC) $(CFLAGS) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -I. -Igraphics/nvn/gfx/nvn -Igraphics/nvn/gfx/nvn/include -Igraphics/nvn/gfx/tex -I$(NVN_REPLAY_DIR) \
-	  -o $(BUILD)/tests/t_nvn_res graphics/nvn/tests/t_nvn_res.c graphics/nvn/tests/nvn_clear_view_unused.c $(NVN_REPLAY_CORE) -lm
+	  -o $(BUILD)/tests/t_nvn_res graphics/nvn/tests/t_nvn_res.c graphics/nvn/tests/nvn_clear_view_unused.c $(NVN_REPLAY_CORE) $(NVN_REPLAY_WEAK) -lm
 	timeout 30 $(BUILD)/tests/t_nvn_res
 	@echo '✓ t_nvn_res：贴图内容按纪元只查一次（换段重查 / 写后重传 / WriteTexels 强制作废）/ 连续同参数绘制第二笔整组沿用 / 驱动段暂存按内容命中 / 换管线按布局立脏'
 TEST_TARGETS += native-test-nvn_res
@@ -34,7 +40,7 @@ TEST_TARGETS += native-test-nvn_res
 native-test-nvn_wait_sync:
 	@mkdir -p $(BUILD)/tests
 	$(CC) $(CFLAGS) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -I. -Igraphics/nvn/gfx/nvn -Igraphics/nvn/gfx/nvn/include -Igraphics/nvn/gfx/tex -I$(NVN_REPLAY_DIR) \
-	  -o $(BUILD)/tests/t_nvn_wait_sync graphics/nvn/tests/t_nvn_wait_sync.c graphics/nvn/tests/nvn_clear_view_unused.c $(NVN_REPLAY_CORE) -lm
+	  -o $(BUILD)/tests/t_nvn_wait_sync graphics/nvn/tests/t_nvn_wait_sync.c graphics/nvn/tests/nvn_clear_view_unused.c $(NVN_REPLAY_CORE) $(NVN_REPLAY_WEAK) -lm
 	timeout 30 $(BUILD)/tests/t_nvn_wait_sync
 TEST_TARGETS += native-test-nvn_wait_sync
 
@@ -42,7 +48,7 @@ TEST_TARGETS += native-test-nvn_wait_sync
 native-test-nvn_copy_t2b:
 	@mkdir -p $(BUILD)/tests
 	$(CC) $(CFLAGS) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -I. -Igraphics/nvn/gfx/nvn -Igraphics/nvn/gfx/nvn/include -Igraphics/nvn/gfx/tex -I$(NVN_REPLAY_DIR) \
-	  -o $(BUILD)/tests/t_nvn_copy_t2b graphics/nvn/tests/t_nvn_copy_t2b.c graphics/nvn/tests/nvn_clear_view_unused.c $(NVN_REPLAY_CORE) -lm
+	  -o $(BUILD)/tests/t_nvn_copy_t2b graphics/nvn/tests/t_nvn_copy_t2b.c graphics/nvn/tests/nvn_clear_view_unused.c $(NVN_REPLAY_CORE) $(NVN_REPLAY_WEAK) -lm
 	timeout 30 $(BUILD)/tests/t_nvn_copy_t2b
 TEST_TARGETS += native-test-nvn_copy_t2b
 
@@ -50,6 +56,6 @@ TEST_TARGETS += native-test-nvn_copy_t2b
 native-test-nvn_clear_tex:
 	@mkdir -p $(BUILD)/tests
 	$(CC) $(CFLAGS) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -I. -Igraphics/nvn/gfx/nvn -Igraphics/nvn/gfx/nvn/include -Igraphics/nvn/gfx/tex -I$(NVN_REPLAY_DIR) \
-	  -o $(BUILD)/tests/t_nvn_clear_tex graphics/nvn/tests/t_nvn_clear_tex.c $(NVN_REPLAY_CORE) -lm
+	  -o $(BUILD)/tests/t_nvn_clear_tex graphics/nvn/tests/t_nvn_clear_tex.c $(NVN_REPLAY_CORE) $(NVN_REPLAY_WEAK) -lm
 	timeout 30 $(BUILD)/tests/t_nvn_clear_tex
 TEST_TARGETS += native-test-nvn_clear_tex
