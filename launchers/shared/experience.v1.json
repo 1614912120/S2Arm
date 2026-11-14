@@ -305,7 +305,7 @@
        "next_action": {"from": "pack/jobs/errors.py"}},
       {"code": "diag_upload_failed", "severity": "error", "retryable": true, "recoverable": true,
        "title": {"zh-Hans": "诊断没传上去", "en": "The diagnostics did not upload"},
-       "detail": {"zh-Hans": "上传服务没开通、连不上，或没收下这份诊断包。", "en": "The upload service is not available, could not be reached, or did not accept this package."},
+       "detail": {"zh-Hans": "本机打包诊断太慢（和网络无关），或上传服务没开通、连不上、没收下这份诊断包。", "en": "Packing the diagnostics on this computer took too long (not a network problem), or the upload service is not available, could not be reached, or did not accept this package."},
        "next_action": {"from": "pack/jobs/errors.py"}},
       {"code": "download_failed", "severity": "error", "retryable": true, "recoverable": true,
        "title": {"zh-Hans": "下载没成功", "en": "The download failed"},
