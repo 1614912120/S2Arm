@@ -129,6 +129,18 @@ static pthread_cond_t g_sp_cv = PTHREAD_COND_INITIALIZER;
 static struct { uint64_t value; int used; } g_ctr[SP_COUNTERS];
 // ev：游戏等的 SystemEventType（0x30 字节）
 static struct { _Alignas(16) uint8_t ev[0x40]; int used, armed; uint64_t hev; cv_sync want; } g_slot[SP_SLOTS];
+static unsigned g_slot_gen;   // 槽表属于哪一局（会话代号）
+// 持 g_sp_mu。槽的 SystemEvent 挂的读端句柄在那一局的句柄表里：进程内重启后句柄表整张关掉、重新编号，旧句柄在新一局里不存在
+//   （11-14 D-VHSE：重启后第一次建同步点事件就复用了上一局缓存的事件，游戏等它 → svc 回 InvalidHandle 0xe401，SDK 中止）。
+//   换局后头一次碰槽表：放掉宿主替旧事件持的那份引用（句柄那份已随句柄表关掉），整张清空，用到时在新一局里重新建、重新挂
+static void sp_slots_for_session_locked(void) {
+    unsigned g = s2a_session_generation ? s2a_session_generation() : 0;
+    if (g == g_slot_gen) return;
+    int n = 0;
+    for (int i = 0; i < SP_SLOTS; i++) { if (g_slot[i].hev) { s2a_event_release(g_slot[i].hev); n++; } memset(&g_slot[i], 0, sizeof g_slot[i]); }
+    if (n) LOG("Switch 2 视频：换局（会话 %u → %u），上一局的 %d 个同步点事件作废，用到时重新建", g_slot_gen, g, n);
+    g_slot_gen = g;
+}
 
 static int sp_reached_locked(const cv_sync *h) {
     if (!h->id_inv && !h->mode && !h->value) return 1;
@@ -179,6 +191,7 @@ static int sp_wait(const cv_sync *h, uint64_t timeout_ns) {
 static uint32_t sp_slot(const void *t) { uint32_t s = *(const uint32_t *)t; if (s >= SP_SLOTS || !g_slot[s].used) die("Switch 2 视频：同步点事件 %p 的槽 %u 不在用", t, s); return s; }
 static Result sp_create(uint32_t *t) {
     pthread_mutex_lock(&g_sp_mu);
+    sp_slots_for_session_locked();
     int s = -1; for (int i = 0; i < SP_SLOTS; i++) if (!g_slot[i].used) { s = i; break; }
     if (s >= 0) { g_slot[s].used = 1; g_slot[s].armed = 0; }
     uint64_t ev = s >= 0 ? g_slot[s].hev : 0;
