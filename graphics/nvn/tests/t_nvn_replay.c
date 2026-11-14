@@ -2324,6 +2324,22 @@ static void t_dispatch_indirect_gpu(void) {
     nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK); g_buf_cpu_fake = NULL; nvn_be_pool_del(g_pmem); pass_fresh();
 }
 
+static void t_depth_copy_scaled(void) {
+    pass_fresh(); g_nbl = 0; g_caps_extra = NVN_GPU_CAP_BLIT_DEPTH_STENCIL;
+    tex_t a = mk_tex(176, 0, NVN_FORMAT_DEPTH24_STENCIL8, 16, 16, 1, 0), b = mk_tex(177, 0x4000, NVN_FORMAT_DEPTH24_STENCIL8, 8, 8, 1, 0);
+    stream s = {0}; p_copy_t2t *o = put_t2t(&s, &a, &b);
+    o->sr = (NVNcopyRegion){2, 2, 0, 12, 12, 1}; o->dr = (NVNcopyRegion){1, 1, 0, 6, 6, 1}; end(&s);
+    submit1(&s); fake_complete(NVN_GPU_DONE_OK);
+    CHECK(g_nbl == 1 && nvn_unimpl_kinds() == 0);
+    CHECK(g_bl[0].s && g_bl[0].d && g_bl[0].sr.xoffset == 2 && g_bl[0].dr.xoffset == 1 && g_bl[0].dr.width == 6 && !g_bl[0].linear);
+    o->flags = NVN_COPY_FLAGS_LINEAR_FILTER_BIT;
+    submit1(&s); fake_complete(NVN_GPU_DONE_OK);
+    CHECK(g_nbl == 1 && nvn_unimpl_count("tex", "t2t_scaled") == 1);
+    o->flags = 0; g_caps_extra = 0;
+    submit1(&s); fake_complete(NVN_GPU_DONE_OK);
+    CHECK(g_nbl == 1 && nvn_unimpl_count("tex", "t2t_scaled") == 2);
+    pass_fresh();
+}
 static void t_copy_t2t(void) {
     pass_fresh(); g_nct = 0; g_nbl = 0;
     tex_t a = mk_tex(71, 0, NVN_FORMAT_RGBA8, 64, 32, 3, 0), b = mk_tex(72, 0x8000, NVN_FORMAT_RGBA8, 32, 16, 1, 0), f = mk_tex(73, 0xC000, NVN_FORMAT_R11G11B10F, 32, 16, 1, 0);
@@ -2877,7 +2893,7 @@ int main(int argc, char **argv) {
     t_dispatch_ubop_ro_skip();
     t_compute_image();
     t_compute_sources();
-    t_copy_t2t();
+    t_depth_copy_scaled(); t_copy_t2t();
     t_draw();
     t_arena697_detail();
     t_logic_op_accounting();
