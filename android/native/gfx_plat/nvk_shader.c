@@ -774,15 +774,16 @@ static void libpack_mark_bad(const uint8_t identity[32]) {
     if (n <= 4) { char b[200]; snprintf(b, sizeof b, "出包预编程序不可用、退回现编（第 %llu 个，身份 %02x%02x%02x%02x…）", (unsigned long long)n,
         identity[0], identity[1], identity[2], identity[3]); nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b); }
 }
-static void libpack_note_hit(void) {
-    uint64_t n = atomic_fetch_add(&g_n_libpack, 1) + 1;
-    if (n == 1 || n % 10 == 0) {
-        char b[260]; snprintf(b, sizeof b, "程序累计：出包预编 命中 %llu / 没有 %llu / 坏 %llu / 不可用 %llu、离线库 %llu、跨局缓存 %llu、现场编 %llu、失败 %llu",
-            (unsigned long long)n, (unsigned long long)s2a_libpack_misses(), (unsigned long long)s2a_libpack_rejects(),
-            (unsigned long long)atomic_load(&g_n_libpack_bad), (unsigned long long)atomic_load(&g_n_offline), (unsigned long long)atomic_load(&g_n_cache),
-            (unsigned long long)atomic_load(&g_n_compiled), (unsigned long long)atomic_load(&g_n_failed));
-        nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b);
-    }
+static void libpack_note_hit(void) { atomic_fetch_add(&g_n_libpack, 1); }
+// 程序累计一行：出包预编 / 离线库 / 跨局缓存 / 现场编 合计第 1 个和每 50 个打一次（每发布一份新程序合计正好加 1）
+static void prog_tally_log(void) {
+    uint64_t n = atomic_load(&g_n_libpack) + atomic_load(&g_n_offline) + atomic_load(&g_n_cache) + atomic_load(&g_n_compiled);
+    if (n != 1 && (!n || n % 50)) return;
+    char b[260]; snprintf(b, sizeof b, "程序累计：出包预编 命中 %llu / 没有 %llu / 坏 %llu / 不可用 %llu、离线库 %llu、跨局缓存 %llu、现场编 %llu、失败 %llu",
+        (unsigned long long)atomic_load(&g_n_libpack), (unsigned long long)s2a_libpack_misses(), (unsigned long long)s2a_libpack_rejects(),
+        (unsigned long long)atomic_load(&g_n_libpack_bad), (unsigned long long)atomic_load(&g_n_offline), (unsigned long long)atomic_load(&g_n_cache),
+        (unsigned long long)atomic_load(&g_n_compiled), (unsigned long long)atomic_load(&g_n_failed));
+    nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b);
 }
 
 // [提交 / 后台] 只吃快照：离线库 → 跨局缓存 →（仅提交线程）现场编译 → parse + 建后端着色器。
@@ -1277,16 +1278,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
     if (failed) return -1;
     *out = &use->prog;
     nvk_prog_warm_note(&rec);   // 真实 resolve 成功：记身份 + uses（含 c1）
-    {
-        uint64_t n = atomic_load(&g_n_offline) + atomic_load(&g_n_cache) + atomic_load(&g_n_compiled);
-        if (n == 1 || (n && n % 50 == 0)) {
-            char b[192];
-            snprintf(b, sizeof b, "程序累计：离线库 %llu、跨局缓存 %llu、现场编 %llu、失败 %llu",
-                     (unsigned long long)atomic_load(&g_n_offline), (unsigned long long)atomic_load(&g_n_cache),
-                     (unsigned long long)atomic_load(&g_n_compiled), (unsigned long long)atomic_load(&g_n_failed));
-            nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b);
-        }
-    }
+    prog_tally_log();
     return 0;
 }
 
