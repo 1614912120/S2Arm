@@ -483,9 +483,15 @@ final class GameInstall {
     }
 
     private static byte[] required(Source source, String path) throws IOException, GamePack.BadPack {
-        try (InputStream in = source.open(path)) {
-            if (in == null) throw new GamePack.BadPack("package has no " + path);
-            return GamePack.readAll(in);
+        ResumableRead r = new ResumableRead(source, path);   // 同 store：读卡住重开续读
+        try {
+            java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[1 << 16];
+            long at = 0;
+            for (int n; (n = r.read(buf, buf.length, at)) > 0; ) { out.write(buf, 0, n); at += n; }
+            return out.toByteArray();
+        } finally {
+            r.close();
         }
     }
 
