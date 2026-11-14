@@ -1434,6 +1434,23 @@ static int svc_mem_impl(int num, uint64_t *regs, uint64_t orig) {
         uint64_t page = memory_protection_page();
         if (!page) { regs[0] = 0xD401; return 1; }
         uint64_t lo = widen ? a & ~(page - 1) : (a + page - 1) & ~(page - 1), hi = widen ? (a + n + page - 1) & ~(page - 1) : (a + n) & ~(page - 1);
+        // #815 / #523（0100FA501AF90000，补丁 @rugal7699）：游戏把模块映像（main / subsdk / sdk / NRO）里的一段收紧成只读后，游戏 SDK 自己的 nn::ro 装 NRO 时
+        //   还会往这段（main+0x579508）写 → SIGBUS。模块映像里的收紧只记游戏可见权限（下面 perm_set 照记，QueryMemory 照回只读），
+        //   不改宿主保护；S2A_MOD_RELRO_ENFORCE=1 恢复旧行为。放宽（widen）照旧。
+        {
+            static int enforce = -1;
+            if (enforce < 0) { const char *ev = getenv("S2A_MOD_RELRO_ENFORCE"); enforce = ev && *ev == '1'; }
+            module_t *mm = n ? module_of((const void *)(uintptr_t)a) : NULL;
+            int in_mod = !widen && mm && module_of((const void *)(uintptr_t)(a + n - 1)) == mm;
+            uint64_t mb = mm ? (uint64_t)(uintptr_t)mm->base : 0;
+            static _Atomic int said;   // 只记模块映像内的收紧（游戏可能频繁改别处权限），每局至多 16 行
+            if (in_mod && atomic_fetch_add(&said, 1) < 16)
+                LOG("SetMemoryPermission %s+%#llx 大小 %#llx 权限 %u → 宿主 [%#llx, %#llx)%s",
+                    mm->name, (unsigned long long)(a - mb), (unsigned long long)n, p,
+                    (unsigned long long)(lo - mb), (unsigned long long)(hi > lo ? hi - mb : lo - mb),
+                    !enforce ? "（模块映像内收紧：只记游戏权限，宿主保持可写）" : "（S2A_MOD_RELRO_ENFORCE=1：照旧设宿主只读）");
+            if (in_mod && !enforce) hi = lo;   // 跳过下面的宿主 mprotect / prot_changed
+        }
         // 远端（别名区伸出宿主窗口的那段）只是承诺：页的保护由远端探针 / 翻译层管，这里不改宿主保护
         uint64_t we = L.win_base + L.win_size; if (hi > we && lo < we && s2a_far_has(we, hi - we)) hi = we; else if (lo >= we && s2a_far_has(lo, hi - lo)) hi = lo;
         if (hi > lo) {
@@ -1889,7 +1906,8 @@ static int svc_mem_impl(int num, uint64_t *regs, uint64_t orig) {
             if (atomic_fetch_add(&said, 1) < 8) LOG("Break 通知（仅通知、不是错误，继续）原因 %#llx 位于 %s+%#llx", (unsigned long long)regs[0], m ? m->name : "?", (unsigned long long)(m ? orig - (uint64_t)m->base : orig));
             regs[0] = 0; return 1;
         }
-        LOG("【红】Break 原因 %#llx 载荷 %#llx+%#llx 位于 %s+%#llx", (unsigned long long)regs[0], (unsigned long long)regs[1], (unsigned long long)regs[2], m ? m->name : "?", (unsigned long long)(m ? orig - (uint64_t)m->base : orig));
+        { char at[256]; if (!s2a_guest_where(orig, at, sizeof at)) snprintf(at, sizeof at, "?+%#llx", (unsigned long long)orig);   // 带导出名（#806）
+          LOG("【红】Break 原因 %#llx 载荷 %#llx+%#llx 位于 %s", (unsigned long long)regs[0], (unsigned long long)regs[1], (unsigned long long)regs[2], at); }
         // SDK 的「结果不成功就中止」（原因 0、载荷 4 字节）载荷就是那个失败的 Result：读出来按 2xxx-yyyy 打，一眼看出是哪个服务回了什么
         //   （10-29 普查 Servonauts / Fit Boxing 3 同在 sdk+0x162868 中止，日志只有载荷地址、没有值，定不了是哪个服务）。载荷在游戏栈上，只读窗口内对齐的
         if (regs[2] == 4 && !(regs[1] & 3) && win_has(regs[1], 4)) {

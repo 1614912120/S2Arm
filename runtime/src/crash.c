@@ -18,6 +18,7 @@
 
 __attribute__((weak)) int s2a_trap_brk(void *ctx);   // traps.c；只编 crash.c 的单测 / 安卓测试壳里没有它
 static void where(uint64_t a, char *b, size_t n) {   // 地址 → 「模块+偏移」或宿主符号
+    if (s2a_guest_where(a, b, n)) return;   // 游戏模块：「模块+偏移（导出名+偏移）」（loader.c，#806：玩家那版 sdk 我们手里没有时也能读回溯）
     module_t *m = module_of((void *)a);
     if (m) {   // 补丁区：近端在映像尾（偏移 ≥ patch_off），FAR 在基址前（偏移为负，按有符号打，原先无符号相减打成 0xffff… 回绕值）
         int64_t off = (int64_t)(a - (uint64_t)m->base);
@@ -175,10 +176,25 @@ static void android_crash_fatal(int sig, siginfo_t *si, const ucontext_t *contex
     if (sig == SIGABRT) android_sigabrt_ctx(context);
     s2a_android_fatal(sig, si, context->uc_mcontext.pc, context->uc_mcontext.sp, (void *)context);
 }
+static _Atomic uint64_t g_sp_unaligned;   // 替游戏模拟的「栈指针未对齐」读写条数（收局汇总报，s2a_sp_unaligned_count；同苹果段）
+uint64_t s2a_sp_unaligned_count(void) { return atomic_load(&g_sp_unaligned); }
 static void on_crash(int sig, siginfo_t *si, void *context) {
     ucontext_t *u = context;
     // 双补丁岛 brk 兜底点（traps.c）：两岛都够不着的必改点，按原语义模拟后 pc += 4
     if (sig == SIGTRAP && s2a_trap_brk && s2a_trap_brk(context)) return;
+    // 栈指针未对齐（ESR 类别 0x26）：Switch 不查、安卓内核查，替游戏做这一条读写（emul_sp.c 安卓段）。范围同苹果：
+    //   游戏代码（含补丁区）+ 系统调用门进出两头（entry.S [sw_gate, sw_gate_end) 用客体 sp 借 32 字节）
+    if (sig == SIGBUS) {
+        unsigned ec;
+        if (s2a_android_fault_ec(context, &ec) && ec == 0x26) {
+            int s2a_emul_sp_unaligned(void *); extern void sw_gate(void); extern char sw_gate_end[];
+            uint64_t pc0 = (uint64_t)u->uc_mcontext.pc;
+            int gate = pc0 >= (uint64_t)(uintptr_t)sw_gate && pc0 < (uint64_t)(uintptr_t)sw_gate_end;
+            if ((gate || module_of((void *)(uintptr_t)pc0)) && s2a_emul_sp_unaligned(context)) {
+                atomic_fetch_add_explicit(&g_sp_unaligned, 1, memory_order_relaxed); return;
+            }
+        }
+    }
     if (sig == SIGBUS || sig == SIGSEGV) {
         int write;
         if (s2a_android_fault_esr(context, &write)) {

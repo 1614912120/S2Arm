@@ -157,7 +157,13 @@ def diagnostic_log_excerpt(source, size, head=None, tail=None):
 DIAGNOSTIC_JOB_LIMIT = 4 << 20
 PHONE_TEXT = (".log", ".txt", ".tsv", ".json", ".ips", ".csv")   # 拉回的手机诊断里按文本脱敏收的类型（host.log、logs/、frames.tsv、threads.txt、diag/*.json、metrickit 等）
 DIAG_RUN_FILE_LIMIT = 4 << 20    # 诊断局 PNG：单张上限
+DIAG_PSO_FILE_LIMIT = 4 << 20   # 本机管线记录 pso_user.tsv 单份上限（实测约 1 MB；收件单个成员上限 16 MB）
 DIAG_RUN_TOTAL_LIMIT = 40 << 20  # 诊断局 PNG：总量上限（#438 定）
+# 本机（Mac）崩溃报告（11-14 诊断#43f7d3：宿主起局 1 秒内 SIGTRAP，没走到写日志，诊断包里一份现场都没有）：系统写在 ~/Library/Logs/DiagnosticReports，
+#   只收我们自己的进程（宿主 s2arm-host、启动器 S2Arm*）近 7 天的 .ips，最新的至多 10 份、单份至多 4 MB，按文本脱敏
+MAC_CRASH_DIR = Path.home() / "Library" / "Logs" / "DiagnosticReports"
+MAC_CRASH_NAME = re.compile(r"^(?:s2arm-host|S2Arm[A-Za-z]*)-\d{4}-\d{2}-\d{2}-\d{6}(?:-\d+)?\.ips$")
+MAC_CRASH_DAYS, MAC_CRASH_MAX, MAC_CRASH_FILE_LIMIT = 7, 10, 4 << 20
 
 
 # 游戏原始包：安装包 NSP 与卡带镜像 XCI，及它们的压缩版 NSZ / XCZ（nx_unpack 按内容认格式、还原压缩的 NCA）；
@@ -209,6 +215,7 @@ def _copy_cover(c, tid, game, metadata, icon):
 
 
 STORE_RETRY = 7 * 86400   # 商店给了定论（抓到 / 商品页 404 / 没有合格横图）的款，7 天内不再查；断网 / 超时 / 预算用尽不算查过，下次照查
+STORE_LOGIC = 2   # 取图逻辑的版本：storeSettled 只在同版本下算数。2 = 美区 404 再查港区（11-14，亚洲版程序号原先被美区 404 定论锁 7 天）；以后取图口径放宽就加一
 STORE_BUDGET = 10.0       # 每次最多花的联网时间（秒）：单页 / 单图各一跳短超时（banner_fetch），超了剩下的下次再查
 
 
@@ -223,7 +230,7 @@ def store_todo(c, ids=None):
         d = layout.find_game(c, gid)
         if g.get("englishName") and d is not None and (d / "banner.jpg").is_file():
             continue
-        if ids is None and now - float(g.get("storeSettled") or 0) < STORE_RETRY:   # 旧字段 storeChecked（断网也记）不认：11-13 前一次没联上就锁 7 天
+        if ids is None and g.get("storeLogic") == STORE_LOGIC and now - float(g.get("storeSettled") or 0) < STORE_RETRY:   # 旧字段 storeChecked（断网也记）不认：11-13 前一次没联上就锁 7 天
             continue
         todo.append(gid)
     return todo
@@ -304,7 +311,7 @@ def store_meta(c, ids=None, budget=STORE_BUDGET):
                     banner, name, settled = got[gid]
                     g.pop("storeChecked", None)
                     if settled:
-                        g["storeSettled"] = int(now)
+                        g["storeSettled"], g["storeLogic"] = int(now), STORE_LOGIC
                     if name and layout._ascii_name(name) and not g.get("englishName"):
                         g["englishName"] = name.strip()
                     if banner:
@@ -1862,6 +1869,7 @@ def catalog(c):
         game["needsPreparation"] = not game["ready"] or manifest.get("inputIdentity") != input_identity(game)
         game["iphoneReady"] = iphone_ready(c, game["id"])
         game["downstream"] = downstream.describe(c, game)   # 下游深度方案（pack/downstream/schemes.json）：命中时启动器弹确认页
+        game["sgrade"] = sgrade_badge(c, game["id"], image)   # 游戏库封面左上角金色 S（v0.4.0）
         game["iphoneRestorable"] = layout.phone_ipa(c, previous=True).is_file()   # 换壳后可装回上一版（install.restore_previous）
         game["iphoneInstall"] = layout.install_record(c, game["id"])
         game["onPhone"] = game["id"].upper() in on_phone
@@ -2155,6 +2163,31 @@ def _windows_layout():   # 单测可打桩：Windows 的产物根在 work/ 下�
     return os.name == "nt"
 
 
+def table_rows(path):
+    """补丁表（cpatch.tsv）里的条目数（去掉表头）；没有 / 读不了 = 0"""
+    try:
+        return max(0, sum(1 for line in open(path, encoding="utf-8") if line.strip()) - 1)
+    except OSError:
+        return 0
+
+
+def sgrade_badge(c, gid, image):
+    """游戏库封面左上角的金色 S（v0.4.0 维护者）：这款有 S 级优化——Mac 运行版本或 iPhone 程序件里已经打进了社区补丁 / 金手指，
+    或者补丁库（随启动器的快照）里有这款的包、下次起局 / 更新 iPhone 就会补上（pack/jobs/rewrite_refresh.py）。出包页取消过「出包时打入」的款不亮"""
+    gid = gid.upper()
+    if layout.game_info(c, gid).get("sgradeOff") is True:
+        return False
+    if table_rows(Path(image) / "cpatch.tsv") or table_rows(layout.ios_kit(c, gid) / "cpatch.tsv"):
+        return True
+    import patches
+    main = Path(image) / "exefs/main"
+    try:
+        bid = main.read_bytes()[0x40:0x48].hex().upper() if main.is_file() else (layout.game_info(c, gid).get("ios") or {}).get("mainBid", "")
+        return patches.has_match(c, gid, bid)
+    except (OSError, ValueError):
+        return False
+
+
 CONTAINER_KIT = layout.IOS_KIT   # 每款 image/ios/kit：装机组装容器要用的文件，出包成功后从产物根存一份独立副本（游戏库结构 v3；旧布局是 iPhone/<号>/container-kit）
 
 
@@ -2394,20 +2427,31 @@ def delete(c):
             has_saves = layout.has_content(saves) or layout.has_content(backups)   # 只有 .DS_Store 之类不算有存档
             root = gdir.parent.parent   # 这款所在存放位置的根（root_of 靠 find_game，认不出时会退回默认位置）
             for item in ([i for i in gdir.iterdir() if i.name not in ("saves", "save-backups")] if has_saves else [gdir]):
-                trashed.append((root, _to_trash(c, root, item, gid)))
+                moved = _to_trash(c, root, item, gid)
+                if moved:
+                    trashed.append((root, moved))
+        # 缓存（game_caches：这款的直连库 / 烘焙 / 补丁 / 宽屏，连同删除语义里一并清的共用编库缓存）同样锁内挪进工具缓存根的 .s2a-trash：
+        #   锁一放，别的款出包重建共用缓存、重新加回同一款再出包，都不会和锁外的删除撞在同一个目录上
+        for p in game_caches(c, gid):
+            moved = _to_trash(c, c.work_root, p, gid)
+            if moved:
+                trashed.append((c.work_root, moved))
         drop_from_container(c, gid)
         cat = c.catalog()
         cat["games"] = [g for g in cat["games"] if g["id"] != gid]
         atomic(c.library / "catalog.json", cat)
-        left = []
-        for root, p in trashed + [(c.work_root, p) for p in game_caches(c, gid)]:
-            try:
-                _rm(c, root, p)
-            except (Failure, OSError) as e:
+    # 真正删文件放在锁外（诊断#dab32d：一款 100 GB 级的游戏在慢盘上删了 53 分钟，整段占着执行锁，期间开别的款 6 次全 library_busy）。
+    #   上面已经挪进 .s2a-trash、从清单去掉，别的任务看不到也碰不到这堆文件，不需要锁
+    left = []
+    for root, p in trashed:
+        try:
+            _rm(c, root, p)
+        except (Failure, OSError) as e:
+            if p.exists() or p.is_symlink():   # 删的过程中被别处（启动时的 sweep_trash）删完了，不算没删掉
                 left.append(f"{p.name}（{e}）")
-        if left:
-            c.diagnostic("这款已从游戏库删掉；有几个文件当时删不掉（可能正被别的程序打开），S2Arm 空闲时会再删：" + "；".join(left)[:400],
-                         code="job_failed", severity="warning")
+    if left:
+        c.diagnostic("这款已从游戏库删掉；有几个文件当时删不掉（可能正被别的程序打开），S2Arm 空闲时会再删：" + "；".join(left)[:400],
+                     code="job_failed", severity="warning")
     return {}
 
 
@@ -2415,14 +2459,21 @@ TRASH = ".s2a-trash"   # 每个存放位置根下：删除时先把这款整块�
 
 
 def _to_trash(c, root, item, gid):
-    """把 root 下的 item 改名挪进 root/.s2a-trash/<游戏号>-<毫秒>-<原名>（同盘改名）→ 新路径；挪不动（权限 / 只读盘）照实报"""
+    """把 root 下的 item 改名挪进 root/.s2a-trash/<游戏号>-<毫秒>-<原名>（同盘改名）→ 新路径；已经不在了 → None；挪不动（权限 / 只读盘）照实报"""
     root, item = Path(os.path.abspath(root)), Path(os.path.abspath(item))
     if root not in item.parents or _is_link(item):   # 不在这个存放位置里的、链接都不碰（同 _rm 的托管目录检查）
         raise Failure("操作路径不属于托管目录。")
     dest = root / TRASH / f"{gid}-{int(time.time() * 1000)}-{item.name}"
+    n = 1
+    while os.path.lexists(dest):   # 同一毫秒挪两个同名的（widen/ 与 widen/auto/ 下同名的缓存目录）
+        dest, n = dest.with_name(f"{gid}-{int(time.time() * 1000)}-{n}-{item.name}"), n + 1
     dest.parent.mkdir(parents=True, exist_ok=True)
     try:
         os.rename(item, dest)
+    except FileNotFoundError:
+        # 列目录后它已经没了：exFAT 上挪走 banner.jpg 时系统连带挪走 ._banner.jpg（AppleDouble），清单里还挂着它的名字。
+        #   要删的东西不存在就是删完了，不能整单 job_failed（诊断#3d03f4：删游戏报「删不掉 ._banner.jpg：No such file or directory」）
+        return None
     except OSError as e:
         raise Failure(f"删不掉「{item.name}」：{e.strerror or e}。确认这块盘没被设成只读、文件没被别的程序锁住，再删一次。", code="job_failed") from e
     return dest
@@ -2430,7 +2481,7 @@ def _to_trash(c, root, item, gid):
 
 def sweep_trash(c):
     """删掉各存放位置 .s2a-trash/ 里上次没删干净的（delete 挪进来的、已不在游戏库里）；删不掉下次再试，不影响读游戏库"""
-    for _, root, ok in layout.locations(c):
+    for root, ok in [(root, ok) for _, root, ok in layout.locations(c)] + [(c.work_root, True)]:   # 工具缓存根：delete 挪进来的这款自己的缓存
         t = root / TRASH
         if not ok or not t.is_dir():
             continue
@@ -2955,6 +3006,25 @@ def diagnostics(c):
                             else:
                                 phone["skipped"].append(member)
                     pulled(latest_fd)
+                step = "读本机崩溃报告"
+                mac_crash = None
+                if sys.platform == "darwin" and MAC_CRASH_DIR.is_dir() and not MAC_CRASH_DIR.is_symlink():
+                    cutoff = time.time() - MAC_CRASH_DAYS * 86400
+                    found = []
+                    for f in MAC_CRASH_DIR.iterdir():
+                        if MAC_CRASH_NAME.match(f.name) and not f.is_symlink() and f.is_file():
+                            st = f.stat()
+                            if st.st_mtime >= cutoff:
+                                found.append((st.st_mtime, st.st_size, f))
+                    found.sort(key=lambda x: x[0], reverse=True)
+                    mac_crash = dict(found=len(found), files=0, skipped=[])
+                    for _, size, f in found[:MAC_CRASH_MAX]:
+                        c.check()
+                        if size > MAC_CRASH_FILE_LIMIT:
+                            mac_crash["skipped"].append(f.name)
+                            continue
+                        archive.writestr("mac_crash/" + f.name, redact(f.read_text(encoding="utf-8", errors="replace")).encode())
+                        mac_crash["files"] += 1
                 # 诊断局（#438，community.diag_run_env）的读数：各款游戏文件夹 diagrun/ 里的 PNG（出图画面与颜色目标，渲染出来的图、不含游戏数据），
                 #   原样放 diagrun/<游戏号>_<原名>。单张超过 4 MB 跳过、总量至多 40 MB；链接不跟（不越出游戏文件夹）
                 step = "读诊断局读数"
@@ -2973,12 +3043,31 @@ def diagnostics(c):
                             continue
                         archive.writestr(f"diagrun/{g['id']}_{f.name}", f.read_bytes())
                         used += n
+                # 本机管线记录（11-13 维护者：玩家上传的诊断收进随包种子，取件按程序号收进众包 zc_crowd.tsv）：各款文档目录 temp/<号>/wire/<号>/pso_user.tsv
+                #   （build.runtime_env 的 S2A_DOCS，宿主 nvn_mtl.m pso_user_path），原样放 pso/<号>.tsv。只有着色器键与管线状态的十六进制，不含个人信息、不过脱敏；
+                #   单份超过 4 MB 跳过；链接不跟。Windows 不在本机跑游戏，没有这份就不放
+                step = "读本机管线记录"
+                for g in sorted(c.catalog().get("games", []), key=lambda g: g.get("id", "")) if c.library.is_dir() else []:
+                    c.check()
+                    gid = (g.get("id") or "").upper()
+                    if not re.fullmatch(r"[0-9A-F]{16}", gid):
+                        continue
+                    f = c.library / "temp" / gid / "wire" / gid / "pso_user.tsv"
+                    if f.is_symlink() or not f.is_file() or not 0 < f.stat().st_size <= DIAG_PSO_FILE_LIMIT:
+                        continue
+                    archive.writestr(f"pso/{gid}.tsv", f.read_bytes())
                 manifest = dict(schema=1,   # 诊断上传服务收件要它（维护方方案「上传协议」：没有 schema 判 not_diag 拒收）；iOS ios/diag.m 同字段
                                 launcher_version=launcher_version(),
                                 macos_version=platform.mac_ver()[0] or {"error": "macOS 版本不可用"},
                                 xcode_version=probe(["/usr/bin/xcodebuild", "-version"]),
                                 mac_model=probe(["/usr/sbin/sysctl", "-n", "hw.model"]),
                                 xcode_signing=signing_status())
+                # 这份包是哪款游戏的（同 iOS ios/diag.m 的 game.title_id，diagnostic_report 读它）：只认导出请求带的游戏号——
+                #   启动器「故障报修」从玩家当时选中的那款传进来。没带就不写、不猜（猜最近任务会把 A 的问题记到 B 头上，
+                #   11-14 诊断#e68047 就是报告级程序号「-」把两款的停帧并成一单），取件按包里每一局自己的程序号分
+                gid = c.r.get("gameId")
+                if isinstance(gid, str) and re.fullmatch(r"[0-9A-Fa-f]{16}", gid):
+                    manifest["game"] = dict(title_id=gid.upper())
                 # 降级汇总（v0.3.1）：出包成功收尾存进日志目录的 <任务>-degrade.log（build.collect_degrade，上面已随 logs/ 收进包），按 阶段/类别 计处数
                 from build import degrade_rows
                 degrade = {}
@@ -2993,6 +3082,8 @@ def diagnostics(c):
                         degrade[log.name[:-len("-degrade.log")]][r["stage"] + "/" + r["kind"]] += r["count"]
                 if degrade:
                     manifest["degrade_summary"] = degrade   # 任务号 → {阶段/类别: 处数}
+                if mac_crash is not None:
+                    manifest["mac_crash_reports"] = mac_crash   # 本机崩溃报告：近 7 天符合的共几份、收了几份、超大跳过的
                 if phone is not None:
                     manifest["phone_diagnostics"] = phone   # 最近一次拉回的手机诊断：拉回时刻、来源设备（机型 / 系统）、收了几份、跳过了哪些
                 manifest = redact_fields(manifest)

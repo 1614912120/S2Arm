@@ -927,6 +927,25 @@ class JobsTests(unittest.TestCase):
             self.assertIn("logs/t1-degrade.log", archive.namelist())
             self.assertEqual(json.loads(archive.read("manifest.json"))["degrade_summary"], {"t1": {"rewrite/x18": 30, "direct/lazy": 5}})
 
+    def test_diagnostics_carries_pipeline_records(self):
+        # 本机管线记录（11-13 维护者：诊断收进众包种子）：游戏库里各款 temp/<号>/wire/<号>/pso_user.tsv 原样进 pso/<号>.tsv；没跑过（没这份）的不放；
+        #   空文件、超过 4 MB 的、链接都不放。期望按规则手写
+        import zipfile
+        A, B, C, D = "0100AAAA00000000", "0100BBBB00000000", "0100CCCC00000000", "0100DDDD00000000"
+        atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=g, name=g) for g in (A, B, C, D)]))
+        def rec(g, data):
+            f = self.c.library / "temp" / g / "wire" / g / "pso_user.tsv"; f.parent.mkdir(parents=True, exist_ok=True); f.write_bytes(data); return f
+        rec(A, b"S\t0123456789abcdef_b\t1\nC\t1111222233334444_b\n")
+        rec(C, b"")
+        rec(D, b"x" * ((4 << 20) + 1))
+        destination = self.root / "diag-pso.zip"; destination.unlink(missing_ok=True); self.c.r["path"] = str(destination)
+        library.diagnostics(self.c)
+        with zipfile.ZipFile(destination) as archive:
+            names = sorted(n for n in archive.namelist() if n.startswith("pso/"))
+            self.assertEqual(names, [f"pso/{A}.tsv"])
+            self.assertEqual(archive.read(f"pso/{A}.tsv"), b"S\t0123456789abcdef_b\t1\nC\t1111222233334444_b\n")
+            self.assertIn(f"pso/{A}.tsv", json.loads(archive.read("manifest.json"))["files"])
+
     def test_diagnostics_player_note(self):
         # 故障报修的可选文本框（11-13 维护者）：请求带 note 就原样（去首尾空白）进 manifest.json 的 note，收件服务与 iOS 同字段；不填 / 空白不写
         import zipfile
@@ -938,6 +957,24 @@ class JobsTests(unittest.TestCase):
             library.diagnostics(self.c)
             with zipfile.ZipFile(destination) as archive:
                 self.assertEqual(json.loads(archive.read("manifest.json")).get("note"), expect)
+
+    def test_diagnostics_names_the_game(self):
+        # 11-14 诊断#e68047：Mac / Windows 诊断包 manifest 没有 game.title_id，报告程序号成了「-」，不同游戏的停帧被并成一单。
+        #   只认导出请求带的游戏号（启动器「故障报修」传玩家选中的那款）；没带就不写——任务记录里最近玩的那款也不拿来猜
+        import zipfile
+        jobs = self.c.jobpath.parent; jobs.mkdir(parents=True, exist_ok=True)
+        (jobs / "mid.json").write_text(json.dumps({"id": "mid", "operation": "play", "state": "completed", "gameId": "0100F2C0115B6000"}), encoding="utf-8")
+        def game_of():
+            destination = self.root / "diag-game.zip"; destination.unlink(missing_ok=True); self.c.r["path"] = str(destination)
+            library.diagnostics(self.c)
+            with zipfile.ZipFile(destination) as archive:
+                return json.loads(archive.read("manifest.json")).get("game")
+        for given, expect in ((None, None), ("", None), ("not-a-title", None), ("0400a3a01ee4c000", {"title_id": "0400A3A01EE4C000"})):
+            self.c.r.pop("gameId", None)
+            if given is not None:
+                self.c.r["gameId"] = given
+            self.assertEqual(game_of(), expect, given)
+        self.c.r.pop("gameId", None)
 
     def test_diagnostics_export_to_volume_whose_new_files_change_inode(self):
         # exFAT / FAT（macOS 驱动）：新文件写入数据、分到存储后 inode 号会变（本机 exFAT 镜像实测：mkstemp 后 18446744073709404714，写完 32987）。
@@ -1732,6 +1769,37 @@ class JobsTests(unittest.TestCase):
         self.assertFalse(gdir.exists())
         self.assertEqual([g["id"] for g in self.c.catalog()["games"]], [])
 
+    def test_delete_removes_files_without_holding_library_locks(self):
+        # 诊断#dab32d：删一款大游戏在慢盘上删了 53 分钟，整段占着执行锁，期间开别的款 6 次全 library_busy。
+        #   期望（手写）：挪进 .s2a-trash、清单去掉这款在锁内做完；之后每一次真删（_rm）时执行锁和清单锁都拿得到；
+        #   这款的缓存（直连库）和共用编库缓存照旧删掉（删除语义不变），工具缓存根的 .s2a-trash 删完是空的
+        import filelock
+        package = self.package(); game = self.game(packages=[package]); self.catalogue([game])
+        keep, gone, other = self._build_leftovers(game["id"])
+        free, real = [], library._rm
+        def rm(c, root, p):
+            for name in ("execution", "catalog"):
+                try:
+                    with filelock.held(self.c.library / f".{name}.lock", wait_s=0, holder={}):
+                        free.append(True)
+                except filelock.Busy:
+                    free.append(False)
+            return real(c, root, p)
+        self.c.r["gameId"] = game["id"]
+        with unittest.mock.patch.object(library, "_rm", rm):
+            library.delete(self.c)
+        self.assertTrue(free and all(free), free)
+        self.assertEqual([f for f in keep + gone if f.exists()], [])
+        self.assertEqual([g["id"] for g in self.c.catalog()["games"]], [])
+        self.assertEqual(list((self.c.work_root / library.TRASH).iterdir()), [])
+        self.assertTrue(all(f.exists() for f in other))
+
+    def test_sweep_trash_also_clears_tool_cache_trash(self):
+        # 删除时挪进工具缓存根 .s2a-trash 的缓存当时没删掉（被占用 / 进程被杀）：期望下次启动 sweep_trash 一并清掉
+        left = self.c.work_root / library.TRASH / "0100AAAAAAAAA000-1-bake" / "ok"; left.parent.mkdir(parents=True); left.write_text("x")
+        library.sweep_trash(self.c)
+        self.assertEqual(list((self.c.work_root / library.TRASH).iterdir()), [])
+
     def test_delete_with_undeletable_file_still_removes_game_from_library(self):
         # 11-11 玩家反馈「删除有时生效有时不生效」（真 App 复现：游戏文件夹里一个文件删不掉 → 整个删除失败、目录删一半、游戏还挂在列表里成了「找不到游戏文件」）。
         #   期望（手写）：游戏立刻从清单里去掉、原文件夹不在原处；删不掉的那个文件留在存放位置的 .s2a-trash 里，记一条黄字；
@@ -1751,6 +1819,29 @@ class JobsTests(unittest.TestCase):
         os.chflags(left[0], 0)
         library.sweep_trash(self.c)
         self.assertEqual(list((self.c.library / library.TRASH).iterdir()), [])
+
+    def test_delete_with_saves_on_exfat_skips_appledouble_that_left_with_its_file(self):
+        # 诊断#3d03f4：exFAT 上有存档的款逐项挪进 .s2a-trash，挪走 banner.jpg 时系统连带挪走 ._banner.jpg，列表里还挂着它 →
+        #   原先 rename 报 ENOENT、整单「删不掉 ._banner.jpg」job_failed。期望（手写）：删除完成、清单去掉这款、存档保留、游戏目录里只剩 saves
+        package = self.package(); game = self.game(packages=[package]); self.catalogue([game])
+        gdir = layout.game_dir(self.c, game["id"])
+        (gdir / "banner.jpg").write_bytes(b"j"); (gdir / "._banner.jpg").write_bytes(b"a")
+        save = gdir / "saves" / "s.dat"; save.parent.mkdir(parents=True); save.write_text("keep")
+        real = os.rename
+        def rename(src, dst):   # 照 exFAT：数据文件挪走，它的 AppleDouble 附属文件跟着走
+            real(src, dst)
+            side = Path(src).with_name("._" + Path(src).name)
+            if side.exists():
+                real(side, Path(dst).with_name("._" + Path(dst).name))
+        self.c.r["gameId"] = game["id"]
+        listdir = Path.iterdir
+        def iterdir(d):   # 让 banner.jpg 先于 ._banner.jpg 挪（真盘上的列目录顺序不保证，这里固定成会出事的那种）
+            return iter(sorted(listdir(d), key=lambda q: q.name.startswith("._")))
+        with unittest.mock.patch.object(library.os, "rename", rename), unittest.mock.patch.object(Path, "iterdir", iterdir):
+            library.delete(self.c)
+        self.assertEqual([g["id"] for g in self.c.catalog()["games"]], [])
+        self.assertEqual(save.read_text(), "keep")
+        self.assertEqual(sorted(i.name for i in gdir.iterdir()), ["saves"])
 
     def test_delete_also_drops_game_from_library_container(self):
         # 期望（#227，游戏库结构 v3）：删 A → 各台手机记录（devices/<设备>.json）里摘掉 A，B 与其余字段原样；没装 A 的那台记录不动；
@@ -2053,6 +2144,27 @@ class JobsTests(unittest.TestCase):
             self.assertTrue(m["pulledAt"]); self.assertEqual(m["devices"][0]["model"], "iPhone 17 Pro Max"); self.assertEqual(m["devices"][0]["os"], "27.3")
             self.assertNotIn("合成甲", json.dumps(m, ensure_ascii=False)); self.assertNotIn("U1", json.dumps(m))   # 不记设备名、设备号
             self.assertEqual(m["files"], 3); self.assertTrue(any(x.endswith("diag/blob.bin") for x in m["skipped"]))
+
+    def test_diagnostics_collect_recent_mac_crash_reports(self):
+        """诊断#43f7d3：宿主起局 1 秒内 SIGTRAP、没走到写日志，包里没现场。导出时收本机 ~/Library/Logs/DiagnosticReports 里我们进程的 .ips。
+        期望手写：收 s2arm-host / S2ArmApple 近 7 天的两份（脱敏）；8 天前的、别的 App 的不收；超 4 MB 的跳过并写名字；manifest 计数对"""
+        import unittest.mock as um, os, sys, time as t
+        rep = self.root / "DiagnosticReports"; rep.mkdir()
+        (rep / "s2arm-host-2026-11-14-101500.ips").write_text('{"exception": "EXC_BREAKPOINT", "path": "/Users/Synthetic/x", "mail": "synth@example.invalid"}')
+        (rep / "S2ArmApple-2026-11-14-101600.ips").write_text('{"app": "launcher"}')
+        old = rep / "s2arm-host-2026-11-01-090000.ips"; old.write_text("old"); os.utime(old, (t.time() - 8 * 86400, t.time() - 8 * 86400))
+        (rep / "Finder-2026-11-14-101700.ips").write_text("other app")
+        big = rep / "s2arm-host-2026-11-14-101800.ips"; big.write_bytes(b"x" * (library.MAC_CRASH_FILE_LIMIT + 1))
+        destination = self.root / "diagnostics.zip"; self.c.r["path"] = str(destination)
+        with um.patch.object(library, "MAC_CRASH_DIR", rep), um.patch.object(sys, "platform", "darwin"):
+            library.diagnostics(self.c)
+        with zipfile.ZipFile(destination) as archive:
+            crash = sorted(n for n in archive.namelist() if n.startswith("mac_crash/"))
+            self.assertEqual(crash, ["mac_crash/S2ArmApple-2026-11-14-101600.ips", "mac_crash/s2arm-host-2026-11-14-101500.ips"])
+            text = archive.read("mac_crash/s2arm-host-2026-11-14-101500.ips").decode()
+            self.assertIn("EXC_BREAKPOINT", text); self.assertNotIn("synth@example.invalid", text); self.assertNotIn("/Users/Synthetic", text)
+            m = json.loads(archive.read("manifest.json"))["mac_crash_reports"]
+            self.assertEqual((m["found"], m["files"], m["skipped"]), (3, 2, ["s2arm-host-2026-11-14-101800.ips"]))
 
     def test_diagnostic_manifest_and_every_member_are_redacted_without_truncation(self):
         import platform
