@@ -122,7 +122,8 @@ struct nvn_gpu_buf_s { uint64_t bytes; uint8_t *cpu; };
 static int g_buf_cpu_auto;   // 1 = 新建的缓冲各带一块自己的 CPU 可见内存（两份池镜像要分得开的用例用）
 static int g_buf_creates, g_buf_releases; static uint64_t g_buf_bytes;
 static struct { uint64_t off, len; uint8_t head[8]; int pre; } g_bw[32]; static int g_nbw;
-nvn_gpu_rc nvn_gpu_buf_create(uint64_t bytes, int mem, const void *init, nvn_gpu_buf *out, nvn_gpu_err *err) { (void)mem; (void)init; (void)err; g_buf_creates++; g_buf_bytes = bytes; *out = calloc(1, sizeof **out); (*out)->bytes = bytes; if (g_buf_cpu_auto) (*out)->cpu = calloc(1, bytes); return (nvn_gpu_rc){NVN_GPU_OK}; }
+static uint64_t g_buf_fail_bytes;   // 非 0：建这个大小的缓冲时失败（池镜像建不出来的用例用）
+nvn_gpu_rc nvn_gpu_buf_create(uint64_t bytes, int mem, const void *init, nvn_gpu_buf *out, nvn_gpu_err *err) { (void)mem; (void)init; (void)err; g_buf_creates++; g_buf_bytes = bytes; if (g_buf_fail_bytes && bytes == g_buf_fail_bytes) { *out = NULL; return (nvn_gpu_rc){NVN_GPU_E_OOM}; } *out = calloc(1, sizeof **out); (*out)->bytes = bytes; if (g_buf_cpu_auto) (*out)->cpu = calloc(1, bytes); return (nvn_gpu_rc){NVN_GPU_OK}; }
 void nvn_gpu_tex_info_get(nvn_gpu_tex t, nvn_gpu_tex_info *out) { memset(out, 0, sizeof *out); (void)t; }   // 调试读回用；用例不开那个开关
 static struct { nvn_gpu_tex s, d; uint32_t sl, sy, dl, dy; NVNcopyRegion sr, dr; } g_ct[8]; static int g_nct;
 void nvn_gpu_copy_tex(nvn_gpu_cmd c, nvn_gpu_tex src, uint32_t slevel, uint32_t slayer, const NVNcopyRegion *sr, nvn_gpu_tex dst, uint32_t dlevel, uint32_t dlayer, const NVNcopyRegion *dr) {
@@ -1036,6 +1037,24 @@ static void t_decl_view(void) {
     CHECK(g_tex_releases == releases + 13 && g_view_releases == view_releases + 13);
 }
 
+static void t_buf_mirror_fail_once(void) {   // 池镜像建不出来：同一个池只尝试一次，之后直接按未接返回；池释放再登记会重试
+    nvn_be_sub_begin();
+    nvn_be_shutdown_session(); nvn_unimpl_reset(); g_pg_tracked = 1; g_nbw = 0;
+    uint64_t base = (uint64_t)(uintptr_t)g_pmem; int c0 = g_buf_creates;
+    nvn_be_pool_add(g_pmem, sizeof g_pmem);
+    g_buf_fail_bytes = sizeof g_pmem;
+    nvn_gpu_buf b = NULL; uint64_t o = 0;
+    CHECK(rp_buf_resolve(&g_fake_cmd, base + 64, 16, &b, &o) == 0);
+    CHECK(rp_buf_resolve(&g_fake_cmd, base + 128, 16, &b, &o) == 0);
+    CHECK(rp_buf_resolve(&g_fake_cmd, base + PG, 32, &b, &o) == 0);
+    CHECK(g_buf_creates - c0 == 1);                                         // 三次解析只试建一次
+    CHECK(nvn_unimpl_count("gpu", "buf_create_pool_mirror") == 3);         // 每次照样记未接（计数），不再重建
+    nvn_be_pool_del(g_pmem); nvn_be_pool_add(g_pmem, sizeof g_pmem);         // 池释放再登记：失败记录随之删掉
+    g_buf_fail_bytes = 0;
+    CHECK(rp_buf_resolve(&g_fake_cmd, base + 64, 16, &b, &o) == 1 && b && o == 64);   // 同一地址重新使用：重试并建成
+    CHECK(g_buf_creates - c0 == 2);
+    nvn_be_shutdown_session();
+}
 static void t_buf_mirror(void) {   // 池镜像：首次使用建一份、按页同步；没写过的页不重传；按使用点的先后保证 GPU 顺序
     nvn_be_sub_begin();
     nvn_be_shutdown_session(); nvn_unimpl_reset(); memset(g_pg_gen, 0, sizeof g_pg_gen); g_pg_tracked = 1; g_nbw = 0; g_dirty_now = 100;
@@ -2908,6 +2927,7 @@ int main(int argc, char **argv) {
     t_registry();
     t_decl_view();
     t_buf_mirror();
+    t_buf_mirror_fail_once();
     t_buf_ops();
     t_copy_b2t();
     t_pass_clear_fold();
