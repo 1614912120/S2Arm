@@ -36,6 +36,11 @@ struct fd_stage {
     uint32_t fragment_output_map;   // 片元阶段：每个颜色目标 4 位（RGBA）= 着色器写了哪些输出分量；读不到为全 1
 };
 
+/* 句柄放在游戏用户常量缓冲里的一个 32 位字（v1 uboHandle / sampler.handle；iOS nvn_refl.h NVN_RB_TEXU / SAMPU / TBUFU 的 reg / off / sid / pair）：
+ * 用户常量槽 slot 的字节 offset 处；sid = 这个字是采样器号（读出后左移 20）；pair = 同一句柄的另一半（pair_sid：那半是采样器号字，左移 20 后相或）。 */
+struct fd_ubo_word { uint8_t slot, sid, pair, pair_slot, pair_sid; uint16_t offset, pair_offset; };
+enum { FD_SAMP_NONE = 0, FD_SAMP_UBO, FD_SAMP_ID, FD_SAMP_SLOT };   // fd_binding.samp_src
+
 struct fd_binding {
     int set, binding, kind;   // kind: 0 uniform/support, 1 storage, 2 texture, 3 image
     int slot;
@@ -46,6 +51,12 @@ struct fd_binding {
     int16_t tex_slot;         // 组合槽 0..31 或分离贴图槽 128..255；-1 = 未解析
     int16_t samp_slot;        // -1 = 组合句柄；0..127 = 分离采样器来源槽
     uint8_t texel_buffer;     // 真实 SPIR-V 证明该 texture 是只读 Buffer；不是普通采样图像
+    // kind==2 且 tex_ubo = 1：贴图句柄不在槽里，在用户常量缓冲 tex_u 处（_b.json tex_ubo / tbuf_ubo）。此时 tex_slot = -1。
+    //   samp_src = 组合采样的采样器从哪来：FD_SAMP_UBO = 常量缓冲 samp_u 处的字；FD_SAMP_ID = 常量采样器号 samp_val；
+    //   FD_SAMP_SLOT = NVN 采样器槽 samp_val；FD_SAMP_NONE = 着色器没有采样器半边
+    uint8_t tex_ubo, samp_src;
+    uint16_t samp_val;
+    struct fd_ubo_word tex_u, samp_u;
     int16_t ubo_slot;         // kind==0 的 NVN 用户槽（cbuf - 3，clamp 到 0）
     uint8_t is_support;       // kind==0 且 stage=="program"（SupportBuffer）
     // kind==1 的地址来源（编译期从 ShaderProgramInfo.SBuffers 解析）：
