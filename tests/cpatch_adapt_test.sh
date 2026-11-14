@@ -263,6 +263,38 @@ got17, why17 = cpatch.port_writes([(0x280, mzh(u16)), (0x284, mkl(u16))], 21 / 9
 ck(f'⑰ 先高后低 / X 寄存器的 movz / movk 也认、也移植（实得 先高后低 {[x[:2] for x in hl17]} 剩 {lhl17}；X {[x[:2] for x in x17]} 剩 {lx17}；W X 混用 {mix17}；移植 {got17} {why17}）',
    [x[:2] for x in hl17] == [(0x280, 'movpair')] and lhl17 == 0 and [x[:2] for x in x17] == [(0x2A0, 'movpair')] and lx17 == 0 and mix17 == []
    and sorted(got17 or []) == [(0x300, mzh(u16)), (0x304, mkl(u16))])
+# ⑱ / ⑲ 只改高半的 movk（11-14 补丁库体检：一类补丁只写 movk w9,#hi,lsl16，低半留程序里 16:9 的 movz w9,#0x8e39；32:9 = 0x4063 + 0x8e39 正好 3.5556）
+#    期望（手算）：识别 —— 只写 movk #0x4015 认成 movk（21:9）；补丁连低半也写了（movz #lo(43:18) + movk #0x4018 = 2.3889）按 A = 2.4 不认（不按高半松容差凑）；
+#    移植 —— 新版 0x400 movk w9,#0x3fe3,lsl16 → 写 0x400 = 补丁那条；合成 —— 同 ⑤ 的程序（0x110 movz w10,#0x8e39 / 0x114 movk w10,#0x3fe3），
+#    四份只改 0x114 的高半 → 与 ⑤ 同表同行：0x110 改读槽 1016（b95fc20a）、0x114 换 nop
+hi = lambda A: struct.unpack('<I', struct.pack('<f', A))[0] >> 16
+mkh = lambda v, rd=9: (0x72A00000 | (v << 5) | rd).to_bytes(4, 'little')
+p18 = cpatch.aspect_classify([(0x500, mkh(0x4015))], 21 / 9)[0]
+u18 = struct.unpack('<I', struct.pack('<f', 43 / 18))[0]
+q18 = cpatch.aspect_classify([(0x500, mz(u18, 9)), (0x504, mkh(u18 >> 16))], 2.4)[0]
+im18 = bytearray(0x1000); im18[0x3FC:0x400] = mz(r16, 9); im18[0x400:0x404] = mkh(0x3FE3)
+got18, why18 = cpatch.port_writes([(0x500, mkh(0x4015))], 21 / 9, bytes(im18), 0x800)
+r18 = T + '/root18'; shutil.copytree(r5, r18, ignore=shutil.ignore_patterns('cpatch*'))
+idx18 = T + '/e18/widescreen'; os.makedirs(idx18); rows18 = ['game\ttitle_id\tpath\ttype\tsource\tlicense\tin_pack\tsha256\taspect\torigin']
+for i, (w, hh) in enumerate([(21, 9), (32, 9), (43, 18), (16, 10)]):
+    body = f'@nsobid-{BID}\n@flag offset_shift 0x100\n// {w}:{hh} Aspect Ratio\n@enabled\n00000114 {mkh(hi(w / hh), 10).hex().upper()}\n@stop\n'
+    os.makedirs(f'{idx18}/f/{i}'); open(f'{idx18}/f/{i}/1.0.4.pchtxt', 'w').write(body)
+    rows18.append(f"\t0100A3501946E000\tf/{i}/1.0.4.pchtxt\tpchtxt\to/r\tMIT\tyes\t\t\to/r/Aspect Ratio/{w}'{hh}/exefs/1.0.4.pchtxt")
+open(idx18 + '/INDEX.tsv', 'w').write('\n'.join(rows18) + '\n'); cpatch.plan(r18, '', [idx18])
+got18t = sorted((c[0], c[2], c[7]) for c in (l.split('\t') for l in open(r18 + '/cpatch.tsv', encoding='utf-8').read().splitlines()[1:]))
+rows18r = {tuple(l.split('\t# ')[0].split('\t')) for l in open(r18 + '/cpatch_rows.tsv').read().splitlines()}
+ck(f'⑱ 只改高半的 movk：认、不误认整对、移植、合成（实得 识别 {p18}；整对 {q18}；移植 {got18} {why18}；表 {got18t}；行多 {sorted(rows18r - want5)} 缺 {sorted(want5 - rows18r)}）',
+   p18 == [(0x500, 'movk', 'a')] and q18 == [] and got18 == [(0x400, mkh(0x4015))]
+   and got18t == [(f'wsauto:{fid5}:n', '1', 'k1016::@a4'), (f'wsauto:{fid5}:w', '0', 'k1016::@a4')] and rows18r == want5)
+r19 = T + '/root19'; shutil.copytree(r5, r19, ignore=shutil.ignore_patterns('cpatch*'))
+idx19 = T + '/e19/widescreen'; os.makedirs(idx19 + '/f/0')
+open(idx19 + '/f/0/1.0.4.pchtxt', 'w').write(f'@nsobid-{BID}\n@flag offset_shift 0x100\n// 32:9 Aspect Ratio\n@enabled\n00000114 {mkh(0x4063, 10).hex().upper()}\n@stop\n')
+open(idx19 + '/INDEX.tsv', 'w').write('game\ttitle_id\tpath\ttype\tsource\tlicense\tin_pack\tsha256\taspect\torigin\n\t0100A3501946E000\tf/0/1.0.4.pchtxt\tpchtxt\to/r\tMIT\tyes\t\t32:9\to/r/x/[32:9]/exefs/1.0.4.pchtxt\n')
+cpatch.plan(r19, '', [idx19])
+t19 = sorted((c[2], c[7]) for c in (l.split('\t') for l in open(r19 + '/cpatch.tsv', encoding='utf-8').read().splitlines()[1:]))
+rows19 = {tuple(l.split('\t# ')[0].split('\t')) for l in open(r19 + '/cpatch_rows.tsv').read().splitlines()}
+ck(f'⑲ 单份只改高半（32:9 只写 movk #0x4063）单份参数化：与 ⑤ 同行（实得 表 {t19}；行多 {sorted(rows19 - want5)} 缺 {sorted(want5 - rows19)}）',
+   t19 == [('0', 'k1016::@a4'), ('1', 'k1016::@a4')] and rows19 == want5)
 sys.exit(bad)
 EOF
 rc=$?; [ $rc = 0 ] && echo "✅ cpatch_adapt_test 全过" || { echo "🔴 cpatch_adapt_test 有不通项"; exit 1; }
