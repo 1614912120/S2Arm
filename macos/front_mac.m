@@ -1796,7 +1796,7 @@ void s2a_front_run(void (*guest_main)(void)) {
         NSApplication *app = NSApplication.sharedApplication;
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
         S2AMacDelegate *delegate = [S2AMacDelegate new]; app.delegate = delegate; g_delegate = delegate;
-        // 心跳（#1050）：每 10 秒一行实占 / 出帧 / 读写盘 / 缺页读入（runtime/src/energy.c s2a_heartbeat_mac；只此一处用，不进 native.h），后台串行队列上打，不占主线程
+        // 心跳（#1050）：每 10 秒一行实占 / 出帧 / 读写盘 / 缺页读入（macos/heartbeat_mac.c s2a_heartbeat_mac；只此一处用，不进 native.h），后台串行队列上打，不占主线程
         { void s2a_heartbeat_mac(void); static dispatch_source_t hb; dispatch_queue_t q = dispatch_queue_create("s2a.heartbeat", DISPATCH_QUEUE_SERIAL);
           hb = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
           dispatch_source_set_timer(hb, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), 10 * NSEC_PER_SEC, NSEC_PER_SEC);
