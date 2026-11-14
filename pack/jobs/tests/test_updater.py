@@ -254,6 +254,12 @@ class NoticeTests(unittest.TestCase):
             {"id": "bad", "platforms": "mac", "text": self.ITEM["text"]}]}
         self.assertEqual([(n["id"], n["level"]) for n in updater.notice_messages(data, "mac")], [("a1", "info"), ("m0", "info")])
         self.assertEqual([n["id"] for n in updater.notice_messages(data, "windows")], ["w2", "a1"])   # 有 messages 就不再看顶层那条（给旧版看的）
+        # maxVersion（11-14）：只给这一版及更早的看；新版看不到，版本号读不出（开发版后缀照样认前三段）时按版本比，没给 current 照常显示
+        old = {"schema": 1, "messages": [{"id": "old", "maxVersion": "0.3.9", "text": {"zh-Hans": "旧", "en": "old"}}]}
+        self.assertEqual([n["id"] for n in updater.notice_messages(old, "mac", "0.3.9")], ["old"])
+        self.assertEqual([n["id"] for n in updater.notice_messages(old, "mac", "0.3.10-dev+e6403d")], [])
+        self.assertEqual([n["id"] for n in updater.notice_messages(old, "mac", "0.4.0")], [])
+        self.assertEqual([n["id"] for n in updater.notice_messages(old, "mac")], ["old"])
 
     def test_invalid_shapes_are_not_shown(self):
         for bad in ({"schema": 2, "id": "a", "text": self.ITEM["text"]}, {"schema": 1, "text": self.ITEM["text"]},
