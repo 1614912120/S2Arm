@@ -527,6 +527,15 @@ class AndroidDeliveryTest(unittest.TestCase):
              patch.dict(os.environ, {'S2A_ANDROID_SKIP_APPLE_ARTIFACTS': '1'}):
             entries = producer.entries_from_root(str(root), str(third))
         self.assertEqual([name for name, _ in entries if name.startswith('shaders/')], ['shaders/vulkan/direct'])
+        # #1434 新图形层的离线库 shaders/direct/b-<链>-vk 进包；同目录 Apple 的 Metal 库（不带 -vk）不进
+        for lib in ('b-0be3f28548fd-vk', 'b-0be3f28548fd'):
+            (root / 'shaders/direct' / lib).mkdir(parents=True); (root / 'shaders/direct' / lib / 'lib.idx').write_text('fixture')
+        fourth = self.base / 'fourth/modules'; fourth.mkdir(parents=True)
+        with patch.object(producer, 'rewrite'), patch.object(producer, 'stage_address_requirements', return_value='need'), \
+             patch.dict(os.environ, {'S2A_ANDROID_SKIP_APPLE_ARTIFACTS': '1'}):
+            entries = producer.entries_from_root(str(root), str(fourth))
+        self.assertEqual([name for name, _ in entries if name.startswith('shaders/')],
+                         ['shaders/vulkan/direct', 'shaders/direct/b-0be3f28548fd-vk'])
         for name in ('widen_enable.handheld.tsv', 'widen_full.handheld.tsv', 'widen_verified.tsv'):
             self.assertEqual((stage / name).read_text(), (root / name).read_text())
         second_stage = self.base / 'second/modules'; second_stage.mkdir(parents=True)
