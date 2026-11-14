@@ -33,7 +33,6 @@ struct ExportView: View {
                     if sgradeNothing != game.id {   // 都没有（这个版本没命中、别的版本也没有）就整张不出（11-13 维护者「没匹配就什么都不显示」），换一款再出
                         SGradeCard(model: model, gameID: game.id, nothing: { sgradeNothing = game.id })   // S 级优化（Beta，11-13）：这款这个版本命中了哪些社区补丁，命中的出包时自动打入
                     }
-                    Text(BackendText.launcherText("batch.hint", language: loc.lang == .zh ? "zh-Hans" : "en")).font(.manrope(12.5)).foregroundStyle(.secondary)
                     platforms
                 }
                 .padding(.horizontal, 40).padding(.top, 22).padding(.bottom, 40)

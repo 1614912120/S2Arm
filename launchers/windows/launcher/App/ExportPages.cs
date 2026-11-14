@@ -341,7 +341,6 @@ public sealed partial class EnvironmentWindow
         }
         body.Children.Add(GameHeader(game));
         body.Children.Add(SGradeCard(game));   // S 级优化（Beta，11-13，同 Mac SGradeCard.swift）：这款这个版本命中了哪些社区补丁，命中的出包时自动打入
-        body.Children.Add(Muted(T("batch.hint")));   // 批量出包（v0.2.4）：添加游戏一次放进多款，导入完列成清单连续出包
 
         // platforms
         var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
