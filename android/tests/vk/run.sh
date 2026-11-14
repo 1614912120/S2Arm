@@ -173,7 +173,7 @@ if [ "$mode" = "--gs-core" ]; then
          "$repo/android/native/nvn/nvn_pipe_flight.c" "$repo/android/native/nvn/nvn_vk_pipe_once.c"
          "$repo/android/native/nvn/nvn_vk_driver_cache.c"
          "$repo/android/native/direct/source_store.c" "$repo/android/native/direct/control.c" "$repo/android/native/direct/input_identity.c" "$repo/android/native/direct/texture_facts.c"
-         "$repo/android/native/direct/sha256.c" "$repo/android/native/direct/json.c" "$repo/android/native/direct/jv.c" "$repo/android/native/direct/compile_request.c"
+         "$repo/android/native/direct/sha256.c" "$repo/android/native/direct/json.c" "$repo/android/native/direct/jv.c" "$repo/android/native/direct/libpack_vk.c" "$repo/android/native/direct/compile_request.c"
          "$repo/android/native/direct/offline_library.c" "$repo/android/native/direct/program_cache.c" "$repo/runtime/src/direct_host.c")
     # offline_library.c / program_cache.c 用 realpath / openat 等 POSIX.1-2008 接口：glibc 在 -std=c11 下不暴露
     # （与 android/tests/nvk_shader_pool_test.py 的说明同源），所以这一档必须带 _GNU_SOURCE。
