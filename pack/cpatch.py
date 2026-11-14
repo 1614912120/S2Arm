@@ -348,6 +348,34 @@ def _movpair_at(get, o):
     return None
 
 
+MOVK_HI_TOL = 2 ** -7   # 只改高半的单精度：低半是程序里原来那份（16:9 的 0x8e39 等），值只准到高 16 位，容差按尾数 7 位
+
+
+def _movk_hi(w):
+    """movk Rd, #hi, lsl 16（W 或 X）→ (Rd 号, 是否 X, hi)；不是 → None"""
+    if w is None or w & 0x7FE00000 != 0x72A00000: return None
+    return w & 31, bool(w >> 31), (w >> 5) & 0xFFFF
+
+
+def _hi_val(hi, lo=0x8000):
+    return struct.unpack('<f', struct.pack('<I', (hi << 16) | lo))[0]
+
+
+def _movk_partner(get, o):
+    """o 处是只改高半的 movk Rd,#hi,lsl16（11-14 补丁库体检：一类宽屏补丁只写这一条，低半留程序里原来的 movz Rd,#lo）：
+    往前 MOVPAIR_GAP 字节内找同一 Rd、同宽的 movz Rd,#lo（低半），中途同一 Rd 被别的 movz / movn / movk 赋值就停 → (movz 偏移, 低半)；没有 → None。
+    get(偏移) → 程序映像里那一处的字"""
+    mk = _movk_hi(get(o))
+    if not mk: return None
+    for d in range(4, MOVPAIR_GAP + 4, 4):
+        y = get(o - d)
+        if y is None: return None
+        if y & 31 == mk[0] and y & 0x1F800000 == 0x12800000:   # 同一 Rd 的 move-wide
+            if y & 0x7FE00000 == 0x52800000 and bool(y >> 31) == mk[1]: return o - d, (y >> 5) & 0xFFFF
+            return None
+    return None
+
+
 def _ldr_imm(w):
     """ldr <Rt>, [<Xn>, #imm]（无符号偏移；整数 32/64 位、浮点 S/D）→ (Rn, 偏移, 是否浮点, 字节数, Rt)；不是 → None"""
     if w & 0x3B400000 != 0x39400000 or (w >> 23) & 1: return None
@@ -573,6 +601,17 @@ def adapt_families(cands, exefs, log, root=None):
                             words[o] = _ldr_slot(0xB9400000 | (16 << 5) | pr[0][0], slot(k, 's')); marks[o] = 'kv'; ks[o] = k
                             words[o + pr[0][2]] = 0xD503201F; skip.add(o + pr[0][2]); continue
                         if ref is None: raise ValueError(f'{side} 模板 {mod}+{o:#x} 的 movz / movk 值拟合不上画幅')
+                    mks = [_movk_hi(v) for v in ws]   # 只改高半的 movk：低半那条 movz 在程序里（各份都没写），改它读值槽、movk 换 nop
+                    pt = _movk_partner(lambda q: ws[0] if q == o else None if q in offs or not 0 <= q < text_end else int.from_bytes(im[q:q + 4], 'little'), o) \
+                        if o < text_end and all(mks) and len({m[:2] for m in mks}) == 1 and not any(pr) else None
+                    if pt and (ref is not None or len({m[2] for m in mks}) > 1):
+                        only2 = ref.get(pt[0]) if ref is not None else None   # 另一侧把式记在低半那条 movz 的位置上
+                        k = _fit(As, [_hi_val(m[2], pt[1]) for m in mks], MOVK_HI_TOL, only2)
+                        if k and (ref is None or only2):
+                            if isfill(o) or isfill(pt[0]): raise ValueError(f'{side} 模板 {mod}+{o:#x} 的只改高半 movk 在填充区')
+                            words[pt[0]] = _ldr_slot(0xB9400000 | (16 << 5) | mks[0][0], slot(k, 's')); marks[pt[0]] = 'kv'; ks[pt[0]] = k
+                            words[o] = 0xD503201F; continue
+                        if ref is None: raise ValueError(f'{side} 模板 {mod}+{o:#x} 的只改高半 movk 值拟合不上画幅')
                     if all(v == ws[0] for v in ws) and not only:
                         words[o] = fam_max.get(o, ws[0]); continue
                     fm = [_fmov_imm(v) for v in ws]
@@ -693,7 +732,7 @@ def single_aspects(c):
 
 def aspect_classify(writes, A):
     """一份宽屏补丁的写入里认出随画幅变的值（只看补丁本身，不要游戏程序；tools/ws_wash.py 体检与跨版本移植共用）：
-    → (画幅值 [(字偏移, 写法 fmov / movpair / float, 式)], 渲染尺寸对 [(宽偏移, 高偏移, 宽, 高)], 定值字数)。
+    → (画幅值 [(字偏移, 写法 fmov / movpair / movk（只改高半）/ float, 式)], 渲染尺寸对 [(宽偏移, 高偏移, 宽, 高)], 定值字数)。
     fmov 只能编约 2 位有效数字，容差 0.07，其余 2e-3；渲染尺寸 = 一对 MOV 立即数宽 ÷ 高 = A（1%）、宽 ≥ 160"""
     w = {}
     for off, b in writes:
@@ -710,6 +749,11 @@ def aspect_classify(writes, A):
         if mp:
             k = _fit([A], [mp[1]], 2e-3)
             if k: par.append((o, 'movpair', k)); used |= {o, o + mp[2]}; continue
+        mk = _movk_hi(x)
+        if mk and not any(words.get(q, 0) & 0x7F80001F == 0x52800000 | mk[0] for q in range(o - 64, o, 4)):
+            # 只改高半（低半在程序里）：按高 16 位比。补丁自己在前面 64 字节内写了同一寄存器的 movz（整对、隔太远、W / X 混用）不按高半松容差认
+            k = _fit([A], [_hi_val(mk[2])], MOVK_HI_TOL)
+            if k: par.append((o, 'movk', k)); used.add(o); continue
         f = struct.unpack('<f', struct.pack('<I', x))[0]
         if 0.05 < abs(f) < 50:
             k = _fit([A], [f], 2e-3)
@@ -751,6 +795,9 @@ def port_writes(writes, A, im, text_end):
         x = ww[o]; t = ADAPT_F[k](R16)
         if kind == 'fmov':
             fm = _fmov_imm(x); cands = scan_w(0, text_end, lambda y: _fmov_imm(y) == fm and abs(_fmov_val(y) - t) <= 0.07)
+        elif kind == 'movk':   # 原值 = 同 Rd、同宽、高半为式(16/9) 高 16 位的 movk
+            mk = _movk_hi(x); th = struct.unpack('<I', struct.pack('<f', t))[0] >> 16
+            cands = scan_w(0, text_end, lambda y: _movk_hi(y) == (mk[0], mk[1], th))
         elif kind == 'movpair':
             rd = x & 31; tgap = {}
             def hit(q):
@@ -820,12 +867,18 @@ def _adapt_single(c, exefs, log, root, side, fid=None):
             if fm and o < text_end and not isfill(o):
                 k = _fit([A], [_fmov_val(x)], 0.07)
                 if k: rec[o] = ('fm', k); continue
+            pt = _movk_partner(lambda q: wm[q] if q in wm else int.from_bytes(im[q:q + 4], 'little') if 0 <= q < text_end else None, o) if not pr else None
+            if pt and o < text_end and not isfill(o) and not isfill(pt[0]) and pt[0] not in rec and pt[0] not in wm:
+                k = _fit([A], [_hi_val(_movk_hi(x)[2], pt[1])], MOVK_HI_TOL)
+                if k: rec[pt[0]] = ('mp', k); rec[o] = ('nop', None); continue
             if not fm and not pr:
                 f = struct.unpack('<f', struct.pack('<I', x))[0]
                 k = _fit([A], [f], 2e-3) if 0.05 < abs(f) < 50 else None
                 if k and o >= code_end: rec[o] = ('fd', k)
         return rec
     A, rec = max(((B, one(B)) for B in As), key=lambda x: sum(1 for v in x[1].values() if v[0] in ('mp', 'fm', 'fd', 'x')))
+    for o in rec:   # 只改高半的 movk：低半那条 movz 在程序里、补丁没写，模板要改它（读值槽）
+        if o not in wm: wm[o] = int.from_bytes(im[o:o + 4], 'little')
     if not any(v[0] in ('mp', 'fm', 'fd', 'x') for v in rec.values()):
         log.append(f'不参数化\t{c["id"]}\t{mod}\t{c["name"][:40]}\t认不出随画幅变的值（画幅 {A:.3f}），照原样'); return None
     slots, words, marks, adata = {}, {}, {}, []
