@@ -23,6 +23,10 @@ public final class LibraryActivity extends Activity {
     private static final int PICK_PACKAGE = 1;
     // A caller opts in to consuming one direct child of files/import/.
     public static final String EXTRA_IMPORT_STAGING = "org.s2arm.android.IMPORT_STAGING";
+    /** 电脑直传资源包（ImportReceiver）：开本地套接字 s2arm-import.&lt;包名&gt;，只收 adb（shell uid）连进来的一次传输。 */
+    public static final String EXTRA_IMPORT_RECEIVE = "org.s2arm.android.IMPORT_RECEIVE";
+    static final int SHELL_UID = 2000;          // adb forward 的连接由 adbd 发起，对端是 shell 用户
+    static final int RECEIVE_WAIT_MS = 120000;  // 开着等电脑连进来的最长时间
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -193,12 +197,56 @@ public final class LibraryActivity extends Activity {
         super.onResume();
         fpsOverlay.setChecked(getSharedPreferences("display", MODE_PRIVATE).getBoolean("fps", false));
         if (library != null) {
+            boolean receive = getIntent().hasExtra(EXTRA_IMPORT_RECEIVE);
+            getIntent().removeExtra(EXTRA_IMPORT_RECEIVE);
             String staging = getIntent().getStringExtra(EXTRA_IMPORT_STAGING);
             getIntent().removeExtra(EXTRA_IMPORT_STAGING); // do not repeat on later resumes
-            library.scanImports(staging);
+            if (receive) receiveImport(); else library.scanImports(staging);
         }
     }
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); }
+
+    // 直传：本地套接字收一次资源包进私有 files/import/<名字>，收完照常 scanImports（按 index.tsv 逐文件核）。
+    //   不经共享存储（FUSE）。只认 shell uid 的对端：别的 App 连进来直接断开、接着等
+    private void receiveImport() {
+        final GameLibrary lib = library;
+        final String name = "s2arm-import." + getPackageName();
+        final java.io.File parent = new java.io.File(getFilesDir(), "import");
+        new Thread(() -> {
+            android.net.LocalServerSocket server;
+            try { server = new android.net.LocalServerSocket(name); }
+            catch (java.io.IOException e) { android.util.Log.e("S2Arm", "Game import receiver: cannot listen on " + name + ": " + e.getMessage()); return; }
+            final android.net.LocalServerSocket srv = server;
+            Thread timer = new Thread(() -> {
+                try { Thread.sleep(RECEIVE_WAIT_MS); srv.close(); } catch (InterruptedException | java.io.IOException ignored) { }
+            }, "s2a-import-wait");
+            timer.setDaemon(true); timer.start();
+            android.util.Log.i("S2Arm", "Game import receiver listening: " + name);
+            try {
+                while (true) {
+                    android.net.LocalSocket s;
+                    try { s = srv.accept(); } catch (java.io.IOException closed) { android.util.Log.e("S2Arm", "Game import receiver: nobody connected"); return; }
+                    try (android.net.LocalSocket c = s) {
+                        if (c.getPeerCredentials().getUid() != SHELL_UID) {
+                            android.util.Log.e("S2Arm", "Game import receiver: refused peer uid " + c.getPeerCredentials().getUid());
+                            continue;
+                        }
+                        timer.interrupt();
+                        long t0 = System.nanoTime();
+                        java.io.File dir = ImportReceiver.receive(c.getInputStream(), c.getOutputStream(), parent);
+                        android.util.Log.i("S2Arm", "Game import received " + dir.getName() + " in " + (System.nanoTime() - t0) / 1000000 + " ms");
+                        runOnUiThread(() -> lib.scanImports(dir.getAbsolutePath()));
+                        return;
+                    } catch (java.io.IOException e) {
+                        android.util.Log.e("S2Arm", "Game import of requested directory refused: receive failed: " + e.getMessage());
+                        return;
+                    }
+                }
+            } finally {
+                try { srv.close(); } catch (java.io.IOException ignored) { }
+            }
+        }, "s2a-import-receive").start();
+    }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request == PICK_PACKAGE && result == RESULT_OK && data != null && data.getData() != null) library.importTree(data.getData());

@@ -13,6 +13,9 @@ LIBRARY_ACTIVITY = JAVA / 'org/s2arm/android/LibraryActivity.java'
 
 STUBS = {
 'android/os/Parcelable.java': '''package android.os; public interface Parcelable {}''',
+'android/net/LocalServerSocket.java': '''package android.net; public class LocalServerSocket implements java.io.Closeable { public LocalServerSocket(String n) throws java.io.IOException {} public LocalSocket accept() throws java.io.IOException { throw new java.io.IOException("closed"); } public void close() {} }''',
+'android/net/LocalSocket.java': '''package android.net; public class LocalSocket implements java.io.Closeable { public Credentials getPeerCredentials() { return new Credentials(); } public java.io.InputStream getInputStream() { return null; } public java.io.OutputStream getOutputStream() { return null; } public void close() {} }''',
+'android/net/Credentials.java': '''package android.net; public class Credentials { public int getUid() { return 0; } }''',
 'android/net/Uri.java': '''package android.net; public class Uri implements android.os.Parcelable {}''',
 'android/content/ClipData.java': '''package android.content; import android.net.Uri; public class ClipData {
  public static ClipData newRawUri(CharSequence label,Uri uri){throw new AssertionError("diagnostic share unexpectedly called");} }''',
@@ -59,7 +62,7 @@ STUBS = {
  public static Uri buildChildDocumentsUriUsingTree(Uri u,String s){return u;}
  public static Uri buildDocumentUriUsingTree(Uri u,String s){return u;}
  public static class Document { public static final String COLUMN_DOCUMENT_ID="id", COLUMN_DISPLAY_NAME="name", COLUMN_MIME_TYPE="type", MIME_TYPE_DIR="dir"; } }''',
-'android/util/Log.java': '''package android.util; public class Log { public static final int DEBUG=3; public static int d(String a,String b){return 0;} public static boolean isLoggable(String a,int b){return false;} public static final java.util.List<String> messages=new java.util.concurrent.CopyOnWriteArrayList<>(); public static int i(String a,String b){messages.add(b);return 0;} public static int w(String a,String b,Throwable t){return 0;} }''',
+'android/util/Log.java': '''package android.util; public class Log { public static final int DEBUG=3; public static int d(String a,String b){return 0;} public static boolean isLoggable(String a,int b){return false;} public static final java.util.List<String> messages=new java.util.concurrent.CopyOnWriteArrayList<>(); public static int i(String a,String b){messages.add(b);return 0;} public static int w(String a,String b,Throwable t){return 0;} public static int e(String a,String b){messages.add(b);return 0;} }''',
 'android/util/DisplayMetrics.java': '''package android.util; public class DisplayMetrics { public float density=1; }''',
 'android/content/res/Resources.java': '''package android.content.res; public class Resources { public android.util.DisplayMetrics getDisplayMetrics(){return new android.util.DisplayMetrics();} }''',
 'android/os/Bundle.java': '''package android.os; public class Bundle {}''',

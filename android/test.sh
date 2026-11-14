@@ -427,6 +427,11 @@ s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" \
     "$android_dir/tests/GameInstallTest.java"
 s2a_gate_step java -cp "$out/java" org.s2arm.android.GamePackTest
 s2a_gate_step java -cp "$out/java" org.s2arm.android.GameInstallTest
+# 资源包直传接收（电脑经 adb forward 直接写进 App 私有目录，不经共享存储）
+s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" \
+    "$android_dir/app/src/main/java/org/s2arm/android/ImportReceiver.java" \
+    "$android_dir/tests/ImportReceiverTest.java"
+s2a_gate_step java -cp "$out/java" org.s2arm.android.ImportReceiverTest
 s2a_gate_step "$PY" "$android_dir/tests/deploy_game_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/test_app_id_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/debug_app_admission_test.py"

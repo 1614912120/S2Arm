@@ -1,0 +1,105 @@
+package org.s2arm.android;
+
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+
+/**
+ * 资源包直传（电脑 → App 私有目录），不经共享存储：电脑端 android/tools/deploy_game.py 经
+ * `adb forward tcp:N localabstract:<socketName>` 连到 LibraryActivity 开的本地套接字，逐个文件把字节流进来。
+ * 原先先 adb push 到 /sdcard/Android/data/…/import 再由 App 读进私有目录：vivo 上 App 经共享存储（FUSE）
+ * 读 1.7 GB 的大文件会停在中途不返回（11-13 奥日导入卡死）；iOS 是 devicectl 直接写进 App 沙盒，没有这一层。
+ *
+ * 协议（每行 UTF-8、以 \n 结尾）：App 先发 READY 1（电脑据此确认套接字已开：adb forward 在设备端没人监听时也先接 TCP、随后才断）；电脑发
+ *   S2A-IMPORT 1 &lt;名字&gt;
+ *   F &lt;字节数&gt; &lt;相对路径&gt;    后面紧跟这么多字节，可重复
+ *   END
+ * 回一行：OK &lt;文件数&gt; &lt;字节数&gt; 或 ERR &lt;原因&gt;。
+ * 收进 parent/.&lt;名字&gt;.part，收完整才改名成 parent/&lt;名字&gt;（parent = 私有 files/import），
+ * 之后照常走 GameLibrary.scanImports（逐文件按 index.tsv 核大小与 SHA-256，这里不重复校验内容）。
+ * 本类不碰安卓 API，套接字与对端身份（只认 adb 的 shell uid）在 LibraryActivity。
+ */
+final class ImportReceiver {
+    private ImportReceiver() { }
+
+    static final int VERSION = 1;
+    private static final int MAX_LINE = 4096;
+
+    /** 收一次传输；成功返回落好的目录，失败抛异常（已回 ERR、临时目录已删）。 */
+    static File receive(InputStream rawIn, OutputStream out, File parent) throws IOException {
+        InputStream in = new BufferedInputStream(rawIn, 1 << 20);
+        File part = null;
+        try {
+            reply(out, "READY " + VERSION);
+            String[] head = line(in).split(" ", 3);
+            if (head.length != 3 || !head[0].equals("S2A-IMPORT") || !head[1].equals(String.valueOf(VERSION)))
+                throw new IOException("bad header");
+            String name = head[2];
+            if (!name.matches("[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}")) throw new IOException("bad package name: " + name);
+            if (!parent.isDirectory() && !parent.mkdirs()) throw new IOException("cannot create " + parent);
+            part = new File(parent, "." + name + ".part");
+            GameInstall.deleteTree(part);
+            if (!part.mkdirs()) throw new IOException("cannot create " + part);
+            long files = 0, bytes = 0;
+            byte[] buf = new byte[1 << 20];
+            while (true) {
+                String l = line(in);
+                if (l.equals("END")) break;
+                String[] f = l.split(" ", 3);
+                if (f.length != 3 || !f[0].equals("F")) throw new IOException("bad entry line");
+                long size;
+                try { size = Long.parseLong(f[1]); } catch (NumberFormatException e) { throw new IOException("bad size"); }
+                if (size < 0) throw new IOException("bad size");
+                File target = new File(part, safePath(f[2]));
+                File dir = target.getParentFile();
+                if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("cannot create " + dir);
+                try (FileOutputStream os = new FileOutputStream(target)) {
+                    for (long left = size; left > 0; ) {
+                        int n = in.read(buf, 0, (int) Math.min(buf.length, left));
+                        if (n < 0) throw new IOException("stream ended inside " + f[2]);
+                        os.write(buf, 0, n); left -= n;
+                    }
+                }
+                files++; bytes += size;
+            }
+            File done = new File(parent, name);
+            GameInstall.deleteTree(done);
+            if (!part.renameTo(done)) throw new IOException("cannot move " + part + " into place");
+            part = null;
+            reply(out, "OK " + files + " " + bytes);
+            return done;
+        } catch (IOException | RuntimeException e) {
+            if (part != null) GameInstall.deleteTree(part);
+            try { reply(out, "ERR " + String.valueOf(e.getMessage()).replace('\n', ' ')); } catch (IOException ignored) { }
+            throw e;
+        }
+    }
+
+    // 相对路径：不许绝对、不许 . / .. / 空段、不许反斜杠
+    static String safePath(String p) throws IOException {
+        if (p.isEmpty() || p.startsWith("/") || p.indexOf('\\') >= 0 || p.indexOf('\0') >= 0) throw new IOException("bad path: " + p);
+        for (String seg : p.split("/", -1))
+            if (seg.isEmpty() || seg.equals(".") || seg.equals("..")) throw new IOException("bad path: " + p);
+        return p;
+    }
+
+    private static String line(InputStream in) throws IOException {
+        ByteArrayOutputStream b = new ByteArrayOutputStream();
+        for (int c; (c = in.read()) != '\n'; ) {
+            if (c < 0) throw new IOException("stream ended");
+            if (b.size() >= MAX_LINE) throw new IOException("line too long");
+            b.write(c);
+        }
+        return new String(b.toByteArray(), StandardCharsets.UTF_8);
+    }
+
+    private static void reply(OutputStream out, String s) throws IOException {
+        out.write((s + "\n").getBytes(StandardCharsets.UTF_8));
+        out.flush();
+    }
+}
