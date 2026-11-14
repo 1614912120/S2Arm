@@ -26,6 +26,7 @@ __attribute__((constructor)) static void cheats_register_host(void) { void (*f)(
 #include "../graphics/metal/gal_abi.h"
 #include "../graphics/nvn/gfx/nvn/nvn_present_fit.h"   // pf_viewport / pf_out_aspect：直连上屏摆放（鼠标当触屏的画面矩形）
 #include <pthread.h>
+#include <dispatch/dispatch.h>   // 主队列踢采样（s2a_mac_ns2_input_changed）用
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
@@ -440,6 +441,7 @@ static GCExtendedGamepad *active_pad(NSArray *controllers) {
 //   手柄事件跟着排队（延迟管线调研：列为权衡而非缺陷）。改挂专用串行队列（对齐 iOS ios/controller.m 的 s2arm.controller.input），
 //   回调只走 pad_event_fast 快速路径：照槽位采样这一只、合键盘 / 鼠标快照发布，不碰主线程的 keys / mouse / config。
 //   120Hz 主线程定时器仍保留：键盘 / 鼠标的粘键核对、补装新连接的手柄、槽位重排、六轴 / 震动 / Home 退出都在那一轮。
+//   Switch 2 Pro 输入不靠定时器拉取：报文线程对变化经 s2a_mac_ns2_input_changed 踢主队列采样（见下，#771），到手即采样。
 // 没有扩展手柄描述、但通用物理描述里有按键的手柄（部分第三方手柄的某些模式、只给简易描述的手柄）：原先整只被忽略、游戏里没反应也没有提示。
 //   按标准键名从 physicalInputProfile 读（参照维护者提供的前端实现 Gamepad.swift 的读法）。六轴 / 震动 / Home 退出仍只认扩展手柄
 static BOOL pad_has_profile_buttons(GCController *c) { return !c.extendedGamepad && c.physicalInputProfile.buttons.count > 0; }
@@ -872,7 +874,10 @@ static void map_pad_inputs(NSDictionary *cfg, NSDictionary *all, NSDictionary *a
     for (int i = 0; i < 4; i++) {
         NSDictionary *binding = cfg[@"axes"][names[i]];
         float v = [axes[binding[@"source"] ?: @""] floatValue];
-        if (fabsf(v) > dz) sticks[i] += (int32_t)(v * ([binding[@"invert"] boolValue] ? -32767 : 32767));
+        // 死区内线性重缩放（pad.c s2a_pad_axis_deadzone，iOS 物理手柄 s2a_pad_stick 同口径；11-14 卡顿诊断手柄项）：
+        //   原实现过阈直接 v×32767，小推杆一过死区输出从 0 突跳死区宽度（缺省 15%）的量，呈「突然窜一下」的阶跃感；
+        //   满幅、反向（invert）、死区宽度配置语义都不变
+        if (fabsf(v) > dz) sticks[i] += (int32_t)(s2a_pad_axis_deadzone(v, dz) * ([binding[@"invert"] boolValue] ? -32767 : 32767));
     }
     *out_buttons = buttons;
 }
@@ -1350,6 +1355,21 @@ static void sample_input(void) {
     publish_input(slot_buttons[0], slot_sticks[0]);   // 玩家 1：旧 ABI + 事件驱动 ABI（含鼠标视角）
     publish_keyboard(muted);   // R5：键盘区原始键态（先落键态再唤醒，泵醒来读到同一拍）
     pthread_mutex_unlock(&g_compose_mu);
+}
+// Switch 2 Pro 输入事件化（11-12 延迟管线调研，同 A2 的事件直达）：ns2_controller.c 的报文线程
+//   （直连传输回调 / 通道读线程）发现快照变化就调这里。此前 NS2 输入靠 120Hz 主线程定时器拉取快照，
+//   每次按键 / 摇杆变化平均多等半个采样周期（~4.2ms）、最坏一整个（~8.3ms），主线程忙于菜单动画时还要排队。
+//   sample_input 必须主线程跑（上面的键鼠 / 槽位表规则），所以这里踢到主队列，与键鼠 / GCController 事件串行；
+//   在途合并：已有一踢未跑就不再排——sample_input 读的永远是最新快照，合并不丢事件，整包心跳重发也不会排队风暴。
+static _Atomic int ns2_sample_pending;
+static void ns2_sample_kick_main(void *unused) {
+    (void)unused;
+    atomic_store(&ns2_sample_pending, 0);   // 先清再采样：采样进行中来的新变化会再排一踢，不会被吞
+    sample_input();
+}
+void s2a_mac_ns2_input_changed(void) {
+    if (atomic_exchange(&ns2_sample_pending, 1)) return;
+    dispatch_async_f(dispatch_get_main_queue(), NULL, ns2_sample_kick_main);
 }
 // 多手柄槽位（服务层 InputPump 按符号查；没导出时退回旧的单手柄 ABI）
 __attribute__((visibility("default"), used)) int s2a_vpad_pad_count(void) { return atomic_load(&pad_live); }

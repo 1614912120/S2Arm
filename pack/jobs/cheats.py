@@ -31,15 +31,28 @@ def cheats_dir(c, gid, create=True):
 
 
 def main_build(c, game):
-    """这款实际运行的主程序构建号前 16 位（大写）：读共用解包目录里的主程序（NSO 头 0x40）。没解过包 = ''（目录里只记了本体的构建号，
+    """这款实际运行的主程序构建号前 16 位（大写）：读主程序 NSO 头 0x40。找的顺序：共用解包目录 → Mac 运行版本 exefs/ → 存下的原始程序
+    （pack/jobs/sgrade.py）→ iPhone 程序件记的 mainBid（11-14：出完包解包目录会删，原先只读它，出过包的款出包页就当「没解过包」、
+    卡片只剩一句通用说明，封面金色 S 也按「库里有这款」乱亮）。都没有 = ''（真没解过包；目录里只记了本体的构建号，
     装了更新的款跑的是更新里的主程序，按目录取会错——11-12 暗黑 3：本体 EAFC2CEF，更新后 2607A74F）"""
-    try:
-        from build import shared_dir
-        with open(shared_dir(c, game) / "extract/exefs/main", "rb") as f:
+    import layout
+    gid = game["id"].upper()
+    def head(p):
+        with open(p, "rb") as f:
             f.seek(0x40)
             return f.read(8).hex().upper()
+    try:
+        from build import shared_dir
+        return head(shared_dir(c, game) / "extract/exefs/main")
     except (OSError, ImportError, Failure):
-        return ""
+        pass
+    for p in (layout.image_mac(c, gid, create=False) / "exefs/main", layout.path(c, gid, "original-exefs", create=False) / "main"):
+        try:
+            if p.is_file():
+                return head(p)
+        except (OSError, Failure):
+            continue
+    return ((layout.game_info(c, gid).get("ios") or {}).get("mainBid") or "")[:16].upper()
 
 
 # 写死地址：指令按「堆 / 别名 / 随机区起点 + 固定偏移」直接寻址（Atmosphere 0 存值、1 条件、5 取值且不以寄存器为基址，第 3 位区号非 0 = 不是主程序区）。

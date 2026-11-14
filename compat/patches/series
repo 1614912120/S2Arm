@@ -593,3 +593,4 @@
 20261114-0125-audio-cb-nonblocking.patch
 20261114-1030-audio-buffer-platform-note.patch
 20261112-2019-audsmx-pump-realtime.patch
+20261115-0007-mulhi-pow2-shift.patch

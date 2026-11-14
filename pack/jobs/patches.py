@@ -164,15 +164,6 @@ def version_key(c, gid, main_bid=""):
     return hashlib.sha256("|".join(f"{k}={(src.get(k) or {}).get('sha256', '')}" for k in keys).encode()).hexdigest()[:12]
 
 
-def has_match(c, gid, main_bid=""):
-    """游戏库列表的金色 S（v0.4.0）：随启动器装的补丁库快照里有这款的包（按程序号 / 主程序构建号）且条目数 > 0。只看本地、不联网（列表不等网络）"""
-    if "snap" not in _MANIFEST:   # 快照清单一个进程只读一次（游戏库列表每款都问）
-        _MANIFEST["snap"] = _snapshot(c)[0]
-    snap = _MANIFEST["snap"]
-    keys = [f"g/{gid.upper()}"] + ([f"b/{main_bid[:16].upper()}"] if len(main_bid) >= 16 else [])
-    return any((snap.get(k) or {}).get("items", 0) > 0 for k in keys)
-
-
 def items_for(c, gid, main_bid):
     """这款的条目：按程序号的包 + 按主程序构建号的包（没写程序号、只认构建号的；sdk 等公共模块不按它认：各游戏同一份二进制，
     按它认会串款，11-12 实测暗黑 3 的 sdk 认上古惑狼赛车的帧率补丁）。每条核内容 sha256，对不上的不收"""
@@ -468,7 +459,7 @@ def match(c):
                 others=[dict(version=v, cats=[k for k in CATS if k in cs]) for v, cs in sorted(others.items(), key=key)])
 
 
-def display_version(c, game):
+def display_version(c, game):   # 解包目录删了：退回游戏库记的版本（catalog version，同游戏库卡片）
     """这款解过包的显示版本号（共用解包目录 unpack.tsv 的 display_version，带更新的款是更新后的版本）；读不到 = ''。
     出包页「S 级优化」写明补丁对应哪个版本用（11-14 维护者：让玩家知道版本对上才打入）"""
     from core import Failure
@@ -480,7 +471,7 @@ def display_version(c, game):
                 return v.strip()
     except (OSError, ImportError, UnicodeDecodeError, Failure):
         pass
-    return ""
+    return str(game.get("version") or game.get("display") or "").lstrip("vV")
 
 
 def bid_hit(build16, theirs):

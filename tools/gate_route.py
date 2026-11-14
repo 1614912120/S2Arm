@@ -67,6 +67,9 @@ def drop_docstrings(txt):
 
 QSEG = re.compile(r'"(?:[^"\\\n]|\\.)*"|\'[^\'\n]*\'')   # 一行里的引号段（左起先到先得：双引号段里的单引号不另算）
 CJK = re.compile(r'[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]')   # 中文字与全角标点
+# 11-14：pack/orch/oneclick_win.py 的 run.sh([...]) 是对象 run 的 sh 方法，按文件名挂到仓库全部 run.sh（tests/vulkan/run.sh → shader_cases），
+#   约 70 支单测因此改 tests/shader_cases 就被选中。紧跟括号的「标识符.后缀(」是调用，不是点名文件（引号里写的路径后面是引号、带目录的写法前面是 /、「x.json (」中间有空格，都不匹配）
+PYCALL = re.compile(r'(?<![\w./-])[A-Za-z_]\w*\.(?:sh|py|c|h|m|mm|cc|cpp|swift|cs|tsv|mk|json)(?=\()')
 CODEISH = re.compile(r'\$\(|`|;|&&|\|\||\|\s|\bsource\s|^["\']\s*(?:\.\s|bash\b|sh\b|python3?\b|exec\b|env\b|[\w./$-]+\.(?:sh|py)\b)')   # 像要执行的段：命令替换、语句分隔、管道、source、以命令开头
 
 
@@ -100,6 +103,7 @@ def _refs(path, by_name, direct):
     src = drop_docstrings(txt) if path.endswith('.py') else txt
     code = '\n'.join(re.sub(r'\s#\s.*$', '', l) for l in src.split('\n') if not l.lstrip().startswith('#'))   # 行尾「  # 说明」也去掉
     code = drop_prose(code)
+    if path.endswith('.py'): code = PYCALL.sub('', code)   # Python 方法调用（run.sh(…)、r.json()）不是文件名
     toks = set(TOK.findall(code)) | {m + '.py' for m in re.findall(r'^\s*(?:from|import)\s+(\w+)', code, re.M)}   # Python 同目录模块 import
     for t in toks:
         # 单测自己（direct）带目录点名的文件按仓库路径认，不限本线目录、不按文件名猜：从整段起逐级去掉开头一段，取第一个与仓库文件路径相同的（「$H/graphics/…」取出来是 H/gfx/…）。

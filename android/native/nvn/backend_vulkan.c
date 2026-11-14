@@ -1775,9 +1775,10 @@ static nvn_gpu_rc buf_create_impl(uint64_t bytes, int mem, const void *init, int
     int closing = g.closing;
     pthread_mutex_unlock(&g_mu);
     if (closing) return fail(err, NVN_GPU_E_STOPPED, "会话正在关闭");
-    if (bytes == 0 || bytes > g.caps.max_buf_bytes)
-        return fail(err, NVN_GPU_E_ARG, "申请 %llu 字节：超出单次分配上限 %llu（maxMemoryAllocationSize；SSBO 描述符范围上限 %llu 是另一项）",
-                    (unsigned long long)bytes, (unsigned long long)g.caps.max_buf_bytes, (unsigned long long)g.caps.max_ssbo_range);
+    // 不按 maxMemoryAllocationSize 预先拒：规范里它是提示（超过「可能」失败、不保证失败），Adreno 830 原厂驱动上
+    //   1508 MiB 的分配实测成功，而上限报 1 GiB（11-14，#1070：1.47 GiB 的池镜像被这里拦下、整局黑屏）。真分配不出来时
+    //   下面 vkAllocateMemory 照实报驱动的错误码。
+    if (bytes == 0) return fail(err, NVN_GPU_E_ARG, "申请 0 字节");
     if (mem != NVN_GPU_MEM_SHARED && mem != NVN_GPU_MEM_DEVICE) return fail(err, NVN_GPU_E_ARG, "mem 非法");
     if (mem == NVN_GPU_MEM_DEVICE && init) return fail(err, NVN_GPU_E_ARG, "DEVICE 内存不能带 init");
 
