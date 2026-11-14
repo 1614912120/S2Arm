@@ -2500,11 +2500,20 @@ static int same_spec(const nvn_gpu_stage_desc *a, const nvn_gpu_stage_desc *b) {
 // 图形管线按描述散列成桶。原先在全部管线的一条链表里逐条比：一款 3D 游戏几百条管线、每帧取 513 次，
 // 真机上管线数翻一倍「开通道与取管线」每帧就多 1.3 毫秒（同一局里两种写法的管线并存时量到的）。
 // 散列只取描述里一部分字段（都是 same_pipe_desc 逐字节 / 逐值比的），相等与否仍由 same_pipe_desc 定。
+// 实际交给 Vulkan 的图元重启：只在条带 / 扇上有意义（列表图元打开要 primitiveTopologyListRestart，这里不开）。
+// 管线缓存的散列与相等判定都按它比：原始的 prim_restart 在列表图元上也会被置（rp_draw 按游戏状态填），
+// 拿它比会给列表图元多编一条一模一样的管线；不比则条带上开 / 关重启共用一条管线，有一边画错。
+static int eff_restart(const nvn_gpu_pipe_desc *d) {
+    VkPrimitiveTopology t = vk_topology(d->prim);
+    return d->prim_restart && (t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP || t == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ||
+                               t == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP);
+}
+
 static uint32_t pipe_hash(const nvn_gpu_pipe_desc *d) {
     uint64_t h = 1469598103934665603ull;
 #define PH(p, n) do { const uint8_t *q_ = (const uint8_t *)(p); for (size_t i_ = 0; i_ < (size_t)(n); i_++) h = (h ^ q_[i_]) * 1099511628211ull; } while (0)
     for (int i = 0; i < 5; i++) { uintptr_t sh = (uintptr_t)d->st[i].sh; PH(&sh, sizeof sh); }
-    uint32_t v[4] = {(uint32_t)d->prim, (uint32_t)d->dfmt, (uint32_t)d->sfmt, (uint32_t)d->samples}; PH(v, sizeof v);
+    uint32_t v[5] = {(uint32_t)d->prim, (uint32_t)d->dfmt, (uint32_t)d->sfmt, (uint32_t)d->samples, (uint32_t)eff_restart(d)}; PH(v, sizeof v);
     PH(d->cfmt, sizeof d->cfmt); PH(d->blend, sizeof d->blend); PH(&d->color, sizeof d->color); PH(&d->chmask, sizeof d->chmask);
     PH(&d->ds, sizeof d->ds);
     {   // poly_st 的位域只占部分对象位；散列和相等判定都不能依赖填充位。
@@ -2517,7 +2526,8 @@ static uint32_t pipe_hash(const nvn_gpu_pipe_desc *d) {
 
 static int same_pipe_desc(const nvn_gpu_pipe_desc *a, const nvn_gpu_pipe_desc *b) {
     if (a->prim != b->prim || a->patch_size != b->patch_size || a->dfmt != b->dfmt || a->sfmt != b->sfmt ||
-        a->samples != b->samples || a->rast_discard != b->rast_discard || a->clip_neg1 != b->clip_neg1)
+        a->samples != b->samples || a->rast_discard != b->rast_discard || a->clip_neg1 != b->clip_neg1 ||
+        eff_restart(a) != eff_restart(b))
         return 0;
     for (int i = 0; i < 5; i++)
         if (!same_spec(&a->st[i], &b->st[i])) return 0;
@@ -2753,11 +2763,8 @@ nvn_gpu_rc nvn_gpu_pipe_get(const nvn_gpu_pipe_desc *d, int mode, nvn_gpu_pipe *
     memset(&ia, 0, sizeof ia);
     ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
     ia.topology = vk_topology(d->prim);
-    // 重启只在条带 / 扇上有意义；列表图元打开需要 primitiveTopologyListRestart，这里忽略并注释
-    int restart_topology = ia.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP ||
-                           ia.topology == VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN ||
-                           ia.topology == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
-    ia.primitiveRestartEnable = (d->prim_restart && restart_topology) ? VK_TRUE : VK_FALSE;
+    // 重启只在条带 / 扇上有意义；列表图元打开需要 primitiveTopologyListRestart，这里忽略（见 eff_restart）
+    ia.primitiveRestartEnable = eff_restart(d) ? VK_TRUE : VK_FALSE;
     if (ia.topology == VK_PRIMITIVE_TOPOLOGY_MAX_ENUM) {
         nvn_gpu_rc bad = fail(err, NVN_GPU_E_UNSUPPORTED, "图元 %u：本段只实现三角形", d->prim);
         destroy_pipe_objects(p);
