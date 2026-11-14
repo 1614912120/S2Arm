@@ -71,7 +71,7 @@ STUBS = {
  public static final int FLAG_GRANT_READ_URI_PERMISSION=1; private final Map<String,String> values=new HashMap<>();
  public Intent(){} public Intent(String s){} public Intent(Intent i){values.putAll(i.values);}
  public Intent putExtra(String k,String v){values.put(k,v);return this;} public Intent putExtra(String k,boolean v){values.put(k,String.valueOf(v));return this;} public void removeExtra(String k){values.remove(k);}
- public String getStringExtra(String k){return values.get(k);} public Uri getData(){return null;}
+ public String getStringExtra(String k){return values.get(k);} public boolean hasExtra(String k){return values.containsKey(k);} public Uri getData(){return null;}
  public Intent setType(String type){throw new AssertionError("diagnostic share unexpectedly called");}
  public Intent putExtra(String key,android.os.Parcelable value){throw new AssertionError("diagnostic share unexpectedly called");}
  public Intent addFlags(int flags){throw new AssertionError("diagnostic share unexpectedly called");}
