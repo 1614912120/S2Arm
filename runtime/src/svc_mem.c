@@ -985,8 +985,16 @@ static int in_as(uint64_t a, uint64_t n) {
 // 宿主占到的窗口（布局可伸出窗口，伸出去的只是承诺，layout.c）：游戏要映射到窗口外 = 宿主给不出这段地址，回 OutOfMemory（0xD001，
 //   Switch 上内存不够时的同一结果）并报红（首次与第 2^k 次），不 mprotect 到宿主自己的内存上
 static int win_has(uint64_t a, uint64_t n) { return a >= L.win_base && n <= L.win_size && a - L.win_base <= L.win_size - n; }
+// 最近一次地址越界的请求（崩溃现场归因用：游戏不理会失败照样访问那段，崩出 SIGBUS 时点名是它，crash.c fault_region_note）
+static _Atomic uint64_t g_vs_a, g_vs_n; static _Atomic int g_vs_num;
+int s2a_va_short_last(uint64_t fa, int *num, uint64_t *a, uint64_t *n, uint64_t *count) {
+    uint64_t a0 = atomic_load(&g_vs_a), n0 = atomic_load(&g_vs_n);
+    if (!n0 || fa < a0 || fa - a0 >= n0) return 0;
+    *num = atomic_load(&g_vs_num); *a = a0; *n = n0; *count = atomic_load(&g_va_short); return 1;
+}
 static uint64_t va_short(int num, uint64_t a, uint64_t n, const char *region) {
     uint64_t k = atomic_fetch_add(&g_va_short, 1) + 1;
+    atomic_store(&g_vs_num, num); atomic_store(&g_vs_a, a); atomic_store(&g_vs_n, n);
     if (!(k & (k - 1))) LOG("【红】地址越界：svc %#x 要在%s映射 %#llx +%#llx，宿主只占到 [%#llx, %#llx)（第 %llu 次）；回内存不足（游戏真碰的地址跨度超过本机给的地址）",
         num, region, (unsigned long long)a, (unsigned long long)n, (unsigned long long)L.win_base, (unsigned long long)(L.win_base + L.win_size), (unsigned long long)k);
     return 0xD001;
