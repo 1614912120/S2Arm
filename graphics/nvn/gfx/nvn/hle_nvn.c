@@ -3008,6 +3008,7 @@ static void set_time_constraint(uint64_t period_ns);
 static void rt_comp_tick(uint64_t period_ns);
 static double g_rt_comp_ms;   // Currently declared real-time computation amount (ms; 0 = not declared)
 static double g_rt_period_ms;
+static _Atomic mach_port_t g_rt_port;   // the acquire thread that holds the time-constraint declaration (set_time_constraint_comp); the 300-frame status line reads it
 static void sleep_until_ns(uint64_t dl);
 static uint64_t present_period(const win_t *o);
 static uint64_t rt_period_ns(const win_t *o, uint64_t period);
@@ -3291,9 +3292,13 @@ static void tsummary(uint64_t frame) {
             LOG("[nvn] thread cores up to frame %llu: encode thread %.2f ms a frame, %.0f%% on performance cores; present thread %.2f ms a frame, %.0f%% on performance cores (s2a_qos.h table)", frame,
                 (w[0][0] + w[0][1]) / 1e6 / nf, w[0][0] + w[0][1] > 0 ? 100.0 * w[0][0] / (w[0][0] + w[0][1]) : 0, (w[1][0] + w[1][1]) / 1e6 / nf, w[1][0] + w[1][1] > 0 ? 100.0 * w[1][0] / (w[1][0] + w[1][1]) : 0);
             memcpy(ptv, tv, sizeof ptv); }
-        if (frame % 300 == 0) { unsigned wn = 0; uint32_t wq = dm_guest_work_qos(&wn); thread_extended_info_data_t xi; mach_msg_type_number_t xc = THREAD_EXTENDED_INFO_COUNT; int okx = thread_info(pthread_mach_thread_np(pthread_self()), THREAD_EXTENDED_INFO, (thread_info_t)&xi, &xc) == KERN_SUCCESS;
-            thread_time_constraint_policy_data_t tp; mach_msg_type_number_t tc = THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t def = 0; int rt_live = thread_policy_get(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&tp, &tc, &def) == KERN_SUCCESS && !def;   // def = 1: the real-time policy is not in effect (never set / revoked)
-            LOG("[nvn] thread policy: main thread real-time computation %.2f ms / period %.2f ms, real-time policy %s, current priority %d (base %d, policy %d); %u worker threads QoS %#x; present QoS %#x", g_rt_comp_ms, g_rt_period_ms, rt_live ? "in effect" : "not in effect", okx ? xi.pth_curpri : -1, okx ? xi.pth_priority : -1, okx ? xi.pth_policy : -1, wn, wq, nvn_be_present_qos()); }
+        if (frame % 300 == 0) {   // the declaration lives on the acquire thread (g_rt_port); this line runs on the submitting thread, and reading its own policy printed "not in effect" for a
+            //   declaration that was in place (11-07 / 11-13: twice read as the cause of the submitting thread's efficiency cores). Before any declaration: this thread, as before
+            mach_port_t rp = atomic_load(&g_rt_port), th = rp ? rp : pthread_mach_thread_np(pthread_self());
+            unsigned wn = 0; uint32_t wq = dm_guest_work_qos(&wn); thread_extended_info_data_t xi; mach_msg_type_number_t xc = THREAD_EXTENDED_INFO_COUNT; int okx = thread_info(th, THREAD_EXTENDED_INFO, (thread_info_t)&xi, &xc) == KERN_SUCCESS;
+            thread_time_constraint_policy_data_t tp; mach_msg_type_number_t tc = THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t def = 0; int rq = thread_policy_get(th, THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&tp, &tc, &def) == KERN_SUCCESS;   // def = 1: the real-time policy is not in effect (never set / revoked)
+            LOG("[nvn] thread policy: %s real-time computation %.2f ms / period %.2f ms, real-time policy %s, current priority %d (base %d, policy %d); %u worker threads QoS %#x; present QoS %#x", rp ? "acquire thread" : "this thread (no declaration yet)",
+                g_rt_comp_ms, g_rt_period_ms, !rq ? "unreadable (thread gone?)" : def ? "not in effect" : "in effect", okx ? xi.pth_curpri : -1, okx ? xi.pth_priority : -1, okx ? xi.pth_policy : -1, wn, wq, nvn_be_present_qos()); }
         py = cy; pk = ck; pw = cw; }
       pi = ci; pc = cc; pd = dr_; pf = frame; }
     uint64_t up, re, fa, pr; nvn_be_pkg_stats(&up, &re); nvn_dirty_stats(&fa, &pr);
@@ -3350,7 +3355,7 @@ static void set_time_constraint_comp(uint64_t period_ns, uint64_t comp_ns) {
         .period = (uint32_t)(period_ns * tb.denom / tb.numer), .computation = (uint32_t)(comp_ns * tb.denom / tb.numer),
         .constraint = (uint32_t)(period_ns * tb.denom / tb.numer), .preemptible = 1};
     kern_return_t kr = thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&p, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
-    if (kr == KERN_SUCCESS) { g_rt_comp_ms = comp_ns / 1e6; g_rt_period_ms = period_ns / 1e6; }
+    if (kr == KERN_SUCCESS) { g_rt_comp_ms = comp_ns / 1e6; g_rt_period_ms = period_ns / 1e6; atomic_store(&g_rt_port, pthread_mach_thread_np(pthread_self())); }
     // 读回内核实际生效的值（10-30：xnu 收到声明后 computation < constraint / 2 会直接抬到 constraint / 2，60 Hz 即 8.33 ms；读回才知道真正交给调度器的是多少）
     thread_time_constraint_policy_data_t g = {0}; mach_msg_type_number_t gc = THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t gd = 0;
     int got = thread_policy_get(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&g, &gc, &gd) == KERN_SUCCESS && !gd;
