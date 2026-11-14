@@ -89,7 +89,7 @@ struct Switch2ProConnectionPopover: View {
             // 连着时：两个开关 + 主按钮在同一段（稿 panels.html）；没连 / 搜索 / 连接中 / 失败时只有主按钮（稿 status.html）
             let connected = status == .connected || status == .inUse
             let mainButton = Button(NS2LauncherController.mainButton(status, simplifiedChinese: zh)) { controller.mainAction() }
-                .controllerButtonStyle(PanelButtonStyle())
+                .controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true))
                 .controllerID("controller.main-action")
             if connected {
                 PanelSection {
@@ -124,14 +124,14 @@ struct Switch2ProConnectionPopover: View {
                     .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("controller.system.status")
                     Button(zh ? "打开蓝牙设置" : "Open Bluetooth Settings") { SystemControllers.openBluetoothSettings() }
-                        .controllerButtonStyle(PanelButtonStyle())
+                        .controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true))
                         .controllerID("controller.system.settings")
                 }
             }
 
             if !sections.contains(where: { $0.source == .switchRelay }) {
                 Button(zh ? "Switch 手柄连接选项" : "Switch controller options") { showSwitchOptions = true }
-                    .controllerButtonStyle(PanelButtonStyle()).controllerID("controller.switch-options")
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true)).controllerID("controller.switch-options")
             }
 
             }
@@ -153,8 +153,8 @@ struct Switch2ProConnectionPopover: View {
                         }
                     }
                     HStack(spacing: 8) {
-                        Button(zh ? "取消" : "Cancel") { controller.cancelAssign() }.controllerButtonStyle(PanelButtonStyle())
-                        Button(zh ? "完成" : "Done") { controller.finishAssign() }.controllerButtonStyle(PanelButtonStyle(selected: true))
+                        Button(zh ? "取消" : "Cancel") { controller.cancelAssign() }.controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true))
+                        Button(zh ? "完成" : "Done") { controller.finishAssign() }.controllerButtonStyle(LauncherPrimaryButtonStyle(fill: true))
                     }
                 }
                 .onAppear {
@@ -185,7 +185,7 @@ struct Switch2ProConnectionPopover: View {
                     // 两只以上手柄才有得分配（一对 Joy-Con 算两只、蓝牙手柄也算）
                     if controller.allDevices.count + systems.pads.count >= 2 {
                         Button(zh ? "分配玩家" : "Assign players") { controller.startAssign() }
-                            .controllerButtonStyle(PanelButtonStyle())
+                            .controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true))
                             .accessibilityIdentifier("controller.assign")
                     }
                 }
@@ -194,6 +194,7 @@ struct Switch2ProConnectionPopover: View {
         }
         .padding(20)
         .frame(width: 380)   // 比稿（340）宽一些：标题不会整行撑满
+        .background(.regularMaterial)
         .preferredColorScheme(.dark)
     }
 }
@@ -220,22 +221,6 @@ private struct ToggleRow: View {
             Spacer(minLength: 8)
             Toggle("", isOn: isOn).toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(label)
         }
-    }
-}
-
-// 稿里的 .btn：整宽、#34312e 底、12% 白边、圆角 12
-private struct PanelButtonStyle: ButtonStyle {
-    var selected = false   // 稿里「完成」那颗：反白（--sel）
-    func makeBody(configuration: Configuration) -> some View {
-        let fill = selected ? Color(red: 0xf2 / 255, green: 0xea / 255, blue: 0xd8 / 255) : Color(red: 0x34 / 255, green: 0x31 / 255, blue: 0x2e / 255)
-        return configuration.label
-            .font(.manrope(15, .semibold))
-            .foregroundStyle(selected ? Color(red: 0x1b / 255, green: 0x1a / 255, blue: 0x18 / 255) : Color.primary)
-            .frame(maxWidth: .infinity)
-            .padding(8)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill.opacity(configuration.isPressed ? 0.7 : 1)))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(selected ? fill : Color.white.opacity(0.12), lineWidth: 1))
-            .contentShape(Rectangle())
     }
 }
 

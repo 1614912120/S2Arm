@@ -104,8 +104,9 @@ private struct LauncherPadKeyboardView: View {
                 Button(keyboard.t("home.keyboard.clear")) { keyboard.value = "" }
                 Spacer(minLength: 4)
                 Button(keyboard.t("home.keyboard.cancel")) { keyboard.close(apply: false) }
-                Button(keyboard.t("home.keyboard.done")) { keyboard.close(apply: true) }.keyboardShortcut(.defaultAction)
+                Button(keyboard.t("home.keyboard.done")) { keyboard.close(apply: true) }
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
             }.controllerButtonStyle(LauncherSecondaryButtonStyle()).font(.manrope(12.5, .semibold))
-        }.padding(20).frame(width: 670, height: 410).background(LauncherPalette.background).preferredColorScheme(.dark)
+        }.padding(LauncherTheme.Space.section).launcherSheet(.form, height: 410)
     }
 }

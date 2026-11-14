@@ -327,12 +327,7 @@ struct WelcomeView: View {
     private func actionButton(_ title: String, primary: Bool, enabled: Bool, action: @escaping () -> Void) -> some View {
         Group {
             if primary {
-                Button(action: action) {
-                    Text(title).font(.manrope(14, .bold)).foregroundStyle(.black).fixedSize()
-                        .padding(.horizontal, 20).padding(.vertical, 10)
-                        .background(LauncherPalette.cream, in: Capsule()).contentShape(Capsule())
-                }
-                .controllerButtonStyle(.plain)
+                Button(title, action: action).controllerButtonStyle(LauncherPrimaryButtonStyle())
             } else {
                 Button(action: action) { Text(title).font(.manrope(13, .semibold)).fixedSize() }
                     .controllerButtonStyle(LauncherSecondaryButtonStyle())

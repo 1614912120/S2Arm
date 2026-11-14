@@ -58,23 +58,23 @@ struct InputSettingsSheet: View {
             header
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    HStack(alignment: .top, spacing: 16) {
+                    HStack(alignment: .top, spacing: LauncherTheme.Space.section) {
                         InputControllerMap(config: config, selected: $selected, recording: recording, names: names, text: t) { _ in recording = nil }
                         selectedPanel.frame(maxWidth: .infinity)
                     }
                     if !config.conflicts.isEmpty {
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(Array(config.conflicts.enumerated()), id: \.offset) { _, c in
-                                Text(conflictText(c)).font(.manrope(12.5)).foregroundStyle(LauncherPalette.danger)
+                                Text(conflictText(c)).font(LauncherTheme.TypeStyle.detail).foregroundStyle(LauncherPalette.danger)
                             }
                         }
                     }
                     CardGroup(loc.lang == .zh ? "Switch 2 Pro 背键" : "Switch 2 Pro back buttons",
-                              footnote: loc.lang == .zh ? "按游戏保存，下次开始游戏时生效。原有按键仍可正常使用。" : "Saved per game; applies on the next launch. Original buttons remain available.") {
+                              footnote: loc.lang == .zh ? "按游戏保存，下次启动生效，原有按键仍可使用" : "Saved per game for the next launch, with the original buttons still available") {
                         ForEach(["GL", "GR"], id: \.self) { side in
                             CardRow(side) {
                                 LauncherDropdown(options: [("", t("unbound"))] + Array(zip(InputConfig.padCodes, InputConfig.targets.prefix(16))).map { ($0.0, names.target($0.1)) },
-                                                 selection: config.backButtons?[side] ?? "", label: side, style: .button) { value in
+                                                 selection: config.backButtons?[side] ?? "", label: side) { value in
                                     var back = config.backButtons ?? [:]
                                     back[side] = value.isEmpty ? nil : value
                                     config.backButtons = back.isEmpty ? nil : back
@@ -85,9 +85,8 @@ struct InputSettingsSheet: View {
                     }
                     options
                 }
-                .padding(.horizontal, 30).padding(.bottom, 24)
+                .padding(.horizontal, LauncherTheme.Space.page).padding(.bottom, LauncherTheme.Space.section)
             }
-            Divider().opacity(0.3)
             footer
         }
         .alert(t("rebind.title"), isPresented: Binding(get: { rebind != nil }, set: { if !$0 { rebind = nil } })) {
@@ -103,25 +102,19 @@ struct InputSettingsSheet: View {
             let input = model.loadInput(gameID: gameID)
             config = input.config; baseline = input.config; loadProblem = input.problem; loaded = true
         }
-        .frame(width: 640, height: 720)
-        .background(LauncherPalette.background)
-        .font(.manrope(13))
-        .preferredColorScheme(.dark)
-        .tint(LauncherPalette.cream)
-        .launcherDropdownHost()
+        .launcherSheet()
+        .onExitCommand { if recording == nil && !saving { dismiss() } }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(t("title")).font(.manrope(26, .heavy)).tracking(-0.6)
-            Text(game?.name ?? gameID).font(.manrope(14, .semibold)).foregroundStyle(.secondary).lineLimit(1)
-            Text(t("subtitle")).font(.manrope(12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            LauncherSheetHeading(t("title"), subtitle: game?.name ?? gameID, note: t("subtitle"))
             if loadProblem {
-                Text(t("loadProblem")).font(.manrope(12.5)).foregroundStyle(LauncherPalette.building)
+                Text(t("loadProblem")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(LauncherPalette.building)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 4)
             }
         }
-        .padding(.horizontal, 30).padding(.top, 28).padding(.bottom, 18)
+        .padding(.horizontal, LauncherTheme.Space.page).padding(.top, LauncherTheme.Space.page).padding(.bottom, LauncherTheme.Space.section)
     }
 
     // ---- 选中的那个键 ----
@@ -129,22 +122,22 @@ struct InputSettingsSheet: View {
     private var selectedPanel: some View {
         VStack(alignment: .leading, spacing: 14) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(t("selected")).font(.manrope(12)).foregroundStyle(.secondary)
+                Text(t("selected")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary)
                 Text(names.target(selected)).font(.manrope(20, .heavy)).foregroundStyle(LauncherPalette.cream)
             }
             VStack(alignment: .leading, spacing: 7) {
-                Label(t("keyboard"), systemImage: "keyboard").font(.manrope(13, .semibold))
+                Label(t("keyboard"), systemImage: "keyboard").font(LauncherTheme.TypeStyle.section)
                 keyField
                 LauncherDropdown(options: [("", t("key.common"))] + Self.commonKeys.map { (String($0), names.key(KeyBinding(code: $0))) },
-                                 selection: "", label: t("key.common"), style: .button, fill: true) { value in
+                                 selection: "", label: t("key.common"), fill: true) { value in
                     if let code = Int(value) { setKey(KeyBinding(code: code), for: selected) }
                     recording = nil
                 }
             }
             VStack(alignment: .leading, spacing: 7) {
-                Label(t("mouse"), systemImage: "computermouse").font(.manrope(13, .semibold))
+                Label(t("mouse"), systemImage: "computermouse").font(LauncherTheme.TypeStyle.section)
                 LauncherDropdown(options: [("", t("unbound"))] + (0...4).map { (String($0), names.mouseButton($0)) },
-                                 selection: config.mouse[selected].map(String.init) ?? "", label: t("mouse"), style: .button, fill: true, leading: true) { value in
+                                 selection: config.mouse[selected].map(String.init) ?? "", label: t("mouse"), fill: true) { value in
                     recording = nil
                     let button = Int(value), target = selected
                     let holder = button.flatMap { b in config.mouse.first { $0.key != target && $0.value == b }?.key }
@@ -155,9 +148,9 @@ struct InputSettingsSheet: View {
                 }
             }
             VStack(alignment: .leading, spacing: 7) {
-                Label(t("gamepad"), systemImage: "gamecontroller").font(.manrope(13, .semibold))
+                Label(t("gamepad"), systemImage: "gamecontroller").font(LauncherTheme.TypeStyle.section)
                 LauncherDropdown(options: [("", t("unbound"))] + InputConfig.padCodes.map { ($0, names.pad($0)) },
-                                 selection: config.gamepad[selected] ?? "", label: t("gamepad"), style: .button, fill: true, leading: true) { value in
+                                 selection: config.gamepad[selected] ?? "", label: t("gamepad"), fill: true) { value in
                     recording = nil
                     let pad = value.isEmpty ? nil : value, target = selected
                     let holder = pad.flatMap { p in config.gamepad.first { $0.key != target && $0.value == p }?.key }
@@ -168,39 +161,42 @@ struct InputSettingsSheet: View {
                 }
             }
             if config.conflictingTargets.contains(selected) {
-                Label(t("conflict.here"), systemImage: "exclamationmark.triangle").font(.manrope(12.5)).foregroundStyle(LauncherPalette.danger)
+                Label(t("conflict.here"), systemImage: "exclamationmark.triangle").font(LauncherTheme.TypeStyle.detail).foregroundStyle(LauncherPalette.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Button { config.restoreTarget(selected, from: baseline); recording = nil } label: { Text(t("restoreKey")).frame(maxWidth: .infinity) }
                 .controllerButtonStyle(LauncherSecondaryButtonStyle())
             Text(t("iconNote")).font(.manrope(11.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
-        .padding(16)
+        .padding(LauncherTheme.Metrics.cardInset)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(LauncherPalette.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.06)))
+        .launcherPanel()
     }
 
     /// 键盘绑定：点一下进入录入（按新键，Esc 取消），右侧 × 清掉。
     private var keyField: some View {
         let on = recording == selected
-        return Button { recording = on ? nil : selected } label: {
-            Text(on ? t("key.record") : names.key(config.keyboard[selected]))
-                .font(.manrope(14, .semibold)).lineLimit(1).minimumScaleFactor(0.8)
-                .padding(.leading, 12).padding(.trailing, 36)
-                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
-                .contentShape(Rectangle())
-        }
-        .controllerButtonStyle(.plain)
-        .background(on ? LauncherPalette.cream.opacity(0.10) : Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 9))
-        .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(on ? LauncherPalette.cream : Color.white.opacity(0.10), lineWidth: on ? 1.5 : 1).allowsHitTesting(false))
-        .overlay(alignment: .trailing) {
-            Button { config.keyboard[selected] = nil; recording = nil } label: {
-                Image(systemName: "xmark.circle").frame(width: 30, height: 38).contentShape(Rectangle())
+        return HStack(spacing: 0) {
+            Button { recording = on ? nil : selected } label: {
+                Text(on ? t("key.record") : names.key(config.keyboard[selected]))
+                    .font(LauncherTheme.TypeStyle.button).lineLimit(1).minimumScaleFactor(0.8)
+                    .padding(.horizontal, LauncherTheme.Space.medium)
+                    .frame(maxWidth: .infinity, minHeight: LauncherControl.height, alignment: .leading)
+                    .contentShape(Rectangle())
             }
-            .controllerButtonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel(t("key.clear")).padding(.trailing, 4)
+            .controllerButtonStyle(.plain).controllerID("input.keyboard.record")
+            .accessibilityLabel(t("keyboard")).accessibilityValue(names.key(config.keyboard[selected]))
+            Button { config.keyboard[selected] = nil; recording = nil } label: {
+                Image(systemName: "xmark.circle").frame(width: LauncherControl.height, height: LauncherControl.height).contentShape(Rectangle())
+            }
+            .controllerButtonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel(t("key.clear"))
+            .controllerID("input.keyboard.clear")
         }
-        .accessibilityLabel(t("keyboard")).accessibilityValue(names.key(config.keyboard[selected]))
+        .background(on ? LauncherPalette.cream.opacity(0.10) : LauncherTheme.Colors.control,
+                    in: RoundedRectangle(cornerRadius: LauncherTheme.Metrics.controlRadius))
+        .overlay(RoundedRectangle(cornerRadius: LauncherTheme.Metrics.controlRadius)
+            .strokeBorder(on ? LauncherPalette.cream : LauncherTheme.Colors.border, lineWidth: on ? 1.5 : 1).allowsHitTesting(false))
+        .accessibilityElement(children: .contain)
     }
 
     /// 「常用键」里给的键（Return、Esc、空格、Tab、Shift、Ctrl、Option）：Esc 录入时是取消键，只能从这里选。
@@ -214,7 +210,7 @@ struct InputSettingsSheet: View {
                 CardRow(t("mouse.mode")) {
                     LauncherSegmented(options: [("camera", t("mouse.mode.camera")), ("off", t("mouse.mode.off"))],
                                       selection: config.mouseOptions.mode) { config.mouseOptions.mode = $0 }
-                        .frame(width: 240)
+                        .frame(width: LaunchControl.width)
                 }
                 CardDivider()
                 slider(t("mouse.sensX"), value: config.mouseOptions.sensitivityX, range: 0.1...10, step: 0.1,
@@ -236,13 +232,14 @@ struct InputSettingsSheet: View {
                     CardDivider()
                     CardRow(names.axis(target)) {
                         HStack(spacing: 8) {
-                            Text(t("axis.invert")).font(.manrope(12.5)).foregroundStyle(.secondary)
+                            Text(t("axis.invert")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary)
+                                .frame(width: 40, alignment: .leading)
                             Toggle("", isOn: Binding(get: { config.axes[target]?.invert ?? false },
                                                      set: { config.axes[target] = AxisBinding(source: config.axes[target]?.source ?? Self.ownSource(target), invert: $0) }))
                                 .toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(names.axis(target) + " " + t("axis.invert"))
-                                .padding(.trailing, 4)
+                                .controllerID("input.axis.invert." + target)
                             LauncherDropdown(options: InputConfig.axisSources.map { ($0, names.axis($0)) },
-                                             selection: config.axes[target]?.source ?? Self.ownSource(target), label: names.axis(target), style: .button) { source in
+                                             selection: config.axes[target]?.source ?? Self.ownSource(target), label: names.axis(target)) { source in
                                 let old = config.axes[target]?.source ?? Self.ownSource(target)
                                 let holder = config.axes.first { $0.key != target && $0.value.source == source }?.key
                                 bind("axes", key: names.axis(source), target: target, holder: holder) {   // 摇杆不能留空：两边互换方向
@@ -250,7 +247,10 @@ struct InputSettingsSheet: View {
                                     config.axes[target] = AxisBinding(source: source, invert: config.axes[target]?.invert ?? false)
                                 }
                             }
+                            .environment(\.launcherControlWidth, LauncherTheme.Metrics.compactChoiceWidth)
+                            .controllerID("input.axis.source." + target)
                         }
+                        .frame(width: LaunchControl.width)
                     }
                 }
             }
@@ -265,9 +265,11 @@ struct InputSettingsSheet: View {
                         change: @escaping (Double) -> Void) -> some View {
         CardRow(title) {
             HStack(spacing: 12) {
-                LauncherSlider(value: value, range: range, step: step, change: change).frame(width: 180)
+                LauncherSlider(value: value, range: range, step: step, change: change)
+                    .accessibilityLabel(title).accessibilityValue(readout)
                 Text(readout).font(.manrope(12.5, .semibold)).monospacedDigit().foregroundStyle(.secondary).frame(width: 40, alignment: .trailing)
             }
+            .frame(width: LaunchControl.width)
         }
     }
 
@@ -278,39 +280,37 @@ struct InputSettingsSheet: View {
     // ---- 底栏 ----
 
     private var footer: some View {
+        LauncherSheetFooter {
         VStack(alignment: .leading, spacing: 10) {
             if saving {
                 ProgressView().progressViewStyle(.linear).tint(LauncherPalette.cream)
             }
             if let failure {
-                Text(failure).font(.manrope(12.5)).foregroundStyle(LauncherPalette.danger).fixedSize(horizontal: false, vertical: true)
+                Text(failure).font(LauncherTheme.TypeStyle.detail).foregroundStyle(LauncherPalette.danger).fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 10) {
                 Button(t("restoreDefault")) { config = .standard; recording = nil; failure = nil }
                     .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(saving)
                 LauncherDropdown(options: [("", t("preset"))] + InputConfig.Preset.allCases.map { ($0.rawValue, t("preset." + $0.rawValue)) },
-                                 selection: "", label: t("preset"), style: .button) { value in
+                                 selection: "", label: t("preset")) { value in
                     if let p = InputConfig.Preset(rawValue: value) { config = .preset(p); failure = nil }
                     recording = nil
                 }
                 .disabled(saving)
                 Spacer(minLength: 8)
                 if saving {
-                    Text(t("saving")).font(.manrope(12)).foregroundStyle(.secondary)
+                    Text(t("saving")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary)
                 } else if config != baseline {
-                    Text(t("unsaved")).font(.manrope(12)).foregroundStyle(.secondary)
+                    Text(t("unsaved")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary)
                 }
                 Button(t("cancel")) { dismiss() }
                     .controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).disabled(saving)
-                Button { save() } label: {
-                    Text(t("save")).font(.manrope(13.5, .bold)).foregroundStyle(.black)
-                        .padding(.horizontal, 22).padding(.vertical, 9)
-                        .background(LauncherPalette.cream, in: Capsule()).contentShape(Capsule())
-                }
-                .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction).disabled(!canSave).opacity(canSave ? 1 : 0.45)
+                Button(t("save")) { save() }
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).disabled(!canSave)
+                    .controllerID("input.save")
             }
         }
-        .padding(.horizontal, 30).padding(.vertical, 16)
+        }
     }
 
     private func save() {
@@ -470,7 +470,7 @@ struct InputControllerMap: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(text("map.title")).font(.manrope(13, .semibold))
+                Text(text("map.title")).font(LauncherTheme.TypeStyle.section)
                 Text(text("map.hint")).font(.manrope(11.5)).foregroundStyle(.secondary)
             }
             HStack(alignment: .top, spacing: 20) {
@@ -480,9 +480,8 @@ struct InputControllerMap: View {
             Text(text("map.note")).font(.manrope(11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 .frame(width: JoyConGeometry.width * 2 + 20, alignment: .leading)
         }
-        .padding(14)
-        .background(LauncherPalette.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.06)))
+        .padding(LauncherTheme.Metrics.cardInset)
+        .launcherPanel()
     }
 
     private func pick(_ target: String) { selected = target; onSelect?(target) }

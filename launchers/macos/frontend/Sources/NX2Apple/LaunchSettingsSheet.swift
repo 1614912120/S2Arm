@@ -106,21 +106,19 @@ struct LaunchSettingsSheet: View {
     private var gameName: String { model.games.first { $0.id == gameID }?.name ?? gameID }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(t("display.title")).font(.manrope(26, .heavy)).tracking(-0.6)
-                Text(gameName).font(.manrope(14)).foregroundStyle(.secondary).lineLimit(1)
-                Text(t("display.hint")).font(.manrope(12.5)).foregroundStyle(.secondary).padding(.top, 6)
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            LauncherSheetHeading(t("display.title"), subtitle: gameName, note: t("display.hint"))
+                .padding(LauncherTheme.Space.page)
             if let failure {
                 Label { Text(loc.backend(failure)).fixedSize(horizontal: false, vertical: true) } icon: { Image(systemName: "exclamationmark.circle.fill") }
-                    .font(.manrope(12.5)).foregroundStyle(LauncherPalette.danger)
+                    .font(LauncherTheme.TypeStyle.detail).foregroundStyle(LauncherPalette.danger)
+                    .padding(.horizontal, LauncherTheme.Space.page).padding(.bottom, LauncherTheme.Space.large)
             }
             if !loaded && failure == nil {
-                ProgressView().controlSize(.small)
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if loaded {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: LauncherTheme.Space.section) {
                         // 分组顺序：画面 → S 级优化（社区补丁 + 金手指，金色卡）→ 手柄 → 其他（定义表 launchers/shared/game_settings.v1.json 的 group）
                         ForEach(["display", "sgrade", "controls", "other"], id: \.self) { group in
                             let rows = items.filter { $0.group == group && visible($0) }
@@ -133,20 +131,18 @@ struct LaunchSettingsSheet: View {
                             }
                         }
                     }
+                    .padding(.horizontal, LauncherTheme.Space.page).padding(.bottom, LauncherTheme.Space.section)
                 }
             }
             Spacer(minLength: 0)
-            HStack {
+            LauncherSheetFooter {
                 Spacer()
-                Button(t("display.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                Button(t("display.done")) { dismiss() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                    .controllerID("launch.done")
             }
         }
-        .padding(30)
-        .frame(width: 600, height: 640)
-        .background(LauncherPalette.background)
-        .font(.manrope(13))
-        .preferredColorScheme(.dark)
-        .tint(LauncherPalette.cream)
+        .launcherSheet()
+        .onExitCommand { dismiss() }
         .task { if !loaded { await load(nil) } }
     }
 
@@ -163,7 +159,7 @@ struct LaunchSettingsSheet: View {
             onCheat: { id, on in Task { await load(nil, cheats: [id: on]) } },
             onImport: { importCheats() },
             summary: { on, all in t("display.cheats.summary").replacingOccurrences(of: "{0}", with: String(on)).replacingOccurrences(of: "{1}", with: String(all)) },
-            searchPrompt: t("display.cheats.search"))
+            searchPrompt: t("display.cheats.search"), clearSearchTitle: loc.t("home.clearSearch"))
     }
 
     @ViewBuilder private func groupRows(_ rows: [GameSettingItem]) -> some View {
@@ -188,7 +184,7 @@ struct LaunchSettingsSheet: View {
         case "page":
             CardRow(title, detail: item.detail(lang)) {
                 Button(t("display.open")) { dismiss(); openInput() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
-                    .accessibilityIdentifier("launch." + item.id)
+                    .controllerID("launch." + item.id)
             }
         case "patches":
             CardRow(title, detail: item.detail(lang)) { EmptyView() }
@@ -216,7 +212,7 @@ struct LaunchSettingsSheet: View {
             CardRow(title, detail: option?.available == false ? loc.backend(option?.reason ?? "") : item.detail(lang)) {
                 LauncherDropdown(options: item.options.map { ($0.value, $0.label[lang] ?? $0.value) },
                                  selection: option?.value as? String ?? "", label: title) { v in Task { await load([item.id: v]) } }
-                .frame(width: 150).controllerID("launch." + item.id)
+                .controllerID("launch." + item.id)
                 .disabled(option?.available != true || saving || model.busy)
             }
         default:

@@ -33,12 +33,15 @@ struct PlayerToolbarButton: View {
         .accessibilityLabel(loc.t("s2arm.players.player") + "：" + (currentPlayer.map(name) ?? ""))
         .controllerID("top.player")
         .onAppear(perform: reload)
-        .popover(isPresented: $show, arrowEdge: .bottom) { popover.frame(width: 340).padding(18) }
+        .popover(isPresented: $show, arrowEdge: .bottom) {
+            popover.frame(width: 340).padding(LauncherTheme.Metrics.cardInset).background(.regularMaterial)
+                .controllerButtonStyle(LauncherSecondaryButtonStyle())
+        }
     }
 
     private var popover: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(loc.t("s2arm.players.title")).font(.manrope(17, .bold))
+            Text(loc.t("s2arm.players.title")).font(LauncherTheme.TypeStyle.panelTitle)
             Text(loc.t("s2arm.players.intro")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             ForEach(players) { row($0) }
             if editing == .adding { field(loc.t("s2arm.players.add.confirm")) { commit { try store.add(text) } } }
@@ -66,15 +69,20 @@ struct PlayerToolbarButton: View {
                         Spacer()
                     }.contentShape(Rectangle())
                 }.controllerButtonStyle(.plain).accessibilityIdentifier("players.row." + (p.isFirst ? "first" : p.uid))
-                Button { start(.renaming(p.uid), p.name) } label: { Image(systemName: "pencil") }.controllerButtonStyle(.borderless).help(loc.t("s2arm.players.rename"))
-                if !p.isFirst { Button { start(.removing(p.uid), "") } label: { Image(systemName: "trash") }.controllerButtonStyle(.borderless).help(loc.t("s2arm.players.remove")) }
+                Button { start(.renaming(p.uid), p.name) } label: { Image(systemName: "pencil") }
+                    .controllerButtonStyle(LauncherIconButtonStyle()).help(loc.t("s2arm.players.rename")).accessibilityLabel(loc.t("s2arm.players.rename"))
+                if !p.isFirst {
+                    Button { start(.removing(p.uid), "") } label: { Image(systemName: "trash") }
+                        .controllerButtonStyle(LauncherIconButtonStyle()).help(loc.t("s2arm.players.remove")).accessibilityLabel(loc.t("s2arm.players.remove"))
+                }
             }
         }
     }
 
     private func field(_ confirm: String, _ action: @escaping () -> Void) -> some View {
         HStack {
-            TextField(loc.t("s2arm.players.name"), text: $text).textFieldStyle(.roundedBorder).onSubmit(action)
+            TextField(loc.t("s2arm.players.name"), text: $text, prompt: Text(loc.t("s2arm.players.name")).foregroundColor(LauncherTheme.Colors.secondary))
+                .textFieldStyle(LauncherTextFieldStyle()).onSubmit(action).accessibilityLabel(loc.t("s2arm.players.name"))
             Button(loc.t("s2arm.players.cancel")) { finish() }
             Button(confirm, action: action).keyboardShortcut(.defaultAction)
         }

@@ -100,14 +100,15 @@ struct LauncherView: View {
         .launcherDropdownHost()
         .background {
             if showingHome { HomeBackdrop(game: homeSelected, covers: covers) }
-            else { LauncherPalette.background }
+            else { LauncherWindowMaterial() }
         }
         .background(LauncherWindowChrome())
         .background(LauncherPadHost(navigation: navigation, update: configurePadNavigation))
         .ignoresSafeArea(.container, edges: .top)
         .preferredColorScheme(.dark)
         .tint(LauncherPalette.cream)
-        .font(.manrope(13))
+        .font(LauncherTheme.TypeStyle.detail)
+        .labelStyle(LauncherLabelStyle())
         .frame(minWidth: 800, minHeight: 450)
         .onAppear { model.startup() }
         .sheet(isPresented: $model.sgradeUpgradeOpen) { SGradeUpgradeView(model: model).environmentObject(loc) }   // S 级优化升级（v0.4.0）

@@ -1,10 +1,6 @@
 // Derived from NX2Apple (MIT; see frontend/NOTICE).
-// S2Arm: register controller actions and isolate an open dropdown's focus.
+// S2Arm: one themed control face, window-local menus, controller actions and isolated dropdown focus.
 import SwiftUI
-
-/// How a LauncherDropdown's button is drawn: `pill` is the round choice beside a launch option, `button` is
-/// LauncherSecondaryButtonStyle's rounded rectangle (the Settings cards).
-package enum LauncherDropdownStyle { case pill, button }
 
 /// Where the list of an open dropdown goes and how big it is. Pure, so the rules are tested (LauncherDropdownTests).
 package enum LauncherDropdownLayout {
@@ -95,8 +91,8 @@ extension View {
 extension View {
     /// The list's own surface: the app's dark card with its border, radius and shadow.
     package func launcherDropdownSurface() -> some View {
-        background(LauncherPalette.surface, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.10)))
+        background(.regularMaterial, in: RoundedRectangle(cornerRadius: LauncherTheme.Metrics.cardRadius))
+            .overlay(RoundedRectangle(cornerRadius: LauncherTheme.Metrics.cardRadius).strokeBorder(LauncherTheme.Colors.border))
             .shadow(color: .black.opacity(0.5), radius: 18, y: 6)
     }
 }
@@ -231,18 +227,15 @@ package struct LauncherDropdownList: View {
 /// the left and the chevron at the right, the choice a little smaller when it does not fit.
 /// `label` names the setting for VoiceOver, which then reads the choice as the value.
 package struct LauncherDropdown: View {
-    package init(options: [(value: String, label: String)], selection: String, label: String = "", style: LauncherDropdownStyle = .pill,
-                  fill: Bool = false, leading: Bool = false, choose: @escaping (String) -> Void) {
-        self.options = options; self.selection = selection; self.label = label; self.style = style; self.fill = fill; self.leading = leading
+    package init(options: [(value: String, label: String)], selection: String, label: String = "",
+                  fill: Bool = false, choose: @escaping (String) -> Void) {
+        self.options = options; self.selection = selection; self.label = label; self.fill = fill
         self.choose = choose
     }
     package let options: [(value: String, label: String)]
     package let selection: String
     package var label = ""
-    package var style: LauncherDropdownStyle = .pill
     package var fill = false
-    /// With `fill`: the choice starts at the left, like the text of a field (the export's device, LNPANDY/NX2Apple#416).
-    package var leading = false
     package let choose: (String) -> Void
     @Environment(\.launcherDropdownHost) private var host
     @State private var id = UUID()
@@ -258,31 +251,25 @@ package struct LauncherDropdown: View {
     fileprivate var current: String { options.first { $0.value == selection }?.label ?? selection }
 
     fileprivate func face(open: Bool, rowWidth: CGFloat?) -> some View {
-        let rounded = style == .button
-        let shape = RoundedRectangle(cornerRadius: rounded ? 9 : 99)
+        let shape = RoundedRectangle(cornerRadius: LauncherTheme.Metrics.controlRadius, style: .continuous)
         let width = fill ? nil : rowWidth
-        return HStack(spacing: 0) {
-            Text(current).font(.manrope(rounded ? 13 : 12.5, .semibold)).lineLimit(1)
+        return HStack(spacing: LauncherTheme.Space.small) {
+            Text(current).font(LauncherTheme.TypeStyle.button).lineLimit(1)
                 .minimumScaleFactor(width == nil ? 1 : 0.85)
                 .fixedSize(horizontal: !fill && width == nil, vertical: false)
-                .frame(maxWidth: fill || width != nil ? .infinity : nil, alignment: fill && leading ? .leading : .center)   // the words centre across the whole button
-                .padding(.leading, (fill && !leading) || width != nil ? 14 : 0)   // room so the chevron never crowds them
-            if fill || width != nil {
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(open ? 180 : 0)).padding(.trailing, 14)
-            } else {
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(open ? 180 : 0)).padding(.leading, 8)
-            }
+                .frame(maxWidth: fill || width != nil ? .infinity : nil, alignment: .leading)
+            Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary)
+                .frame(width: 10).rotationEffect(.degrees(open ? 180 : 0)).accessibilityHidden(true)
         }
-        .padding(.horizontal, rounded ? 15 : 14).padding(.vertical, rounded ? 9 : 7)
-        .frame(width: width, height: width != nil || (fill && rounded) ? LauncherControl.height : nil)   // a filling button as high as a row's buttons
+        .padding(.horizontal, LauncherTheme.Space.large)
+        .frame(width: width, height: LauncherControl.height)
         .frame(maxWidth: fill ? .infinity : nil)
-        .background(Color.white.opacity(open ? 0.13 : (rounded ? 0.055 : 0.06)), in: shape)
-        .overlay(shape.strokeBorder(Color.white.opacity(open ? 0.18 : 0.10)))
-        .foregroundStyle(Color.white.opacity(0.92))
+        .background(open ? LauncherTheme.Colors.pressed : LauncherTheme.Colors.control, in: shape)
+        .overlay(shape.strokeBorder(open ? LauncherPalette.cream.opacity(0.4) : LauncherTheme.Colors.border))
+        .foregroundStyle(LauncherTheme.Colors.text)
+        .help(current)
         .contentShape(shape)
-        .launcherMeasured(label: Text(current).font(.manrope(rounded ? 13 : 12.5, .semibold)), room: LauncherControl.choiceWidth)
+        .launcherMeasured(label: Text(current).font(LauncherTheme.TypeStyle.button), room: LauncherControl.choiceWidth)
     }
 
     fileprivate func accessible<V: View>(_ view: V) -> some View {

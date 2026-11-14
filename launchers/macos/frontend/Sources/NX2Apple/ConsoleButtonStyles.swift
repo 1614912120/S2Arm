@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 S2Arm contributors
 import SwiftUI
+import NXLauncher
 
 /// Compact controls keep the artwork visible; labels remain available to VoiceOver and on hover.
 struct ConsoleIconButtonStyle: ButtonStyle {
@@ -14,7 +15,8 @@ struct ConsoleIconButtonStyle: ButtonStyle {
             .font(.system(size: size > 44 ? 20 : 16, weight: .medium))
             .frame(width: size, height: size)
             .foregroundStyle(.white.opacity(enabled ? 0.95 : 0.35))
-            .background(.black.opacity(configuration.isPressed ? 0.5 : hovered ? 0.34 : 0.2), in: Circle())
+            .background(.thinMaterial, in: Circle())
+            .overlay(Circle().fill(.white.opacity(configuration.isPressed ? 0.14 : hovered ? 0.07 : 0)).allowsHitTesting(false))
             .overlay(Circle().strokeBorder(.white.opacity(hovered ? 0.4 : 0.12)))
             .contentShape(Circle())
             .onHover { hovered = $0 }

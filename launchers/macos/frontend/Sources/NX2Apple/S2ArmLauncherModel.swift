@@ -970,10 +970,17 @@ public final class S2ArmLauncherModel: ObservableObject {
     }
 
     /// 在 Xcode 打开引导项目；玩家运行一次后，装机页每 5 秒的重查会自动打勾。
-    func openSigningProject() {
+    func openSigningProject(completion: ((Error?) -> Void)? = nil) {
         Task {
-            do { NSWorkspace.shared.open(URL(fileURLWithPath: try await provider.signingProject())) }
-            catch { installError = error.localizedDescription }
+            do {
+                let path = try await provider.signingProject()
+                guard !path.isEmpty else { throw CocoaError(.fileNoSuchFile) }
+                let url = URL(fileURLWithPath: path)
+                guard NSWorkspace.shared.open(url) else { throw CocoaError(.fileReadUnknown) }
+                completion?(nil)
+            } catch {
+                if let completion { completion(error) } else { installError = error.localizedDescription }
+            }
         }
     }
 

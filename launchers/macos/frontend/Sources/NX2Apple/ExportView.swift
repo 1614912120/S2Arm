@@ -169,7 +169,7 @@ struct ExportView: View {
                 LauncherRowIcon("externaldrive")
                 Text(x("location.title")).font(.manrope(13)).foregroundStyle(.secondary)
                 Spacer(minLength: 12)
-                LauncherDropdown(options: options, selection: location, label: x("location.title"), style: .button) { value in
+                LauncherDropdown(options: options, selection: location, label: x("location.title")) { value in
                     if value == Self.otherFolder { chooseLocation() } else { location = value }
                 }
                 .accessibilityIdentifier("export.location")
@@ -293,21 +293,13 @@ struct ExportView: View {
             }
             Spacer(minLength: 12)
             Button { model.export(game, location: location.isEmpty ? nil : location) } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "shippingbox.fill")
-                    Text(model.busy ? x("action.queue") : count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start")).lineLimit(1)
-                }
-                .font(.manrope(16, .bold)).foregroundStyle(.black)
-                .padding(.horizontal, 26).frame(height: 48)
-                .background(LauncherPalette.cream, in: Capsule())
-                .contentShape(Capsule())
+                Label(model.busy ? x("action.queue") : count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"), systemImage: "shippingbox.fill")
             }
-            .controllerButtonStyle(.plain)
+            .controllerButtonStyle(LauncherPrimaryButtonStyle(prominent: true))
             .disabled(blocker?.stopsStart == true)   // 缺文件 / 缺 keys 只在左边提示，不置灰（作业层核实）
-            .opacity(blocker?.stopsStart == true ? 0.4 : 1)
             .busyHint(model, disabled: blocker == .busy)   // 别的任务（非出包）在跑：说在等谁（出包在跑时这里是「排队」，不置灰）
             .keyboardShortcut(.defaultAction)
-            .padTarget("export.start", scope: "main", radius: 26) { model.export(game, location: location.isEmpty ? nil : location) }
+            .padTarget("export.start", scope: "main", radius: LauncherTheme.Metrics.controlRadius) { model.export(game, location: location.isEmpty ? nil : location) }
             .accessibilityLabel(count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"))
             .accessibilityIdentifier("export.start")
         }

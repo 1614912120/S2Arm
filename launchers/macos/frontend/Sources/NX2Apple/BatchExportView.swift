@@ -108,7 +108,7 @@ struct BatchExportView: View {
                 LauncherRowIcon("externaldrive")
                 Text(t("location")).font(.manrope(13)).foregroundStyle(.secondary)
                 Spacer(minLength: 12)
-                LauncherDropdown(options: options, selection: model.batchLocation, label: t("location"), style: .button) { value in
+                LauncherDropdown(options: options, selection: model.batchLocation, label: t("location")) { value in
                     if value == "__other__" {
                         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
                         if panel.runModal() == .OK, let url = panel.url { model.batchLocation = url.path; model.loadLocations(probe: url.path) }
@@ -217,11 +217,9 @@ struct BatchExportView: View {
                 let count = model.batchDraft.filter { !$0.platforms.isEmpty }.count
                 Spacer()
                 Button { model.startBatch() } label: {
-                    HStack(spacing: 8) { Image(systemName: "shippingbox.fill"); Text(t("start").replacingOccurrences(of: "{0}", with: "\(count)")) }
-                        .font(.manrope(16, .bold)).foregroundStyle(.black).padding(.horizontal, 26).frame(height: 48)
-                        .background(LauncherPalette.cream, in: Capsule()).contentShape(Capsule())
+                    Label(t("start").replacingOccurrences(of: "{0}", with: "\(count)"), systemImage: "shippingbox.fill")
                 }
-                .controllerButtonStyle(.plain).disabled(count == 0 || model.busy).opacity(count == 0 || model.busy ? 0.4 : 1).busyHint(model)
+                .controllerButtonStyle(LauncherPrimaryButtonStyle(prominent: true)).disabled(count == 0 || model.busy).busyHint(model)
                 .keyboardShortcut(.defaultAction).accessibilityIdentifier("batch.start")
             } else {
                 let s = model.batchSummary

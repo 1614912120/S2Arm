@@ -1,5 +1,5 @@
 // Derived from NX2Apple (MIT; see frontend/NOTICE).
-// S2Arm: shared card actions participate in launcher controller navigation.
+// S2Arm: shared theme spacing and typography; card actions participate in controller navigation.
 import SwiftUI
 import AppKit
 import NXCore
@@ -51,21 +51,24 @@ package struct CardGroup<Content: View>: View {
 
     package var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(label).font(.manrope(15, .semibold)).foregroundStyle(.secondary)
-                .padding(.leading, 2)
+            Text(label).font(LauncherTheme.TypeStyle.section).foregroundStyle(.secondary)
+                .padding(.leading, LauncherTheme.Metrics.cardInset)
+                .accessibilityAddTraits(.isHeader)
             VStack(spacing: 0) { content }
-                .background(LauncherPalette.surface.opacity(0.75), in: RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.white.opacity(0.06)))
+                .frame(maxWidth: .infinity)
+                .launcherPanel()
             if !footnote.isEmpty {
-                Text(footnote).font(.manrope(12)).foregroundStyle(.secondary).padding(.leading, 2)
+                Text(LauncherCopy.note(footnote)).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary)
+                    .padding(.horizontal, LauncherTheme.Metrics.cardInset)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .accessibilityElement(children: .contain)
     }
 }
 
-/// One line of a card: a status dot (its place kept when there is none, so every title starts on one line),
-/// the title (with a disclosure chevron beside it when `open` is given), a secondary detail, and its controls.
+/// A card row: title, optional status/disclosure indicator, description, and one trailing control column.
+/// Rows without status indicators keep the full reading width instead of reserving an empty icon slot.
 /// Its buttons and dropdowns are all LauncherControl.width wide, so they line up in one column across the cards.
 package struct CardRow<Trailing: View>: View {
     let title: String
@@ -88,11 +91,11 @@ package struct CardRow<Trailing: View>: View {
     }
 
     package var body: some View {
-        HStack(spacing: 12) {
-            Circle().fill(dot ?? .clear).frame(width: 7, height: 7)
-            VStack(alignment: .leading, spacing: 3) {
+        HStack(spacing: LauncherTheme.Space.section) {
+            VStack(alignment: .leading, spacing: LauncherTheme.Space.xSmall) {
                 HStack(spacing: 6) {
-                    Text(title).font(.manrope(14)).fixedSize(horizontal: false, vertical: true)
+                    if let dot { Circle().fill(dot).frame(width: 7, height: 7).accessibilityHidden(true) }
+                    Text(title).font(LauncherTheme.TypeStyle.body).fixedSize(horizontal: false, vertical: true)
                     if let open {
                         Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
                             .rotationEffect(.degrees(open ? 90 : 0))
@@ -104,8 +107,8 @@ package struct CardRow<Trailing: View>: View {
                     if detail.hasPrefix("/") || detail.hasPrefix("~") {
                         PathLink(detail, help: help)
                     } else {
-                        Text(detail).font(.manrope(12.5)).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true).help(help.isEmpty ? detail : help)
+                        Text(LauncherCopy.note(detail)).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true).help(LauncherCopy.note(help.isEmpty ? detail : help))
                     }
                 }
                 if !detail2.isEmpty {
@@ -113,11 +116,11 @@ package struct CardRow<Trailing: View>: View {
                     else { Text(detail2).font(.mono(12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(detail2) }
                 }
             }
-            Spacer(minLength: 12)
+            .frame(maxWidth: .infinity, alignment: .leading)
             trailing.launcherRowControls()
         }
-        .padding(.horizontal, 18).padding(.vertical, 13)
-        .frame(minHeight: 52)
+        .padding(.horizontal, LauncherTheme.Metrics.cardInset).padding(.vertical, LauncherTheme.Space.large)
+        .frame(minHeight: 68)
     }
 }
 
@@ -158,7 +161,10 @@ package struct PathLink: View {
 
 package struct CardDivider: View {
     package init() {}
-    package var body: some View { Divider().opacity(0.25).padding(.leading, 18) }
+    package var body: some View {
+        Rectangle().fill(LauncherTheme.Colors.border).frame(height: 1)
+            .padding(.horizontal, LauncherTheme.Metrics.cardInset).accessibilityHidden(true)
+    }
 }
 
 /// A row that opens the rows under it.
@@ -194,8 +200,8 @@ package struct LauncherPageScroll<Content: View>: View {
     package var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 34) { content }
-                    .padding(.horizontal, 40).padding(.top, 40).padding(.bottom, 48)
+                VStack(alignment: .leading, spacing: LauncherTheme.Space.section) { content }
+                    .padding(LauncherTheme.Space.page)
                     .frame(maxWidth: 900)
                     .frame(maxWidth: .infinity)
             }

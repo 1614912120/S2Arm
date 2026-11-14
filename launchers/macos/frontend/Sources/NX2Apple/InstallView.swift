@@ -22,19 +22,15 @@ struct InstallView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    // 装法是导出时标题照导出写（维护者 11-13：出包页起分两路），不写「装到 iPhone」
-                    Text(model.installMode.mode == "export" ? text("install.mode.export") : loc.t(model.installKey("s2arm.install.title"))).font(.manrope(26, .heavy)).tracking(-0.6)
-                    if let game { Text(game.name).font(.manrope(14)).foregroundStyle(.secondary) }
-                }
-                Spacer()
+                // 装法是导出时标题照导出写（维护者 11-13：出包页起分两路），不写「装到 iPhone」
+                LauncherSheetHeading(model.installMode.mode == "export" ? text("install.mode.export") : loc.t(model.installKey("s2arm.install.title")), subtitle: game?.name ?? "")
                 if model.installChecking { ProgressView().controlSize(.small) }
             }
-            .padding(.horizontal, 30).padding(.top, 28).padding(.bottom, 20)
+            .padding(.horizontal, LauncherTheme.Space.page).padding(.top, LauncherTheme.Space.page).padding(.bottom, 20)
             if let error = model.installError {
-                Text(loc.backend(error)).font(.manrope(12)).foregroundStyle(LauncherPalette.danger)
+                Text(loc.backend(error)).font(LauncherTheme.TypeStyle.caption).foregroundStyle(LauncherPalette.danger)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 30).padding(.bottom, 12)
+                    .padding(.horizontal, LauncherTheme.Space.page).padding(.bottom, 12)
             }
             if model.installDone == gameID { doneContent } else if let job = installJob {
                 VStack(alignment: .leading, spacing: 10) {
@@ -43,7 +39,7 @@ struct InstallView: View {
                     // 装机在后台照跑：关掉弹层回游戏库，顶部胶囊「正在装到 iPhone · 查看进度」能回来（#308，Mac 与 Windows 同一套）
                     HStack { Spacer(); Button(text("install.background")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.background") }
                 }
-                .padding(.horizontal, 30).frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, LauncherTheme.Space.page).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
@@ -64,14 +60,16 @@ struct InstallView: View {
                                     }
                                     if !item.ok, item.id == "appleId" {
                                         // 团队号手填 / 引导项目收进环境检查「装到 iPhone 的方式」（v0.3.0）：这里只给一个去设置
-                                        Button(BackendText.launcherText("install.mode.go_settings", language: loc.lang == .zh ? "zh-Hans" : "en")) {
-                                            dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { model.showEnvironment = true }
+                                        LauncherRowActions {
+                                            Button(BackendText.launcherText("install.mode.go_settings", language: loc.lang == .zh ? "zh-Hans" : "en")) {
+                                                dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { model.showEnvironment = true }
+                                            }
+                                            .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("install.goSettings")
+                                            Button(text("install.apple.open")) {
+                                                if case .open(let url) = model.provider.environment.repairStep(for: "openXcode") { NSWorkspace.shared.open(url) }
+                                            }
+                                            .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("install.openXcode")
                                         }
-                                        .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.goSettings")
-                                        Button(text("install.apple.open")) {
-                                            if case .open(let url) = model.provider.environment.repairStep(for: "openXcode") { NSWorkspace.shared.open(url) }
-                                        }
-                                        .controllerButtonStyle(LauncherSecondaryButtonStyle())
                                     }
                                 }
                                 if item.id != r.items.last?.id { CardDivider() }
@@ -79,8 +77,8 @@ struct InstallView: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(text("install.container_note")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        Text(text("install.legacy_note")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text(text("install.container_note")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text(text("install.legacy_note")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     }
                     if let game, game.iphoneRestorable {
                         // 只换宿主后（手机上的 S2Arm 换了新版运行层）新版不好用：装回上一版
@@ -106,41 +104,37 @@ struct InstallView: View {
                             }
                     }
                 }
-                .padding(.horizontal, 30).padding(.bottom, 24)
+                .padding(.horizontal, LauncherTheme.Space.page).padding(.bottom, LauncherTheme.Space.section)
             }
             // 认得出的风险（会挤掉别处装的游戏 / 存档没能备份……）在结局页里问（PhoneJobPanel），不弹框
             }
             Divider().opacity(0.3)
             if model.installDone == gameID {
                 HStack { Spacer(); Button(text("install.close")) { model.installDone = nil; dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction) }
-                    .padding(.horizontal, 30).padding(.vertical, 16)
+                    .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
             } else if let job = installJob {
                 HStack { Spacer(); Button(loc.t("s2arm.job.cancel")) { model.stop() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(job.phase == .stopping) }
-                    .padding(.horizontal, 30).padding(.vertical, 16)
+                    .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
             } else {
             HStack(spacing: 14) {
-                Text(loc.t("s2arm.install.note")).font(.manrope(12)).foregroundStyle(.secondary).lineLimit(3)
+                Text(loc.t("s2arm.install.note")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary).lineLimit(3)
                 Spacer(minLength: 8)
                 if let ipa = model.installReadiness?.ipaPath, !ipa.isEmpty {
                     Button(loc.t("s2arm.export.revealIpa")) { model.revealIpa(ipa) }
                         .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.revealIpa")
                 }
                 Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
-                Button {
+                Button(loc.t("s2arm.install.start")) {
                     if let game { model.clearInlineFailure(); model.install(game) }
-                } label: {
-                    Text(loc.t("s2arm.install.start")).font(.manrope(13.5, .bold)).foregroundStyle(.black)
-                        .padding(.horizontal, 22).padding(.vertical, 9)
-                        .background(LauncherPalette.cream, in: Capsule())
                 }
-                .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction)
+                .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
                 // 不按清单置灰（维护者 11-11：玩家主动点装机不许前端挡）：清单可能是旧的（在外面登录好、插好线回来仍灰），
                 // 真做不下去的（没出 iPhone 版、没连设备、签名失败）作业层开头自己判、回真实原因；只在有作业在跑时置灰
                 .disabled(model.busy)
                 .opacity(model.busy ? 0.45 : 1)
                 .busyHint(model)
             }
-            .padding(.horizontal, 30).padding(.vertical, 16)
+            .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
             }
         }
         .onExitCommand { dismiss() }
@@ -156,9 +150,8 @@ struct InstallView: View {
             if installJob == nil, model.installDone != gameID { model.checkInstall(gameID) }
         }
         .onAppear { if model.phoneResult?.gameID == gameID { model.phoneResult = nil } }   // 回来看过结果，顶部胶囊收起
-        .frame(width: 600, height: 520)
-        .background(LauncherPalette.background)
-        .font(.manrope(13))
+        .launcherSheet()
+        .font(LauncherTheme.TypeStyle.detail)
         .preferredColorScheme(.dark)
         .tint(LauncherPalette.cream)
     }
@@ -171,7 +164,7 @@ struct InstallView: View {
             ScrollView {
                 PhoneJobPanel(model: model, session: last, notes: doneNotes).frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 30).frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, LauncherTheme.Space.page).frame(maxWidth: .infinity, maxHeight: .infinity)
         } else { legacyDone }
     }
 
@@ -194,9 +187,9 @@ struct InstallView: View {
             if model.installOpenToFinish {
                 Text(text("install.done.open")).font(.manrope(15, .semibold)).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
-            Text(text("install.done.trust")).font(.manrope(14)).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+            Text(text("install.done.trust")).font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             if game?.iphoneFree == true {
-                Text(text("install.done.free")).font(.manrope(13)).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
+                Text(text("install.done.free")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.horizontal, 44).frame(maxWidth: .infinity, maxHeight: .infinity)

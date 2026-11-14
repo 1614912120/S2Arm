@@ -57,30 +57,34 @@ struct SGradeUpgradeBody: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(spacing: 12) {
                 Image(nsImage: sImage).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 34, height: 34)
-                Text(x("title")).font(.manrope(20, .bold))
+                Text(x("title")).font(LauncherTheme.TypeStyle.title)
                     .foregroundStyle(LinearGradient(colors: [SGradeCardView.goldHi, SGradeCardView.gold, SGradeCardView.rose], startPoint: .leading, endPoint: .trailing))
                 Spacer()
             }
             content
         }
-        .padding(26).frame(width: 560)
+        .padding(LauncherTheme.Space.page).launcherSheet(.form, height: nil)
         .accessibilityIdentifier("sgrade.upgrade")
     }
 
     @ViewBuilder private var content: some View {
         if let failure {
-            Text(failure).font(.manrope(13)).foregroundStyle(.secondary)
+            Text(failure).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary)
             okRow
         } else if let games {
             let found = games.filter(\.found)
             let yes = found.filter { $0.total > 0 && !$0.off }, no = found.filter { $0.total == 0 }, off = found.filter { $0.total > 0 && $0.off }
             let missing = games.filter { !$0.found }
             if found.isEmpty {
-                Text(x("nothing")).font(.manrope(14)).fixedSize(horizontal: false, vertical: true)
+                Text(x("nothing")).font(LauncherTheme.TypeStyle.body).fixedSize(horizontal: false, vertical: true)
                 okRow
             } else if yes.isEmpty {
-                if !no.isEmpty { Text(x("none")).font(.manrope(14)); list(no.map { ($0.name, "") }) }
-                if !off.isEmpty { group(x("off"), off.map { ($0.name, "") }) }
+                LauncherReadingPane {
+                    VStack(alignment: .leading, spacing: LauncherTheme.Space.large) {
+                        if !no.isEmpty { Text(x("none")).font(LauncherTheme.TypeStyle.body); list(no.map { ($0.name, "") }) }
+                        if !off.isEmpty { group(x("off"), off.map { ($0.name, "") }) }
+                    }
+                }
                 okRow
             } else {
                 Text(x("found").replacingOccurrences(of: "{0}", with: String(found.count))).font(.manrope(14, .medium))
@@ -90,22 +94,22 @@ struct SGradeUpgradeBody: View {
                     if !off.isEmpty { group(x("off"), off.map { ($0.name, "") }) }
                     if !missing.isEmpty { group(x("missing"), missing.map { ($0.name, "") }) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                if games.count > 10 { ScrollView { groups }.frame(height: 300) } else { groups }   // 款多才滚动，少的直接排开
-                Text(x("macNote")).font(.manrope(12.5)).foregroundStyle(.secondary)
+                LauncherReadingPane { groups }
+                Text(x("macNote")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if yes.contains(where: \.iphone) {
-                    Text(x("iphoneNote")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(x("iphoneNote")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 10) {
-                        Button(x("install")) { upgrade("install") }.controllerButtonStyle(.borderedProminent).accessibilityIdentifier("sgrade.upgrade.install")
-                        Button(x("export")) { upgrade("export") }.controllerButtonStyle(.bordered).accessibilityIdentifier("sgrade.upgrade.export")
+                        Button(x("install")) { upgrade("install") }.controllerButtonStyle(LauncherPrimaryButtonStyle()).controllerID("sgrade.upgrade.install")
+                        Button(x("export")) { upgrade("export") }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("sgrade.upgrade.export")
                         Spacer()
-                        Button(x("close")) { close() }.controllerButtonStyle(.plain).foregroundStyle(.secondary)
+                        Button(x("close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                     }.disabled(busy)
                 } else {
                     okRow
                 }
             }
         } else {
-            HStack(spacing: 8) { ProgressView().controlSize(.small); Text(x("scanning")).font(.manrope(13)).foregroundStyle(.secondary) }
+            HStack(spacing: 8) { ProgressView().controlSize(.small); Text(x("scanning")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary) }
         }
     }
 
@@ -120,7 +124,7 @@ struct SGradeUpgradeBody: View {
 
     private func group(_ title: String, _ rows: [(String, String)], gold: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.manrope(13, .semibold)).foregroundStyle(gold ? SGradeCardView.gold : .primary)
+            Text(title).font(LauncherTheme.TypeStyle.section).foregroundStyle(gold ? SGradeCardView.gold : .primary)
             list(rows)
         }
     }
@@ -129,15 +133,15 @@ struct SGradeUpgradeBody: View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
                 HStack(alignment: .firstTextBaseline) {
-                    Text(r.0).font(.manrope(13)).lineLimit(1)
+                    Text(r.0).font(LauncherTheme.TypeStyle.detail).lineLimit(1)
                     Spacer(minLength: 12)
-                    if !r.1.isEmpty { Text(r.1).font(.manrope(12)).foregroundStyle(.secondary) }
+                    if !r.1.isEmpty { Text(r.1).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary) }
                 }
             }
         }
     }
 
     private var okRow: some View {
-        HStack { Spacer(); Button(x("ok")) { close() }.controllerButtonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
+        HStack { Spacer(); Button(x("ok")) { close() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction) }
     }
 }
