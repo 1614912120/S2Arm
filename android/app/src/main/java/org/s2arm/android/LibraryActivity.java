@@ -224,9 +224,9 @@ public final class LibraryActivity extends Activity {
         android.content.Context app = getApplicationContext();
         new Thread(() -> {
             String error = null;
-            try (java.io.OutputStream out = app.getContentResolver().openOutputStream(target, "w")) {
-                if (out == null) throw new java.io.IOException("destination cannot be written");
-                DiagnosticBundleWriter.copyBundle(DiagnosticShareProvider.directory(app), name, out);
+            try {
+                DiagnosticBundleWriter.saveBundle(DiagnosticShareProvider.directory(app), name,
+                    mode -> app.getContentResolver().openOutputStream(target, mode));
             } catch (java.io.IOException | RuntimeException e) {
                 error = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
             }

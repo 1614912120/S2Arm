@@ -215,6 +215,27 @@ public final class DiagnosticBundleWriterTest {
         } catch (IOException e) {
             expect("目标写不进的报错原样上抛", "disk full", e.getMessage());
         }
+        // 2d. Overwriting an existing, longer file of the same name: a stand-in provider that, like the external storage
+        //     provider since Android 10, does not truncate on "w" (writes over the start, keeps the old tail) and truncates on "wt".
+        final byte[][] document = {new byte[original.length + 4096]};
+        java.util.Arrays.fill(document[0], (byte) 'x');
+        long saved = DiagnosticBundleWriter.saveBundle(out, "S2Arm-diag-1112-0123-2.zip", mode -> new java.io.ByteArrayOutputStream() {
+            @Override public void close() {
+                byte[] written = toByteArray();
+                if (mode.contains("t")) document[0] = written;
+                else if (written.length >= document[0].length) document[0] = written;
+                else System.arraycopy(written, 0, document[0], 0, written.length);
+            }
+        });
+        expect("覆盖更长的旧文件：返回字节数", (long) original.length, saved);
+        expect("覆盖更长的旧文件：长度等于新包（不留旧尾巴）", original.length, document[0].length);
+        expect("覆盖更长的旧文件：内容就是新包", true, java.util.Arrays.equals(original, document[0]));
+        try {
+            DiagnosticBundleWriter.saveBundle(out, "S2Arm-diag-1112-0123-2.zip", mode -> null);
+            expect("目标打不开要报错", "IOException", "returned");
+        } catch (IOException e) {
+            expect("目标打不开的报错", "destination cannot be written", e.getMessage());
+        }
         Files.delete(out.resolve("S2Arm-diag-0101-0000.zip"));
 
         // ---- 3. No logs at all (nothing played yet): a manifest-only bundle.

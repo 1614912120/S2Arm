@@ -312,6 +312,26 @@ final class DiagnosticBundleWriter {
     }
 
     /**
+     * Mode for the player's chosen document: "wt", not "w". Some document providers (the external
+     * storage provider since Android 10) do not truncate on "w", so overwriting an existing, longer
+     * file of the same name would keep its old tail and leave a broken zip.
+     */
+    static final String SAVE_MODE = "wt";
+
+    /** Where the bundle goes: opens the chosen document in the given mode (ContentResolver in the app). */
+    interface Destination {
+        OutputStream open(String mode) throws IOException;
+    }
+
+    /** Saves one bundle to the destination, opened with {@link #SAVE_MODE}; returns the bytes written. */
+    static long saveBundle(Path outDir, String name, Destination destination) throws IOException {
+        try (OutputStream out = destination.open(SAVE_MODE)) {
+            if (out == null) throw new IOException("destination cannot be written");
+            return copyBundle(outDir, name, out);
+        }
+    }
+
+    /**
      * Copies one bundle this class wrote (a name {@link #shareable} accepts) to a destination the
      * player picked, without following links. Returns the bytes copied; the caller compares them
      * with the bundle size, so a destination that stopped taking bytes is not reported as saved.
