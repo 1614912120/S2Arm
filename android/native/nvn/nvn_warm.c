@@ -31,6 +31,16 @@
 enum { W_IDLE = 0, W_RUNNING = 1, W_STOPPING = 2 };
 enum { WHY_DONE = 0, WHY_STOP = 1, WHY_OFF = 2, WHY_NONE = 3 };
 
+
+// 线程名：Linux / 安卓是 (线程, 名字)，苹果只能给自己起名（宿主单测在 macOS 上编这个文件）
+static void warm_thread_name(const char *name) {
+#ifdef __APPLE__
+    pthread_setname_np(name);
+#else
+    pthread_setname_np(pthread_self(), name);
+#endif
+}
+
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_exit = PTHREAD_COND_INITIALIZER;   // 预热线程退出时广播（收尾用有界等待，不依赖 pthread_timedjoin_np：bionic 要 _GNU_SOURCE）
 static pthread_t g_th;
@@ -206,7 +216,7 @@ static void warm_leave(void) {
 // detached：Stop 只按预算等 g_saved，到点就交还，不 join 它；它退出前一定把清单写完。
 static void *warm_saver_main(void *unused) {
     (void)unused;
-    pthread_setname_np(pthread_self(), "nvk-warm-save");
+    warm_thread_name("nvk-warm-save");
     warm_persist_stop();
     return NULL;
 }
@@ -225,7 +235,7 @@ static void *warm_main(void *unused) {
     (void)unused;
     {   // 让出游戏线程：预热只是把关键路径上本来就要做的活提前，不跟游戏抢核（iOS 后台预热同样降 QoS）
         setpriority(PRIO_PROCESS, 0, 5);
-        pthread_setname_np(pthread_self(), "nvk-warm");
+        warm_thread_name("nvk-warm");
     }
     g_t0 = warm_now_ms();
     int loaded = warm_load();
