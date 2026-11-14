@@ -11,7 +11,7 @@ import S2ArmAppleAdapter
 
 /// 更新说明里的一条：{zh-Hans, en?}；英文没有就用中文
 private func noteText(_ item: [String: Any], _ language: String) -> String {
-    (language == "en" ? item["en"] as? String : nil) ?? item["zh-Hans"] as? String ?? ""
+    LauncherCopy.note((language == "en" ? item["en"] as? String : nil) ?? item["zh-Hans"] as? String ?? "")
 }
 
 private func releasePage(_ version: String) -> URL? { URL(string: "https://github.com/jhaizhou-ops/S2Arm/releases/tag/v" + version) }
@@ -39,7 +39,7 @@ struct UpdatePopupView: View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(t("update.popup.kicker")).font(LauncherTheme.TypeStyle.section).foregroundStyle(LauncherPalette.cream.opacity(0.8))
-                Text("S2Arm v" + version).font(.manrope(28, .heavy))
+                Text("S2Arm v" + version).font(LauncherTheme.TypeStyle.title)
                 Text(t("update.popup.meta")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary)
             }
             let sections = notes["sections"] as? [[String: Any]] ?? []
@@ -155,7 +155,7 @@ struct MessagesPanel: View {
                 let items = (notes["highlights"] as? [[String: Any]]).flatMap { $0.isEmpty ? nil : $0 }
                     ?? (notes["sections"] as? [[String: Any]] ?? []).flatMap { $0["items"] as? [[String: Any]] ?? [] }
                 ForEach(Array(items.prefix(3).enumerated()), id: \.offset) { _, item in
-                    Text("• " + noteText(item, language)).font(.manrope(13.5)).fixedSize(horizontal: false, vertical: true)
+                    Text("• " + noteText(item, language)).font(LauncherTheme.TypeStyle.body).fixedSize(horizontal: false, vertical: true)
                 }
                 if let link = releasePage(version) {
                     Button { NSWorkspace.shared.open(link) } label: { Text(t("update.popup.fullLog")).font(LauncherTheme.TypeStyle.detail).underline() }
@@ -166,7 +166,8 @@ struct MessagesPanel: View {
                     if unread { Circle().fill(LauncherPalette.danger).frame(width: 7, height: 7) }
                     Text(t(m["level"] as? String == "important" ? "messages.kind.important" : "messages.kind.notice")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary)
                 }
-                Text((m["text"] as? [String: String])?[language] ?? "").font(.manrope(13.5)).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                Text(LauncherCopy.note((m["text"] as? [String: String])?[language] ?? ""))
+                    .font(LauncherTheme.TypeStyle.body).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
                 if let link = (m["url"] as? String).flatMap(URL.init(string:)) {
                     Button { NSWorkspace.shared.open(link) } label: { Text(t("notice.details")).font(LauncherTheme.TypeStyle.detail).underline() }
                         .controllerButtonStyle(.plain).foregroundStyle(LauncherPalette.cream)
