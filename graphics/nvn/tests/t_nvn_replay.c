@@ -316,7 +316,7 @@ static void t_fence_sync(void) {
 
 // CALL 目标核对替身（真身在 hle_nvn.c，本单测不链前端）：缺省都算活录制；用例把 g_call_reused 设成某个句柄，它就回 -1（块已被复用）
 static uint64_t g_call_reused;
-int nvn_cmd_call_target(uint64_t h) { return g_call_reused && h == g_call_reused ? -1 : 0; }
+int nvn_cmd_call_resolve(uint64_t h, uint64_t *to) { *to = h; return g_call_reused && h == g_call_reused ? -1 : 0; }
 // #768338 安全阀：CALL 的目标块已被别的录制复用 → 跳过这次调用（子列表的设置不生效）、记一行红；CALL 之后的记录照常执行。
 //   反证：去掉 rp_exec.c 的 ck < 0 跳过，子列表照执行，alpha_ref 被写成 0.25
 static void t_call_reused(void) {
