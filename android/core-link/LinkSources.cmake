@@ -84,6 +84,7 @@ function(s2a_android_nvk_sources output)
         # 着色器链里与旧回放无关的部分
         native/direct/compiler_bind.c native/direct/source_store.c native/direct/diag.c
         native/direct/compile_worker.c native/direct/program_cache.c native/direct/offline_library.c
+        native/direct/libpack_vk.c   # 出包预编库读取（nvk_shader.c 按每阶段键取，同 iOS lib_pack）
         native/direct/compile_request.c native/direct/input_identity.c native/direct/texture_facts.c
         native/nvn/nvn_vk_program_result.c native/nvn/nvn_vk_compute_request.c native/gfx_plat/nvk_shader.c
         # nvn_gpu_* 的 Vulkan 后端与它的零件

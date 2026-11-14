@@ -217,9 +217,13 @@ static int lp_emit_bindings(struct jw *j, struct s2a_jv top, const char *lib_sta
             uint32_t reg = 0;
             if (jf_u32(b, "reg", &reg)) return lp_fail(why, why_size, "%s bindings[%u] cbuf without reg", lib_stage, i);
             v1kind = "uniform"; slot = reg + 3; has_slot = 1;   // v1：驱动槽号，消费端 ubo_slot = slot-3
-        } else if (!strcmp(kind, "c1") || !strcmp(kind, "drvcb") || !strcmp(kind, "ubolen")
-                   || !strcmp(kind, "sbsize") || !strcmp(kind, "uvx") || !strcmp(kind, "lb")) {
-            v1kind = "uniform";   // 宿主常量/表：真实 UBO 描述符、无 guest 槽
+        } else if (!strcmp(kind, "c1")) {
+            v1kind = "uniform"; slot = 1; has_slot = 1;   // 着色器自带常量段 c[1]：v1 槽 1（消费端 NVN_RB_C1）
+        } else if (!strcmp(kind, "ubolen") || !strcmp(kind, "uvx") || !strcmp(kind, "lb") || !strcmp(kind, "sbsize")) {
+            continue;   // Metal 专用的宿主表（越界长度表 / 宽屏采样换算 / LOD 偏移 / 存储长度表）：Vulkan 版 .spv 不声明它们
+                        //   （11-13 一款 Unity 游戏全库 11052 个着色器逐个核：这四种在 _b.json 里 21599 处、.spv 里 0 处），v1 不出行
+        } else if (!strcmp(kind, "drvcb")) {
+            v1kind = "uniform";   // 宿主常量：真实 UBO 描述符、无 guest 槽（消费端还没接，按无槽如实拒）
         } else if (!strcmp(kind, "geometry") || !strcmp(kind, "sbuf") || !strcmp(kind, "sbuf_ubo")
                    || !strcmp(kind, "ubo_ptr") || !strcmp(kind, "gmem_map") || !strcmp(kind, "gmem_log")) {
             v1kind = "storage";

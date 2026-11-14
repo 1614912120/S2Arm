@@ -171,8 +171,8 @@ int main(void) {
               "tex reg5 → texture binding=12 slot=8+5*2=18");
         CHECK(!has(j, "\"slot\":10") && !has(j, "\"slot\":5,") && !has(j, "\"slot\":5}"),
               "负控：不是 reg*2(=10) 也不是 reg 原值(=5)");
-        CHECK(has(j, "\"binding\":24}") && !has(j, "\"binding\":24,\"slot\""),
-              "ubolen → uniform binding=24 无 guest 槽");
+        CHECK(!has(j, "\"binding\":24"),
+              "ubolen（Metal 专用越界长度表，Vulkan 版 .spv 不声明）不出行");
         CHECK(!has(j, "Smplr") && !has(j, "samp_tex"), "Smplr 采样器半边不出行");
         // ps→fs 改名、阶段号 4、sep-tex/img 槽（同一程序里的 fs 键）
         CHECK(has(j, "\"stage\":\"fs\""), "ps → v1 fs 改名");
@@ -191,7 +191,7 @@ int main(void) {
             CHECK(p.stage[0].present && p.stage[1].present &&
                   p.stage[0].spirv_bytes == sizeof libpack_vert_spv && p.stage[0].attr_mask == 10,
                   "fd vs+fs present + spirv + attr_mask=10");
-            CHECK(p.binding_count == 7, "5+3 条反射 -1 采样器半边 = 7 条 v1 绑定");
+            CHECK(p.binding_count == 6, "5+3 条反射 -1 采样器半边 -1 ubolen = 6 条 v1 绑定");
             struct fd_binding *b0 = NULL, *b6 = NULL, *b12 = NULL, *b24 = NULL, *b10 = NULL, *b16 = NULL;
             for (int i = 0; i < p.binding_count; i++) {
                 if (p.bindings[i].binding == 0) b0 = &p.bindings[i];
@@ -207,7 +207,7 @@ int main(void) {
                   "fd sbuf → storage_kind1 slot7 writable");
             CHECK(b12 && b12->kind == 2 && b12->tex_slot == 5 && !b12->texel_buffer,
                   "fd tex → texture tex_slot=5（slot18→byte0x48→(0x48-0x20)/8 回环）");
-            CHECK(b24 && b24->kind == 0 && b24->slot == -1, "fd ubolen → uniform 无槽（slot=-1）");
+            CHECK(!b24, "fd 没有 ubolen 那一条");
             // sep-tex 回环：slot90→byte0x168→int8 128 溢出负值 → tex_slot<0（独立纹理不属
             //   组合槽映射，如实不挂槽，不是静默错绑）
             CHECK(b10 && b10->kind == 2 && b10->tex_slot < 0 && b10->stage_idx == 1,
