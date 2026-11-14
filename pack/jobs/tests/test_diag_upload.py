@@ -16,6 +16,7 @@ import http.server
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
 import threading
@@ -51,6 +52,14 @@ class FakeService:
 
 
 class DiagUploadTests(JobCase):
+    def setUp(self):
+        super().setUp()
+        # 临时包落在本单测私有的临时目录：系统公共临时目录里别的进程（同机并发门禁）也在建删 s2a-diag-*，前后名单对比会偶发不等
+        private = tempfile.mkdtemp(prefix="t-diag-upload-")
+        self.addCleanup(lambda: shutil.rmtree(private, ignore_errors=True))
+        patcher = mock.patch.object(tempfile, "tempdir", private)
+        patcher.start(); self.addCleanup(patcher.stop)
+
     def failed_record(self):
         self.c.report_failure(Failure("synthetic failure"))
         self.c.finish("failed", "x")
