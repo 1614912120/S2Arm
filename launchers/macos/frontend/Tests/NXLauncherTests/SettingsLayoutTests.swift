@@ -202,7 +202,7 @@ import S2ArmAppleAdapter
 
     func testStoredTeamIdDoesNotPreventCollapsingTheGuide() async throws {
         let previous = UserDefaults.standard.object(forKey: S2ArmLauncherModel.teamCodeKey)
-        UserDefaults.standard.set("TESTTEAM01", forKey: S2ArmLauncherModel.teamCodeKey)
+        UserDefaults.standard.set("fixture-team-id", forKey: S2ArmLauncherModel.teamCodeKey)
         defer { UserDefaults.standard.set(previous, forKey: S2ArmLauncherModel.teamCodeKey) }
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
@@ -218,7 +218,7 @@ import S2ArmAppleAdapter
         fixture.navigation.focus("env.teamManual"); fixture.navigation.handle(.confirm)
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertTrue(fixture.navigation.controlTargets(in: window).contains { $0.id == "env.teamGuideOpen" })
-        XCTAssertEqual(UserDefaults.standard.string(forKey: S2ArmLauncherModel.teamCodeKey), "TESTTEAM01")
+        XCTAssertEqual(UserDefaults.standard.string(forKey: S2ArmLauncherModel.teamCodeKey), "fixture-team-id")
     }
 
     func testKeyboardClearIsSeparateFromRecordAndSavesOnlyThatBinding() async throws {
