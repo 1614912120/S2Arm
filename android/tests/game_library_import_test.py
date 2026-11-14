@@ -13,8 +13,8 @@ LIBRARY_ACTIVITY = JAVA / 'org/s2arm/android/LibraryActivity.java'
 
 STUBS = {
 'android/os/Parcelable.java': '''package android.os; public interface Parcelable {}''',
-'android/net/LocalServerSocket.java': '''package android.net; public class LocalServerSocket implements java.io.Closeable { public LocalServerSocket(String n) throws java.io.IOException {} public LocalSocket accept() throws java.io.IOException { throw new java.io.IOException("closed"); } public void close() {} }''',
-'android/net/LocalSocket.java': '''package android.net; public class LocalSocket implements java.io.Closeable { public Credentials getPeerCredentials() { return new Credentials(); } public java.io.InputStream getInputStream() { return null; } public java.io.OutputStream getOutputStream() { return null; } public void close() {} }''',
+'android/net/LocalServerSocket.java': '''package android.net; public class LocalServerSocket implements java.io.Closeable { public LocalServerSocket(String n) throws java.io.IOException {} public LocalSocket accept() throws java.io.IOException { throw new java.io.IOException("closed"); } public void close() throws java.io.IOException {} }''',
+'android/net/LocalSocket.java': '''package android.net; public class LocalSocket implements java.io.Closeable { public Credentials getPeerCredentials() { return new Credentials(); } public java.io.InputStream getInputStream() { return null; } public java.io.OutputStream getOutputStream() { return null; } public void close() throws java.io.IOException {} }''',
 'android/net/Credentials.java': '''package android.net; public class Credentials { public int getUid() { return 0; } }''',
 'android/net/Uri.java': '''package android.net; public class Uri implements android.os.Parcelable {}''',
 'android/content/ClipData.java': '''package android.content; import android.net.Uri; public class ClipData {
