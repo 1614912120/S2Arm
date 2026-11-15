@@ -734,7 +734,7 @@ static uint32_t *spv_tbias(const uint32_t *in, uint32_t nw, uint32_t *onw, uint3
     sx S = {0}, *s = &S; s->in = in; s->nw = nw; s->bound = in[3]; s->nb = in[3]; s->direct = 1;
     uint32_t B = s->bound;
     s->pos = calloc(B, 4); s->rtype = calloc(B, 4); s->dset = calloc(B, 4); s->ptrs = calloc(B, 4);
-    uint32_t *nm_at = calloc(B, 4), *img_buf = calloc(B, 1), *ent_of = calloc(B, 4);   // nm_at[id] = 该 id 的 OpName 位置；img_buf[类型] = Dim Buffer 的图像类型；ent_of[变量 / 载入值] = 1 + 表项号
+    uint32_t *nm_at = calloc(B, 4), *ent_of = calloc(B, 4); uint8_t *img_buf = calloc(B, 1);   // 按字节：原先同一句声明成 uint32_t * 却只分 B 字节，读写越界踩坏堆（ampere_isa 冷跑卡死 / 段错误）；nm_at[id] = 该 id 的 OpName 位置；img_buf[类型] = Dim Buffer 的图像类型；ent_of[变量 / 载入值] = 1 + 表项号
     tb_ent *ent = NULL; int nent = 0;
     uint32_t *out = NULL; wbuf body = {0};
     g_wb_bad = 0;
