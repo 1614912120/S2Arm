@@ -505,6 +505,11 @@ int main(void) {
         s2a_mem_test_setup(AB, AS, W, WS, (void *)(tail + 128 * MB_), 0); s2a_mem_test_vamm(0x1800000, tail + 128 * MB_, 32 * MB_);
         void s2a_mem_test_peaks(uint64_t *, uint64_t *);
         uint64_t pk, ap;
+        {   // Switch 2 应用池诊断开关（S2A_APP_POOL_MB）：没设 = 9 GiB；9809 → 9809 MiB；0 / 负数 / 乱写 → 照旧 9 GiB（期望手写）
+            uint64_t s2a_ounce_pool(void); unsetenv("S2A_APP_POOL_MB"); uint64_t d0 = s2a_ounce_pool();
+            setenv("S2A_APP_POOL_MB", "9809", 1); uint64_t d1 = s2a_ounce_pool();
+            setenv("S2A_APP_POOL_MB", "-5", 1); uint64_t d2 = s2a_ounce_pool(); setenv("S2A_APP_POOL_MB", "x", 1); uint64_t d3 = s2a_ounce_pool(); unsetenv("S2A_APP_POOL_MB");
+            CHECK(d0 == 0x240000000ull && d1 == 9809ull << 20 && d2 == 0x240000000ull && d3 == 0x240000000ull, "Switch 2 应用池开关：缺省 9 GiB、9809 MiB、负数与乱写照旧"); }
         SVH(0x29, 0, 3, 0xFFFF8001, 0);
         CHECK(SVH(0x01, 0, 0x5a800000, 0, 0) == 0xD001, "无表32MiB仍真实拒绝惊奇申请");
         s2a_mem_test_peaks(&pk,&ap); CHECK(pk == 0x5a800000, "失败的合法申请必须计入需求");
