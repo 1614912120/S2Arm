@@ -2004,11 +2004,31 @@ def phone_updates(c):
     import ipa as packer
     sid = packer.current_shell_id(c)
     out = []
+    import rewrite_refresh
     for key, rec in recs:
         st = shell_outdated(c, rec, sid)
-        if st:
-            out.append(dict(device=key, name=(rec.get("signed") or {}).get("device") or "", **st))
+        # 运行时留下、已收回游戏库还没补进 iPhone 件的 NRO（#8be819）：壳是本版也要更新（只推程序），按钮亮、启动器自动发起（kept 列这几款）
+        kept = [g for g in rec.get("games") or [] if isinstance(g, str) and rewrite_refresh.kept_todo(c, g, layout.ios_kit(c, g))]
+        if st or kept:
+            if not st:
+                names = {g["id"].upper(): g.get("name") or g["id"] for g in c.catalog()["games"]}
+                st = dict(fromShell=rec["shellId"], toShell=sid, games=[dict(gameId=g, name=names.get(g, g)) for g in sorted(rec.get("games") or {})], stale=[])
+            out.append(dict(device=key, name=(rec.get("signed") or {}).get("device") or "", **st, kept=[dict(gameId=g, name=g) for g in kept]))
     return out
+
+
+def phone_kept_pull(c):
+    """「手机插着、启动器开着」时启动器隔一阵调一次（phoneKeptPull 作业）：连着的那台手机上，宿主留下的 NRO（#8be819）拉回游戏库。
+    → {device, new: 新收的个数, kept: 还没补进 iPhone 件的款}；new > 0 时启动器自动发起「更新 iPhone」只推程序。没连手机 / 没装过 = new 0、不报错"""
+    try:
+        ph = phone_for(c)
+    except Failure:
+        return dict(device="", new=0, kept=[])
+    rec = layout.load_device(c, ph.key)
+    games = [g for g in rec.get("games") or [] if isinstance(g, str)]
+    new = ph.pull_kept(games)
+    import rewrite_refresh
+    return dict(device=ph.key, new=new, kept=[g for g in games if rewrite_refresh.kept_todo(c, g, layout.ios_kit(c, g))])   # 没补进的款（手动按钮兜底同 phone_updates）
 
 
 def online_devices(c):

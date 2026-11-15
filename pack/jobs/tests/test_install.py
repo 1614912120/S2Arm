@@ -1362,6 +1362,30 @@ class AssembleTests(unittest.TestCase):
         with um.patch.object(packer, "current_shell_id", return_value="SID1"):
             self.assertEqual(install.phone_updates(self.c), [])
 
+    def test_phone_updates_lists_kept_modules_on_current_shell(self):
+        """壳是本版、但甲有运行时留下、已收回还没补进 iPhone 件的 NRO（#8be819）→ 照样列这台，kept = [甲]；没有留下的 → 空"""
+        A = self.A
+        self._update()
+        import ipa as packer, rewrite_refresh
+        with um.patch.object(packer, "current_shell_id", return_value="SID1"), \
+             um.patch.object(rewrite_refresh, "kept_todo", side_effect=lambda c, g, base: ["x.nro"] if g == A else []):
+            got = install.phone_updates(self.c)
+        self.assertEqual([(u["device"], u["fromShell"], u["toShell"], [g["gameId"] for g in u["kept"]], u["stale"]) for u in got], [("dev1", "SID1", "SID1", [A], [])])
+
+    def test_phone_kept_pull(self):
+        """phoneKeptPull 作业：连着的手机上各款留下的 NRO 拉回 → new = 新收个数、kept = 没补进的款；没连手机 → new 0、不报错"""
+        A = self.A
+        self._update()
+        ph = types.SimpleNamespace(key="dev1", pull_kept=lambda games: 2 if A in games else 0)
+        import rewrite_refresh
+        with um.patch.object(install, "phone_for", return_value=ph), \
+             um.patch.object(rewrite_refresh, "kept_todo", side_effect=lambda c, g, base: ["x.nro"] if g == A else []):
+            r = install.phone_kept_pull(self.c)
+        self.assertEqual((r["device"], r["new"], r["kept"]), ("dev1", 2, [A]))
+        def none(c): raise Failure("没连手机", code="device_not_connected")
+        with um.patch.object(install, "phone_for", side_effect=none):
+            self.assertEqual(install.phone_kept_pull(self.c), dict(device="", new=0, kept=[]))
+
     def test_install_mode_defaults_and_persists(self):
         """装到 iPhone 的方式：没设过 = device；不认识的拒收；设成 device / export 写进 install.json；导出作业在 = exportAvailable"""
         self.assertEqual(install.install_mode_job(self.c)["mode"], "device")
