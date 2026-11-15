@@ -72,10 +72,13 @@ package struct CardRow<Trailing: View>: View {
     let dot: Color?
     let help: String
     let open: Bool?
+    /// 控件另起一行（11-14 体验梳理第二轮）：说明长、右边又有两个按钮时，横排会把说明挤成一条窄栏折五六行
+    let stacked: Bool
     let trailing: Trailing
 
     package init(_ title: String, detail: String = "", detail2: String = "", dot: Color? = nil, help: String = "", open: Bool? = nil,
-                 @ViewBuilder trailing: () -> Trailing) {
+                 stacked: Bool = false, @ViewBuilder trailing: () -> Trailing) {
+        self.stacked = stacked
         self.title = title
         self.detail = detail
         self.detail2 = detail2
@@ -86,8 +89,30 @@ package struct CardRow<Trailing: View>: View {
     }
 
     package var body: some View {
+        if stacked {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) { Circle().fill(dot ?? .clear).frame(width: 7, height: 7); texts; Spacer(minLength: 0) }
+                HStack(spacing: 0) { Spacer().frame(width: 19); trailing.launcherRowControls(); Spacer(minLength: 0) }
+            }
+            .padding(.horizontal, 18).padding(.vertical, 13)
+            .frame(minHeight: 52)
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
         HStack(spacing: 12) {
             Circle().fill(dot ?? .clear).frame(width: 7, height: 7)
+            texts
+            Spacer(minLength: 12)
+            trailing.launcherRowControls()
+        }
+        .padding(.horizontal, 18).padding(.vertical, 13)
+        .frame(minHeight: 52)
+    }
+
+    private var texts: some View {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Text(title).font(.manrope(14)).fixedSize(horizontal: false, vertical: true)
@@ -111,11 +136,6 @@ package struct CardRow<Trailing: View>: View {
                     else { Text(detail2).font(.mono(12)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle).help(detail2) }
                 }
             }
-            Spacer(minLength: 12)
-            trailing.launcherRowControls()
-        }
-        .padding(.horizontal, 18).padding(.vertical, 13)
-        .frame(minHeight: 52)
     }
 }
 

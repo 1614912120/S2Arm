@@ -11,7 +11,9 @@
 set -u
 GT=300
 has_file() { [ -f "runtime/tests/t_$1.c" ] || [ -f "runtime/tests/t_$1.m" ] || [ -f "graphics/nvn/tests/t_$1.c" ] || [ -f "graphics/nvn/tests/t_$1.m" ]; }
-for k in ${GATE_SKIP:-} ${GATE_ONLY:-}; do has_file "$k" || { echo "原生层：子项键 $k 在 runtime/tests 或 graphics/nvn/tests 下没有对应的 C / Objective-C 单测 → 红"; exit 1; }; done
+# 子项键也认只有构建分片、没有单测源文件的组（runtime/tests/mk/<键>.mk：touch_compat、ns2pro 这类打自己通过行的目标；11-14 新门禁按组拆步要能单跑它们）
+is_key() { has_file "$1" || [ -f "runtime/tests/mk/$1.mk" ]; }
+for k in ${GATE_SKIP:-} ${GATE_ONLY:-}; do is_key "$k" || { echo "原生层：子项键 $k 在 runtime/tests 或 graphics/nvn/tests 下没有对应的 C / Objective-C 单测 → 红"; exit 1; }; done
 # 跑一组并判：绿 → G+1；红 → R+1、记「键 原因」进 WHY、把细节行攒进 DET
 G=0; R=0; WHY=; DET=; TM=
 # 组并行（10-28 质量线门禁提速：100 组逐个跑本机 212 秒、gate-host 276 秒，单组最慢 13 秒，瓶颈是串行）：每组一个 make 进后台，同时至多 NATIVE_GATE_J 组

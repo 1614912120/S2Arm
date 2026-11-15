@@ -4,15 +4,7 @@
     <string name="preview_description">安卓宿主调试构建，尚未接入游戏运行。</string>
     <string name="native_unavailable">原生宿主无法启动，详情见 S2Arm 日志。</string>
     <string name="import_game">导入游戏包…</string>
-    <string name="in_place_game">原地使用游戏文件夹…</string>
-    <string name="in_place_access_title">需要「所有文件访问」</string>
-    <string name="in_place_access_text">原地使用会直接读手机存储里的游戏文件，不再往 App 里拷一份，省下和游戏一样大的空间。请在接下来的系统设置里给本 App 打开「允许访问所有文件」，回来后再点一次「原地使用游戏文件夹…」选游戏文件夹。</string>
-    <string name="in_place_access_open">去开启</string>
-    <string name="in_place_not_local">选的位置不是这台手机上的文件夹（比如网盘），没法原地使用。请选手机存储或 SD 卡里的游戏文件夹。</string>
-    <string name="player_err_all_files">App 没有「所有文件访问」权限，读不到原地的游戏文件。</string>
-    <string name="player_err_all_files_next">在系统设置里给本 App 打开「允许访问所有文件」，再试一次。</string>
-    <string name="player_err_in_place">原地的游戏文件被挪走、删掉或改动了。</string>
-    <string name="player_err_in_place_next">把游戏文件夹按原样放回去（或从电脑重新拷一份），再在游戏库点「原地使用游戏文件夹…」重新登记。</string>
+    <string name="import_progress">正在导入游戏：%1$d / %2$d MiB</string>
     <string name="fps_overlay_show">显示 FPS（成功提交速率）</string>
     <string name="fps_overlay_description">游戏帧成功提交速率，每秒更新；不是屏幕刷新率</string>
 

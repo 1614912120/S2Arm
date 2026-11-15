@@ -310,12 +310,8 @@ final class GameLibrary {
     private GameInstall.Progress progress() {
         long[] last = {0};
         return (done, total) -> {
-            if (done - last[0] > (64L << 20)) { last[0] = done; listener.onStatus(progress(done, total)); }
+            if (done - last[0] > (64L << 20)) { last[0] = done; listener.onStatus(context.getString(R.string.import_progress, done >> 20, total >> 20)); }
         };
-    }
-
-    private static String progress(long done, long total) {
-        return String.format(Locale.ROOT, "Importing game: %d / %d MiB", done >> 20, total >> 20);
     }
 
     // Every file and folder under the picked tree, by package-relative path.

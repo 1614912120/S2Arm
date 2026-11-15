@@ -8,6 +8,10 @@
 //   ⑥ 同键再请求（那份还卡着）→ 50 ms 内返回 nil、gave_up = 1，不再起新编（仍 1 次）
 //   ⑦ 卡住的那份终于返回 X → 下一次同键请求直接拿到 X（同一对象），不重编（仍 1 次）
 //   ⑧ 晚 50 ms 返回、上限 1 秒 → 照常拿到结果、gave_up = 0
+//   慢编译带 MSL 摘要（#065090，msl_note / par_slow_begin）：期望按 DshOutline 的拆分门槛（main0 体 ≥ 8192 行、s2a_outline_ 助手）手写，哈希按 FNV-1a 64 定义逐字节另算：
+//   ⑨ main0 体 8202 行、没有助手 → 「over the 8192-line split threshold, not split」、总行数 8203；两个 s2a_outline_ 助手 → 「split into 2 helpers」；体 3 行 → 「under …」
+//   ⑩ 编 300 ms、门槛改成 100 ms → 日志「still compiling after 100 ms … MSL: <调用方给的摘要>」，源文件留一份 <键>.slow.metal、内容逐字节相同
+//   ⑪ 编得快（门槛内返回）→ 不留源（反证）
 #include "../gfx/nvn/nvn_mtl.m"
 static unsigned checks, failures;
 #define REQUIRE(c) do { if (!(c)) { fprintf(stderr, "FAIL setup %s:%d: %s\n", __FILE__, __LINE__, #c); exit(1); } } while (0)
@@ -17,6 +21,13 @@ static id<MTLComputePipelineState> stub_hang(id<MTLFunction> fn, NSString *key, 
     (void)fn; (void)key; (void)e; atomic_fetch_add(&g_stub_calls, 1); dispatch_semaphore_wait(g_hang, DISPATCH_TIME_FOREVER); return g_stub_ret; }
 static id<MTLComputePipelineState> stub_slow(id<MTLFunction> fn, NSString *key, NSError **e) {
     (void)fn; (void)key; (void)e; atomic_fetch_add(&g_stub_calls, 1); usleep((useconds_t)g_stub_sleep_ms * 1000); return g_stub_ret; }
+static uint64_t fnv(const char *p) { uint64_t h = 1469598103934665603ull; for (; *p; p++) h = (h ^ (uint8_t)*p) * 1099511628211ull; return h; }
+static NSString *log_during(void (^b)(void)) {   // 把 fd 2 接到临时文件跑 b，返回这段时间的日志
+    NSString *f = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"t_pso_slow_%d.log", getpid()]];
+    fflush(stderr); int save = dup(2), fd = open(f.fileSystemRepresentation, O_CREAT | O_TRUNC | O_WRONLY, 0644); dup2(fd, 2); close(fd);
+    b(); fflush(stderr); dup2(save, 2); close(save);
+    NSString *r = [NSString stringWithContentsOfFile:f encoding:NSUTF8StringEncoding error:nil] ?: @""; unlink(f.fileSystemRepresentation); return r;
+}
 static double ms_since(uint64_t t0) { return (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0) / 1e6; }
 static id ask(id<MTLFunction> fn, NSString *key, dispatch_semaphore_t done) {   // 另起一线程请求，返回 __block 结果的盒子
     NSMutableArray *box = [NSMutableArray array];
@@ -69,7 +80,34 @@ int main(void) { @autoreleasepool {
     g_par_compute_impl = stub_slow; g_stub_sleep_ms = 50; atomic_store(&g_stub_calls, 0); gu = 7;
     id r8 = par_compute_wait(fn, @"t-h2", &e, 1000 * NSEC_PER_MSEC, &gu);
     VERIFY(r8 == X && gu == 0 && atomic_load(&g_stub_calls) == 1, "⑧ 晚 50 ms、上限 1 秒：拿到结果（%s）、gave_up %d", r8 == X ? "是" : "否", gu);
-    g_par_compute_impl = par_compute_;
+    // ⑨
+    NSMutableString *big = [NSMutableString stringWithString:@"kernel void main0(device uint* o [[buffer(0)]])\n{\n"];
+    for (int i = 0; i < 8200; i++) [big appendString:@"    o[0] += 1u;\n"];
+    [big appendString:@"}\n"];
+    NSString *n9 = msl_note(@"k9_b", big), *want9 = [NSString stringWithFormat:@"k9_b fallback translation, 8203 lines, fnv %016llx, main0 body 8202 lines, over the 8192-line split threshold, not split", (unsigned long long)fnv(big.UTF8String)];
+    NSString *sp = @"static __attribute__((noinline)) void s2a_outline_0(thread uint& a)\n{\n    a += 1u;\n}\n\nstatic __attribute__((noinline)) void s2a_outline_1(thread uint& a)\n{\n    a += 2u;\n}\n\nkernel void main0(device uint* o [[buffer(0)]])\n{\n    s2a_outline_0(o[0]);\n    s2a_outline_1(o[0]);\n}\n";
+    NSString *n9b = msl_note(@"k9s_b", sp), *n9c = msl_note(@"k9u_b", @"kernel void main0()\n{\n    return;\n}\n");
+    VERIFY([n9 isEqualToString:want9] && [n9b hasSuffix:@"main0 body 4 lines, split into 2 helpers"] && [n9c hasSuffix:@"main0 body 3 lines, under the 8192-line split threshold"],
+           "⑨ MSL 摘要：%s | %s | %s", n9.UTF8String, n9b.UTF8String, n9c.UTF8String);
+    // ⑩
+    NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"t_pso_slow_%d", getpid()]];
+    [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *src10 = [dir stringByAppendingPathComponent:@"k10_b.metal"], *keep10 = [dir stringByAppendingPathComponent:@"k10_b.slow.metal"];
+    REQUIRE([big writeToFile:src10 atomically:NO encoding:NSUTF8StringEncoding error:nil]);
+    g_par_slow_ms = 100; g_par_compute_impl = stub_slow; g_stub_sleep_ms = 300;
+    NSString *log10 = log_during(^{ NSError *e2 = nil; t_par_msl_note = n9.UTF8String; t_par_msl_src = src10.fileSystemRepresentation;
+        (void)par_compute_wait(fn, @"t-s1", &e2, -1, NULL); t_par_msl_note = t_par_msl_src = NULL; usleep(200000); });
+    NSData *k10 = [NSData dataWithContentsOfFile:keep10];
+    VERIFY([log10 containsString:[NSString stringWithFormat:@"still compiling after 100 ms on thread"]] && [log10 containsString:[@"; MSL: " stringByAppendingString:n9]] && [k10 isEqualToData:[big dataUsingEncoding:NSUTF8StringEncoding]],
+           "⑩ 编 300 ms、门槛 100 ms：日志带摘要（%s）、留源 k10_b.slow.metal（%s）", [log10 containsString:@"; MSL: k9_b"] ? "是" : "否", k10 ? "是" : "否");
+    // ⑪
+    NSString *src11 = [dir stringByAppendingPathComponent:@"k11_b.metal"], *keep11 = [dir stringByAppendingPathComponent:@"k11_b.slow.metal"];
+    REQUIRE([big writeToFile:src11 atomically:NO encoding:NSUTF8StringEncoding error:nil]);
+    g_stub_sleep_ms = 0; t_par_msl_note = "fast"; t_par_msl_src = src11.fileSystemRepresentation;
+    (void)par_compute_wait(fn, @"t-s2", &e, -1, NULL); t_par_msl_note = t_par_msl_src = NULL; usleep(300000);
+    VERIFY(![NSFileManager.defaultManager fileExistsAtPath:keep11], "⑪ 门槛内编完：不留源（%s）", [NSFileManager.defaultManager fileExistsAtPath:keep11] ? "留了" : "没留");
+    [NSFileManager.defaultManager removeItemAtPath:dir error:nil];
+    g_par_slow_ms = PAR_SLOW_MS; g_par_compute_impl = par_compute_;
   }
     if (failures) { printf("✗ t_nvn_pso_inflight：%u 项里 %u 项不符\n", checks, failures); return 1; }
     printf("✓ t_nvn_pso_inflight：%u 项全过（同一归档键同时只编一次：后到的等先到的、拿同一对象；先到的失败自己编；不同键不互等）\n", checks); return 0;
