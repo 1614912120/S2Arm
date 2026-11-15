@@ -226,7 +226,7 @@
 "vpad.menu.stickFixed.note" = "オフにすると指を置いた位置がスティックの中心になります";
 "vpad.menu.stickTuning" = "スティックを細かく調整…";
 "vpad.menu.stickTuning.note" = "デッドゾーン / 外周サチュレーション / レスポンス指数";
-"vpad.menu.sticks" = "摇杆";
+"vpad.menu.sticks" = "スティック";
 "vpad.menu.title" = "ゲーム設定";
 "vpad.rumble" = "ゲーム振動";
 "vpad.rumble.level.0" = "最弱";
@@ -291,7 +291,7 @@
 "app.widen.title" = "全画面";
 "common.later" = "後で";
 "common.restartLater" = "後で再起動する";
-"common.restartNow" = "立即重启";
+"common.restartNow" = "今すぐ再起動";
 "controller.allowBluetooth" = "設定で Bluetooth を許可";
 "controller.connect" = "Switch 2 Pro を接続";
 "controller.connect.hint" = "コントローラー上部の SYNC ボタンを、プレイヤーランプが循環点滅するまで長押し";
@@ -414,7 +414,7 @@
 "save.noRoot" = "セーブデータ保存場所にアクセスできないため、今回はセーブデータのインポートまたはエクスポートができません。App を閉じて再度開くか、「仍要開始遊戲…」をタップして通常通りプレイできます。";
 "save.noService" = "このパッケージには、セーブデータ転送に必要なゲーム識別情報またはサービスがありません。最新の S2Arm で再パッケージしてインストールしてください。現在のセーブデータは通常通り使用できます。";
 "save.noService.recover" = "このパッケージには、セーブデータ転送に必要なゲーム識別情報またはサービスがないため、中断されたセーブデータ操作を回復できません。";
-"save.override" = "仍要開始遊戲…";
+"save.override" = "それでもゲームを開始…";
 "save.override.confirm" = "失われる可能性があることを理解しました — ゲームを開始";
 "save.override.done" = "ブロックを解除しました。中断された操作の記録は保持されており、次回 App を開いたときに回復が再試行されます。";
 "save.override.doneNoRoot" = "ブロックを解除しました。今回はセーブデータのインポートまたはエクスポートができません。";
