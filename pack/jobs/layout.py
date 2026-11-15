@@ -445,7 +445,11 @@ def ios_pack(c, gid):
             os.rename(legacy, pack)
             hide(pack)
         except OSError:
-            return legacy   # 改不了名（被占着）：照旧用老位置，下次再改
+            # 审计 P1-183：改名失败可能是另一路（装机页轮询 / 出包）刚改完：.pack 已在就用它，不退回已经不存在的 pack/；
+            #   真被占着（老位置还在）才照旧用老位置，下次再改。不加锁、不要求重新出包
+            if pack.is_dir():
+                return pack
+            return legacy
     return pack
 
 
