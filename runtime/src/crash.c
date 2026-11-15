@@ -293,9 +293,17 @@ static void crash_raw(int sig, siginfo_t *si, ucontext_t *uc, int other) {
 // 出事那块内存（#523 / #815：游戏装完 NRO 后 SIGBUS 落在主程序 +0x579508，日志只有地址，定不了是只读还是没映射）：
 //   缺页类信号（SIGBUS / SIGSEGV）打一行——读还是写（ESR 的 WnR 位）、地址所在（或之后第一块）映射的起止、当前 / 最大权限、标签、共享方式，块起点换成「模块+偏移」。
 //   只用 Mach 调用和 LOG，不分配
+// 11-14 D-G2JB：游戏的 SetHeapSize 因超出宿主地址窗口回了内存不足，它没理会、照样写堆首，崩出 SIGBUS——日志里只见总线错误。
+//   出事地址落在最近一次地址越界的请求里时点名是它，指向起局「自检」行（窗口多大、有没有「提高内存上限」权限）
+int s2a_va_short_last(uint64_t fa, int *num, uint64_t *a, uint64_t *n, uint64_t *count) __attribute__((weak));
 static void fault_region_note(int sig, siginfo_t *si, ucontext_t *uc) {
     if (sig != SIGBUS && sig != SIGSEGV) return;
     uint64_t fa = (uint64_t)(uintptr_t)si->si_addr, esr = uc->uc_mcontext->__es.__esr; const char *rw = (esr >> 6 & 1) ? "写" : "读";
+    { int num; uint64_t a, n, k;
+      if (s2a_va_short_last && s2a_va_short_last(fa, &num, &a, &n, &k))
+          LOG("【红】崩在游戏没要到的地址上：svc %#x 早先要在 %#llx +%#llx 映射，超出宿主占到的地址窗口、回了内存不足（地址越界共 %llu 次），游戏没理会照样访问 %#llx。%s",
+              num, (unsigned long long)a, (unsigned long long)n, (unsigned long long)k, (unsigned long long)fa,
+              "地址窗口比游戏要的小，看起局「自检」行；手机上缺「提高内存上限」权限时按首启提示重签带权限的包"); }
     vm_address_t r = (vm_address_t)fa; vm_size_t sz = 0; natural_t depth = 0; vm_region_submap_info_data_64_t info; mach_msg_type_number_t cnt;
     for (;;) {
         cnt = VM_REGION_SUBMAP_INFO_COUNT_64;

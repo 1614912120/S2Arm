@@ -321,9 +321,59 @@ def _fit(As, vs, tol, only=None):
 
 
 def _movpair(w0, w1):
-    """movz Wd, #lo + movk Wd, #hi, lsl 16（相邻两条拼一个单精度）→ (Wd, 浮点值)；不是 → None"""
-    if w0 is None or w1 is None or w0 & 0xFFE00000 != 0x52800000 or w1 & 0xFFE00000 != 0x72A00000 or (w0 ^ w1) & 31: return None
-    return w0 & 31, struct.unpack('<f', struct.pack('<I', (((w1 >> 5) & 0xFFFF) << 16) | ((w0 >> 5) & 0xFFFF)))[0]
+    """movz Rd, #a, lsl 16·h + movk Rd, #b, lsl 16·(1−h)（h = 0 / 1：先低后高或先高后低；Rd 为 W 或 X，两条同宽）拼一个单精度 → (Rd 号, 浮点值)；不是 → None。
+    X 版 movz 清零高 32 位、movk 只填低 32 位，结果与 W 版同值（读值槽的 ldr Wd 同样零扩展到 Xd，替换后语义不变）。
+    11-14 补丁库体检：12 份宽屏补丁先写高半、5 份用 X 寄存器，原先只认 W 先低后高"""
+    if w0 is None or w1 is None or w0 & 0x7F800000 != 0x52800000 or w1 & 0x7F800000 != 0x72800000 or (w0 ^ w1) & 0x8000001F: return None
+    h0, h1 = (w0 >> 21) & 3, (w1 >> 21) & 3
+    if {h0, h1} != {0, 1}: return None
+    half = {h0: (w0 >> 5) & 0xFFFF, h1: (w1 >> 5) & 0xFFFF}
+    return w0 & 31, struct.unpack('<f', struct.pack('<I', (half[1] << 16) | half[0]))[0]
+
+
+MOVPAIR_GAP = 16   # movz 与 movk 之间最多隔 3 条（字节间距 4–16）：一款游戏的 21:9 补丁 movz w8 @+0x130、movk w8 @+0x138，中间隔一条原指令（11-14）
+
+
+def _movpair_at(get, o):
+    """o 处 movz Rd（W / X，低半或高半，见 _movpair）往后 MOVPAIR_GAP 字节内找同一 Rd 补另一半的 movk（中途同一 Rd 又被 movz / movn / 别的 movk 赋值就停）→ (Rd 号, 浮点值, 间距字节)；没有 → None。
+    get(偏移) → 那一处的字或 None（补丁写入表 / 程序映像都行）"""
+    w0 = get(o)
+    if w0 is None or w0 & 0x7F800000 != 0x52800000: return None
+    for d in range(4, MOVPAIR_GAP + 4, 4):
+        w1 = get(o + d)
+        if w1 is None: continue
+        pr = _movpair(w0, w1)
+        if pr: return pr[0], pr[1], d
+        if w1 & 31 == w0 & 31 and w1 & 0x1F800000 == 0x12800000: return None   # 同一 Wd 被 movz / movn 重新赋值
+    return None
+
+
+MOVK_HI_TOL = 2 ** -7   # 只改高半的单精度：低半是程序里原来那份（16:9 的 0x8e39 等），值只准到高 16 位，容差按尾数 7 位
+
+
+def _movk_hi(w):
+    """movk Rd, #hi, lsl 16（W 或 X）→ (Rd 号, 是否 X, hi)；不是 → None"""
+    if w is None or w & 0x7FE00000 != 0x72A00000: return None
+    return w & 31, bool(w >> 31), (w >> 5) & 0xFFFF
+
+
+def _hi_val(hi, lo=0x8000):
+    return struct.unpack('<f', struct.pack('<I', (hi << 16) | lo))[0]
+
+
+def _movk_partner(get, o):
+    """o 处是只改高半的 movk Rd,#hi,lsl16（11-14 补丁库体检：一类宽屏补丁只写这一条，低半留程序里原来的 movz Rd,#lo）：
+    往前 MOVPAIR_GAP 字节内找同一 Rd、同宽的 movz Rd,#lo（低半），中途同一 Rd 被别的 movz / movn / movk 赋值就停 → (movz 偏移, 低半)；没有 → None。
+    get(偏移) → 程序映像里那一处的字"""
+    mk = _movk_hi(get(o))
+    if not mk: return None
+    for d in range(4, MOVPAIR_GAP + 4, 4):
+        y = get(o - d)
+        if y is None: return None
+        if y & 31 == mk[0] and y & 0x1F800000 == 0x12800000:   # 同一 Rd 的 move-wide
+            if y & 0x7FE00000 == 0x52800000 and bool(y >> 31) == mk[1]: return o - d, (y >> 5) & 0xFFFF
+            return None
+    return None
 
 
 def _ldr_imm(w):
@@ -543,14 +593,25 @@ def adapt_families(cands, exefs, log, root=None):
                         words[o] = _ldr_slot(0xB9400000 | (16 << 5) | (ws[0] & 31), slot('x', 'i')); marks[o] = 'kv'; ks[o] = 'x'; continue
                     if o in rp.values():
                         words[o] = (ws[0] & ~(0xFFFF << 5)) | (PHONE_H << 5); ks[o] = 'h'; continue
-                    pr = [_movpair(x[o], x.get(o + 4)) for x in wm]   # movz / movk 拼单精度：改成从槽读整字、movk 换 nop
-                    if o < text_end and all(pr) and len({q[0] for q in pr}) == 1 and (ref is not None or len({q[1] for q in pr}) > 1):
+                    pr = [_movpair_at(x.get, o) for x in wm]   # movz / movk 拼单精度（movk 可隔几条，_movpair_at）：改成从槽读整字、movk 换 nop
+                    if o < text_end and all(pr) and len({q[0] for q in pr}) == 1 and len({q[2] for q in pr}) == 1 and (ref is not None or len({q[1] for q in pr}) > 1):
                         k = _fit(As, [q[1] for q in pr], 2e-3, only)
                         if k and (ref is None or only):
                             if isfill(o): raise ValueError(f'{side} 模板 {mod}+{o:#x} 的 movz / movk 在填充区')
                             words[o] = _ldr_slot(0xB9400000 | (16 << 5) | pr[0][0], slot(k, 's')); marks[o] = 'kv'; ks[o] = k
-                            words[o + 4] = 0xD503201F; skip.add(o + 4); continue
+                            words[o + pr[0][2]] = 0xD503201F; skip.add(o + pr[0][2]); continue
                         if ref is None: raise ValueError(f'{side} 模板 {mod}+{o:#x} 的 movz / movk 值拟合不上画幅')
+                    mks = [_movk_hi(v) for v in ws]   # 只改高半的 movk：低半那条 movz 在程序里（各份都没写），改它读值槽、movk 换 nop
+                    pt = _movk_partner(lambda q: ws[0] if q == o else None if q in offs or not 0 <= q < text_end else int.from_bytes(im[q:q + 4], 'little'), o) \
+                        if o < text_end and all(mks) and len({m[:2] for m in mks}) == 1 and not any(pr) else None
+                    if pt and (ref is not None or len({m[2] for m in mks}) > 1):
+                        only2 = ref.get(pt[0]) if ref is not None else None   # 另一侧把式记在低半那条 movz 的位置上
+                        k = _fit(As, [_hi_val(m[2], pt[1]) for m in mks], MOVK_HI_TOL, only2)
+                        if k and (ref is None or only2):
+                            if isfill(o) or isfill(pt[0]): raise ValueError(f'{side} 模板 {mod}+{o:#x} 的只改高半 movk 在填充区')
+                            words[pt[0]] = _ldr_slot(0xB9400000 | (16 << 5) | mks[0][0], slot(k, 's')); marks[pt[0]] = 'kv'; ks[pt[0]] = k
+                            words[o] = 0xD503201F; continue
+                        if ref is None: raise ValueError(f'{side} 模板 {mod}+{o:#x} 的只改高半 movk 值拟合不上画幅')
                     if all(v == ws[0] for v in ws) and not only:
                         words[o] = fam_max.get(o, ws[0]); continue
                     fm = [_fmov_imm(v) for v in ws]
@@ -671,7 +732,7 @@ def single_aspects(c):
 
 def aspect_classify(writes, A):
     """一份宽屏补丁的写入里认出随画幅变的值（只看补丁本身，不要游戏程序；tools/ws_wash.py 体检与跨版本移植共用）：
-    → (画幅值 [(字偏移, 写法 fmov / movpair / float, 式)], 渲染尺寸对 [(宽偏移, 高偏移, 宽, 高)], 定值字数)。
+    → (画幅值 [(字偏移, 写法 fmov / movpair / movk（只改高半）/ float, 式)], 渲染尺寸对 [(宽偏移, 高偏移, 宽, 高)], 定值字数)。
     fmov 只能编约 2 位有效数字，容差 0.07，其余 2e-3；渲染尺寸 = 一对 MOV 立即数宽 ÷ 高 = A（1%）、宽 ≥ 160"""
     w = {}
     for off, b in writes:
@@ -684,10 +745,15 @@ def aspect_classify(writes, A):
         if _fmov_imm(x):
             k = _fit([A], [_fmov_val(x)], 0.07)
             if k: par.append((o, 'fmov', k)); used.add(o); continue
-        mp = _movpair(x, words.get(o + 4))
+        mp = _movpair_at(words.get, o)
         if mp:
             k = _fit([A], [mp[1]], 2e-3)
-            if k: par.append((o, 'movpair', k)); used |= {o, o + 4}; continue
+            if k: par.append((o, 'movpair', k)); used |= {o, o + mp[2]}; continue
+        mk = _movk_hi(x)
+        if mk and not any(words.get(q, 0) & 0x7F80001F == 0x52800000 | mk[0] for q in range(o - 64, o, 4)):
+            # 只改高半（低半在程序里）：按高 16 位比。补丁自己在前面 64 字节内写了同一寄存器的 movz（整对、隔太远、W / X 混用）不按高半松容差认
+            k = _fit([A], [_hi_val(mk[2])], MOVK_HI_TOL)
+            if k: par.append((o, 'movk', k)); used.add(o); continue
         f = struct.unpack('<f', struct.pack('<I', x))[0]
         if 0.05 < abs(f) < 50:
             k = _fit([A], [f], 2e-3)
@@ -729,16 +795,23 @@ def port_writes(writes, A, im, text_end):
         x = ww[o]; t = ADAPT_F[k](R16)
         if kind == 'fmov':
             fm = _fmov_imm(x); cands = scan_w(0, text_end, lambda y: _fmov_imm(y) == fm and abs(_fmov_val(y) - t) <= 0.07)
+        elif kind == 'movk':   # 原值 = 同 Rd、同宽、高半为式(16/9) 高 16 位的 movk
+            mk = _movk_hi(x); th = struct.unpack('<I', struct.pack('<f', t))[0] >> 16
+            cands = scan_w(0, text_end, lambda y: _movk_hi(y) == (mk[0], mk[1], th))
         elif kind == 'movpair':
-            rd = x & 31
-            cands = [q for q in scan_w(0, text_end, lambda y: y & 0xFFE0001F == 0x52800000 | rd)
-                     if (lambda pr: pr and pr[0] == rd and abs(pr[1] - t) <= 2e-3)(_movpair(word(q), word(q + 4)))]
+            rd = x & 31; tgap = {}
+            def hit(q):
+                pr = _movpair_at(word, q)
+                if pr and pr[0] == rd and abs(pr[1] - t) <= 2e-3: tgap[q] = pr[2]; return True
+                return False
+            cands = [q for q in scan_w(0, text_end, lambda y: y & 0x7F80001F == 0x52800000 | rd) if hit(q)]
         else:
             tb = struct.pack('<f', t); cands = [m.start() for m in re.finditer(re.escape(tb), im) if m.start() % 4 == 0 and m.start() >= text_end]
         cands = [q for q in near(cands, o) if q not in used]
         if not cands: return None, rep + [f'画幅值 {o:#x}（{kind} {k}）：新版里找不到原值 {t:.4f} 的同形指令，整份不移植']
         q = cands[0]; used.add(q); moved[o] = q; delta.append((o, q - o))
-        if kind == 'movpair': moved[o + 4] = q + 4; used.add(q + 4)
+        if kind == 'movpair':   # movk 跟着走：旧版间距从补丁写入里读，新版间距按新版程序里那一对（版本间可能不同）
+            sg = _movpair_at(ww.get, o)[2]; moved[o + sg] = q + tgap[q]; used.add(q + tgap[q])
         rep.append(f'画幅值 {o:#x} → {q:#x}（平移 {q - o:+#x}，候选 {len(cands)}）')
     for o, p, _, _ in res:
         a0, b0 = _mov_imm(ww[o]), _mov_imm(ww[p]); gap = p - o
@@ -786,20 +859,26 @@ def _adapt_single(c, exefs, log, root, side, fid=None):
                 if p != o and p not in rec and _res_ok(a, b, A): rec[o] = ('x', None); rec[p] = ('h', None); break
         for o, x in sorted(wm.items()):
             if o in rec: continue
-            pr = _movpair(x, wm.get(o + 4))
+            pr = _movpair_at(wm.get, o)
             if pr and o < text_end and not isfill(o):
                 k = _fit([A], [pr[1]], 2e-3)
-                if k: rec[o] = ('mp', k); rec[o + 4] = ('nop', None); continue
+                if k: rec[o] = ('mp', k); rec[o + pr[2]] = ('nop', None); continue
             fm = _fmov_imm(x)
             if fm and o < text_end and not isfill(o):
                 k = _fit([A], [_fmov_val(x)], 0.07)
                 if k: rec[o] = ('fm', k); continue
+            pt = _movk_partner(lambda q: wm[q] if q in wm else int.from_bytes(im[q:q + 4], 'little') if 0 <= q < text_end else None, o) if not pr else None
+            if pt and o < text_end and not isfill(o) and not isfill(pt[0]) and pt[0] not in rec and pt[0] not in wm:
+                k = _fit([A], [_hi_val(_movk_hi(x)[2], pt[1])], MOVK_HI_TOL)
+                if k: rec[pt[0]] = ('mp', k); rec[o] = ('nop', None); continue
             if not fm and not pr:
                 f = struct.unpack('<f', struct.pack('<I', x))[0]
                 k = _fit([A], [f], 2e-3) if 0.05 < abs(f) < 50 else None
                 if k and o >= code_end: rec[o] = ('fd', k)
         return rec
     A, rec = max(((B, one(B)) for B in As), key=lambda x: sum(1 for v in x[1].values() if v[0] in ('mp', 'fm', 'fd', 'x')))
+    for o in rec:   # 只改高半的 movk：低半那条 movz 在程序里、补丁没写，模板要改它（读值槽）
+        if o not in wm: wm[o] = int.from_bytes(im[o:o + 4], 'little')
     if not any(v[0] in ('mp', 'fm', 'fd', 'x') for v in rec.values()):
         log.append(f'不参数化\t{c["id"]}\t{mod}\t{c["name"][:40]}\t认不出随画幅变的值（画幅 {A:.3f}），照原样'); return None
     slots, words, marks, adata = {}, {}, {}, []
@@ -1426,7 +1505,7 @@ def plan(root, default_on, index_dirs):
             if os.path.exists(sp): t |= {int(l.split('\t')[0], 16) for l in open(sp) if l.startswith('0x')}
             # 宽屏候选点只在本款有我方宽屏表（启用表 / 整套放宽 / 已验证名单，stage_rewrite.sh 拷进产物根）时才算占用：没表 = 我方宽屏在这款不开，
             #   候选点让给社区补丁（改写器 widen() 跳过补丁表里有的点），社区宽屏补丁才进得来（荒野大镖客一类：补丁改的正是我方扫出的 asp 点）
-            if widen and os.path.exists(wp) and glob.glob(os.path.join(root, 'widen_enable*.tsv')) + glob.glob(os.path.join(root, 'widen_full*.tsv')) + glob.glob(os.path.join(root, 'widen_verified.tsv')):
+            if widen and os.path.exists(wp) and glob.glob(os.path.join(glob.escape(root), 'widen_enable*.tsv')) + glob.glob(os.path.join(glob.escape(root), 'widen_full*.tsv')) + glob.glob(os.path.join(glob.escape(root), 'widen_verified.tsv')):
                 for l in open(wp):
                     c = l.rstrip('\n').split('\t')
                     if len(c) >= 3 and c[0] == mod and c[1].startswith('0x'): o = int(c[1], 16); t.add(o); t.add(o + 4) if c[2] in ('asp', 'aspcap', 'aspcaps') else None
