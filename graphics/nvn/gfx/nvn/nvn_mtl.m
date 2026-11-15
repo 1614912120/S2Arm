@@ -7338,6 +7338,12 @@ static id<MTLTexture> tex_fit_elem(int tid, id<MTLTexture> t, MTLTextureType wan
 // thousands of shaders reading its light and decal lists, buffer textures, through slots translated as 2D. For a buffer texture: its element count and how far its offset in the
 // pool buffer is from the alignment a linear texture there needs. The total goes on the memory stats line. Caller holds g_rmu
 static uint64_t g_tex_mis_n, g_tex_mis_shown;
+// The game's start-up placeholder in a slot of another dimension (one first-party title: texture ID 258 = serial 6, 4x4 RGBA8 2D, which it binds to slot 0 of every stage and leaves in
+//   slots its model shader variants declare 3D): nothing a lookup got wrong, and reading 0 there is what Ryujinx does, so a plain line, not a red one (it kept showing up as a lead in
+//   triage, 271 logs). Placeholder = created among the first textures (serial < 64) and at most 4x4x1 with one level. Pure, t_nvn_tex_mis_placeholder tests it
+static int tex_mis_placeholder(uint64_t serial, unsigned long w, unsigned long h, unsigned long d, unsigned long layers, unsigned long levels) {
+    return serial && serial < 64 && w <= 4 && h <= 4 && d <= 1 && layers <= 1 && levels <= 1;
+}
 uint64_t mtl_tex_mis_count(void) { return g_tex_mis_n; }
 static void tex_mis_note(NvShader *sh, int stage, int slot, int tid, id<MTLTexture> t, MTLTextureType want, const char *outcome) {
     g_tex_mis_n++;
@@ -7348,8 +7354,9 @@ static void tex_mis_note(NvShader *sh, int stage, int slot, int tid, id<MTLTextu
     char bt[96] = "";
     if (t.textureType == MTLTextureTypeTextureBuffer) snprintf(bt, sizeof bt, ", %lu elements at pool offset %lu, %lu past the linear-texture alignment", (unsigned long)t.width, (unsigned long)t.bufferOffset,
                                                                 (unsigned long)(t.bufferOffset % [g_dev minimumLinearTextureAlignmentForPixelFormat:t.pixelFormat]));
-    MLOG("【红】 texture type mismatch: shader %s (stage %d) declares slot %d as Metal type %lu, texture ID %d is type %lu (NVN target %d, format %#x, Metal format %lu%s); %s", sh->key, stage, slot,
-         (unsigned long)want, tid, (unsigned long)t.textureType, tt ? (int)tt->d.target : -1, tt ? (unsigned)tt->d.format : 0u, (unsigned long)t.pixelFormat, bt, outcome);
+    int ph = tt && tex_mis_placeholder(tt->serial, (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.depth, (unsigned long)t.arrayLength, (unsigned long)t.mipmapLevelCount);
+    MLOG("%stexture type mismatch: shader %s (stage %d) declares slot %d as Metal type %lu, texture ID %d is type %lu (NVN target %d, format %#x, Metal format %lu%s); %s%s", ph ? "" : "【红】 ", sh->key, stage, slot,
+         (unsigned long)want, tid, (unsigned long)t.textureType, tt ? (int)tt->d.target : -1, tt ? (unsigned)tt->d.format : 0u, (unsigned long)t.pixelFormat, bt, outcome, ph ? " (the game's start-up placeholder texture)" : "");
 }
 // Alpha from red: the fragment shaders the game profile's alpha_from_red lists read a single-channel render target whose channel mapping is exactly (R, 0, 0, 1) as (R, 0, 0, R).
 // A workaround for NintendoWare layout captures (BotW, Odyssey): the game rebuilds each capture on the same storage with its own mapping ((1, 1, 1, R) for an A8 capture), which was lost while
