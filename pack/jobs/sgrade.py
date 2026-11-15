@@ -74,8 +74,9 @@ def find_program(c, game, extract=True):
     return "none", None
 
 
-def local_patches(c, gid, bid):
-    """这个版本在本地补丁库（快照 + 增量缓存，不联网）里各类条数（同 patches.match 的口径：按构建号精确对）"""
+def local_patches(c, gid, bid, others=None):
+    """这个版本在本地补丁库（快照 + 增量缓存，不联网）里各类条数（同 patches.match 的口径：按构建号精确对）。
+    others 给一个 dict：顺带收「只有别的版本」的各类版本号 {类: [版本号…]}（升级页拆「没有 / 是别的版本的」，同 patches.match 的 others）"""
     import patches
     snap, snap_get = patches._snapshot(c)
     keys = [f"g/{gid}"] + ([f"b/{bid[:16]}"] if len(bid) >= 16 else [])
@@ -84,8 +85,13 @@ def local_patches(c, gid, bid):
         for it in patches.bundle(c, k, None, snap, snap_get):
             if it.get("kind") == "pso":
                 continue
+            cat = it.get("cat") if it.get("cat") in patches.CATS else "gfx"
             if bid and any(patches.bid_hit(bid, b) for b in it.get("bids") or []):
-                out[it.get("cat") if it.get("cat") in patches.CATS else "gfx"] += 1
+                out[cat] += 1
+            elif others is not None:
+                v = patches._version_label(it)
+                if v and v not in others.setdefault(cat, []):
+                    others[cat].append(v)
     return out
 
 
@@ -101,11 +107,14 @@ def scan(c):
             continue   # 没出过包：没有可升级的东西（出包时就会带上 S 级优化）
         where, exefs = find_program(c, g)
         bid = (exefs / "main").read_bytes()[0x40:0x48].hex().upper() if exefs else ""
-        pats = local_patches(c, gid, bid) if bid else {}
+        oth = {}
+        pats = local_patches(c, gid, bid, oth) if bid else {}
         import patches as _p   # 维护者 11-15「两者合成一套」：没社区满屏补丁、这一版在宽屏已验证名单 → 满屏算我方通用满屏
         own = not pats.get("widescreen") and _p.own_widen(c, gid, bid)
         games.append(dict(id=gid, name=g.get("name") or gid, program=where, build=bid, patches=pats, total=sum(pats.values()) + (1 if own else 0),
-                          ownWiden=bool(own), iphone=iphone, mac=mac, off=info.get("sgradeOff") is True))
+                          ownWiden=bool(own), iphone=iphone, mac=mac, off=info.get("sgradeOff") is True,
+                          versions={"mine": _p.display_version(c, g) or "",
+                                    "available": {k: sorted(v) for k, v in oth.items() if not pats.get(k)}}))
     found = [x for x in games if x["program"] != "none"]
     return dict(games=games, found=len(found), upgradable=sum(1 for x in found if x["total"] and not x["off"]),
                 noPatch=sum(1 for x in found if not x["total"]), missing=len(games) - len(found))

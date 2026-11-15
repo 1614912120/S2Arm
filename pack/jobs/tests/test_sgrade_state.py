@@ -106,6 +106,21 @@ class SgradeStateTests(unittest.TestCase):
         (self.img / "widen_verified.tsv").write_text("x\n")
         self.assertTrue(library.sgrade_badge(self.c, GID, self.img))       # 只有我方通用满屏也亮
 
+    def test_local_patches_collects_other_versions(self):
+        # 升级页拆「没有 / 是别的版本的」：本地补丁库里这款别的版本的条目按类收版本号；本版的照常计数。期望手写
+        import patches
+        items = [{"cat": "widescreen", "bids": ["AAAAAAAAAAAAAAAA"], "source": {"path": "G/1.0.0/a.pchtxt"}},
+                 {"cat": "fps", "bids": ["BBBBBBBBBBBBBBBB"], "source": {"path": "G/1.2.0/60fps.pchtxt"}},
+                 {"cat": "fps", "bids": ["CCCCCCCCCCCCCCCC"], "source": {"path": "G/1.3.0/60fps.pchtxt"}}]
+        real_s, real_b = patches._snapshot, patches.bundle
+        patches._snapshot = lambda c: ({}, None); patches.bundle = lambda c, k, cloud, snap, get: items if k.startswith("g/") else []
+        try:
+            oth = {}
+            got = sgrade.local_patches(self.c, GID, "AAAAAAAAAAAAAAAA", oth)
+            self.assertEqual((got["widescreen"], got["fps"], sorted(oth["fps"])), (1, 0, ["1.2.0", "1.3.0"]))
+        finally:
+            patches._snapshot, patches.bundle = real_s, real_b
+
 
 if __name__ == "__main__":
     unittest.main()
