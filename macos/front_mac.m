@@ -1684,7 +1684,6 @@ static NSString *lan_warning(void) {
 @property(strong) S2AMacInputGuide *inputGuide;
 @property(strong) NSMenuItem *controllerStatus;
 @property BOOL ns2ReconnectPending;
-@property BOOL ns2RelayDisconnectNoticeShown;
 @property NSRect windowedFrame;   // 进全屏前的窗口位置大小，退全屏时放回
 @end
 static __weak S2AMacDelegate *g_delegate;
@@ -1712,7 +1711,6 @@ static __weak S2AMacDelegate *g_delegate;
     ns2_status controller = s2a_mac_ns2_status();
     if (controller == NS2_STATUS_READY) {
         self.ns2ReconnectPending = YES;
-        self.ns2RelayDisconnectNoticeShown = NO;
     }
     const char *relay = getenv("S2A_NS2_SOCKET");
     BOOL relayMode = relay && *relay;
@@ -1720,10 +1718,7 @@ static __weak S2AMacDelegate *g_delegate;
     if (self.ns2ReconnectPending && s2a_mac_ns2_relay_due(controller, relay)) s2a_mac_ns2_connect();
     if (self.ns2ReconnectPending && (controller == NS2_STATUS_ERROR || controller == NS2_STATUS_DISCONNECTED)) {
         if (relayMode) {
-            if (!self.ns2RelayDisconnectNoticeShown) {
-                [self.banner showTitle:@"Switch 2 Pro" body:@"S2Arm 手柄连接已中断；重新连接后游戏会自动接回。" accept:nil decline:nil seconds:12];
-                self.ns2RelayDisconnectNoticeShown = YES;
-            }
+            // 通道断开不弹横幅（每次都打断游戏）；菜单状态行照常显示，重连后自动接回
             // S2Arm may be starting a fresh helper; keep trying the stable relay socket.
             s2a_mac_ns2_connect();
         } else {
