@@ -233,7 +233,7 @@ class ScanTests(unittest.TestCase):
         path = 'services/S2A.Services/systemdata_synth.tar'
         other = 'services/S2A.Services/other.tar'
         rules = self.mod.load_rules()
-        entries = [row for row in rules['allowlist'] if row['id'] == 's2arm_synthetic_systemdata']
+        entries = [row for row in rules['allowlist'] if row['id'] == 'generated_synthetic_systemdata_tar']
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]['paths'], [path])
         self.assertEqual(entries[0]['categories'], ['uncovered_unreviewed_type'])

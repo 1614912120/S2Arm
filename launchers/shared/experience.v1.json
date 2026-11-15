@@ -799,7 +799,7 @@
       {"id": "input.saved", "zh-Hans": "已保存", "en": "Saved"},
       {"id": "input.cancel", "zh-Hans": "取消", "en": "Cancel"},
       {"id": "input.rebind.title", "zh-Hans": "改绑这个键？", "en": "Reassign this key?"},
-      {"id": "input.rebind.body", "zh-Hans": "将 {2} 从「{0}」改绑到「{1}」后，原功能将不再使用此键", "en": "Move {2} from “{0}” to “{1}”, leaving the original action unbound"},
+      {"id": "input.rebind.body", "zh-Hans": "将 {2} 从「{0}」改绑到「{1}」后，「{0}」将不再使用此键", "en": "Move {2} from “{0}” to “{1}”; “{0}” will no longer use this key"},
       {"id": "input.rebind.axes", "zh-Hans": "将 {2} 改绑到「{1}」，并与「{0}」互换方向", "en": "Assign {2} to “{1}” and swap its direction with “{0}”"},
       {"id": "input.rebind.confirm", "zh-Hans": "改绑", "en": "Reassign"},
       {"id": "input.save", "zh-Hans": "保存", "en": "Save"},
