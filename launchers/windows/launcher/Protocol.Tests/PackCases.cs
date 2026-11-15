@@ -196,7 +196,9 @@ public static class PackCases
             check(appOps.Contains("sgradeScan") && appOps.Contains("community") && missing.Count == 0,
                 $"request: every operation the App sends is whitelisted (sent {appOps.Count}, missing: {string.Join(",", missing)})");
             var scan = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "sgradeScan", ""), "win-7");
-            check((string?)scan["operation"] == "sgradeScan" && !scan.ContainsKey("gameId"), "request: sgradeScan scans the whole library, no game");
+            check((string?)scan["operation"] == "sgradeScan" && !scan.ContainsKey("gameId") &&
+                  (string?)scan["resources"] == Path.GetFullPath(AppContext.BaseDirectory),
+                "request: sgradeScan scans the whole library, no game, uses bundled patch resources");
         }
         foreach (var (operation, extra, label) in new (string, Dictionary<string, object?>?, string)[]
         {
