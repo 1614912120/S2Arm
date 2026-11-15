@@ -1,7 +1,7 @@
 // 出图补帧（11-14 维护者手测后定，取代我方 60 帧；DM_PRESENT_FI=1 备好功能，iOS 设置页缺省写 1，开不开按这款的「补帧」开关当场定，s2a_fi_set_live）。给原本 30 帧的游戏在屏上补到 60 帧：游戏一帧不少画、节拍不动。
 // 流程：游戏每交一帧，出图线程只把它缩拷成一张输入图（BGRA8，按游戏画面比例、高 ≤ DM_PRESENT_FI_MAXH，缺省 1080）就返回（不等 GPU）；这次拷贝做完的回调
 //   把这一帧交给补帧队列（串行），那里用 MetalFX 帧插值（MTLFXFrameInterpolator，iOS / macOS 26）由上一帧与这一帧补出正中的一帧：
-//   整画面插值，深度填常数 1、运动矢量填 0（同 devinhurry/nxnative fix/ios-framegen-reference 的 nvn_fg.inc，MIT；iPhone Air 一款 30 帧开放世界游戏实测 28.56 → 59.98 帧、GPU 15.36 ms）；
+//   整画面插值，深度填常数 1、运动矢量填 0（同 devinhurry/nxnative fix/ios-framegen-reference 的 nvn_fg.inc，MIT；一台 iPhone 上一款 30 帧开放世界游戏实测 28.56 → 59.98 帧、GPU 15.36 ms）；
 //   先上补出来的帧，再隔半个游戏周期把游戏的原图直接画上屏（原分辨率），原图上屏的命令做完才把这一帧的票记完成。
 //   比 11-13 的 VideoToolbox 版少了 RGB ↔ YUV 两次转换（那一版只走流程就 +1.3 W）；MetalFX 在单独一条 Metal 命令队列上编码，输入图写完（Metal 4 回调）才编、做完才上屏。
 // 超时：补帧在 DM_PRESENT_FI_BUDGET_MS（缺省 12）毫秒内没做完就跳过这一次，直接上真帧，不等它。
