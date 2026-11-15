@@ -12689,6 +12689,8 @@ planned:
     if (!g_fz_n++) MLOG("readable-tile pass merge: first case pass %llu (%d physical attachments)", g_stat_pass + 1, n);
     PD("F %llu merge with the next pass (readable tile): physical attachments %d, previous pass %d", g_stat_pass + 1, n, R.rt.n == n ? g_fz.n1 : g_fz.n1);
 }
+// 可读瓦片版的「第 j 个输出写附件 k」常量编号（S2A.Dsh DshFetch.OmIndex 同一公式）：前 4 个输出 64 + 8 j + k，第 5–8 个 128 + 8 (j − 4) + k（96–127 有 100 / 101 别的常量）
+static inline int bf_om_index(int j, int k) { return j < 4 ? 64 + 8 * j + k : 128 + 8 * (j - 4) + k; }
 static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const uint8_t *lmap) {   // The readable tile version is specialized by constants (cached)
     bf_key bk; memset(&bk, 0, sizeof bk); memcpy(bk.key, fs->key, sizeof bk.key); bk.fbmask = fbmask; bk.nfc = (uint8_t)MIN(fs->rf.nfc, 32);
     for (int i = 0; i < bk.nfc; i++) bk.fx[i] = (int8_t)fx[i];
@@ -12708,7 +12710,7 @@ static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const 
     MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new];
     for (int i = 0; i < fs->rf.nfc; i++) { int v = fx[i]; [cv setConstantValue:&v type:MTLDataTypeInt atIndex:(NSUInteger)i]; }
     for (int q = 0; q < 8; q++) { bool b = fbmask >> q & 1; [cv setConstantValue:&b type:MTLDataTypeBool atIndex:(NSUInteger)(32 + q)]; }
-    for (int j = 0; j < fs->rf.nfo; j++) for (int q = 0; q < 8; q++) { bool b = lmap[q] == fs->rf.fo_color[j]; [cv setConstantValue:&b type:MTLDataTypeBool atIndex:(NSUInteger)(64 + 8 * j + q)]; }
+    for (int j = 0; j < fs->rf.nfo; j++) for (int q = 0; q < 8; q++) { bool b = lmap[q] == fs->rf.fo_color[j]; [cv setConstantValue:&b type:MTLDataTypeBool atIndex:(NSUInteger)bf_om_index(j, q)]; }
     NSError *e = nil; id<MTLFunction> f = [lib newFunctionWithName:@"main0" constantValues:cv error:&e];
     if (!f) {
         NSMutableString *k = [NSMutableString stringWithFormat:@"%02x", fbmask];
@@ -12825,8 +12827,9 @@ static int uv_proof(NvShader *vs, int locn, const p_draw *dw, const p_draw_idx *
 //   同样是「视口覆盖游戏画的那块」，屏幕坐标与存储纹素一一对应，也算成立（11-12 Mac 1920×1350 满屏局：画布 1600×1125、视口 1600×900，原先一律拒，⑤ 为 0）。
 //   这一笔片上读的是本像素瓦片，像素对不对由 DM_NVN_FB_TILE_CHECK 双画逐字节比核
 static uint64_t g_fb_l5wd;   // ⑤ 里靠「满屏加宽、视口 = 游戏尺寸」放行的次数（fb_report）
-static int scr_proof(NvProg *pr, NvShader *vs, int locn, int push_late, const tex_t *att) {
-    if (!vs || locn < 0 || locn >= 32 || !(vs->rf.scr_uv >> locn & 1)) return 0;
+// ndc（#1152）：片元自己把插值量 locn 换成 uv（fma(x / w, 0.5, 0.5)、fma(y / w, -0.5, 0.5)）——插值量要正好是 gl_Position（顶点 scr_pos），算出的就是本像素屏幕坐标；其余前提相同
+static int scr_proof(NvProg *pr, NvShader *vs, int locn, int ndc, int push_late, const tex_t *att) {
+    if (!vs || locn < 0 || locn >= 32 || !((ndc ? vs->rf.scr_pos : vs->rf.scr_uv) >> locn & 1)) return 0;
     for (int st = 2; st < 6; st++) if (pr->sh[st]) return 0;
     if (vs->layer_out || (!push_late && g_wd > 0 && vs->push)) return 0;
     if (!vp_y_upper_left()) return 0;   // y 约定只在左上角原点、视口不 swizzle 时成立（画面线审 10-30）
@@ -12868,7 +12871,7 @@ static int fz_p2_draw(NvProg *pr, const p_draw *dw, const p_draw_idx *di, uint8_
                     PD("F %llu not provable: slot %d sampled view is not the attachment itself (level / layer / format / channel mapping differ)", g_stat_pass, b->reg); return 0; } }
             int any = 0;
             for (int c = 0; c < fs->rf.nfc; c++) if (fs->rf.fc_reg[c] == b->reg) {
-                if ((fs->rf.fc_proj >> c & 1) ? !scr_proof(pr, vs, fs->rf.fc_locn[c], 0, NULL) : !uv_proof(vs, fs->rf.fc_locn[c], dw, di)) { PD("F %llu not provable: slot %d sample coordinate is not this pixel (interpolated output %d)", g_stat_pass, b->reg, fs->rf.fc_locn[c]); return 0; }
+                if ((fs->rf.fc_proj >> c & 1) ? !scr_proof(pr, vs, fs->rf.fc_locn[c], fs->rf.fc_ndc >> c & 1, 0, NULL) : !uv_proof(vs, fs->rf.fc_locn[c], dw, di)) { PD("F %llu not provable: slot %d sample coordinate is not this pixel (interpolated output %d)", g_stat_pass, b->reg, fs->rf.fc_locn[c]); return 0; }
                 fx[c] = j; fbmask |= (uint8_t)(1u << j); any = 1; }
             if (!any) { PD("F %llu not provable: slot %d sample is not in the rewritable table", g_stat_pass, b->reg); return 0; } } }
     memset(lmap, 0xff, 8);
@@ -13165,37 +13168,49 @@ static int swz_ident_for(MTLPixelFormat f, MTLTextureSwizzleChannels s) {
     for (int i = 0; i < 4; i++) if (c[i] != id[i] && !(i >= n && c[i] == (i == 3 ? MTLTextureSwizzleOne : MTLTextureSwizzleZero))) return 0;
     return 1;
 }
+// ⑤ 走不成的原因计数（300 帧统计行里列出前几名；#1152 异度之刃 iPhone：每帧 2000–3600 次 ④ 快照、⑤ 0 次，诊断里看不出被哪条前提挡住）
+enum { FBR_STATE, FBR_NO_VS, FBR_NO_FO, FBR_MIXED, FBR_NOT_PROJ, FBR_SCR_PROOF, FBR_NO_FC, FBR_SUB, FBR_PRE_SIZE, FBR_CANVAS, FBR_VIEW, FBR_SWIZZLE, FBR_NO_FN, FBR_N };
+static const char *const g_fbr_name[FBR_N] = {"pass state", "no vertex shader", "no fragment outputs", "texture also read another way", "not sampled at its own pixel",
+    "same pixel not proven", "slot not a tile read", "attachment level / layer not 0", "pass sizes differ (pass not open)", "canvas differs from the pass", "view format differs", "view swizzle", "no tile-read variant"};
+static uint64_t g_fbr[FBR_N];
+enum { FB4_LISTED, FB4_PRE_BLOCKED, FB4_PRE_REFUSED, FB4_DIRTY_REFUSED, FB4_LOADED_REFUSED, FB4_NOT_LOADED, FB4_N };
+static const char *const g_fb4_name[FB4_N] = {"forced by DM_NVN_FB list", "pass not open, deferred replay / merge", "pass not open, refused", "drawn in this pass, refused", "loaded, refused", "pass open, slot not loaded (cleared / don't-care)"};
+static uint64_t g_fb4[FB4_N];
+static inline int fbr(int r) { g_fbr[r]++; return 0; }
 static int fb_tile_try(NvProg *pr, NvShader *fs, int k, int reg, id<MTLTexture> tv, int pre) {   // pre：遍还没开（开遍前定，调用方让这一槽开遍时载入）
     NvShader *vs = pr->sh[0];
-    if (!fb_tile_on() || (pre ? g_enc != nil : !g_enc) || !vs || !fs->rf.nfo || k < 0 || k >= 8) return 0;
-    if (fs->rf.fc_mixed[reg >> 6] >> (reg & 63) & 1) return 0;   // 同一张纹理还有别的读法（如读邻像素）：只能结束遍
+    if (!fb_tile_on() || (pre ? g_enc != nil : !g_enc) || k < 0 || k >= 8) return fbr(FBR_STATE);
+    if (!vs) return fbr(FBR_NO_VS);
+    if (!fs->rf.nfo) return fbr(FBR_NO_FO);
+    if (fs->rf.fc_mixed[reg >> 6] >> (reg & 63) & 1) return fbr(FBR_MIXED);   // 同一张纹理还有别的读法（如读邻像素）：只能结束遍
     int fx[32]; memcpy(fx, g_fbt.on ? g_fbt.fx : (int[32]){[0 ... 31] = -1}, sizeof fx); int any = 0;
     for (int c = 0; c < fs->rf.nfc; c++) if (fs->rf.fc_reg[c] == reg) {
-        if (!(fs->rf.fc_proj >> c & 1) || !scr_proof(pr, vs, fs->rf.fc_locn[c], 1, R.rt.color[k])) return 0;
+        if (!(fs->rf.fc_proj >> c & 1)) return fbr(FBR_NOT_PROJ);
+        if (!scr_proof(pr, vs, fs->rf.fc_locn[c], fs->rf.fc_ndc >> c & 1, 1, R.rt.color[k])) return fbr(FBR_SCR_PROOF);
         fx[c] = k; any = 1; }
-    if (!any) return 0;
+    if (!any) return fbr(FBR_NO_FC);
     uint64_t s_; int lv, sl; rt_sub(&R.rt, k, &s_, &lv, &sl);
-    if (lv || sl || !R.rt.color[k]) return 0;
+    if (lv || sl || !R.rt.color[k]) return fbr(FBR_SUB);
     if (pre) {   // 遍的画布还没定：要求本遍每个附件游戏尺寸都与它相同（画布 = 它），且不放宽（放宽会改画布）
         uint32_t w0 = MAX(R.rt.color[k]->d.width, 1u), h0 = MAX(R.rt.color[k]->d.height, 1u);
-        if (g_wd > 0) return 0;
-        for (int i = 0; i < R.rt.n && i < 8; i++) if (R.rt.color[i] && (MAX(R.rt.color[i]->d.width, 1u) != w0 || MAX(R.rt.color[i]->d.height, 1u) != h0)) return 0;
-        if (R.rt.depth && (MAX(R.rt.depth->d.width, 1u) != w0 || MAX(R.rt.depth->d.height, 1u) != h0)) return 0;
+        if (g_wd > 0) return fbr(FBR_PRE_SIZE);
+        for (int i = 0; i < R.rt.n && i < 8; i++) if (R.rt.color[i] && (MAX(R.rt.color[i]->d.width, 1u) != w0 || MAX(R.rt.color[i]->d.height, 1u) != h0)) return fbr(FBR_PRE_SIZE);
+        if (R.rt.depth && (MAX(R.rt.depth->d.width, 1u) != w0 || MAX(R.rt.depth->d.height, 1u) != h0)) return fbr(FBR_PRE_SIZE);
     } else {   // 遍已开：附件 k 的画布（canvas 单位：内部分辨率按游戏尺寸、满屏按加宽后的存储，tex_extent_at）要正好是这一遍的画布，同像素由 scr_proof 证。
         //   原先比游戏尺寸 d.width / d.height：满屏加宽了存储、画布跟着变宽 / 变高，永远不等，⑤ 一律被拒（11-12 Duo 一款开放世界游戏：13.3 万次自采样全走快照、累计拷 372 GB、每帧 412 遍）
-        id<MTLTexture> at = tex_mtl(R.rt.color[k]); if (!at) return 0;
+        id<MTLTexture> at = tex_mtl(R.rt.color[k]); if (!at) return fbr(FBR_CANVAS);
         tex_extent ex = tex_extent_at(R.rt.color[k], at, 0, 0);
-        if (MAX(ex.canvas.width, 1u) != g_pass.cw || MAX(ex.canvas.height, 1u) != g_pass.ch) return 0; }
+        if (MAX(ex.canvas.width, 1u) != g_pass.cw || MAX(ex.canvas.height, 1u) != g_pass.ch) return fbr(FBR_CANVAS); }
     {   // 采样的视图必须就是附件本身（同 fz_p2_draw：起始级 / 层 0、单级、格式同附件实际格式、通道顺序恒等、单采样）
         uint32_t apf_ = tv.parentTexture ? (uint32_t)tv.parentTexture.pixelFormat : (uint32_t)tv.pixelFormat; uint8_t swz_[4];
-        if (R.rt.has_cview[k] && R.rt.cview[k].set_format && !(nvn_fmt_to_mtl(R.rt.cview[k].format, &apf_, swz_) && apf_)) return 0;
+        if (R.rt.has_cview[k] && R.rt.cview[k].set_format && !(nvn_fmt_to_mtl(R.rt.cview[k].format, &apf_, swz_) && apf_)) return fbr(FBR_VIEW);
         MTLTextureSwizzleChannels tsw = tv.swizzle;
-        if (!swz_ident_for(tv.pixelFormat, tsw)) return 0;   // 恒等，或只在格式缺的分量上补 0 / 0 / 1（见 swz_ident_for）
-        if ((tv.parentTexture && (tv.parentRelativeLevel || tv.parentRelativeSlice)) || tv.pixelFormat != (MTLPixelFormat)apf_ || tv.mipmapLevelCount != 1 || tv.sampleCount != 1) return 0; }
+        if (!swz_ident_for(tv.pixelFormat, tsw)) return fbr(FBR_SWIZZLE);   // 恒等，或只在格式缺的分量上补 0 / 0 / 1（见 swz_ident_for）
+        if ((tv.parentTexture && (tv.parentRelativeLevel || tv.parentRelativeSlice)) || tv.pixelFormat != (MTLPixelFormat)apf_ || tv.mipmapLevelCount != 1 || tv.sampleCount != 1) return fbr(FBR_VIEW); }
     uint8_t fbmask = (uint8_t)((g_fbt.on ? g_fbt.fbmask : 0) | (1u << k)), lmap[8]; memset(lmap, 0xff, 8);
     for (int c = 0; c < 8; c++) if (fs->rf.color_mask >> c & 1) lmap[c] = (uint8_t)c;   // 输出不搬位置：第 c 个颜色写附件 c
     id<MTLFunction> fn = bf_fn(fs, fx, fbmask, lmap);
-    if (!fn) return 0;
+    if (!fn) return fbr(FBR_NO_FN);
     if (pre && fbc_limit()) return 0;   // 双画检查要开着的遍：遍未开的这一笔照 ④
     if (fbc_limit() && !g_fbc.forcing) {   // 双画检查：这一笔先按老路（③）画，⑤ 留到 draw_top 里第二遍
         uint64_t fr = atomic_load(&g_cur_frame); if (fr != g_fbc.frame) { g_fbc.frame = fr; g_fbc.quota = 0; }
@@ -13253,6 +13268,15 @@ static void fb_report(uint64_t frame) {   // every 300 frames: hits per layer an
          (unsigned long long)frame, (unsigned long long)(g_fb_hits - h0), (unsigned long long)(g_fb_l1 - a0), (unsigned long long)(g_fb_l2 - b0), (unsigned long long)(g_fb_l3 - c0),
          (unsigned long long)(g_fb_count - d0), (g_fb_bytes - y0) / 1048576.0, (unsigned long long)(g_fb_l5 - e0), (unsigned long long)(g_fb_l5ld - f0), (unsigned long long)g_fb_l5_unpush, (unsigned long long)g_fb_l5wd);
     h0 = g_fb_hits; a0 = g_fb_l1; b0 = g_fb_l2; c0 = g_fb_l3; d0 = g_fb_count; y0 = g_fb_bytes; e0 = g_fb_l5; f0 = g_fb_l5ld;
+    {   // ⑤ 被拒的原因（这 300 帧），按次数排前 4
+        static uint64_t r0[FBR_N]; uint64_t d[FBR_N], tot = 0; for (int i = 0; i < FBR_N; i++) { d[i] = g_fbr[i] - r0[i]; r0[i] = g_fbr[i]; tot += d[i]; }
+        if (tot) { char line[512]; int at = 0;
+            for (int n = 0; n < 4; n++) { int m = -1; for (int i = 0; i < FBR_N; i++) if (d[i] && (m < 0 || d[i] > d[m])) m = i; if (m < 0) break;
+                at += snprintf(line + at, sizeof line - (size_t)at, "%s%s %llu", n ? ", " : "", g_fbr_name[m], (unsigned long long)d[m]); d[m] = 0; if (at >= (int)sizeof line) break; }
+            MLOG("same-pass feedback sampling up to frame %llu: on-chip read refused %llu times: %s", (unsigned long long)frame, (unsigned long long)tot, line); } }
+    {   static uint64_t q0[FB4_N]; char line[512]; int at = 0; uint64_t tot = 0;
+        for (int i = 0; i < FB4_N; i++) { uint64_t d = g_fb4[i] - q0[i]; q0[i] = g_fb4[i]; tot += d; if (d) at += snprintf(line + at, sizeof line - (size_t)at, "%s%s %llu", at ? ", " : "", g_fb4_name[i], (unsigned long long)d); if (at >= (int)sizeof line) break; }
+        if (tot) MLOG("same-pass feedback sampling up to frame %llu: ④ snapshots by case: %s", (unsigned long long)frame, line); }
 }
 // Called before the draw opens its render pass: if a snapshot is needed, end the current render pass, copy the snapshot and register the substitution (used by this draw's argument encoding)
 // #387 the depth snapshot of the pass's own depth attachment, kept while that depth stays unchanged: draws after the first that sample it read the same copy (one copy and
@@ -13425,6 +13449,10 @@ static void fb_prepare(NvProg *pr) {
             //   shape and sample that. Any 2D / 2D array view works, including one the shader declares as a cube / cube array and one that holds several mip levels
             //   (Breath of the Wild 9a08f70c2775ebe7: a 4-level 2D array sampled while drawing layer 6 of it): the levels the pass does not write are copied unchanged,
             //   so a LOD read means the same in the snapshot. Non-root views (a view of a view), multisample and 3D are reported once and left as they are
+            {   // 走到 ④ 的这一笔：⑤ 为什么没试 / 没成（诊断计数，300 帧统计行列出）
+                int why = listed ? FB4_LISTED : (!g_enc ? (g_defer_replaying || g_defer_natq || g_fz.active ? FB4_PRE_BLOCKED : FB4_PRE_REFUSED)
+                        : g_fb_dirty[k] ? FB4_DIRTY_REFUSED : (g_fb_loaded >> k & 1) ? FB4_LOADED_REFUSED : FB4_NOT_LOADED);
+                g_fb4[why]++; }
             if ((tt != MTLTextureType2D && !(tt == MTLTextureType2DArray && (vt == tt || cube))) || t.sampleCount != 1 || base.parentTexture) {
                 RED_ONCE(80, "same-pass feedback sampling: the sampled view cannot be copied whole (type %lu levels %lu+%lu layer %lu, attachment level %d layer %d, shader %s); left as is", (unsigned long)t.textureType, (unsigned long)tl, (unsigned long)t.mipmapLevelCount, (unsigned long)ts, lv, sl, fs->key);
                 continue; }
