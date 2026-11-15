@@ -602,6 +602,15 @@ def container_custom(c):
     return out
 
 
+def kit_astype(c, gid):
+    """这款 iPhone 版 kit 的 main.npdm 地址空间类型（头 +0x0C 位 1–3，同 pack/ship_ext.py npdm_ident / runtime/src/vawin.c astype_of）；读不到回 None"""
+    try:
+        b = (layout.ios_kit(c, gid) / "main.npdm").read_bytes()
+    except OSError:
+        return None
+    return (b[0x0C] >> 1) & 7 if len(b) > 0x0C and b[:4] == b"META" else None
+
+
 def incompatible_message(text, gid, names):
     """各款地址空间类型不一致（pack/ship_ext.py container 的红行「…装不进同一个窗口：<游戏号> 类型 <t>、…」）→ 点名手机上和这款类型不同的那几款（#1132：原先只说「删掉不兼容的那款」，玩家不知道是哪款）。
     读不出红行就退回原句。gid 为 None（只组手机上已有的几款）时按游戏库名字列出各类型分组"""
