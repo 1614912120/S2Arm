@@ -8559,6 +8559,15 @@ static id spec_probe_fn(id<MTLLibrary> lib, id<MTLFunction> f) API_AVAILABLE(mac
     if (![lib newFunctionWithName:f.name].functionConstantsDictionary.count) return l;
     id sp = [MTL4SpecializedFunctionDescriptor new]; [sp setFunctionDescriptor:l]; [sp setConstantValues:[MTLFunctionConstantValues new]]; return sp;
 }
+// 完整建用的 Metal 4 描述：照真实描述逐项带过来（单测直接查这里，探针的完整建要和真实那条是同一条管线，计时才可比）
+static id spec_probe_desc(MTLRenderPipelineDescriptor *d, id<MTLLibrary> vl, id<MTLLibrary> fl, NvShader *vs, NvShader *fs) API_AVAILABLE(macos(26.0), ios(26.0)) {
+    id full = [MTL4RenderPipelineDescriptor new];
+    [full setVertexFunctionDescriptor:spec_probe_fn(vl, vs->fn)]; [full setFragmentFunctionDescriptor:spec_probe_fn(fl, fs->fn)]; [full setVertexDescriptor:d.vertexDescriptor];
+    [full setRasterSampleCount:d.rasterSampleCount]; [full setInputPrimitiveTopology:d.inputPrimitiveTopology];
+    [full setAlphaToCoverageState:d.alphaToCoverageEnabled ? MTL4AlphaToCoverageStateEnabled : MTL4AlphaToCoverageStateDisabled];
+    [full setAlphaToOneState:d.alphaToOneEnabled ? MTL4AlphaToOneStateEnabled : MTL4AlphaToOneStateDisabled];
+    spec_probe_color(full, d, 0); return full;
+}
 static void spec_probe(MTLRenderPipelineDescriptor *d, NvShader *vs, NvShader *fs) {
     if (@available(macOS 26.0, iOS 26.0, *)) {} else return;
     static dispatch_queue_t q; static id comp; static dispatch_once_t once;
@@ -8568,11 +8577,7 @@ static void spec_probe(MTLRenderPipelineDescriptor *d, NvShader *vs, NvShader *f
     dispatch_sync(q, ^{ @autoreleasepool { if (@available(macOS 26.0, iOS 26.0, *)) {
         id<MTLLibrary> vl = vs ? vs->plib : nil, fl = fs ? fs->plib : nil;
         if (!comp || !vl || !fl || d.vertexFunction != vs->fn || d.fragmentFunction != fs->fn || !d.rasterizationEnabled) { g_sp.skipped++; return; }
-        id full = [MTL4RenderPipelineDescriptor new];
-        [full setVertexFunctionDescriptor:spec_probe_fn(vl, vs->fn)]; [full setFragmentFunctionDescriptor:spec_probe_fn(fl, fs->fn)]; [full setVertexDescriptor:d.vertexDescriptor];
-        [full setRasterSampleCount:d.rasterSampleCount]; [full setInputPrimitiveTopology:d.inputPrimitiveTopology];
-        [full setAlphaToCoverageState:d.alphaToCoverageEnabled ? MTL4AlphaToCoverageStateEnabled : MTL4AlphaToCoverageStateDisabled];
-        spec_probe_color(full, d, 0);
+        id full = spec_probe_desc(d, vl, fl, vs, fs);
         id base = [full copy]; spec_probe_color(base, d, 1);
         int full_first = (int)(g_sp.n & 1); NSError *e = nil; uint64_t tb = 0, ts = 0, tf = 0, t0;
         id<MTLRenderPipelineState> pf = nil, pb = nil, pz = nil;
