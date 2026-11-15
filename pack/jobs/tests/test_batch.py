@@ -159,7 +159,10 @@ class BatchCli(unittest.TestCase):
         self.run_cli("create", "--json", json.dumps({"items": [{"gameId": A, "platforms": ["iphone"]}]}))
         before = Path(self.root, "batch.json").read_text(encoding="utf-8")
         import filelock
-        with open(Path(self.root, "batch.json.lock"), "a+") as f, mock.patch.object(batch.time, "sleep", lambda s: None):
+        held = filelock.held   # 排队上限调短（同 test_filelock 的 0.3 秒口径）：核的是「锁被占 → 报错、不写」，不是等满 batch.locked 的 5 秒
+        #   （11-14 门禁提速：原先桩的是 batch.time.sleep，可等锁在 filelock 里，每次白等 5 秒）
+        with open(Path(self.root, "batch.json.lock"), "a+") as f, \
+                mock.patch.object(filelock, "held", lambda path, **kw: held(path, **dict(kw, wait_s=min(kw.get("wait_s", 0), 0.3)))):
             filelock.try_lock(f)
             rc, got = self.run_cli("mark", "--game", A, "--platform", "iphone", "--state", "running")
             filelock.unlock(f)

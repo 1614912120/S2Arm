@@ -20,6 +20,7 @@ from unittest.mock import patch
 JOBS = Path(__file__).resolve().parents[1]
 ROOT = JOBS.parents[1]
 sys.path.insert(0, str(JOBS))
+os.environ.setdefault("S2A_PATCH_BASE", "file:" + os.path.join(tempfile.gettempdir(), "s2a-jobtests-no-patch-site"))   # 出包用例不连补丁下载站，同 jobcase.py
 from core import Context, Failure, Cancelled, atomic, contained, digest
 import build
 import layout

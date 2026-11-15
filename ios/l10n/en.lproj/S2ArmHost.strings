@@ -214,6 +214,8 @@
 "vpad.menu.holdLock.note" = "Hold for 2 s to lock; this game only";
 "vpad.menu.hud" = "Performance overlay";
 "vpad.menu.hud.note" = "Frame rate and memory in the top-right corner";
+"vpad.menu.fi" = "Frame generation";
+"vpad.menu.fi.note" = "Fills 30 FPS up to 60: smoother, with slightly more input delay; applies right away";
 "vpad.menu.manageLayouts" = "Import / Export / Save As…";
 "vpad.menu.ns2pro" = "Enable Switch 2 Pro Controller";
 "vpad.menu.pad" = "Controllers & Motion";

@@ -63,6 +63,8 @@ int s2a_ui_zh(void);
 // ---------- 齿轮菜单「性能浮层」那一行（runtime/src/hud.c s2a_hud_brief → ios/hud.m） ----------
 #define S2A_UI_HUD_BRIEF                "%llu 帧 · %s"
 #define S2A_UI_HUD_BRIEF_EN             "%llu FPS · %s"
+#define S2A_UI_HUD_BRIEF_FI             "屏上 %llu 帧（游戏 %llu）· %s"   // 补帧开着：补出的帧算进屏上帧率
+#define S2A_UI_HUD_BRIEF_FI_EN          "%llu FPS on screen (game %llu) · %s"
 #define S2A_UI_HUD_MEM_FAIL             "内存读取失败"
 #define S2A_UI_HUD_MEM_FAIL_EN          "Memory unavailable"
 // 两本账一起写（11-13 玩家复盘：GPU 已分配撞上系统上限报 OutOfMemory，浮层只写进程实占 0.9 GB，看着像内存没吃多少）
