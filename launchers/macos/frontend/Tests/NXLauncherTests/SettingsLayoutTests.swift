@@ -13,6 +13,32 @@ import S2ArmAppleAdapter
 
 /// Real SwiftUI pages with original, asset-free job responses; never reads the player's library.
 @MainActor final class SettingsLayoutTests: XCTestCase {
+    func testStorageModeAlignsWithTheHeadingAndContentInBothModes() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        for language in [Lang.zh, .en] {
+            let (host, window) = try await render(AnyView(FreeSpaceView(model: fixture.model, gameID: "fixture")), fixture: fixture, language: language)
+            let navigation = fixture.navigation
+            navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
+            defer { navigation.detach(); window.close() }
+            for overview in [false, true] {
+                try await Task.sleep(for: .milliseconds(80))
+                XCTAssertEqual(navigation.shortcutTargets(in: window)[.secondary] != nil, overview, "只有存储总览显示刷新操作，确认切换实际生效")
+                let modes = navigation.controlTargets(in: window).filter { abs($0.frame.height - 30) < 0.5 }
+                    .sorted { $0.frame.minX < $1.frame.minX }
+                XCTAssertEqual(modes.count, 2)
+                let first = try XCTUnwrap(modes.first), last = try XCTUnwrap(modes.last)
+                let bounds = window.convertToScreen(host.bounds)
+                print("storage-mode \(language.code)/\(overview): left=\(first.frame.minX - bounds.minX - 3)")
+                XCTAssertEqual(first.frame.minX - bounds.minX, 35, accuracy: 1,
+                    "分段控件与页头、内容共用 32 pt 左边距；按钮本身另有 3 pt 内边距")
+                XCTAssertEqual(last.frame.maxX - first.frame.minX + 6, 300, accuracy: 1, "仍保持 300 pt 的紧凑宽度")
+                try snapshot(host, "storage-mode-\(language.code)-\(overview ? "overview" : "game")")
+                if !overview { navigation.focus(last.id); navigation.handle(.confirm) }
+            }
+        }
+    }
+
     func testPlayResultAlignsWithPageInsetsAndTheSharedPrimaryAction() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }

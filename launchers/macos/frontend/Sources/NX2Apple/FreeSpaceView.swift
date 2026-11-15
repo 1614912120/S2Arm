@@ -39,12 +39,12 @@ struct FreeSpaceView: View {
                 if model.spaceLoading || model.spaceFreeing || model.overviewLoading { ProgressView().controlSize(.small) }
             }
             .padding(.horizontal, LauncherTheme.Space.page).padding(.top, LauncherTheme.Space.page).padding(.bottom, 16)
-            // 切换单独一行、水平居中，夹在页头与内容之间。两段都是固定的短词，不放游戏名。
+            // 切换单独一行，与页头和内容左对齐。两段都是固定的短词，不放游戏名。
             LauncherSegmented(options: [("game", loc.t("s2arm.space.title")), ("overview", storage("title"))],
                               selection: overviewMode ? "overview" : "game") { overviewMode = $0 == "overview" }
             .frame(width: LauncherTheme.Metrics.navigationWidth)
             .accessibilityIdentifier("space.mode")
-            .frame(maxWidth: .infinity, alignment: .center)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, LauncherTheme.Space.page).padding(.bottom, 20)
             if let error = model.spaceError {
                 Text(loc.backend(error)).font(LauncherTheme.TypeStyle.caption).foregroundStyle(LauncherPalette.danger)
