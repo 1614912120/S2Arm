@@ -3268,6 +3268,7 @@
   "保持电脑不休眠没开成（{0}），作业照常跑；电脑空闲休眠时推送 / 出包会停在半截": "Impossible de garder l'ordinateur actif ({0}). La tâche continue, mais si l'ordinateur se met en veille, l'envoi / la compilation s'arrêtera en cours",
   "批次正被另一个进程改着，稍后再试": "Le lot est en cours de modification par un autre processus. Réessayez plus tard",
   "这一批里没有勾了平台的游戏": "Aucun jeu de ce lot n'a de plateforme sélectionnée",
+  "不认识的出包平台：{0}（只支持 {1}）": "Plateforme de compilation inconnue : {0} (prises en charge : {1})",
   "这一批里没有 {0}": "{0} n'est pas dans ce lot",
   "{0} 这一批没有 {1}": "{0} n'a pas de {1} dans ce lot",
   "这一批因为磁盘空间不足暂停着：释放空间后点「重试」": "Ce lot est en pause car le disque est plein. Libérez de l'espace, puis cliquez sur « Réessayer »",
