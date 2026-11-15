@@ -6567,11 +6567,20 @@ __attribute__((weak)) int s2a_host_hi_range(uint64_t *lo, uint64_t *hi) { *lo = 
 #define LP_HI_RANGE(lo, hi) s2a_host_hi_range(lo, hi)
 #include "../../lib_pack.inc"
 static lp_pack g_libpack; static int g_libpack_ok;   // lp_open: 1 container, 0 one file per key, -1 a broken container (red, nothing loads)
+static lp_pack g_lpover;   // <库目录>/bf/：S 级升级补的可读瓦片版覆盖层（lp_pick）；没有 = idx 空
+static void lp_over_open(void) {   // 主容器开成了才开覆盖层；覆盖层坏了报红、只用主容器（不挡起局）
+    memset(&g_lpover, 0, sizeof g_lpover);
+    if (g_libpack_ok != 1 || !g_msl_dir) return;
+    NSString *od = [g_msl_dir stringByAppendingPathComponent:@"bf"];
+    int r = lp_open(&g_lpover, od.fileSystemRepresentation, DMSH_CHAIN);
+    if (r == 1) MLOG("direct library overlay: %u records in %u shards (%s/lib.idx, readable-tile versions added by the S-grade upgrade)", g_lpover.n, g_lpover.nshard, od.UTF8String);
+    else if (r < 0) memset(&g_lpover, 0, sizeof g_lpover);
+}
 static lp_pack *lp_pack_get(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{ int r = g_msl_dir ? lp_open(&g_libpack, g_msl_dir.fileSystemRepresentation, DMSH_CHAIN) : 0;
         if (r == 1) MLOG("direct library container: %u records in %u shards (%s/lib.idx)", g_libpack.n, g_libpack.nshard, g_msl_dir.UTF8String);
-        g_libpack_ok = r; });
+        g_libpack_ok = r; lp_over_open(); });
     return g_libpack_ok == 1 ? &g_libpack : NULL;
 }
 // 多程序合集（runtime/include/s2a_programs.h）：游戏 ExecuteProgram(n) 切到同包另一支程序走进程内重启，这支程序的着色器库在 <游戏数据>/programs/<n>/shaders/direct。
@@ -6589,7 +6598,8 @@ int nvn_be_reload_direct_library(void) {
     g_shmap = nil; g_c1_full = nil; g_c1_full_valid = 0; g_cb_ext = nil;
     g_warm_started = 1;   // 先挡住 shmap_load_once 里的预热：预热要用库容器，等新目录的库容器开好再起
     shmap_load_once();
-    int r = g_msl_dir ? lp_open(&g_libpack, g_msl_dir.fileSystemRepresentation, DMSH_CHAIN) : 0; g_libpack_ok = r;
+    if (g_lpover.idx) munmap((void *)g_lpover.idx, g_lpover.idx_len);
+    int r = g_msl_dir ? lp_open(&g_libpack, g_msl_dir.fileSystemRepresentation, DMSH_CHAIN) : 0; g_libpack_ok = r; lp_over_open();
     MLOG("multi-program: shader map %s → %s, library %s (container %s)", old.UTF8String ?: "-", np.UTF8String, g_msl_dir.UTF8String ?: "-", r == 1 ? "opened" : r == 0 ? "none, one file per key" : "broken");
     g_warm_started = 0; warm_start();   // 同首次：读完映射表就起预热
     return 1;
@@ -6621,7 +6631,7 @@ static id<MTLLibrary> lib_from_pack(const char *name, NSError **err) {
     lp_pack *p = lp_pack_get(); int k = lp_kind_of(name, 0);
     if (!p && !g_libpack_ok) return lib_from_file([NSString stringWithFormat:@"%@/%s.metallib", g_msl_dir, name], err);
     if (!p || k < 0) { if (err) *err = [NSError errorWithDomain:NSPOSIXErrorDomain code:ENOENT userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"%s is not in the library container", name]}]; return nil; }
-    return lp_library(p, g_dev, name, (unsigned)k, &t_lib_layer, err);   // one library a segment: a batched library's keys share it (lib_pack.inc); t_lib_layer as lib_from_file
+    return lp_library(lp_pick(p, &g_lpover, name, (unsigned)k), g_dev, name, (unsigned)k, &t_lib_layer, err);   // one library a segment: a batched library's keys share it (lib_pack.inc); t_lib_layer as lib_from_file
 }
 // A library entry ready for a pipeline: a function that declares function constants cannot go into a pipeline unspecialized (Metal validation aborts: "use
 // newFunctionWithName:constantValues:"), so it is specialized with none given, as shader_load does for main0 / main0_u. Every variant library made from a shader's
@@ -6634,7 +6644,7 @@ static id<MTLFunction> lib_entry(id<MTLLibrary> lib, NSString *name) {
 static NSData *json_from_pack(const char *name) {
     lp_pack *p = lp_pack_get(); int k = lp_kind_of(name, 1);
     if (!p && !g_libpack_ok) return [NSData dataWithContentsOfFile:[NSString stringWithFormat:@"%@/%s.json", g_msl_dir, name]];
-    return p && k >= 0 ? (NSData *)lp_get(p, name, (unsigned)k) : nil;   // dispatch_data is bridged to NSData
+    return p && k >= 0 ? (NSData *)lp_get(lp_pick(p, &g_lpover, name, (unsigned)k), name, (unsigned)k) : nil;   // dispatch_data is bridged to NSData; the overlay first (lp_pick)
 }
 // NVN depth mode (nvnDeviceSetDepthMode): every vertex library has two entry points (dmsh_build.py vs_depth): main0 rewrites z for the GL convention (near = -w, NVN's default),
 // main0_z leaves z as is (near = 0, which Link's Awakening, 13 Sentinels and Engage set). Loading picks by the mode the game set, so no game needs a setting for it
