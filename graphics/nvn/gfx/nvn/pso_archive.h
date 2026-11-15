@@ -432,6 +432,13 @@ static id<MTLRenderPipelineState> par_render(MTLRenderPipelineDescriptor *d, NSS
     par_fl_leave(key, mine, ps);
     return ps;
 }
+// 重译抢跑（par_compute_wait）：调用方在本线程设 t_par_race（只用一次、取走即清）；块在后台跑、返回替代管线或 nil（做不了）
+typedef id<MTLComputePipelineState> (^ParRace)(void);
+static __thread __unsafe_unretained ParRace t_par_race;   // 调用方的强引用撑着这次调用
+static int64_t g_par_race_wait_ns = 60ll * 1000000000;   // 抢跑在途时的等待上限（单测改短）
+static _Atomic uint64_t g_par_race_n, g_par_race_won, g_par_race_lost;   // 起了几次抢跑、抢跑先好、原管线先好
+@interface ParWait : NSObject { @public dispatch_semaphore_t sem; int odone, rstate; id<MTLComputePipelineState> ores, rres; NSError *oerr; } @end   // rstate：0 没起 / 1 在跑 / 2 好了 / 3 做不了 / 4 已处理
+@implementation ParWait @end
 // 建计算管线的实现（单测换成不返回 / 晚返回的桩，#884）
 static id<MTLComputePipelineState> (*g_par_compute_impl)(id<MTLFunction>, NSString *, NSError **) = par_compute_;
 // 至多等 wait_ns 建一条计算管线（< 0 = 一直等，原行为）。#884：Metal 编译服务对一条计算管线现编一直不返回，提交线程跟着卡死、开场剧情固定定格。
@@ -454,22 +461,49 @@ static id<MTLComputePipelineState> par_compute_wait(id<MTLFunction> fn, NSString
         par_fl_leave(fk, mine, ps);
         return ps;
     }
-    __block id<MTLComputePipelineState> res = nil; __block NSError *err = nil; dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    // 重译抢跑（v0.4.1，#065090）：调用方给了 t_par_race（出包库是旧翻译器出的计算着色器）→ 编满 g_par_slow_ms 还没完就在后台起一份重译管线，谁先好用谁，执行的就是这一次派发
+    //   （跳过这一次救不回来：诊断 D-EVQ3 卡住那支 20.5 秒后自己编出，之后 18 秒游戏仍不出帧——它在等被跳过那次派发的结果）。抢跑在途时上限放宽到 g_par_race_wait_ns，
+    //   抢跑做不了（返回 nil）上限回到 wait_ns；两边都没好到上限才跳过（#884 的老行为）
+    ParWait *w = [ParWait new]; w->sem = dispatch_semaphore_create(0);
     ParFlight *m2 = mine; NSString *k2 = key, *fk2 = fk; id<MTLFunction> f2 = fn;
     dispatch_async(dispatch_get_global_queue(qos_class_self(), 0), ^{
         NSError *ee = nil; id<MTLComputePipelineState> r = g_par_compute_impl(f2, k2, &ee);
         par_slow_end(sw, r != nil);
-        res = r; err = ee;
+        w->ores = r; w->oerr = ee;
         par_fl_leave(fk2, m2, r);
-        dispatch_semaphore_signal(sem);
+        __atomic_store_n(&w->odone, 1, __ATOMIC_RELEASE); dispatch_semaphore_signal(w->sem);
     });
-    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, wait_ns))) {
+    ParRace race = t_par_race;
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); int64_t cap = wait_ns, race_at = race ? (int64_t)g_par_slow_ms * 1000000 : -1;
+    for (;;) {
+        int64_t el = (int64_t)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0), until = race_at >= 0 && race_at < cap ? race_at : cap;
+        long to = until > el ? dispatch_semaphore_wait(w->sem, dispatch_time(DISPATCH_TIME_NOW, until - el)) : 1;
+        if (__atomic_load_n(&w->odone, __ATOMIC_ACQUIRE)) {
+            if (__atomic_load_n(&w->rstate, __ATOMIC_ACQUIRE) == 1) atomic_fetch_add(&g_par_race_lost, 1);
+            if (e) *e = w->oerr;
+            return w->ores;
+        }
+        int rs = __atomic_load_n(&w->rstate, __ATOMIC_ACQUIRE);
+        if (rs == 2) {   // 原管线还在编：在途记录照「等超时过」处理，同键后到的有界请求不再等满（结果仍登记给下一次，g_par_late）
+            if (m2) { os_unfair_lock_lock(&g_par_fl_lock); if (!m2->result) atomic_store(&m2->gave_up, 1); os_unfair_lock_unlock(&g_par_fl_lock); }
+            atomic_fetch_add(&g_par_race_won, 1); return w->rres;
+        }
+        if (rs == 3) { __atomic_store_n(&w->rstate, 4, __ATOMIC_RELEASE); cap = wait_ns; continue; }   // 抢跑做不了：回到原上限（已过就立刻跳过）
+        if (!to) continue;   // 被信号叫醒但两边都没出结果（抢跑失败的那次已在上面处理）
+        el = (int64_t)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0);
+        if (race_at >= 0 && el >= race_at) {
+            race_at = -1; __atomic_store_n(&w->rstate, 1, __ATOMIC_RELEASE); cap = wait_ns > g_par_race_wait_ns ? wait_ns : g_par_race_wait_ns; atomic_fetch_add(&g_par_race_n, 1);
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ @autoreleasepool {
+                id<MTLComputePipelineState> r = race(); w->rres = r;
+                __atomic_store_n(&w->rstate, r ? 2 : 3, __ATOMIC_RELEASE); dispatch_semaphore_signal(w->sem);
+            } });
+            continue;
+        }
+        if (el < cap) continue;
         if (m2) { os_unfair_lock_lock(&g_par_fl_lock); if (!m2->result) atomic_store(&m2->gave_up, 1); os_unfair_lock_unlock(&g_par_fl_lock); }
         if (gave_up) *gave_up = 1;
         return nil;
     }
-    if (e) *e = err;
-    return res;
 }
 static id<MTLComputePipelineState> par_compute(id<MTLFunction> fn, NSString *key, NSError **e) { return par_compute_wait(fn, key, e, -1, NULL); }
 static id<MTLRenderPipelineState> par_render_(MTLRenderPipelineDescriptor *d, NSString *key, NSError **e) {
