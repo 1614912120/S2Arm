@@ -566,7 +566,7 @@ void s2a_cpatch_fps_follow(int on) {
     if (any) st_flush_locked();
     pthread_mutex_unlock(&g_st_lock);
 }
-// 停帧救场（11-14 维护者「补丁导致停帧时在局内自动关掉、恢复出图」）：出图停住看门（runtime/src/ap_host.c）打第一份现场时调。
+// 停帧救场（11-14 维护者「补丁导致停帧时在局内自动关掉、恢复出图」）：出图停住看门（runtime/src/ap_host.c）判到「首帧后 30 秒窗口新上屏 ≤ 15 帧」时调（s2a_ap_crawl_due）。
 //   社区帧率补丁开着 → 当场关（写回原值、出图链与节拍回 60 Hz），并记成「这款下次也关」——同「崩了自动关」一套规矩，从崩溃扩到停帧
 //   （停帧不崩溃，原先玩家只看到画面不动、声音照常）。补丁里只在起局时写一次的设定（如交换间隔）关掉后这局回不来，提示里叫玩家重开。
 //   记住：iOS 由 ios/settings.m 强定义的 s2a_cpatch_persist_fps_off 写这款设置；其余平台在 S2A_DOCS 下写 cpatch_stall_off，
