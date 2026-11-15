@@ -55,7 +55,7 @@ ck "③ 组件分类表字面量 → DOUBLE export.export.boost.fps（行 11）"
 ck "④ C# S(\"export.sign.mode\") → DOUBLE export.sign.export.sign.mode" 'grep -qE "^DOUBLE	launchers/windows/launcher/App/Sign.cs:3	.*	export\.sign\.export\.sign\.mode$" <<< "$o2"'
 ck "④ C# T(\"nope.key\") → MISSING；T(\"export.done\") 不报" 'grep -qE "^MISSING	launchers/windows/launcher/App/Sign.cs:3	.*	nope\.key$" <<< "$o2" && ! grep -q "	export.done$" <<< "$o2"'
 ck "⑤ iOS S2AL(@\"app.nope\") → MISSING，app.ok 不报" 'grep -qE "^MISSING	ios/app.m:1	ios	S2AL	app\.nope$" <<< "$o2" && ! grep -q "app.ok" <<< "$o2"'
-ck "②–⑤ 样例共 6 处、退出 1（rc=$rc2，$(grep -c . <<< "$o2") 行）" '[ $rc2 = 1 ] && [ "$(grep -c . <<< "$o2")" = 6 ]'
+ck "②–⑤ 样例共 6 处、退出 1（rc=${rc2}，$(grep -c . <<< "$o2") 行）" '[ $rc2 = 1 ] && [ "$(grep -c . <<< "$o2")" = 6 ]'
 
 sed -i.bak 's/Banner(boost: boost, text: x)/Banner(boost: boost, text: { BackendText.launcherText($0, language: lang) })/' "$R/launchers/macos/frontend/Sources/A/Page.swift" && rm "$R/launchers/macos/frontend/Sources/A/Page.swift.bak"
 o3=$(python3 "$H/tools/l10n_key_lint.py" "$R" 2>&1)
