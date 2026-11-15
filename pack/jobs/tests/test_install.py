@@ -1376,15 +1376,36 @@ class AssembleTests(unittest.TestCase):
         """phoneKeptPull 作业：连着的手机上各款留下的 NRO 拉回 → new = 新收个数、kept = 没补进的款；没连手机 → new 0、不报错"""
         A = self.A
         self._update()
-        ph = types.SimpleNamespace(key="dev1", pull_kept=lambda games: 2 if A in games else 0)
+        ph = types.SimpleNamespace(key="dev1", pull_kept=lambda games: 2 if A in games else 0, app_running=lambda: False)
         import rewrite_refresh
         with um.patch.object(install, "phone_for", return_value=ph), \
              um.patch.object(rewrite_refresh, "kept_todo", side_effect=lambda c, g, base: ["x.nro"] if g == A else []):
             r = install.phone_kept_pull(self.c)
-        self.assertEqual((r["device"], r["new"], r["kept"]), ("dev1", 2, [A]))
+        self.assertEqual((r["device"], r["new"], r["kept"], r["running"]), ("dev1", 2, [A], False))
+        for state, want in ((True, True), (None, True)):   # 正在玩 / 查不清：running 为真，启动器这一轮不推
+            ph.app_running = lambda s=state: s
+            with um.patch.object(install, "phone_for", return_value=ph), \
+                 um.patch.object(rewrite_refresh, "kept_todo", side_effect=lambda c, g, base: ["x.nro"] if g == A else []):
+                self.assertEqual(install.phone_kept_pull(self.c)["running"], want)
         def none(c): raise Failure("没连手机", code="device_not_connected")
         with um.patch.object(install, "phone_for", side_effect=none):
-            self.assertEqual(install.phone_kept_pull(self.c), dict(device="", new=0, kept=[]))
+            self.assertEqual(install.phone_kept_pull(self.c), dict(device="", new=0, kept=[], running=False))
+
+    def test_app_running(self):
+        """自动推送前查手机上 S2Arm 是否在跑（#8be819）：进程在它安装目录下 = True；没有 = False；没装 = False；devicectl 查不了 = None"""
+        url = "file:///private/var/containers/Bundle/Application/X/S2Arm.app/"
+        def fake(procs, apps_rc=0, ps_rc=0, installed=True):
+            def devicectl(c, *a, timeout=0):
+                if a[2] == "apps": return apps_rc, {"result": {"apps": [{"bundleIdentifier": "b", "url": url}] if installed else []}}, ""
+                return ps_rc, {"result": {"runningProcesses": [{"executable": e} for e in procs]}}, ""
+            return devicectl
+        import diag
+        cases = [(fake([url + "S2Arm"]), True), (fake(["file:///System/Library/CoreServices/SpringBoard.app/SpringBoard"]), False),
+                 (fake([url + "S2Arm"], installed=False), False), (fake([], apps_rc=1), None), (fake([], ps_rc=1), None),
+                 (fake(["file:///private/var/containers/Bundle/Application/X/S2Arm.app2/S2Arm"]), False)]
+        for f, want in cases:
+            with um.patch.object(diag, "devicectl", f):
+                self.assertEqual(install.app_running(self.c, "dev", "b"), want)
 
     def test_install_mode_defaults_and_persists(self):
         """装到 iPhone 的方式：没设过 = device；不认识的拒收；设成 device / export 写进 install.json；导出作业在 = exportAvailable"""

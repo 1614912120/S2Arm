@@ -762,6 +762,23 @@ def pull_seen(c, ident, bid, gid, tag, docs="Documents"):
         return True
 
 
+def app_running(c, ident, bid):
+    """手机上这个包名的 App（S2Arm 容器）现在是不是在跑：进程可执行文件落在它的安装目录下 = 在跑。→ True / False（没装也算不在跑）/ None（查不清）。
+    自动推送前查（#8be819，phone_kept_pull）：在玩就不推，推送装 App 会把这局杀掉"""
+    from diag import devicectl
+    rc, apps, _ = devicectl(c, "device", "info", "apps", "--device", ident, "--bundle-id", bid, timeout=60)
+    if rc:
+        return None
+    urls = [a["url"].rstrip("/") + "/" for a in (apps.get("result") or {}).get("apps") or [] if isinstance(a, dict) and a.get("bundleIdentifier") == bid and a.get("url")]
+    if not urls:
+        return False
+    rc, procs, _ = devicectl(c, "device", "info", "processes", "--device", ident, timeout=60)
+    if rc:
+        return None
+    exe = [p.get("executable") or "" for p in (procs.get("result") or {}).get("runningProcesses") or [] if isinstance(p, dict)]
+    return any(e.startswith(u) for e in exe for u in urls)
+
+
 def pull_kept_nros(c, ident, bid, gid, docs="Documents"):
     """装之前把这台设备上宿主留下的 NRO（runtime/src/loader.c s2a_nro_keep：包里没有改写映像、游戏解开的整份，Documents/wire/<号>/nro/<SHA-256>.nro）
     拉回游戏库 games/<号>/nro_kept/，下次准备这款时改写进包（#8be819）。机上没有 / 列不出 / 拉不到都不算错；只收文件名 = 内容 SHA-256 的。→ 新收的个数"""
@@ -1554,6 +1571,9 @@ class MacPhone:
                          team=self.team["name"], free=self.team["free"])
         self.pending = None   # 资源传完但没拉起 App 解开时的那句（put_game 带进结果 unpackPending）
 
+    def app_running(self):
+        return app_running(self.c, self.dev["id"], self.bid) if self.bid else None
+
     def pull_kept(self, games):
         """这几款在手机上留下的 NRO 都收回游戏库（pull_kept_nros，#8be819）→ 新收的个数；收不到不挡装机"""
         n = 0
@@ -1632,6 +1652,9 @@ class WinPhone:
 
     def pull_kept(self, games):   # 留下的 NRO（#8be819）：Windows 没有 devicectl，先不收（后续项：经 s2a-devpush 列 / 拉 Documents 文件）
         return 0
+
+    def app_running(self):   # 查不清（Windows 没有 devicectl）：自动推送不发起
+        return None
 
     def client(self, work):
         return devpush_client(self.c, self.udid, self.bid, work)
@@ -2019,16 +2042,18 @@ def phone_updates(c):
 
 def phone_kept_pull(c):
     """「手机插着、启动器开着」时启动器隔一阵调一次（phoneKeptPull 作业）：连着的那台手机上，宿主留下的 NRO（#8be819）拉回游戏库。
-    → {device, new: 新收的个数, kept: 还没补进 iPhone 件的款}；new > 0 时启动器自动发起「更新 iPhone」只推程序。没连手机 / 没装过 = new 0、不报错"""
+    → {device, new: 新收的个数, kept: 还没补进 iPhone 件的款, running: 手机上 S2Arm 正在跑或查不清}；有 kept 且 running 为假时启动器自动发起「更新 iPhone」
+    只推程序（正在玩就不推：装 App 会杀掉这局，等它退了下一轮再推）。没连手机 / 没装过 = new 0、不报错"""
     try:
         ph = phone_for(c)
     except Failure:
-        return dict(device="", new=0, kept=[])
+        return dict(device="", new=0, kept=[], running=False)
     rec = layout.load_device(c, ph.key)
     games = [g for g in rec.get("games") or [] if isinstance(g, str)]
     new = ph.pull_kept(games)
     import rewrite_refresh
-    return dict(device=ph.key, new=new, kept=[g for g in games if rewrite_refresh.kept_todo(c, g, layout.ios_kit(c, g))])   # 没补进的款（手动按钮兜底同 phone_updates）
+    kept = [g for g in games if rewrite_refresh.kept_todo(c, g, layout.ios_kit(c, g))]   # 没补进的款（手动按钮兜底同 phone_updates）
+    return dict(device=ph.key, new=new, kept=kept, running=bool(kept) and ph.app_running() is not False)
 
 
 def online_devices(c):

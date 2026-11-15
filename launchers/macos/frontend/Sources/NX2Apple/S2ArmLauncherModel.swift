@@ -385,6 +385,7 @@ public final class S2ArmLauncherModel: ObservableObject {
         guard let r = try? await provider.client.perform("phoneKeptPull").result else { return false }
         let kept = (r["kept"] as? [String]) ?? [], device = r["device"] as? String ?? ""
         if kept.isEmpty || device.isEmpty { return false }
+        if r["running"] as? Bool != false { return false }   // 手机上 S2Arm 正在跑（或查不清）：装 App 会杀掉玩家这一局，等它退了下一轮再推（这一批不记已试）
         let batch = device + ":" + kept.sorted().joined(separator: ",")
         if keptAutoTried.contains(batch) || busy { return false }
         keptAutoTried.insert(batch)
