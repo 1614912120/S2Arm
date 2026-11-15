@@ -18,6 +18,10 @@ def variant(msl, binds):
 def scr_uv_locns(src):
     return dshfn.fn("scr_uv_locns", src)
 
+
+def scr_pos_locns(src):
+    return dshfn.fn("scr_pos_locns", src)
+
 FS = """#include <metal_stdlib>
 using namespace metal;
 
@@ -217,6 +221,93 @@ class ScrUv(unittest.TestCase):
 
     def test_no_main0(self):
         self.assertEqual(scr_uv_locns(VS.replace("main0(", "other(")), [])
+
+
+
+
+# #1152：片元自己把裁剪坐标插值量换成 uv（异度之刃 3 038af36eb178a2bf / a93aa7a906dc4e2d 的写法：_111 = 1.0 / in.m_55.w；
+#   _113 = fma(_99 * _111, 0.5, 0.5)；_139 = fma(_101 * _111, -0.5, 0.5)）。期望按写法手写：可改、proj + ndc、插值量 locn；顶点侧要求这个插值量 = gl_Position
+FS_NDC = """#include <metal_stdlib>
+using namespace metal;
+
+struct spvDescriptorSetBuffer0
+{
+    texture2d<float> fp_t_tcb_1A [[id(0)]];
+    sampler fp_t_tcb_1ASmplr [[id(1)]];
+};
+
+struct main0_out
+{
+    float4 m_10 [[color(0)]];
+};
+
+struct main0_in
+{
+    float4 m_55 [[user(locn7)]];
+};
+
+fragment main0_out main0(main0_in in [[stage_in]], constant spvDescriptorSetBuffer0& spvDescriptorSet0 [[buffer(0)]])
+{
+    main0_out out = {};
+    float _99 = in.m_55.x;
+    float _101 = in.m_55.y;
+    float _111 = 1.0 / in.m_55.w;
+    float _113 = fma(_99 * _111, 0.5, 0.5);
+    float _139 = fma(_101 * _111, -0.5, 0.5);
+    float2 _511 = float2(_113, _139);
+    float3 _203 = spvDescriptorSet0.fp_t_tcb_1A.sample(spvDescriptorSet0.fp_t_tcb_1ASmplr, s2a_uv(select(_511, float2(0.0), isnan(_511)), spvDescriptorSet0.s2a_uvx[16]), bias(spvDescriptorSet0.s2a_lb[17])).xyz;
+    out.m_10 = float4(_203, 1.0);
+    return out;
+}
+"""
+BINDS_NDC = [{"kind": "tex", "msl_name": "fp_t_tcb_1A", "reg": 9}]
+
+
+class NdcUv(unittest.TestCase):
+    def test_fragment_ndc_to_uv(self):
+        fv, meta = variant(FS_NDC, BINDS_NDC)
+        self.assertIsNotNone(fv)
+        self.assertEqual(meta["calls"], [{"fc": 0, "tex_reg": 9, "varying_locn": 7, "proj": 1, "ndc": 1}])
+
+    def test_inlined_ndc(self):
+        inl = FS_NDC.replace("    float _99 = in.m_55.x;\n    float _101 = in.m_55.y;\n", "").replace("fma(_99 * _111", "fma(in.m_55.x * _111").replace("fma(_101 * _111", "fma(in.m_55.y * _111")
+        self.assertNotIn("_99 =", inl)
+        self.assertEqual(variant(inl, BINDS_NDC)[1]["calls"], [{"fc": 0, "tex_reg": 9, "varying_locn": 7, "proj": 1, "ndc": 1}])
+
+    def test_y_not_flipped_is_not_this_pixel(self):
+        bad = FS_NDC.replace("fma(_101 * _111, -0.5, 0.5)", "fma(_101 * _111, 0.5, 0.5)")
+        self.assertIsNone(variant(bad, BINDS_NDC)[0])   # 没有可改的采样：整支不出变体
+
+    def test_x_flipped_is_not_this_pixel(self):
+        bad = FS_NDC.replace("fma(_99 * _111, 0.5, 0.5)", "fma(_99 * _111, -0.5, 0.5)")
+        self.assertIsNone(variant(bad, BINDS_NDC)[0])   # 没有可改的采样：整支不出变体
+
+    def test_other_scale_is_not_this_pixel(self):
+        bad = FS_NDC.replace("fma(_99 * _111, 0.5, 0.5)", "fma(_99 * _111, 0.25, 0.5)")
+        self.assertIsNone(variant(bad, BINDS_NDC)[0])   # 没有可改的采样：整支不出变体
+
+    def test_w_from_other_component(self):
+        bad = FS_NDC.replace("float _111 = 1.0 / in.m_55.w;", "float _111 = 1.0 / in.m_55.z;")
+        self.assertIsNone(variant(bad, BINDS_NDC)[0])   # 没有可改的采样：整支不出变体
+
+
+class ScrPos(unittest.TestCase):
+    def test_position_copy_locn(self):
+        # VS：m_71 = (P.x, P.y, ·, P.w) → locn7；m_70 是 scr_uv 那种（(P.x + P.w) / 2 …）不是位置本身 → 不记
+        self.assertEqual(scr_pos_locns(vs_with_z(VS)), [7])
+        self.assertEqual(scr_uv_locns(vs_with_z(VS)), [6])
+
+    def test_y_negated_is_not_position(self):
+        bad = VS.replace("    out.m_71.y = _679;\n", "    out.m_71.y = -_679;\n")
+        self.assertEqual(scr_pos_locns(vs_with_z(bad)), [])
+
+    def test_w_not_position_w(self):
+        bad = VS.replace("    out.m_71.w = _677;\n", "    out.m_71.w = _673;\n")
+        self.assertEqual(scr_pos_locns(vs_with_z(bad)), [])
+
+    def test_assignment_inside_block(self):
+        bad = VS.replace("    out.m_71.x = _673;\n", "    if (_673 > 0.0) { out.m_71.x = _673; }\n")
+        self.assertEqual(scr_pos_locns(vs_with_z(bad)), [])
 
 
 if __name__ == "__main__":

@@ -71,15 +71,28 @@ namespace S2A.Dsh
             r.Add(e[st..]); return r;
         }
         // 分量 u 是不是插值量的 c 分量 → (插值量成员名, 投影?) 或 null
-        static (string Mem, bool Proj)? CompOf(string u, char c, Dictionary<(string, string), List<string>> d)
+        static readonly Regex NdcFma = R(@"fma\((.+), (-?)0\.5, 0\.5\)");
+        // #1152：片元自己把裁剪坐标插值量换成 uv（.x = fma(x / w, 0.5, 0.5)、.y = fma(y / w, -0.5, 0.5)），Ndc = true；同像素证明在宿主按顶点反射 scr_pos（插值量 = gl_Position）
+        static (string Mem, bool Proj, bool Ndc)? CompOf(string u, char c, Dictionary<(string, string), List<string>> d)
         {
+            {   // 临时量先代回（只代顶层单次定义的，同 Factors）再认 fma
+                string e = u.Trim(); int guard = 0;
+                while (guard++ < 8 && Full(@"_\d+", e).Success && d.TryGetValue(("", e), out var l0) && l0.Count == 1 && !(d.TryGetValue(("=", e), out var r0) && r0.Count > 1)) e = l0[0].Trim();
+                var fm = FullAt(NdcFma, e);
+                if (fm != null && (c == 'x' ? fm.Groups[2].Value == "" : c == 'y' && fm.Groups[2].Value == "-"))
+                {
+                    var p = CompOf(fm.Groups[1].Value, c, d);
+                    if (p != null && p.Value.Proj && !p.Value.Ndc) return (p.Value.Mem, true, true);
+                    return null;
+                }
+            }
             var f = Factors(u, d);
-            if (f.Count == 1) { var m = FullAt(Comp1, f[0]); if (m != null && m.Groups[2].Value[0] == c) return (m.Groups[1].Value, false); }
+            if (f.Count == 1) { var m = FullAt(Comp1, f[0]); if (m != null && m.Groups[2].Value[0] == c) return (m.Groups[1].Value, false, false); }
             if (f.Count == 2)
             {
                 string a = f.FirstOrDefault(x => !x.StartsWith("inv(", System.StringComparison.Ordinal)), w = f.FirstOrDefault(x => x.StartsWith("inv(", System.StringComparison.Ordinal));
                 var ma = a == null ? null : FullAt(Comp1, a); var mw = w == null ? null : FullAt(Comp1, w[4..^1]);
-                if (ma != null && mw != null && ma.Groups[2].Value[0] == c && mw.Groups[2].Value == "w" && ma.Groups[1].Value == mw.Groups[1].Value) return (ma.Groups[1].Value, true);
+                if (ma != null && mw != null && ma.Groups[2].Value[0] == c && mw.Groups[2].Value == "w" && ma.Groups[1].Value == mw.Groups[1].Value) return (ma.Groups[1].Value, true, false);
             }
             return null;
         }
@@ -108,7 +121,7 @@ namespace S2A.Dsh
                 dd ??= Defs(msl);
                 var d = DefFull("2", v, F2);
                 var cx = d == null ? null : CompOf(d.Groups[1].Value, 'x', dd); var cy = d == null ? null : CompOf(d.Groups[2].Value, 'y', dd);
-                if (cx == null || cy == null || cx.Value.Mem != cy.Value.Mem || cx.Value.Proj != cy.Value.Proj || !locn.ContainsKey(cx.Value.Mem)) continue;
+                if (cx == null || cy == null || cx.Value.Mem != cy.Value.Mem || cx.Value.Proj != cy.Value.Proj || cx.Value.Ndc != cy.Value.Ndc || !locn.ContainsKey(cx.Value.Mem)) continue;
                 int proj = cx.Value.Proj ? 1 : 0; string vmem = cx.Value.Mem;
                 int i = calls.Count;
                 if (i >= 32) break;
@@ -116,6 +129,7 @@ namespace S2A.Dsh
                 parts.Append(msl, pos, m.Index - pos); parts.Append('(').Append(sel).Append(m.Value).Append(')'); pos = m.Index + m.Length;
                 var c = new PyDict { ["fc"] = (long)i, ["tex_reg"] = reg[member], ["varying_locn"] = (long)locn[vmem] };
                 if (proj != 0) c["proj"] = 1L;
+                if (cx.Value.Ndc) c["ndc"] = 1L;
                 calls.Add(c);
             }
             if (calls.Count == 0 && !omOnlyOk) return (null, "no rewritable sample");

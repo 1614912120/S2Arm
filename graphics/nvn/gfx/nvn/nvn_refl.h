@@ -105,6 +105,8 @@ typedef struct {
     // 10-30 遍内自采样改片上读取（nvn_mtl.m fb_tile_try）：fragment - fc_proj 第 i 个可改采样是投影屏幕坐标（in.m.xy / in.m.w，dmsh_fetch proj_uv）；
     //   vertex - scr_uv 第 L 位 = 插值量 locn L 是本顶点裁剪坐标的屏幕坐标（.x = (P.x + P.w) / 2、.y = (P.w - P.y) / 2、.w = P.w，main0 与 main0_z 都成立，dmsh_build scr_uv_locns）
     uint32_t fc_proj, scr_uv;
+    // #1152：fragment - fc_ndc 第 i 个可改采样是片元算的 NDC→uv（fma(x / w, 0.5, 0.5)、fma(y / w, -0.5, 0.5)），证明看顶点 scr_pos；vertex - scr_pos 第 L 位 = 插值量 locn L 就是 gl_Position
+    uint32_t fc_ndc, scr_pos;
     uint8_t *c1;             // c1 constant segment as-is (B): c1_len bytes, malloc'd by nvn_refl_from_json (NULL without one). It was a 4 KB array; Hyrule Warriors: Age of Calamity has 6 KB segments (its soldiers' vertex shaders)
 } nvn_refl;
 
