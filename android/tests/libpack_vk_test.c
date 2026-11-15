@@ -25,7 +25,9 @@ static int fails;
 
 #define CHAIN "0be3f28548fd"   // 与 graphics/nvn/gfx/nvn/dmsh_chain.h DMSH_CHAIN 同值
 
-static char g_dir[320];
+#define TMPL_CAP 320   // main() 里临时目录模板 tmpl 的容量（拼出来超长时 main 直接退出）
+// g_dir 依次放 tmpl、tmpl/bad、tmpl/buffer：按最长的「tmpl + "/buffer"」给够，snprintf 不会截断。
+static char g_dir[TMPL_CAP + sizeof "/buffer" - 1];
 
 static void wr(void *dst, const void *src, size_t n, size_t *at) { memcpy((uint8_t *)dst + *at, src, n); *at += n; }
 static void wr32(void *dst, uint32_t v, size_t *at) { wr(dst, &v, 4, at); }
@@ -148,7 +150,7 @@ static const uint32_t FO2_SPV[] = {
 };
 int main(void) {
     const char *tmp = getenv("TMPDIR"); if (!tmp || !*tmp) tmp = "/tmp";
-    char tmpl[320];
+    char tmpl[TMPL_CAP];
     if (snprintf(tmpl, sizeof tmpl, "%s/libpack_vk_test.XXXXXX", tmp) >= (int)sizeof tmpl || !mkdtemp(tmpl)) return 1;
     snprintf(g_dir, sizeof g_dir, "%s", tmpl);
 

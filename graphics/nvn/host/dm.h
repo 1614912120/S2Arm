@@ -71,6 +71,7 @@ void dm_shader_mesh_hold_key(const uint8_t key[8], uint64_t code, const void *co
 void dm_shader_vs_hold_key(const uint8_t key[8], uint64_t code, const void *control);   // SetShaders 时按键保存 Switch 1 顶点着色器输入（补齐变体用）
 int dm_shader_se_fresh(const char *key16);
 void *dm_shader_snap(uint64_t code, const void *control, uint64_t *code_out, const void **control_out);
+int dm_shader_retrans(const uint8_t key[8], uint64_t code, const void *control);   // 出包库计算着色器按本机翻译器重出源码 <键>_b.metal（dsh_miss.inc，v0.4.1 重译抢跑）：成功 0、做不了 1
 void mtl_se_stats(uint64_t out[2]);   // S2Arm（#800，nvn_mtl.m se_done）：采样器归约变体 [0] 本局在设备上编好的着色器数、[1] 编不出的（收局汇总行）
 void mtl_vp_stats(uint64_t out[2]);   // S2Arm（nvn_mtl.m vp_done）：顶点补齐变体 [0] 本局在设备上编好的、[1] 编不出的
 void mtl_shmap_rt_add(const char *key, const char *stage); int mtl_shmap_known(const char *key); int mtl_shlib_has(const char *key);

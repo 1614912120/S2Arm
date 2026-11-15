@@ -2780,7 +2780,7 @@ uint32_t s2a_event_dup_read(uint64_t ev) {
 uint32_t s2a_shmem_create(uint64_t size, void **host) {
     if (!size) return 0;
     shmem_t *sm = calloc(1, sizeof *sm); sm->size = size; sm->refs = 1; sm->owned = 1;
-    sm->buf = mmap(NULL, (size + 0x3FFF) & ~0x3FFFull, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);   // MAP_SHARED：vm_remap 别名到游戏地址后同一批物理页
+    sm->buf = mmap(NULL, (size + 0x3FFF) & ~0x3FFFull, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, S2A_VMTAG_FD(S2A_VMTAG_SHMEM), 0);   // MAP_SHARED：vm_remap 别名到游戏地址后同一批物理页
     if (sm->buf == MAP_FAILED) die("共享内存后备 mmap %#llx", (unsigned long long)size);
     glock(); uint32_t h = h_new(S2A_OBJ_SHMEM, sm, 0);
     if (h) { sm->next = g_shmem; g_shmem = sm; } pthread_mutex_unlock(&G);
@@ -3105,6 +3105,16 @@ void s2a_thread_dump(void) {
                     mach_ms(now - g_cvl[i].t), g_cvl[i].woken, g_cvl[i].left, mine);
             else LOG("    条件键 %#llx 当前值 %#x，已等 %.0f ms；此键从没被发过信号（或记录被别的键覆盖）%s",
                      (unsigned long long)t->wkey, ld32(t->wkey), mach_ms(now - t->wait_t0), mine);
+            // 锁 / 键周围的原样内存（#19361b：上古卷轴加载线程在 WaitLightEvent 里等，键「从没被发过信号」、锁字 0——
+            //   判不了是「事件已置位、唤醒丢了」还是「根本没人置位」：两者只差键后面那几个字节里的「已置位」标志）。
+            //   从锁地址按 16 对齐往前 16 字节起打 48 字节，盖住游戏自己包在外面的锁字与 SDK 事件的锁 / 键 / 已置位
+#if defined(__APPLE__)   // 安全读靠 Mach vm_read_overwrite（同上面抽样回溯）；安卓不打
+            { uint64_t a0 = (t->waddr < t->wkey ? t->waddr : t->wkey) & ~0xFull; a0 -= 0x10; uint32_t m[12]; vm_size_t got = 0;
+              if (vm_read_overwrite(mach_task_self(), (vm_address_t)a0, sizeof m, (vm_address_t)m, &got) == KERN_SUCCESS && got == sizeof m)
+                  LOG("    键周围内存 %#llx：%08x %08x %08x %08x | %08x %08x %08x %08x | %08x %08x %08x %08x", (unsigned long long)a0,
+                      m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
+              else LOG("    键周围内存 %#llx：读不了", (unsigned long long)a0); }
+#endif
         }
         if (t->wkind && t->wkind != 2 && !t->exited) LOG("    已等 %.0f ms", mach_ms(thread_clock() - t->wait_t0));
         if (t->wkind == 4 && t->wn > 0) {   // 在等哪些句柄：种类 + cookie（C# 对象 / 事件号）——事件一直不来时据此找是哪个服务的

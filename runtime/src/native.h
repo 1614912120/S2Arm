@@ -7,6 +7,7 @@
 #include <string.h>
 #include <dlfcn.h>
 #include "s2a_native.h"
+#include "s2a_lowva.h"   // S2A_VMTAG_*：宿主自有映射的虚存标签
 #include <pthread.h>
 // 给我方宿主线程起名（11-04 能耗线：「[能耗]」行的耗能前 6 线程只认名字，没名字的只剩线程号，Pokopia 一条吃半个核的宿主线程认不出是谁）。
 //   名字 ≤ 15 字节 ASCII（Linux / 安卓上限 16 含结尾），苹果 / 非苹果签名不同

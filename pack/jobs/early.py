@@ -81,10 +81,10 @@ class EarlyInstall:
                                 stdout=f, stderr=subprocess.STDOUT, env=self.env, cwd=str(self.c.engine)).returncode
         if rc:
             from core import Failure
-            raise Failure("早装件没出成：" + _last(self.log), code="job_failed")
+            raise Failure("早装件没出成：" + _last(self.log), code="job_failed")  # 非玩家句
         import ipa as packer
         import layout
-        root = layout.ios_work(self.c, self.gid) / "roots" / (kuan + "@现行")
+        root = layout.ios_work(self.c, self.gid) / "roots" / (kuan + "@现行")  # 非玩家句
         rec = layout.load_device(self.c, self.udid or self.dev["id"])   # 这台手机上已有的各款一起带上（早装覆盖装也不能把它们装没）
         others = [g for g in rec.get("games", {}) if g != self.gid.upper()]
         return packer.assemble(self.c, self.gid, others, failed=rec.get("failedShells", []), root=root.resolve(), dest=self.dir / "container")
@@ -101,7 +101,7 @@ class EarlyInstall:
         result, error = self.core.finish()
         if error is not None:
             # 玩家不用做任何事（正式安装推整包兜底）：只记一条进度消息，不新增错误码
-            self.c.emit("message", "出包期间先装 App、先推资源没成（" + str(error)[:200] + "），装正式包时整包推送")
+            self.c.emit("message", "出包期间先装 App、先推资源没成（" + str(error)[:200] + "），装正式包时整包推送")  # 非玩家句
         return result
 
 

@@ -53,9 +53,12 @@ static uint64_t load(int i, const char *dir) {
     s2a_widen_load(m, dir);
     return ((uint64_t *)m->base)[WSLOT];
 }
+// 社区宽屏补丁开没开（强定义盖住 widen.c 的弱定义；cpatch.c 的真实判定单测在 t_cpatch*）：T_WS=1 = 本款开着社区宽屏类补丁
+int s2a_cpatch_ws_enabled(const char *dir) { (void)dir; const char *e = getenv("T_WS"); return e && !strcmp(e, "1"); }
 int main(void) {
     char T[] = "/tmp/s2a_t_widen_XXXXXX"; if (!mkdtemp(T)) return 1;
     snprintf(g_tmd, sizeof g_tmd, "%s", T);
+    setenv("S2A_CAPS_OWN", "1", 1);   // 以下测我方满屏机制本身（留给内部对照，S2A_CAPS_OWN=1 才按能力清单 / 已验证名单）
 #if defined(__ANDROID__)
     // Real Android loader path（F1 #1574：安卓撤 opt-in 缺省关、走苹果同一份名单门）：
     // 有 widen_verified.tsv 标记 → 缺省开与显式开等价，2400 屏 1280 × 2400 ÷ 1920 = 1600。
@@ -115,6 +118,24 @@ int main(void) {
                                      "无标记、能力清单开", "无标记、能力清单开、设置关", "有标记、能力清单关（发布包未验）"};
           int on = k == 2 || k == 5 || k == 6;
           CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, "ⓥ%d %s：期望屏幕宽 %d、点值 %d", k, nm[k], on ? 2346 : 1920, on ? 1564 : 1280);
+      } }
+    // 11-15（v0.4.0）我方通用满屏缺省不用：没设 S2A_CAPS_OWN 时，能力清单 widen 1 + 已验证标记都不放，只有社区宽屏补丁（补丁铺满、我方让位）。期望手写：
+    //   ⓦ1 有标记、清单 1、无补丁 → 屏幕宽 1920、点值 1280（不铺满；旧实现 2346 / 1564 → 红）；
+    //   ⓦ2 同上但显式 S2A_WIDEN_VERIFIED=1（闭环 / 验证局覆盖）→ 2346、1564（照旧放）；
+    //   ⓦ3 有标记、清单 1、开着社区宽屏补丁 → 1920、1280（我方让位，画面由补丁按自身画幅铺满）
+    { char mk[620]; snprintf(mk, sizeof mk, "%s/widen_verified.tsv", T);
+      for (int k = 1; k <= 3; k++) {
+          pid_t c = fork();
+          if (c == 0) { unsetenv("S2A_CAPS_OWN"); unsetenv("S2A_WIDESCREEN"); unsetenv("S2A_WIDEN_VERIFIED"); unsetenv("T_WS");
+                        FILE *g = fopen(mk, "w"); fprintf(g, "0100000000000000\tabc\n"); fclose(g);
+                        setenv("S2A_WIDEN_CAPS", "1", 1);
+                        if (k == 2) setenv("S2A_WIDEN_VERIFIED", "1", 1);
+                        if (k == 3) setenv("T_WS", "1", 1);
+                        uint64_t x = load(0, T); int sw = s2a_screen_w(); unlink(mk);
+                        _exit(k == 2 ? !(sw == 2346 && x == 1564) : !(sw == 1920 && x == 1280)); }
+          int st = 0; waitpid(c, &st, 0);
+          static const char *nm[] = {"", "有标记、清单 1、无补丁（缺省口径）", "同上、显式 S2A_WIDEN_VERIFIED=1", "有标记、清单 1、开着社区宽屏补丁"};
+          CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, "ⓦ%d %s：期望屏幕宽 %d、点值 %d", k, nm[k], k == 2 ? 2346 : 1920, k == 2 ? 1564 : 1280);
       } }
     uint64_t v = load(0, T); CHECK(v == 1564, "① 掌机档（缺省）期望 1564 → %llu", (unsigned long long)v);
     CHECK(s2a_widen_game() == 1, "① 掌机档启用 1 点，s2a_widen_game 期望 1");

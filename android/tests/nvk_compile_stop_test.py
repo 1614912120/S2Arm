@@ -91,7 +91,7 @@ int s2a_direct_provider_compile_context(struct s2a_direct_compile_context *c) {
     source = source.replace('int main(int argc, char **argv) {', 'int unused_shader_pool_main(int argc, char **argv) {')
     source += '\n#include "nvk_compile_stop_test.c"\n'
     variant = out/'fixture.c'; variant.write_text(source)
-    inc = (out, include, ROOT/'android/tests', ROOT/'runtime/include', native, native/'nvn', native/'direct', gfx, gfx/'replay', gfx/'gfx/nvn', gfx/'gfx/nvn/include', ROOT/'android/tests/vkhost')
+    inc = (out, include, ROOT/'android/tests', ROOT/'runtime/include', native, native/'nvn', native/'direct', gfx, gfx/'replay', gfx/'gfx/nvn', gfx/'gfx/nvn/include', ROOT/'android/tests/vkhost', native/'gfx_plat')
     libs = [gfx/'replay/nvn_unimpl.c', gfx/'replay/rp_state.c', native/'nvn/nvn_vk_compute_request.c',
             native/'nvn/nvn_vk_prog_warm.c', ROOT/'runtime/src/direct_host.c']
     libs += [native/'direct'/f for f in ('source_store.c', 'control.c', 'input_identity.c', 'texture_facts.c', 'sha256.c', 'json.c', 'compile_request.c')]

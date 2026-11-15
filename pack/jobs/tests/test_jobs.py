@@ -1622,6 +1622,21 @@ class JobsTests(unittest.TestCase):
             self.assertEqual(seen, [stale])
             self.assertFalse(stale.exists())
 
+    def test_launch_forgets_host_registrations_after_normal_exit_and_crash(self):
+        # #1126：每局结束（正常退出、游戏崩溃都算）注销系统应用登记里的 S2ArmGame，启动台不再出灰色图标
+        import host_update
+        game = self.game(); self.catalogue([game]); self.c.r["gameId"] = game["id"]
+        host = self.fake_host(game["id"])
+        for raised in (None, Failure("游戏运行中失败（退出码 139）：fixture", code="tool_exit")):
+            with patch.object(build, "validate_runtime", return_value={"gameId": game["id"], "memoryRequirementsVersion": 2}), \
+                 patch.object(self.c, "run", side_effect=raised), patch.object(host_update, "forget_registrations") as forget:
+                if raised:
+                    with self.assertRaises(Failure): build.launch(self.c)
+                else:
+                    build.launch(self.c)
+            self.assertEqual(forget.call_count, 1)
+            self.assertEqual(forget.call_args.kwargs["app"], host.parents[2], "交这局起的宿主包：不是真 App 包（没 Info.plist）就不碰系统登记")
+
     def test_game_quitting_mid_run_reports_game_crashed_with_exit_code(self):
         # 启动页说人话（11-11）：游戏进程自己非 0 退出（139 = 段错误）报 game_crashed、消息带退出码；别的失败照原样往上抛
         game = self.game(); self.catalogue([game]); self.c.r["gameId"] = game["id"]

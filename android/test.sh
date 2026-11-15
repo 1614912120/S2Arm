@@ -335,7 +335,7 @@ s2a_gate_step "$PY" "$android_dir/tests/nvk_shader_pool_test.py" --withdraw
 s2a_gate_step "$PY" "$android_dir/tests/nvk_shutdown_test.py"
 # GS 脏位、阶段绑定、管线和原始图元拒绝的独立回退反证。
 s2a_gate_step "$PY" "$repo_dir/graphics/nvn/tests/gs_replay_mutation_test.py"
-# 写跟踪取范围（find_span）与池查找的线程内备忘（#974）：键 / 代际 / 写者纪律 / 开关各处的撤改必红（纯宿主 C 编译）。
+# 写跟踪取范围（find_span）的有序索引（#1133）与池查找的线程内备忘（#974）：索引的排序 / 子树最大值 / 复查代际 / 写者纪律 / 上限与停用 / 备忘的键各处的撤改必红（纯宿主 C 编译）。
 s2a_gate_step "$PY" "$repo_dir/graphics/nvn/tests/dirty_span_memo_mutation_test.py"
 # 原创 Maxwell 经生产请求、真实编译器与生产结果解析；GPU 像素由 Vulkan 门禁另验。
 s2a_gate_step "$PY" "$android_dir/tests/gs_compiler_chain_test.py"
@@ -618,6 +618,8 @@ s2a_gate_step python3 "$android_dir/codecs/tests/build_test.py"
 s2a_gate_step "$PY" "$android_dir/codecs/tests/managed_test.py"
 # #1131：宿主原生构建契约——后端路由 / NativeAOT 静态归档校验 / docker↔host 产物等价核对。
 s2a_gate_step "$PY" "$android_dir/tests/build_backend_test.py"
+# 宿主准备编排：首次（缓存里还没有固定 .NET SDK）先引导 SDK 再算依赖清单，一次写出完成标记。
+s2a_gate_step "$PY" "$android_dir/tests/host_prepare_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/archive_check_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/compare_apks_test.py"
 s2a_gate_step "$PY" "$android_dir/tools/test_compare_apks.py"

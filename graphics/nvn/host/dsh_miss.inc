@@ -454,6 +454,17 @@ int dm_shader_vpad_cached(const uint8_t key[8], int st, uint32_t mask, char *pat
 }
 // 后台出归约变体用的拷贝（nvn_mtl.m se_kick）：控制段只在 SetShaders 里保证有效、代码区游戏也可能另用，提交线程上先整份拷下（控制段在前、代码区在后），
 //   后台拿拷贝调 dm_shader_se（它只读 [code, code + 代码长) 与控制段）。*code_out / *control_out 指进返回的那块，调用方 free；NULL = 不是认得的着色器或内存不够
+// 出包库里的计算着色器在设备上按本机翻译器重出一份源码（v0.4.1 重译抢跑，nvn_mtl.m cps_retrans）：兜底目录写 <键>_b.metal + .json（已有本机同链同指纹的就直接用）。
+//   出包库是旧翻译器出的（只升级 App 不重写已出包的库，graphics/tools/direct/COMPUTE_REPAIR.md），本机翻译器带大计算核拆分（DshOutline）。成功 0、做不了 1
+int dm_shader_retrans(const uint8_t key[8], uint64_t code, const void *control) {
+    char k[17]; for (int i = 0; i < 8; i++) snprintf(k + 2 * i, 3, "%02x", key[i]);
+    dsh_comp_fn comp = dsh_comp(); const char *out = getenv("DM_MSL_FALLBACK"); uint32_t ncode = 0, nctl = 0;
+    int st = control && code ? dsh_stage((const uint8_t *)(uintptr_t)code, control, &ncode, &nctl) : -1;
+    if (!comp || !out || !*out || st != 2) { LOG("【红】直连：%s 要重译，做不了（%s）", k, !comp ? "S2A.Aot 没链进来" : !out || !*out ? "没设 DM_MSL_FALLBACK" : "不是计算着色器或长度不对"); return 1; }
+    mkdir(out, 0755);
+    if (dsh_comp_src_locked(comp, k, st, (const void *)(uintptr_t)code, ncode, control, nctl, out)) { atomic_fetch_add_explicit(&g_dsh_failed, 1, memory_order_relaxed); LOG("【红】直连：%s 重译失败", k); return 1; }
+    return 0;
+}
 void *dm_shader_snap(uint64_t code, const void *control, uint64_t *code_out, const void **control_out) {
     uint32_t ncode = 0, nctl = 0;
     if (!code || !control || dsh_stage((const uint8_t *)(uintptr_t)code, control, &ncode, &nctl) < 0) return NULL;

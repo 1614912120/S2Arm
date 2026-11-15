@@ -82,9 +82,9 @@ def estimate_details(c, size_gb, kind="build_dual", reused=()):
         samples = [(s, g) for s, g in per.get((mid, reuse), []) if g > 0 or not scaled]   # 要按体积换算的，缺体积的记录不用
         if samples and size_gb > 0:
             out[mid] = dict(seconds=statistics.median(s / g * size_gb if scaled else s for s, g in samples), source="history",
-                            samples=len(samples), basis="本机最近" + ("复用缓存时" if reuse else "") + "记录的中位数" + ("，按游戏体积换算" if scaled else ""))
+                            samples=len(samples), basis="本机最近" + ("复用缓存时" if reuse else "") + "记录的中位数" + ("，按游戏体积换算" if scaled else ""))  # 非玩家句
         elif reuse:
-            out[mid] = dict(seconds=0.0, source="reuse", samples=0, basis="复用缓存；本机还没有这一步复用时的记录，按 0 秒计")
+            out[mid] = dict(seconds=0.0, source="reuse", samples=0, basis="复用缓存；本机还没有这一步复用时的记录，按 0 秒计")  # 非玩家句
         else:
             out[mid] = dict(seconds=None, source="none", samples=0, basis="本机还没有这一步的记录")
     return out

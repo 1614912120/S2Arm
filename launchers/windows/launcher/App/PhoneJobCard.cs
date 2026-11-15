@@ -33,6 +33,9 @@ internal sealed class PhoneJobTrack
     public string ExportFolder = "";
     public int ExportGames;
     public long? ExportBytes;
+    /// <summary>这次新写的 .img 文件名与沿用上次导出的款数（#1132，作业结果 fresh / reused）：有沿用才在完成页点名「.img 只要拷这几个」</summary>
+    public List<string> ExportFresh = [];
+    public int ExportReused;
     /// <summary>完成页「推到手机」（11-13）：推进手机上自签 S2Arm 的 .img 文件名（空 = 还没推）；推不成时作业给的一句「缺什么、怎么做」</summary>
     public List<string> Pushed = [];
     public string PushNote = "";
@@ -44,7 +47,7 @@ internal sealed class PhoneJobTrack
     {
         Kind = kind; Device = device; Stages.Clear(); Log.Clear(); Overall = null; Step = Steps = null;
         Started = DateTime.UtcNow; Ended = null; Suggestion = ""; PackBytes = null; PackFiles = null; Skipped = []; Version = "";
-        ExportFolder = ""; ExportGames = 0; ExportBytes = null; Pushed = []; PushNote = ""; Pushing = false; SGrade = [];
+        ExportFolder = ""; ExportGames = 0; ExportBytes = null; ExportFresh = []; ExportReused = 0; Pushed = []; PushNote = ""; Pushing = false; SGrade = [];
     }
 
     /// <summary>作业事件：阶段进步骤列表、整体进度只认作业层 overall（只增不减）、说明行进过程记录</summary>
@@ -82,6 +85,8 @@ internal sealed class PhoneJobTrack
             ExportFolder = op.GetString() ?? "";
             ExportGames = r.TryGetProperty("games", out var gs) && gs.ValueKind == JsonValueKind.Array ? gs.GetArrayLength() : 0;
             if (r.TryGetProperty("exportBytes", out var eb) && eb.ValueKind == JsonValueKind.Number) ExportBytes = eb.GetInt64();
+            if (r.TryGetProperty("fresh", out var fr) && fr.ValueKind == JsonValueKind.Array) ExportFresh = fr.EnumerateArray().Select(x => x.GetString() ?? "").Where(x => x.Length > 0).ToList();
+            if (r.TryGetProperty("reused", out var ru) && ru.ValueKind == JsonValueKind.Number) ExportReused = ru.GetInt32();
         }
     }
 }
@@ -181,6 +186,14 @@ public sealed partial class EnvironmentWindow
             panel.Children.Add(Seal("✓", "#40D678"));
             panel.Children.Add(Headline(T("phone.headline.export")));
             panel.Children.Add(WrappedMuted(T("phone.done.export").Replace("{0}", tr.ExportFolder), 17));
+            if (tr.ExportReused > 0)   // #1132：有沿用上次导出的款才点名（第一次导出全是新写的，不多这一句；同 Mac PhoneJobPanel）
+            {
+                var fresh = Label(tr.ExportFresh.Count == 0 ? T("phone.done.export.same")
+                    : T("phone.done.export.fresh").Replace("{0}", string.Join("、", tr.ExportFresh)).Replace("{1}", tr.ExportReused.ToString()), 15);
+                fresh.FontWeight = FontWeight.SemiBold; fresh.TextWrapping = TextWrapping.Wrap;
+                AutomationId(fresh, "phone.export.fresh");
+                panel.Children.Add(fresh);
+            }
             var stats = new WrapPanel { Orientation = Orientation.Horizontal };
             void Stat(string label, string value)
             {

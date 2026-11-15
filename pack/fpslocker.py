@@ -41,9 +41,14 @@ def _target(t, site, labels, syms):
 def _assemble(lines):
     with tempfile.TemporaryDirectory() as d:
         open(f'{d}/a.s', 'w').write('.text\n' + ''.join(f'{l}\n' for l in lines))
-        r = subprocess.run(['xcrun', 'clang', '-c', '-target', 'arm64-apple-macos13', f'{d}/a.s', '-o', f'{d}/a.o'], capture_output=True, text=True)
-        if r.returncode: raise Unsupported('汇编不了：' + (r.stderr.strip().splitlines() or ['?'])[-1][:120])
-        out = subprocess.run(['xcrun', 'otool', '-t', '-X', f'{d}/a.o'], capture_output=True, text=True).stdout.split()
+        try:
+            r = subprocess.run(['xcrun', 'clang', '-c', '-target', 'arm64-apple-macos13', f'{d}/a.s', '-o', f'{d}/a.o'], capture_output=True, text=True)
+            if r.returncode: raise Unsupported('汇编不了：' + (r.stderr.strip().splitlines() or ['?'])[-1][:120])
+            out = subprocess.run(['xcrun', 'otool', '-t', '-X', f'{d}/a.o'], capture_output=True, text=True).stdout.split()
+        except OSError as e:
+            # 汇编器起不来（Windows / 没装 Xcode 命令行工具：WinError 2）：这份 FPSLocker 补丁不收、原因写回，别的补丁与出包照常（#1173：原先异常没人接，
+            #   cpatch plan 整个退 1，Windows 上带 FPSLocker 配置的款出包全挂）
+            raise Unsupported(f'本机没有汇编器（xcrun clang）：{e.strerror or e}') from e
         return [int(w, 16) for w in out if re.fullmatch(r'[0-9a-f]{8}', w)]
 
 

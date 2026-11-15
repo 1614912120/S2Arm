@@ -36,6 +36,8 @@ void s2a_hud_brief_show(UIView *root, BOOL on) __attribute__((weak_import));
 BOOL s2a_ios_ext_connected(void) __attribute__((weak_import));
 // 弱链接[lab]：s2a_fi_set_live（graphics/nvn/gfx/nvn/nvn_present_fi.inc 补帧当场开 / 关；输入工作台不链图形层，取不到就不切）
 void s2a_fi_set_live(int on) __attribute__((weak_import));
+// 弱链接[lab]：S2A_AudioSetVolume（游戏音量当场生效，#1186 开发乙线宿主接线：AppleHardwareDeviceDriver.Volume 逐样本乘；取不到就只记偏好、下次起局生效 S2A_AUDIO_VOLUME）
+void S2A_AudioSetVolume(int percent) __attribute__((weak_import));
 #import "app_settings.h"   // 齿轮菜单：存档管理 / 更多设置（s2a_settings_runtime / s2a_settings_present）
 #import "play_layout.h"
 #include "s2a_docs.h"   // iOS 进程级容器 Documents（s2a_container_docs）
@@ -483,6 +485,20 @@ typedef BOOL (^VPFlag)(void);
     UIAction *motor = [self live:@"vp.rumble.phone" title:S2AL(@"settings.toggle.phoneHaptics") note:nil on:phoneMotor disabled:^BOOL{ return !rumbleOn(); }
                              run:^{ [d setBool:!phoneMotor() forKey:@"S2APhoneHaptics"]; }];
     [items addObject:vp_sub(S2AL(@"vpad.menu.rumble"), @"iphone.radiowaves.left.and.right", @[game, vp_inline(levels), motor, tap])];
+    // 游戏音量（#1186：边听歌边玩时单独压低游戏声，不动系统音量、不影响别的 App）：一行五档、按游戏记、当场生效；静音就是 0 那一档，不另设开关。
+    //   系统菜单放不了滑条，照震动强度一行几档。存 S2AGameVolume（0–100，没设过 = 100；s2a_ios_per_game_keys 按游戏分层）
+    {
+        NSUserDefaults *gd = s2a_ios_settings_defaults();
+        NSInteger (^vol)(void) = ^NSInteger{ id o = [gd objectForKey:@"S2AGameVolume"]; return o ? MAX(0, MIN(100, [o integerValue])) : 100; };
+        NSMutableArray<UIMenuElement *> *vols = [NSMutableArray array];
+        for (NSNumber *p in @[@0, @25, @50, @75, @100]) {
+            NSInteger v = p.integerValue;
+            NSString *title = v == 0 ? S2AL(@"vpad.volume.mute") : [NSString stringWithFormat:@"%ld%%", (long)v];
+            [vols addObject:[self live:[NSString stringWithFormat:@"vp.volume.%ld", (long)v] title:title note:nil on:^BOOL{ return vol() == v; } disabled:nil
+                                   run:^{ [gd setInteger:v forKey:@"S2AGameVolume"]; if (S2A_AudioSetVolume) S2A_AudioSetVolume((int)v); }]];
+        }
+        [items addObject:vp_sub(S2AL(@"vpad.menu.volume"), @"speaker.wave.2", @[vp_inline(vols)])];
+    }
     // 手柄与体感（controller.m / phone_motion.m 监听偏好变化，改完即生效）
     VPFlag gyro = ^BOOL{ id o = [d objectForKey:@"S2APhoneGyro"]; return o ? [o boolValue] : YES; };
     [items addObject:vp_sub(S2AL(@"vpad.menu.pad"), @"scope", @[

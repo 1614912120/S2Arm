@@ -91,16 +91,13 @@ int nvk_session_open(struct s2a_vk_device *dev, const char *cache_dir, char *why
     { extern void nvn_dirty_set_chunk_pages(uint32_t); extern int nvn_plat_flag(const char *, int);
       int cp = nvn_plat_flag("nvk_chunk_pages", 64);
       nvn_dirty_set_chunk_pages(cp > 0 ? (uint32_t)cp : 0); __android_log_print(ANDROID_LOG_INFO, TAG, "nvk session: 写跟踪保护分块 %d 页", cp); }
-    // 写跟踪「取范围」的线程内备忘（#974）：缺省开（每线程 2^10 项）；debug.s2a.nvk_span_memo=0 关，n = 每线程 2^n 项（A/B 对照用）。
-    // 弱引用：不挂这份写跟踪实现的宿主单测不用替身。
-    { extern void nvn_dirty_set_span_memo(unsigned) __attribute__((weak)); extern int nvn_plat_flag(const char *, int);
-      int sm = nvn_plat_flag("nvk_span_memo", -1);
-      if (sm >= 0 && nvn_dirty_set_span_memo) { nvn_dirty_set_span_memo((unsigned)sm); __android_log_print(ANDROID_LOG_INFO, TAG, "nvk session: 写跟踪取范围备忘 %d（0 = 关，n = 每线程 2^n 项）", sm); } }
     g_ready = 1;
     nvn_gpu_caps caps; nvn_gpu_caps_get(&caps);
-    __android_log_print(ANDROID_LOG_INFO, TAG, "nvk session: backend open on %s (api %u, caps %#x, 单次分配上限 %llu, SSBO 范围上限 %llu)",
+    const char *drv_name = dev && dev->driver_name[0] ? dev->driver_name : "?";
+    __android_log_print(ANDROID_LOG_INFO, TAG, "nvk session: backend open on %s (api %u, caps %#x, 单次分配上限 %llu, SSBO 范围上限 %llu, driver=%s driverID=%d)",
                         caps.name, caps.api_version, caps.caps,
-                        (unsigned long long)caps.max_buf_bytes, (unsigned long long)caps.max_ssbo_range);
+                        (unsigned long long)caps.max_buf_bytes, (unsigned long long)caps.max_ssbo_range,
+                        drv_name, dev ? dev->driver_id : -1);
     pthread_mutex_unlock(&g_mu);
     // 开局预热（iOS 蓝本：nvn_mtl.m warm_start 在 shader map 读完就起，后台把上一局清单建出来）。
     // 放在解锁之后：预热线程会取会话缓存目录 / 后端锁，不在 g_mu 里起线程。

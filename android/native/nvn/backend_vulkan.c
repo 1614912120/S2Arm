@@ -144,12 +144,14 @@ struct nvn_gpu_pipe_s {
     uint8_t warm;          // 1 = 这份对象是预热带 / 预热线程建的，真实 draw 第一次命中时计数（见 nvn_gpu_pipe_get）
     struct nvn_gpu_pipe_s *all_next;
     struct nvn_gpu_pipe_s *hnext;   // 图形管线的散列桶链（g_pipe_ht）
+    uint32_t hash;                  // 建管线时的 pipe_hash(描述)：查表先比它、相同才逐字段比（不碰 key 那一大块内存）；重排桶也用它
 };
 
 struct nvn_gpu_samp_s {
     VkSampler sampler;
     VkSampler int_sampler;   // 给整数格式的视图用：最近点、不做各向异性、整数边界色（整数格式不能线性过滤）；参数本来就合规时与 sampler 是同一个
     int released, refs;
+    uint32_t border_slots;   // 占用的自定义边框色配额（sampler 与 int_sampler 各算一个；内置三档为 0）
     struct nvn_gpu_samp_s *all_next;
 };
 
@@ -294,6 +296,7 @@ struct nvn_gpu_vk {
     struct nvn_gpu_tex_s *texs;
     struct nvn_gpu_view_s *views;
     struct nvn_gpu_samp_s *samps;
+    uint32_t border_live;          // 存活的自定义边框色 VkSampler 个数，对照 dev->custom_border_max（g_mu 下改）
     struct nvn_gpu_shader_s *shaders;
     struct nvn_gpu_pipe_s *pipes;
     uint64_t stats[STAT_N];
@@ -344,8 +347,11 @@ static void gmu_lock_rt(void) {
     __atomic_fetch_add(&g_gmu_wait_n, 1, __ATOMIC_RELAXED);
     __atomic_fetch_add(&g_gmu_wait_ns, now_ns() - t0, __ATOMIC_RELAXED);
 }
-static uint64_t g_pl_ns, g_pl_n, g_pl_steps;   // 取图形管线：命中查找的累计纳秒 / 次数 / 比过的条数
-static struct nvn_gpu_pipe_s *g_pipe_ht[PIPE_HT_N];   // 图形管线的散列桶（见 pipe_hash）；持 g_mu
+static uint64_t g_pl_ns, g_pl_n, g_pl_steps, g_pl_cmp;   // 取图形管线：命中查找的累计纳秒 / 次数 / 链上走过的条数 / 其中逐字段比了的条数
+// 图形管线的散列桶（见 pipe_hash）；持 g_mu。桶数 g_pipe_ht_n 是 2 的幂，管线数超过桶数就翻倍（装填因子 <= 1，见 pipe_ht_add）。
+// 原先桶数固定 PIPE_HT_N = 1024：世界场景里管线数是它的好几倍，真机读数「取管线查找」每次比 7.3 条（每条一次缓存未命中，0.83 微秒 / 次、每帧 487 次，#1130）。
+static struct nvn_gpu_pipe_s **g_pipe_ht;
+static uint32_t g_pipe_ht_n, g_pipe_cnt;
 // ---- 驱动管线缓存（#822）：后端建的每条管线都带同一个 VkPipelineCache；会话收尾把驱动给的数据写进 open_desc.cache_dir，
 // 下一局开会话时读回来喂给驱动。真机每局起局二十多秒的同步建管线（每条二三十毫秒）是驱动每次从头编，带上缓存后重开一局按内容命中。
 // 契约（nvn_backend.h open_desc.cache_dir）：NULL = 不落盘；后端有界维护、收尾时写、不逐帧写盘。文件层是旧回放用的 nvn_vk_driver_cache
@@ -772,6 +778,7 @@ static void destroy_samp_locked(struct nvn_gpu_vk *vk, struct nvn_gpu_samp_s *s)
     struct nvn_gpu_samp_s **pp = &vk->samps;
     while (*pp && *pp != s) pp = &(*pp)->all_next;
     if (*pp) *pp = s->all_next;
+    vk->border_live -= s->border_slots;
     if (s->int_sampler && s->int_sampler != s->sampler) vkDestroySampler(vk->d, s->int_sampler, NULL);
     if (s->sampler) vkDestroySampler(vk->d, s->sampler, NULL);
     free(s);
@@ -1725,7 +1732,7 @@ nvn_gpu_rc nvn_gpu_close(uint64_t timeout_ns, nvn_gpu_err *err) {
     depth_blit_close();
     struct nvn_gpu_pipe_s *p = g.pipes;
     g.pipes = NULL;
-    memset(g_pipe_ht, 0, sizeof g_pipe_ht);
+    free(g_pipe_ht); g_pipe_ht = NULL; g_pipe_ht_n = 0; g_pipe_cnt = 0;
     while (p) {
         struct nvn_gpu_pipe_s *pn = p->all_next;
         destroy_pipe_objects(p);
@@ -1743,6 +1750,7 @@ nvn_gpu_rc nvn_gpu_close(uint64_t timeout_ns, nvn_gpu_err *err) {
     }
     struct nvn_gpu_samp_s *sp = g.samps;
     g.samps = NULL;
+    g.border_live = 0;
     while (sp) {
         struct nvn_gpu_samp_s *sn = sp->all_next;
         if (sp->int_sampler && sp->int_sampler != sp->sampler) vkDestroySampler(g.d, sp->int_sampler, NULL);
@@ -2545,7 +2553,6 @@ static int same_spec(const nvn_gpu_stage_desc *a, const nvn_gpu_stage_desc *b) {
 
 // 图形管线按描述散列成桶。原先在全部管线的一条链表里逐条比：一款 3D 游戏几百条管线、每帧取 513 次，
 // 真机上管线数翻一倍「开通道与取管线」每帧就多 1.3 毫秒（同一局里两种写法的管线并存时量到的）。
-// 散列只取描述里一部分字段（都是 same_pipe_desc 逐字节 / 逐值比的），相等与否仍由 same_pipe_desc 定。
 // 实际交给 Vulkan 的图元重启：只在条带 / 扇上有意义（列表图元打开要 primitiveTopologyListRestart，这里不开）。
 // 管线缓存的散列与相等判定都按它比：原始的 prim_restart 在列表图元上也会被置（rp_draw 按游戏状态填），
 // 拿它比会给列表图元多编一条一模一样的管线；不比则条带上开 / 关重启共用一条管线，有一边画错。
@@ -2555,19 +2562,65 @@ static int eff_restart(const nvn_gpu_pipe_desc *d) {
                                t == VK_PRIMITIVE_TOPOLOGY_LINE_STRIP);
 }
 
+// 散列把 same_pipe_desc 比的全部字段都算进来：着色器句柄、特化常量（只比到 nspec 条）、图元 / 格式 / 采样数 / patch_size、光栅丢弃 / 负一裁剪 /
+// 窗口原点 / 深度夹取、颜色格式、通道重映射、混合、颜色状态、写掩码、多重采样、顶点属性与顶点流两张表、深度模板、多边形。原先的散列只算了其中一部分：
+// 同着色器同状态、只差特化常量 / 顶点布局 / 通道重映射的管线全落在同一个桶里，要靠逐字段比才分得开。
+// 散列只决定落在哪个桶，相等与否仍由 same_pipe_desc 定（same_pipe_desc 相等 ⇒ 这里喂进去的每个字节都相等 ⇒ 散列相等；反过来不要求）。
+// 以后给 same_pipe_desc 加比对字段，要同时加进这里（android/tests/vk 的 C205 逐字段表与描述大小检查会红）。
+// 按 8 字节一个字混合（原先字节逐个 FNV：每个字节一次相依的乘法，约 350 字节）。
+static inline uint64_t pipe_mix(uint64_t h, const void *p, size_t n) {
+    const uint8_t *b = (const uint8_t *)p;
+    for (; n >= 8; b += 8, n -= 8) { uint64_t w; memcpy(&w, b, 8); h = (h ^ w) * 0xff51afd7ed558ccdull; h ^= h >> 32; }
+    if (n) { uint64_t w = 0; memcpy(&w, b, n); h = (h ^ w) * 0xff51afd7ed558ccdull; h ^= h >> 32; }
+    return h;
+}
 static uint32_t pipe_hash(const nvn_gpu_pipe_desc *d) {
-    uint64_t h = 1469598103934665603ull;
-#define PH(p, n) do { const uint8_t *q_ = (const uint8_t *)(p); for (size_t i_ = 0; i_ < (size_t)(n); i_++) h = (h ^ q_[i_]) * 1099511628211ull; } while (0)
-    for (int i = 0; i < 5; i++) { uintptr_t sh = (uintptr_t)d->st[i].sh; PH(&sh, sizeof sh); }
-    uint32_t v[5] = {(uint32_t)d->prim, (uint32_t)d->dfmt, (uint32_t)d->sfmt, (uint32_t)d->samples, (uint32_t)eff_restart(d)}; PH(v, sizeof v);
-    PH(d->cfmt, sizeof d->cfmt); PH(d->blend, sizeof d->blend); PH(&d->color, sizeof d->color); PH(&d->chmask, sizeof d->chmask);
-    PH(&d->ds, sizeof d->ds);
-    {   // poly_st 的位域只占部分对象位；散列和相等判定都不能依赖填充位。
-        uint8_t poly[] = {d->poly.cull, d->poly.front, d->poly.mode, d->poly.offset_en};
-        PH(poly, sizeof poly);
+    uint64_t h = 0x9e3779b97f4a7c15ull;
+    uintptr_t sh[5]; for (int i = 0; i < 5; i++) sh[i] = (uintptr_t)d->st[i].sh;
+    h = pipe_mix(h, sh, sizeof sh);
+    for (int i = 0; i < 5; i++) {   // 特化常量：same_pipe_desc 只比前 nspec 条
+        const uint32_t ns = d->st[i].nspec;
+        h = pipe_mix(h, &ns, sizeof ns);
+        if (ns && ns <= NVN_GPU_SPEC_MAX) h = pipe_mix(h, d->st[i].spec, (size_t)ns * sizeof d->st[i].spec[0]);
     }
-#undef PH
+    const uint32_t v[6] = {(uint32_t)d->prim, (uint32_t)d->dfmt, (uint32_t)d->sfmt, (uint32_t)d->samples, (uint32_t)d->patch_size,
+                           (uint32_t)eff_restart(d)};   // #1102：same_pipe_desc 按实际生效的图元重启比
+    h = pipe_mix(h, v, sizeof v);
+    const uint8_t fl[4] = {d->rast_discard, d->clip_neg1, d->origin_ll, d->depth_clamp};
+    h = pipe_mix(h, fl, sizeof fl);
+    h = pipe_mix(h, d->cfmt, sizeof d->cfmt); h = pipe_mix(h, d->lmap, sizeof d->lmap);
+    h = pipe_mix(h, d->blend, sizeof d->blend); h = pipe_mix(h, &d->color, sizeof d->color);
+    h = pipe_mix(h, &d->chmask, sizeof d->chmask); h = pipe_mix(h, &d->ms, sizeof d->ms); h = pipe_mix(h, &d->ds, sizeof d->ds);
+    h = pipe_mix(h, d->attr, sizeof d->attr); h = pipe_mix(h, d->stream, sizeof d->stream);
+    {   // poly_st 的位域只占部分对象位；散列和相等判定都不能依赖填充位。
+        const uint8_t poly[] = {d->poly.cull, d->poly.front, d->poly.mode, d->poly.offset_en};
+        h = pipe_mix(h, poly, sizeof poly);
+    }
+    h ^= h >> 33; h *= 0xc4ceb9fe1a85ec53ull; h ^= h >> 33;
     return (uint32_t)(h ^ h >> 32);
+}
+// 登记一条图形管线进散列表（持 g_mu）：管线数超过桶数（装填因子 > 1）就把桶数翻倍，按各管线存下的散列重排；分配失败沿用旧表
+// （链变长；表一直建不出来时查找退回整表逐条比：慢，答案不变）。
+static int g_pipe_ht_test;   // 只给用例：1 = 查找一律整表逐条比，2 = 散列表分配当失败（走「表建不出来」的退路），4 = 起始桶数 16（多翻几次倍），8 = 只有增长时分配当失败（第一张表照常建）
+static void pipe_ht_add(struct nvn_gpu_pipe_s *p) {
+    if (!g_pipe_ht_n || g_pipe_cnt + 1 > g_pipe_ht_n) {
+        const uint32_t n = g_pipe_ht_n ? g_pipe_ht_n * 2 : (g_pipe_ht_test & 4) ? 16u : PIPE_HT_N;
+        struct nvn_gpu_pipe_s **nt = ((g_pipe_ht_test & 2) || ((g_pipe_ht_test & 8) && g_pipe_ht_n)) ? NULL : calloc(n, sizeof *nt);
+        if (nt) {
+            for (uint32_t i = 0; i < g_pipe_ht_n; i++)
+                for (struct nvn_gpu_pipe_s *q = g_pipe_ht[i], *nx; q; q = nx) {
+                    nx = q->hnext;
+                    const uint32_t b = q->hash & (n - 1);
+                    q->hnext = nt[b]; nt[b] = q;
+                }
+            free(g_pipe_ht); g_pipe_ht = nt; g_pipe_ht_n = n;
+        }
+    }
+    g_pipe_cnt++;
+    p->hnext = NULL;
+    if (!g_pipe_ht_n) return;
+    const uint32_t b = p->hash & (g_pipe_ht_n - 1);
+    p->hnext = g_pipe_ht[b]; g_pipe_ht[b] = p;
 }
 
 static int same_pipe_desc(const nvn_gpu_pipe_desc *a, const nvn_gpu_pipe_desc *b) {
@@ -2591,6 +2644,21 @@ static int same_pipe_desc(const nvn_gpu_pipe_desc *a, const nvn_gpu_pipe_desc *b
            a->poly.mode == b->poly.mode && a->poly.offset_en == b->poly.offset_en &&
            a->origin_ll == b->origin_ll && a->depth_clamp == b->depth_clamp;
 }
+// 用例读写（android/tests/vk）：stat 的 which：0 散列桶数、1 图形管线数、2 累计逐字段比了的条数、3 累计取管线命中次数、4 累计链上走过的条数；
+// hash / same 是 pipe_hash / same_pipe_desc 的对外口子（「相等 ⇒ 散列相等」的性质用例用）；test_mode 的位见 g_pipe_ht_test。
+uint64_t nvn_vk_dbg_pipe_stat(int which) {
+    switch (which) {
+    case 0: return g_pipe_ht_n;
+    case 1: return g_pipe_cnt;
+    case 2: return __atomic_load_n(&g_pl_cmp, __ATOMIC_RELAXED);
+    case 3: return __atomic_load_n(&g_pl_n, __ATOMIC_RELAXED);
+    case 4: return __atomic_load_n(&g_pl_steps, __ATOMIC_RELAXED);
+    default: return 0;
+    }
+}
+uint32_t nvn_vk_dbg_pipe_hash(const nvn_gpu_pipe_desc *d) { return pipe_hash(d); }
+int nvn_vk_dbg_pipe_same(const nvn_gpu_pipe_desc *a, const nvn_gpu_pipe_desc *b) { return same_pipe_desc(a, b); }
+void nvn_vk_dbg_pipe_test_mode(int m) { g_pipe_ht_test = m; }
 
 // 创建管线的并发边界（P1：原先在 g_create_mu 下跑完整个 pipe_build，后台预热一条配方时，无关配方的
 // 首次 draw 也得排队；拿锁后又不复检缓存，已排队的同配方还会再建一次）。现在的分工：
@@ -2618,16 +2686,21 @@ uint64_t nvn_gpu_pipe_warm_created(void) { return __atomic_load_n(&g_warm_create
 // 缓存里按配方找一条图形管线（调用方持 g_mu）。散列只取描述里一部分字段（都是 same_pipe_desc 比的），
 // 相等与否仍由 same_pipe_desc 定。
 static struct nvn_gpu_pipe_s *pipe_find_locked(const nvn_gpu_pipe_desc *d) {
-    const uint32_t hb = pipe_hash(d) % PIPE_HT_N;
+    const uint32_t ph = pipe_hash(d);
     static int scan = -1; static uint32_t scan_n;   // 诊断开关 nvk_pipe_scan=1：走原来的整表逐条比（同一局里对比用），每 256 次取管线读一次
     if (scan < 0 || !(++scan_n & 255)) scan = nvn_plat_flag("nvk_pipe_scan", 0) != 0;
-    struct timespec lk0; clock_gettime(CLOCK_MONOTONIC, &lk0); uint32_t steps = 0;
-    for (struct nvn_gpu_pipe_s *q = scan ? g.pipes : g_pipe_ht[hb]; q; q = scan ? q->all_next : q->hnext) {
+    const int walk_all = scan || !g_pipe_ht_n || (g_pipe_ht_test & 1);   // 表建不出来（内存不够）时退回整表逐条比：慢，答案不变
+    // 计时只在 nvk_gputime 开着才取（#1130）。开关值 g_draw_tm 由绘制入口 / 每 300 帧的读数块刷新，这里只读
+    struct timespec lk0 = {0, 0}; if (g_draw_tm) clock_gettime(CLOCK_MONOTONIC, &lk0);
+    uint32_t steps = 0, cmp = 0;
+    for (struct nvn_gpu_pipe_s *q = walk_all ? g.pipes : g_pipe_ht[ph & (g_pipe_ht_n - 1)]; q; q = walk_all ? q->all_next : q->hnext) {
         steps++;
+        if (q->hash != ph) continue;   // 存下的散列不同一定不同：不去碰 q->key 那一大块（计算管线的 hash 恒为 0，整表逐条比时也靠它跳过）
+        cmp++;
         if (same_pipe_desc(&q->key, d)) {
-            { struct timespec lk1; clock_gettime(CLOCK_MONOTONIC, &lk1);   // 诊断读数：查找这一段用了多久、比了多少条（随对象读数那几行打）
-              __atomic_fetch_add(&g_pl_ns, (uint64_t)(lk1.tv_sec - lk0.tv_sec) * 1000000000ull + (uint64_t)lk1.tv_nsec - (uint64_t)lk0.tv_nsec, __ATOMIC_RELAXED);
-              __atomic_fetch_add(&g_pl_n, 1, __ATOMIC_RELAXED); __atomic_fetch_add(&g_pl_steps, steps, __ATOMIC_RELAXED); }
+            if (g_draw_tm) { struct timespec lk1; clock_gettime(CLOCK_MONOTONIC, &lk1);   // 诊断读数：查找这一段用了多久、走了多少条、逐字段比了多少条
+              __atomic_fetch_add(&g_pl_ns, (uint64_t)(lk1.tv_sec - lk0.tv_sec) * 1000000000ull + (uint64_t)lk1.tv_nsec - (uint64_t)lk0.tv_nsec, __ATOMIC_RELAXED); }
+            __atomic_fetch_add(&g_pl_n, 1, __ATOMIC_RELAXED); __atomic_fetch_add(&g_pl_steps, steps, __ATOMIC_RELAXED); __atomic_fetch_add(&g_pl_cmp, cmp, __ATOMIC_RELAXED);
             return q;
         }
     }
@@ -3084,13 +3157,12 @@ static void *install_find(void *ctx, const void *key, size_t key_bytes) {
 static void install_link(void *ctx, void *fresh) {
     (void)ctx;
     struct nvn_gpu_pipe_s *p = fresh;
-    const uint32_t hb = pipe_hash(&p->key) % PIPE_HT_N;
     for (int st = 0; st < 5; st++)
         if (p->key.st[st].sh) p->key.st[st].sh->refs++;   // 管线持有
     p->all_next = g.pipes;
     g.pipes = p;
-    p->hnext = g_pipe_ht[hb];
-    g_pipe_ht[hb] = p;
+    p->hash = pipe_hash(&p->key);
+    pipe_ht_add(p);
     if (t_warm_scope) {   // 预热线程建的：打 warm 标记，等真实 draw 第一次命中
         p->warm = 1;
         __atomic_fetch_add(&g_warm_created, 1, __ATOMIC_RELAXED);
@@ -5202,6 +5274,30 @@ static const char *samp_wrap(uint8_t w, VkSamplerAddressMode *out) {
     }
 }
 
+// 边框色（#976）。NVN 给的是任意 RGBA（整数 setter 也按数值存成浮点，hle_nvn.c）。正好是 Vulkan 内置三档之一时用内置值，
+// 不占自定义边框色配额；否则要 VK_EXT_custom_border_color。返回 0 透明黑、1 不透明黑、2 不透明白，-1 = 不是三档之一。
+static int samp_border_preset(const float b[4]) {
+    if (b[0] == 0 && b[1] == 0 && b[2] == 0) return b[3] == 0 ? 0 : b[3] == 1 ? 1 : -1;
+    return b[0] == 1 && b[1] == 1 && b[2] == 1 && b[3] == 1 ? 2 : -1;
+}
+
+// 整数视图用的边框色：按数值取整。有符号视图读 int32；无符号视图读同一组 32 位，超过 INT32_MAX 的无符号值按位存。
+static int32_t samp_border_int(float f) {
+    const double d = (double)f;
+    const int64_t v = d <= (double)INT32_MIN ? INT32_MIN : d >= (double)UINT32_MAX ? (int64_t)UINT32_MAX : (int64_t)(d < 0 ? d - 0.5 : d + 0.5);
+    const uint32_t bits = (uint32_t)v;
+    int32_t out;
+    memcpy(&out, &bits, sizeof out);
+    return out;
+}
+
+static void samp_border_unreserve(const struct nvn_gpu_samp_s *s) {
+    if (!s->border_slots) return;
+    pthread_mutex_lock(&g_mu);
+    g.border_live -= s->border_slots;
+    pthread_mutex_unlock(&g_mu);
+}
+
 static VkCompareOp samp_compare(uint8_t m) {
     switch (m) {
     case NVN_COMPARE_FUNC_NEVER: return VK_COMPARE_OP_NEVER;
@@ -5258,11 +5354,47 @@ nvn_gpu_rc nvn_gpu_samp_create(const samp_par *p, nvn_gpu_samp *out, nvn_gpu_err
         ci.compareEnable = VK_TRUE;
         ci.compareOp = samp_compare(p->cmp_func);
     }
-    int white = p->border[0] == 1 && p->border[1] == 1 && p->border[2] == 1 && p->border[3] == 1;
-    int transparent = p->border[0] == 0 && p->border[1] == 0 && p->border[2] == 0 && p->border[3] == 0;
-    ci.borderColor = white ? VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE
-                           : transparent ? VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK : VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK;
+    // 边框色只在有一向是 CLAMP_TO_BORDER 时用得到；用不到时不建自定义边框色（不要扩展、不占配额），不是三档的取不透明黑（与改前相同）。
+    const int preset = samp_border_preset(p->border);
+    const int custom = preset < 0 && (ci.addressModeU == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER ||
+                                      ci.addressModeV == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER ||
+                                      ci.addressModeW == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER);
+    if (custom && !g.dev->custom_border_enabled) {
+        free(s);
+        return fail(err, NVN_GPU_E_UNSUPPORTED, "sampler_border_color_custom：设备没有启用 VK_EXT_custom_border_color（边框色 %g %g %g %g）",
+                    p->border[0], p->border[1], p->border[2], p->border[3]);
+    }
+    if (custom && !g.dev->custom_border_without_format) {
+        free(s);
+        return fail(err, NVN_GPU_E_UNSUPPORTED, "sampler_border_color_custom_format：设备没有 customBorderColorWithoutFormat，建采样器时不知道视图格式");
+    }
+    static const VkBorderColor fixed[3] = {VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK, VK_BORDER_COLOR_FLOAT_OPAQUE_BLACK, VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE};
+    static const VkBorderColor fixed_int[3] = {VK_BORDER_COLOR_INT_TRANSPARENT_BLACK, VK_BORDER_COLOR_INT_OPAQUE_BLACK, VK_BORDER_COLOR_INT_OPAQUE_WHITE};
+    ci.borderColor = custom ? VK_BORDER_COLOR_FLOAT_CUSTOM_EXT : fixed[preset < 0 ? 1 : preset];
+    VkSamplerCustomBorderColorCreateInfoEXT cb, cbi;   // 浮点 / 整数两个采样器各一份；format 留 UNDEFINED（上面已要求 WithoutFormat）
+    memset(&cb, 0, sizeof cb);
+    memset(&cbi, 0, sizeof cbi);
+    if (custom) {
+        pthread_mutex_lock(&g_mu);   // 配额先占后建：两个 VkSampler 都带自定义边框色
+        const int room = g.border_live + 2 <= g.dev->custom_border_max;
+        if (room) g.border_live += 2;
+        pthread_mutex_unlock(&g_mu);
+        if (!room) {
+            free(s);
+            return fail(err, NVN_GPU_E_UNSUPPORTED, "sampler_border_color_custom_quota：自定义边框色采样器已达设备上限 %u", g.dev->custom_border_max);
+        }
+        s->border_slots = 2;
+        cb.sType = cbi.sType = VK_STRUCTURE_TYPE_SAMPLER_CUSTOM_BORDER_COLOR_CREATE_INFO_EXT;
+        cb.format = cbi.format = VK_FORMAT_UNDEFINED;
+        for (int i = 0; i < 4; i++) {
+            cb.customBorderColor.float32[i] = p->border[i];
+            cbi.customBorderColor.int32[i] = samp_border_int(p->border[i]);
+        }
+        cb.pNext = ci.pNext;
+        ci.pNext = &cb;
+    }
     if (vkCreateSampler(g.d, &ci, NULL, &s->sampler) != VK_SUCCESS) {
+        samp_border_unreserve(s);
         free(s);
         return fail(err, NVN_GPU_E_UNSUPPORTED, "vkCreateSampler 拒绝（可能缺少 samplerAnisotropy）");
     }
@@ -5270,9 +5402,13 @@ nvn_gpu_rc nvn_gpu_samp_create(const samp_par *p, nvn_gpu_samp *out, nvn_gpu_err
         VkSamplerCreateInfo ii = ci;
         ii.magFilter = ii.minFilter = VK_FILTER_NEAREST; ii.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
         ii.anisotropyEnable = VK_FALSE; ii.maxAnisotropy = 1.0f;
-        ii.borderColor = white ? VK_BORDER_COLOR_INT_OPAQUE_WHITE : transparent ? VK_BORDER_COLOR_INT_TRANSPARENT_BLACK : VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+        ii.borderColor = custom ? VK_BORDER_COLOR_INT_CUSTOM_EXT : fixed_int[preset < 0 ? 1 : preset];
+        if (custom) {
+            cbi.pNext = ii.pNext == &cb ? cb.pNext : ii.pNext;   // 换掉浮点那份，链上其余结构不动
+            ii.pNext = &cbi;
+        }
         if (vkCreateSampler(g.d, &ii, NULL, &s->int_sampler) != VK_SUCCESS) {
-            vkDestroySampler(g.d, s->sampler, NULL); free(s);
+            vkDestroySampler(g.d, s->sampler, NULL); samp_border_unreserve(s); free(s);
             return fail(err, NVN_GPU_E_UNSUPPORTED, "vkCreateSampler 拒绝（整数格式用的最近点采样器）");
         }
     }
@@ -5992,8 +6128,25 @@ void nvn_gpu_blit(nvn_gpu_cmd ch, nvn_gpu_view sv, const NVNcopyRegion *sr, nvn_
     VkFormatProperties fs, fd; s2a_vk_format_properties(g.phys, s->format, &fs); s2a_vk_format_properties(g.phys, d->format, &fd);
     if (!(fs.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) || !(fd.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT) ||
         (linear && !(fs.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))) { set_sticky(c, NVN_GPU_E_UNSUPPORTED, "blit：设备不支持这对格式（%d → %d，线性 %d）", (int)s->format, (int)d->format, linear); return; }
+    // copy_region 的非正宽高有「整张」含义，不能直接把反向区域交给它。
+    NVNcopyRegion normalized = *sr;
+    int flip_x = sr->width < 0, flip_y = sr->height < 0;
+    // 不扩展同图自拷贝；不同 NVN 身份可能仍别名到同一个后端图像。
+    if ((flip_x || flip_y) && s == d) { set_sticky(c, NVN_GPU_E_UNSUPPORTED, "blit：同图镜像没接"); return; }
+    if (flip_x || flip_y) {
+        int64_t x = sr->xoffset, y = sr->yoffset, w = sr->width, h = sr->height;
+        if (flip_x) { x += w; w = -w; }
+        if (flip_y) { y += h; h = -h; }
+        if (x < 0 || y < 0 || x > INT32_MAX || y > INT32_MAX || w <= 0 || h <= 0 ||
+            w > INT32_MAX || h > INT32_MAX || sr->zoffset || sr->depth != 1 || dr->width <= 0 || dr->height <= 0 ||
+            s->target == NVN_TEXTURE_TARGET_3D || d->target == NVN_TEXTURE_TARGET_3D) {
+            set_sticky(c, NVN_GPU_E_ARG, "blit 反向源区域非法"); return;
+        }
+        normalized.xoffset = (int)x; normalized.yoffset = (int)y;
+        normalized.width = (int)w; normalized.height = (int)h;
+    }
     VkOffset3D so, dof; VkExtent3D se, de;
-    if (copy_region(s, sv->base_level, sr, &so, &se) || copy_region(d, dv->base_level, dr, &dof, &de) || sv->base_layer >= s->layers || dv->base_layer >= d->layers) { set_sticky(c, NVN_GPU_E_ARG, "blit 区域越界"); return; }
+    if (copy_region(s, sv->base_level, &normalized, &so, &se) || copy_region(d, dv->base_level, dr, &dof, &de) || sv->base_layer >= s->layers || dv->base_layer >= d->layers) { set_sticky(c, NVN_GPU_E_ARG, "blit 区域越界"); return; }
     full_barrier(c);
     image_barrier(c, s, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     image_barrier(c, d, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -6001,6 +6154,8 @@ void nvn_gpu_blit(nvn_gpu_cmd ch, nvn_gpu_view sv, const NVNcopyRegion *sr, nvn_
     ib.srcSubresource = (VkImageSubresourceLayers){s->aspect, sv->base_level, sv->base_layer, 1};
     ib.dstSubresource = (VkImageSubresourceLayers){d->aspect, dv->base_level, dv->base_layer, 1};
     ib.srcOffsets[0] = so; ib.srcOffsets[1] = (VkOffset3D){so.x + (int32_t)se.width, so.y + (int32_t)se.height, 1};
+    if (flip_x) { int32_t x = ib.srcOffsets[0].x; ib.srcOffsets[0].x = ib.srcOffsets[1].x; ib.srcOffsets[1].x = x; }
+    if (flip_y) { int32_t y = ib.srcOffsets[0].y; ib.srcOffsets[0].y = ib.srcOffsets[1].y; ib.srcOffsets[1].y = y; }
     ib.dstOffsets[0] = dof; ib.dstOffsets[1] = (VkOffset3D){dof.x + (int32_t)de.width, dof.y + (int32_t)de.height, 1};
     vkCmdBlitImage(c->cb, s->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, d->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &ib, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     image_barrier(c, s, VK_IMAGE_LAYOUT_GENERAL);

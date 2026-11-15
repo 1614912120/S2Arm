@@ -36,5 +36,10 @@ NSString *S2ACPatchRatioText(double a);
 NSArray<S2ACPatchGroup *> *S2ACPatchGroupsFromTSV(NSString *text);
 // 当前开着的编号（不含帧率类）
 NSSet<NSString *> *S2ACPatchEnabled(NSArray<S2ACPatchGroup *> *groups, NSUserDefaults *defaults);
+// 崩溃时只关出事的那份（v0.4.1，同 pack/jobs/cheats.py narrow）：嫌疑从小到大取一层，再崩再扩大——
+//   ① 比上次好好收局时（good，元素「类<TAB>键」；nil = 没记过）新开的；② 没有 → 我方没验过的（金手指、verified 为假的补丁 / 帧率）；③ 还没有 → 全部。
+//   on 元素 {kind: cheat | patch | fps, key, name, verified}
+NSString *S2ACrashTag(NSDictionary *item);
+NSArray<NSDictionary *> *S2ACrashNarrow(NSArray<NSDictionary *> *on, NSSet<NSString *> *good);
 // 改一项（帧率类忽略）：在当前开着的集合上加 / 减，按页面顺序写回字符串数组
 void S2ACPatchSetEnabled(NSArray<S2ACPatchGroup *> *groups, NSUserDefaults *defaults, NSString *ident, BOOL on);

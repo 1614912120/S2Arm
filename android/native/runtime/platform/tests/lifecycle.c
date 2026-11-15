@@ -1,16 +1,26 @@
 // 生命周期错误传播/顺序单测；guest 停稳证明另见真实 thread + fault 交叉测试。
 #include "native.h"
 #include "../lifecycle_android.h"
+#include <android/log.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <stdarg.h>
 #include <sys/syscall.h>
 #include <time.h>
 
 void s2a_host_shutdown(const char *why);
 void s2a_term_install(void);
+// 宿主没有 logcat；保留生产失败诊断到 stderr，不替换生命周期实现或退出码。
+int __android_log_print(int prio, const char *tag, const char *fmt, ...) {
+    (void)prio; (void)tag;
+    va_list ap; va_start(ap, fmt);
+    int n = vfprintf(stderr, fmt, ap);
+    va_end(ap); fputc('\n', stderr);
+    return n;
+}
 static const char *mode;
 static int threaded_mode;   // 模式名带 -threaded：宿主记的拆线程开关为开
 int s2a_android_host_threaded(void) { return threaded_mode; }
