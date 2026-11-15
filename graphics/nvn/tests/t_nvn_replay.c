@@ -441,13 +441,16 @@ static void res_fresh(void);   // 定义在本文件后面
 static view_t vk_layer(int i) { view_t v; memset(&v, 0, sizeof v); v.set_layers = 1; v.min_layer = (uint16_t)i; v.nlayers = 1; return v; }   // 同一份存储上的第 i 种视图记录（替身不校验层号）
 static void t_view_pin(void) {
     res_fresh();
+    // 本用例要放掉成千上万个视图、又要查 first 有没有被放掉：「视图放掉」记录表（g_released_id，8192 条、整个程序不清）
+    //   跑到这里已被前面的用例用掉一大半，记满后 first 被放掉也记不进去。同 t_view_storage_sweep：用例内从空表记起，结束时恢复
+    const int saved_nrel = g_nrel; g_nrel = 0;
     // 视图表是 128 组 x 8 路（按存储、视图记录散列）：窗口里取 3000 种不同的（存储，视图记录），平均每组 23 个——first 那一组的 8 格必然被本轮钉满、
-    // 多出来的走溢出表；窗口结束后再取 3000 个，first 那一格必然被换掉。数量由表的形状推出，不依赖具体散列到哪一组。
+    // 多出来的走溢出表。窗口结束后 first 那一格要能被换掉（见下面的循环：插到它被放掉为止）。
     // 表按存储认视图：不同序号共用一份存储（同池同偏移同描述）时是同一项，所以这里在一份存储上取不同的视图记录来凑不同的项。
-    enum { N = 6000, NWIN = 3000 };
-    static view_t vp[N];
+    enum { NWIN = 3000 };
+    static view_t vp[NWIN];
     tex_t tp = mk_tex(3000, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&tp);
-    for (int i = 0; i < N; i++) vp[i] = vk_layer(i);
+    for (int i = 0; i < NWIN; i++) vp[i] = vk_layer(i);
     nvn_gpu_view first = NULL;
     int first_id = 0;
     rp_view_pin_begin();
@@ -457,7 +460,10 @@ static void t_view_pin(void) {
     for (int i = 1; i < NWIN; i++) (void)rp_view_for(&tp, &vp[i], &g_fake_cmd);   // 每组都被挤满：钉住时不能放掉 first
     CHECK(first && !was_view_released(first_id));                                  // 修前：轮转把 first 放掉 → 红
     rp_view_pin_end();
-    for (int i = NWIN; i < N; i++) (void)rp_view_for(&tp, &vp[i], &g_fake_cmd);
+    // 窗口结束后它可以被淘汰。淘汰哪一路取全局插入计数 % 8（rp_res.c rp_view_for），不是逐组轮转：first 那一组之后进几次插入、
+    //   每次轮到哪一路随存储编号（全局累加）与散列而变，固定再插 3000 个时约 5% 的布局一次都轮不到 first（11-15 前面多一个用例就红）。
+    //   所以一直插不同的视图记录，直到 first 被放掉；上限 60000 次（first 那组约进 470 次插入，轮不到的概率 (7/8)^470，可以不计）
+    for (int i = NWIN; i < NWIN + 60000 && first && !was_view_released(first_id); i++) { view_t w = vk_layer(i); (void)rp_view_for(&tp, &w, &g_fake_cmd); }
     CHECK(first && was_view_released(first_id));                                   // 窗口结束：它可以被淘汰
     res_fresh();
     // 一帧里轮着用 300 个目标（真机一款 3D 游戏每帧一百多个通道）：第二遍取到的必须是第一遍那些视图，一个都不重建。
@@ -470,6 +476,7 @@ static void t_view_pin(void) {
       if (rebuilt > M / 20) fprintf(stderr, "视图表：300 个目标取第二遍，重建了 %d 个（期望 ≤ %d）\n", rebuilt, M / 20);
       CHECK(rebuilt <= M / 20); }
     res_fresh();   // 本用例建的存储不留给后面的用例（它们按 live 计数做断言）
+    g_nrel = saved_nrel;
 }
 
 
