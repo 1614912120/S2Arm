@@ -568,7 +568,10 @@ static void *fail_watch(void *arg) {
     unsigned long long last = 0; double idle = 0, wait_first = 0;
     for (;;) {
         sleep(1);
-        if (atomic_load(&g_suspended)) { idle = 0; base = 0; continue; }
+        // 客机冻结（Mac 失焦暂停 / iOS 后台 / 重启屏障，runtime/src/thread.c s2a_guest_frozen）按设计不出帧，不算停住
+        //   （11-15 v0.4.2 候选一局：窗口失焦冻结 45 秒被报「出帧停住 45 秒」假红；停帧救场 runtime/src/ap_host.c 早已同口径）
+        static int (*frozen)(void); static int looked; if (!looked) { frozen = (int (*)(void))dlsym(RTLD_DEFAULT, "s2a_guest_frozen"); looked = 1; }
+        if (atomic_load(&g_suspended) || (frozen && frozen())) { idle = 0; base = 0; continue; }
         unsigned long long f = direct_frames();
         if (!f) {
             if (++wait_first != 90) continue;   // 只在第 90 秒报一次、打一次现场，之后照常等首帧
