@@ -468,22 +468,30 @@ static struct entry *build(const uint8_t *bytes, size_t len, const struct s2a_so
 // 快路径：输入跟上一次取程序时一样，就还是那个程序。下面的摘要盖住 fill_facts 与身份用到的全部回放状态
 // （游戏每笔绘制前都会重绑贴图 / 缓冲，绑的东西对编译来说通常没变；不走快路径时每笔要重填事实、编码身份、算一次 SHA-256）。
 // 调试开关 nvk_resolve_check=1：命中后仍走一遍慢路径核对，不一致报红。
-// 表是「512 个桶 × 4 路」而不是只记上一次：相邻两笔常在两三种材质之间来回换，只记一项时每次都落空；同桶 4 路让
+// 表是「4096 个桶 × 4 路」而不是只记上一次：相邻两笔常在两三种材质之间来回换，只记一项时每次都落空；同桶 4 路让
 // 几种材质共存，桶内轮转淘汰（桶内热点不超过 4 个时就与 LRU 等价）。取不到程序的那次结果不占位：它本来也不会命中，
 // 只会把有用的项挤掉（同一份输入再进来时由 g_progs 里的失败项挡掉重复编译）。只在提交线程上用。
-enum { LAST_BUCKETS = 512, LAST_WAYS = 4 };
-static struct last_ent { uint64_t key, session, generation; const struct rp_prog *prog; } g_lasts[LAST_BUCKETS][LAST_WAYS];
-static uint8_t g_lasts_next[LAST_BUCKETS];
+// 为什么是 4096 桶（#1146）：一帧里不同的摘要有几百个，散进 512 个桶总有几个桶落进 ≥ 5 个键；4 路装不下 5 个键，
+// 而一帧里又周期性地依次访问它们，轮转替换遇上周期访问就是这几个键每次都落空（真机世界场景稳态每窗仍有十来次，每次走一遍慢路径）。
+// 桶数加到 4096，同一批键散得开；每笔仍只摸一个桶（4 路 × 32 字节 = 2 条缓存行）。
+// 表在会话里第一次存项时按需分配（约 516 KB），rp_shader_reset 释放：不跑游戏的进程不背这一块。分配不到就不缓存，
+// 每笔走慢路径，答案不变。
+enum { LAST_BITS = 12, LAST_BUCKETS = 1 << LAST_BITS, LAST_WAYS = 4 };
+struct last_ent { uint64_t key, session, generation; const struct rp_prog *prog; };
+static struct last_tab { struct last_ent e[LAST_BUCKETS][LAST_WAYS]; uint8_t next[LAST_BUCKETS]; } *g_last_tab;
 static struct last_ent *last_find(uint64_t key, uint64_t session, uint64_t generation) {
-    struct last_ent *b = g_lasts[(key ^ (key >> 32)) & (LAST_BUCKETS - 1)];
+    if (!g_last_tab) return NULL;
+    struct last_ent *b = g_last_tab->e[(key ^ (key >> 32)) & (LAST_BUCKETS - 1)];
     for (int i = 0; i < LAST_WAYS; i++)
         if (b[i].prog && b[i].key == key && b[i].session == session && b[i].generation == generation) return &b[i];
     return NULL;
 }
 static void last_put(uint64_t key, uint64_t session, uint64_t generation, const struct rp_prog *prog) {
-    const unsigned b = (unsigned)((key ^ (key >> 32)) & (LAST_BUCKETS - 1)), w = g_lasts_next[b];
-    g_lasts_next[b] = (uint8_t)((w + 1) & (LAST_WAYS - 1));
-    g_lasts[b][w] = (struct last_ent){key, session, generation, prog};
+    if (!g_last_tab && !(g_last_tab = calloc(1, sizeof *g_last_tab))) return;
+    struct last_tab *t = g_last_tab;
+    const unsigned b = (unsigned)((key ^ (key >> 32)) & (LAST_BUCKETS - 1)), w = t->next[b];
+    t->next[b] = (uint8_t)((w + 1) & (LAST_WAYS - 1));
+    t->e[b][w] = (struct last_ent){key, session, generation, prog};
 }
 // 快路读数（平台件读不到回放核心的 rp_perf）：开关 nvk_shader_cache_log=1 时每 4096 次取程序打一行，真机 A/B 看命中率
 // 与两条路的平均耗时。计时只在开关打开时做（此时那点 clock_gettime 相对 3.5µs 可忽略）。
@@ -520,6 +528,11 @@ static void cs_cache_log(void) {
     g_mark_cs_hits = g_cs_hits; g_mark_cs_misses = g_cs_misses; g_mark_cs_hit_ns = g_cs_hit_ns; g_mark_cs_miss_ns = g_cs_miss_ns;
 }
 uint64_t nvk_shader_cs_fast_hits(void) { return g_cs_hits; }   // 读数出口：计算快路累计命中次数（单测用；会话清空时归零）
+// 快表的单测出口：键由测试自己造（用来钉「同一旧桶里的 5 个键能不能共存」），session / generation 固定为 1；allocated 说明表现在有没有分配
+// （会话外 / 收尾后应当没有）。
+int nvk_shader_last_allocated(void) { return g_last_tab != NULL; }
+void nvk_shader_last_test_put(uint64_t key, const struct rp_prog *prog) { last_put(key, 1, 1, prog); }
+const struct rp_prog *nvk_shader_last_test_find(uint64_t key) { const struct last_ent *e = last_find(key, 1, 1); return e ? e->prog : NULL; }
 // 阶段键一律经核心导出接口取（rp_shader_stage_key）：没绑定 / 键缺失给全 0，不读可能过期的核心内部分量。
 static const uint8_t *stage_key(unsigned st) {
     static uint8_t k[3][8];
@@ -766,14 +779,14 @@ static struct entry *build_compute(const uint8_t *bytes, size_t len, const struc
     return e;
 }
 
-// 计算程序的快路：与图形那条（input_sig + g_lasts）同一套做法——先算「编译请求的全部输入」的摘要，命中就直接返回上次的 rp_prog*。
+// 计算程序的快路：与图形那条（input_sig + g_last_tab）同一套做法——先算「编译请求的全部输入」的摘要，命中就直接返回上次的 rp_prog*。
 // 为什么值得：一款每帧 20 多个计算派发（GPU 剔除 / 后处理）的游戏，每次派发都走完整请求——32 + 128 个组合贴图槽逐槽取快照、
 // 建编译请求（含整份 profile 的 JSON 解析与 SHA-256）、算身份、查表，真机上约 130 微秒 / 次、一帧 2.5 毫秒。
 // 摘要 = 编译请求真正读的那些输入：来源代际、阶段键、用户常量缓冲「有没有」（掩码，不含地址 / 长度）、存储缓冲地址是否未对齐、
 // 贴图池与采样器池的起点与容量、32 个组合槽与 128 个分离槽的编译事实摘要（格式 / 目标 / 深度，不含句柄本身）。
 // 之前的键带着每次派发都不同的地址和句柄，再加每帧都推进的贴图登记代号，等于从不命中。
 // 摘要只含「会进请求」的输入，所以同一个着色器换了绑定地址、换了同样格式的贴图，请求与身份逐字节不变，直接复用。
-// 计算与图形共用 g_lasts：摘要首项是计算专用的域标记，两边的摘要不会碰；rp_shader_reset 一并清空。
+// 计算与图形共用 g_last_tab：摘要首项是计算专用的域标记，两边的摘要不会碰；rp_shader_reset 一并释放。
 static uint64_t compute_input_sig(const struct s2a_direct_compile_context *pc) {
     uint64_t h = 1469598103934665603ull;
     #define MIX(v) do { h ^= (uint64_t)(v); h *= 1099511628211ull; } while (0)
@@ -914,9 +927,9 @@ void rp_shader_reset(void) {
         free(e); }
     free(g_progs.keys); free(g_progs.vals); nvn_hm_init(&g_progs, 32);
     g_profile.ok = 0;
-    // 快路的表随会话清空：里面存的是 rp_prog*，跨会话留着就是悬空指针。计算程序的快路也存在 g_lasts 里
-    // （摘要首项是计算专用的域标记），这一次清空一并带走。
-    memset(g_lasts, 0, sizeof g_lasts); memset(g_lasts_next, 0, sizeof g_lasts_next);
+    // 快路的表随会话释放：里面存的是 rp_prog*，跨会话留着就是悬空指针。计算程序的快路也存在这张表里
+    // （摘要首项是计算专用的域标记），这一次释放一并带走；下一次存项时再按需分配。
+    free(g_last_tab); g_last_tab = NULL;
     memset(g_comb_sig, 0, sizeof g_comb_sig);
     g_cs_hits = g_cs_misses = g_cs_hit_ns = g_cs_miss_ns = 0; g_mark_cs_hits = g_mark_cs_misses = g_mark_cs_hit_ns = g_mark_cs_miss_ns = 0;
     g_cache_calls = g_cache_hits = g_cache_misses = g_cache_hit_ns = g_cache_miss_ns = 0; g_sig_recomp = 0;

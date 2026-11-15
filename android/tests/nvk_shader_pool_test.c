@@ -23,6 +23,9 @@
 // 实现在 nvk_shader.c，声明在 nvk_session.h。这里不包 nvk_session.h：nvk_compile_stop_test.py 拿本文件当夹具，
 // 会在同一个翻译单元里把 nvk_session_request_stop 等会话函数定义成 static，包了头就是「static 声明跟在非 static 声明后面」，编不过。
 uint64_t nvk_shader_cs_fast_hits(void);
+int nvk_shader_last_allocated(void);
+void nvk_shader_last_test_put(uint64_t key, const struct rp_prog *prog);
+const struct rp_prog *nvk_shader_last_test_find(uint64_t key);
 
 static int checks, failures, compiler_calls, diag_enabled, diag_lines, diag_queries;
 static unsigned fake_array_count;
@@ -422,6 +425,27 @@ static void compute_fast_path_test(void) {
     bind_separate(5, 100, 1, 0); memset(rp_S.ubo[5], 0, sizeof rp_S.ubo[5]); memset(rp_S.ssbo[5], 0, sizeof rp_S.ssbo[5]); memset(rp_S.tex[5], 0, sizeof rp_S.tex[5]);
     rp_shader_reset();
 }
+// 图形与计算共用的快表（#1146）：一帧里依次访问落在同一个旧桶（桶号低 9 位相同）的 5 个键。
+// 旧表 512 桶 × 4 路装不下 5 个键，轮转替换遇上周期访问就是每次都落空；4096 桶把它们散开（第 9..11 位不同），
+// 8 轮里只有第一轮冷启动的 5 次落空。同时钉死表的生命周期：会话外没有分配、第一次存项时才分配、会话收尾释放，
+// 收尾后旧项（里面存的是 rp_prog*）一个都取不到。
+static void last_table_test(void) {
+    static struct rp_prog progs[5];
+    uint64_t keys[5];
+    rp_shader_reset();
+    CHECK(!nvk_shader_last_allocated(), "fast table is not allocated outside a session");
+    CHECK(nvk_shader_last_test_find(0x15) == NULL, "empty fast table finds nothing");
+    for (int i = 0; i < 5; i++) keys[i] = ((uint64_t)i << 9) | 0x15;
+    int misses = 0;
+    for (int round = 0; round < 8; round++)
+        for (int i = 0; i < 5; i++)
+            if (nvk_shader_last_test_find(keys[i]) != &progs[i]) { misses++; nvk_shader_last_test_put(keys[i], &progs[i]); }
+    CHECK(misses == 5, "5 keys sharing the low 9 bits of the bucket index coexist in the fast table: %d misses in 8 rounds (cold start only = 5)", misses);
+    CHECK(nvk_shader_last_allocated(), "fast table is allocated on the first store");
+    rp_shader_reset();
+    CHECK(!nvk_shader_last_allocated(), "fast table is released at session retirement");
+    CHECK(nvk_shader_last_test_find(keys[0]) == NULL, "entries holding rp_prog pointers do not survive session retirement");
+}
 static int emit_real_request(const char *profile_path, const char *closure, const char *dir, const char *output, int tbuf) {
     FILE *pf = fopen(profile_path, "rb"); if (!pf) return 1;
     size_t pn = fread(external_profile, 1, sizeof external_profile - 1, pf);
@@ -774,6 +798,7 @@ int main(int argc, char **argv) {
     }
     fake_array_count = 0; fake_compile_error = NULL;
     compute_fast_path_test();
+    last_table_test();
     gs_request_test();
     rp_shader_reset(); s2a_source_clear();
     fprintf(stderr, "nvk shader pool: %d checks, %d failures\n", checks, failures);
