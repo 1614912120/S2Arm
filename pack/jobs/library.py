@@ -831,10 +831,11 @@ def move_library(c, source):
         except BaseException as failure:
             if cross and isinstance(failure, OSError) and failure.errno in (errno.ENOSPC, errno.EIO):
                 # #1112：exFAT 写满盘失败后删掉残留，空闲空间仍显示 0（无日志的文件系统空闲位图没跟着回来），要跑一次修复才找得回
-                repair = ("在「此电脑」里右键这块盘 →「属性」→「工具」→「检查」修复一次" if os.name == "nt"
-                          else "用「磁盘工具」选中这块盘点「急救」修复一次")
-                c.diagnostic("换库写到一半失败（盘满或写入出错），新位置那块盘的文件系统记录可能已经不准：删掉残留后可用空间仍比实际少的话，"
-                             + repair + "（不会删文件）。", code="library_move_failed", severity="warning")
+                # #1112 玩家复核：盘本身没坏（verifyVolume 0），在访达里删的残留进了这块盘自己的废纸篓（.Trashes），要接着盘清倒才腾出空间
+                bin_, repair = (("回收站", "在「此电脑」里右键这块盘 →「属性」→「工具」→「检查」") if os.name == "nt"
+                                else ("废纸篓", "用「磁盘工具」选中这块盘点「急救」"))
+                c.diagnostic(f"换库写到一半失败（盘满或写入出错）。手动删新位置残留的临时文件夹后，要在这块盘还接着时清倒{bin_}，空间才会腾出来；"
+                             f"清倒以后可用空间仍明显比实际少，再{repair}检查一次（不会删文件）。", code="library_move_failed", severity="warning")
             if done:
                 _retarget_links(c.library, c.library, source)
             for a, b in reversed(done):

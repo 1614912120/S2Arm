@@ -397,7 +397,7 @@ class MoveTests(unittest.TestCase):
             library.setup(ctx)
         self.assertEqual(e.exception.errno, 28)
         self.assertTrue(any(".s2arm-moving" in n for n in ctx.notes), ctx.notes)
-        self.assertTrue(any("修复一次" in n for n in ctx.notes), ctx.notes)   # 盘满失败后提示可能要修复文件系统（#1112 删残留后空闲仍为 0）
+        self.assertTrue(any("清倒" in n for n in ctx.notes), ctx.notes)   # 盘满失败后提示可能要修复文件系统（#1112 删残留后空闲仍为 0）
 
     def test_cross_volume_failed_verification_rolls_back(self):
         old, new = self.old(), self.root / "new"
