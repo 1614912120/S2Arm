@@ -273,7 +273,7 @@ def add_kept_nros(c, gid, base, target):
             names.append(name); add.append("\t".join((name, sha, size, bss, src)))
         apply_outputs(out, base, names)
         tmpf = table.with_name(table.name + ".rw")
-        tmpf.write_text("# 模块名\tSHA-256\tNRO 大小\tbss 大小\tromfs 相对路径\n" + "".join(l + "\n" for l in rows + add))
+        tmpf.write_text("# 模块名\tSHA-256\tNRO 大小\tbss 大小\tromfs 相对路径\n" + "".join(l + "\n" for l in rows + add))  # 非玩家句
         os.replace(tmpf, table)
     return names
 
