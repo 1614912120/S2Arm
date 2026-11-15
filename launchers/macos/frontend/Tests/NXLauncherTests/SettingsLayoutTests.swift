@@ -482,10 +482,15 @@ import S2ArmAppleAdapter
                 navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
                 window.makeKeyAndOrderFront(nil)
                 defer { navigation.detach(); window.close() }
-                let title = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "export.name" })
-                let point = window.convertFromScreen(CGRect(x: title.frame.minX + 20, y: title.frame.midY, width: 0, height: 0)).origin
+                func clickTitle() throws {
+                    host.layoutSubtreeIfNeeded()
+                    let title = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "export.name" })
+                    let point = window.convertFromScreen(CGRect(x: title.frame.minX + 20, y: title.frame.midY, width: 0, height: 0)).origin
+                    try click(point, in: window)
+                }
                 let before = fixture.runner.requests.filter { $0["operation"] as? String == "customize" }.count
-                try click(point, in: window)
+                try clickTitle()
+                try await waitUntil { window.firstResponder is NSTextView }
                 try await Task.sleep(for: .milliseconds(60))
                 let editor = try XCTUnwrap(window.firstResponder as? NSTextView)
                 XCTAssertEqual(editor.string, game.name, "点击标题应直接开始编辑原有名字")
@@ -494,23 +499,31 @@ import S2ArmAppleAdapter
                 editor.insertText(replacement, replacementRange: NSRange(location: NSNotFound, length: 0))
                 try await Task.sleep(for: .milliseconds(60))
                 try key(36, "\r", in: window)
-                try await Task.sleep(for: .milliseconds(120))
+                try await waitUntil {
+                    !fixture.model.customizing
+                        && fixture.runner.requests.filter { $0["operation"] as? String == "customize" }.count == before + 1
+                        && navigation.controlTargets(in: window).contains { $0.id == "export.name" }
+                        && !(window.firstResponder is NSTextView)
+                }
                 let saved = fixture.runner.requests.filter { $0["operation"] as? String == "customize" }
                 XCTAssertEqual(saved.count, before + 1, "Return 保存与失焦回调合计只提交一次")
                 XCTAssertEqual(saved.last?["name"] as? String, replacement)
                 XCTAssertNil(window.attachedSheet)
                 XCTAssertNil(navigation.keyboard, "鼠标编辑保持原位输入")
                 try snapshot(host, "export-name-inline-\(language.code)-\(Int(width))")
-                try click(point, in: window)
+                try clickTitle()
+                try await waitUntil { window.firstResponder is NSTextView }
                 try await Task.sleep(for: .milliseconds(60))
                 let cancelEditor = try XCTUnwrap(window.firstResponder as? NSTextView)
                 cancelEditor.selectAll(nil)
                 cancelEditor.insertText("Discard this heading", replacementRange: NSRange(location: NSNotFound, length: 0))
+                try await Task.sleep(for: .milliseconds(60))
                 try key(53, "\u{1b}", in: window)
-                try await Task.sleep(for: .milliseconds(120))
+                try await waitUntil { !(window.firstResponder is NSTextView) }
                 XCTAssertEqual(fixture.runner.requests.filter { $0["operation"] as? String == "customize" }.count, before + 1)
                 XCTAssertEqual(fixture.model.exportFor, game.id, "Esc 只取消标题编辑，不能退出出包页")
-                try click(point, in: window)
+                try clickTitle()
+                try await waitUntil { window.firstResponder is NSTextView }
                 try await Task.sleep(for: .milliseconds(60))
                 XCTAssertEqual((window.firstResponder as? NSTextView)?.string, game.name, "取消后应恢复已有标题")
                 try key(53, "\u{1b}", in: window)
@@ -734,6 +747,14 @@ import S2ArmAppleAdapter
         }
     }
 
+    private func waitUntil(_ ready: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
+        for _ in 0..<100 {
+            if ready() { return }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(ready(), "界面未在 2 秒内完成状态切换", file: file, line: line)
+    }
+
     func testHomeSearchExpandsInsideTheHomeWindowAndKeepsItsQuery() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
@@ -751,15 +772,31 @@ import S2ArmAppleAdapter
                 navigation.source.stop()
                 window.makeKeyAndOrderFront(nil)
                 defer { navigation.detach(); window.close() }
-                func toggleSearch() throws {
+                func settleSearch() async throws {
+                    var previous = CGRect.null
+                    var stable = 0
+                    try await waitUntil {
+                        guard let frame = navigation.controlTargets(in: window).first(where: { $0.id == "home.search" })?.frame else { return false }
+                        stable = frame == previous ? stable + 1 : 0
+                        previous = frame
+                        return stable >= 8
+                    }
+                }
+                func toggleSearch() async throws {
+                    try await settleSearch()
                     let target = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.search" })
                     let rect = window.convertFromScreen(target.frame)
                     try click(CGPoint(x: rect.midX, y: rect.midY), in: window)
                 }
                 let initialWindows = Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber))
                 XCTAssertFalse(navigation.controlTargets(in: window).contains { $0.id == "home.filter" }, "首页不再显示重复的筛选按钮")
-                try toggleSearch()
-                try await Task.sleep(for: .milliseconds(350))
+                try await toggleSearch()
+                // Let the 240 ms capsule transition finish before the next mouse hit test.
+                try await Task.sleep(for: .milliseconds(300))
+                try await waitUntil {
+                    navigation.controlTargets(in: window).contains { $0.id == "home.search.field" }
+                        && window.firstResponder is NSTextView
+                }
                 let field = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.search.field" }, "搜索框应直接在首页展开")
                 XCTAssertEqual(Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber)), initialWindows, "展开搜索不能创建 popup")
                 let editor = try XCTUnwrap(window.firstResponder as? NSTextView, "鼠标展开后必须直接接受文本输入")
@@ -775,12 +812,18 @@ import S2ArmAppleAdapter
                 fixture.model.home.search = "Original"
                 try await Task.sleep(for: .milliseconds(80))
                 try snapshot(host, "home-search-expanded-\(language.code)-\(Int(width))")
-                try toggleSearch()
-                try await Task.sleep(for: .milliseconds(350))
+                try await toggleSearch()
+                try await Task.sleep(for: .milliseconds(300))
+                try await waitUntil { !navigation.controlTargets(in: window).contains { $0.id == "home.search.field" } }
                 XCTAssertFalse(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" })
                 XCTAssertEqual(fixture.model.home.search, "Original", "收起搜索保留筛选条件")
-                try toggleSearch()
-                try await Task.sleep(for: .milliseconds(350))
+                try await toggleSearch()
+                try await Task.sleep(for: .milliseconds(300))
+                try await waitUntil {
+                    navigation.controlTargets(in: window).contains { $0.id == "home.search.clear" }
+                        && window.firstResponder is NSTextView
+                }
+                try await settleSearch()
                 navigation.focus("home.search.clear"); navigation.handle(.confirm)
                 try await Task.sleep(for: .milliseconds(80))
                 XCTAssertEqual(fixture.model.home.search, "")
@@ -1002,16 +1045,24 @@ import S2ArmAppleAdapter
         }
     }
 
-    func testInterfaceDescriptionsDoNotEndInFullStops() throws {
+    func testDescriptionPresentationOmitsFullStopsAndPreservesEllipses() throws {
+        // Catalogs and shared specs also serve other frontends. Check the Mac
+        // presentation boundary rather than rewriting upstream translations.
+        XCTAssertEqual(LauncherCopy.note("Original description."), "Original description")
+        XCTAssertEqual(LauncherCopy.note("原始说明。"), "原始说明")
+        XCTAssertEqual(LauncherCopy.note("Loading..."), "Loading...")
+        func check(_ text: String, _ context: String) {
+            let note = LauncherCopy.note(text)
+            XCTAssertFalse(note.hasSuffix("。") || (note.hasSuffix(".") && !note.hasSuffix("...")), context)
+        }
         for (language, catalog) in L10n.catalogs {
             for (key, text) in catalog {
-                XCTAssertFalse(text.hasSuffix("。") || text.hasSuffix("."), "\(language)/\(key): 说明末尾不加句号")
+                check(text, "\(language)/\(key)")
             }
         }
         for item in try GameSettingsSpec.macItems() {
             for language in ["zh-Hans", "en"] {
-                let note = item.detail(language)
-                XCTAssertFalse(note.hasSuffix("。") || note.hasSuffix("."), "\(item.id)/\(language)")
+                check(item.detail(language), "\(item.id)/\(language)")
             }
         }
         let source = try GameSettingsSpec.url().deletingLastPathComponent().appendingPathComponent("experience.v1.json")
@@ -1020,7 +1071,7 @@ import S2ArmAppleAdapter
         for row in try XCTUnwrap(launcher["items"] as? [[String: Any]]) {
             for language in ["zh-Hans", "en"] {
                 let text = try XCTUnwrap(row[language] as? String)
-                XCTAssertFalse(text.hasSuffix("。") || text.hasSuffix("."), "\(row["id"] ?? "")/\(language)")
+                check(text, "\(row["id"] ?? "")/\(language)")
             }
         }
     }
@@ -1254,7 +1305,8 @@ import S2ArmAppleAdapter
             fixture.navigation.focus("settings.language"); fixture.navigation.handle(.confirm)
             try await Task.sleep(for: .milliseconds(100))
             let options = fixture.navigation.controlTargets(in: window).filter { $0.id.hasPrefix("dropdown.") }
-            XCTAssertEqual(options.count, 3, "下拉列表必须显示在当前设置窗口内")
+            XCTAssertEqual(Set(options.map(\.id)), Set(([""] + Lang.all.map(\.code)).map { "dropdown." + $0 }),
+                           "下拉列表必须在当前设置窗口内显示跟随系统与全部可用语言")
             let bounds = window.convertToScreen(host.bounds)
             for option in options { XCTAssertTrue(bounds.insetBy(dx: -1, dy: -1).contains(option.frame)) }
             fixture.navigation.focus("dropdown." + language.code); fixture.navigation.handle(.confirm)
