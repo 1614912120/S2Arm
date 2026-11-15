@@ -118,7 +118,8 @@ void nvn_dirty_stats(uint64_t *f, uint64_t *p) { *f = 0; *p = 0; }
 static uint64_t g_dirty_map = 1; uint64_t nvn_dirty_mapping_generation(void) { return g_dirty_map; }
 int nvn_dirty_tracking_unreliable(void) { return 0; }
 void nvn_dirty_mp_stats(uint64_t *c, uint64_t *g, uint64_t *n) { *c = 0; *g = 0; *n = 0; }
-void nvn_dirty_span_memo_stats(uint64_t *h, uint64_t *s) { *h = 0; *s = 0; }
+void nvn_dirty_span_stats(uint64_t *h, uint64_t *s, uint64_t *n) { *h = 0; *s = 0; *n = 0; }
+void nvn_dirty_slot_stats(int *live, int *used, uint64_t *adds) { *live = 0; *used = 0; *adds = 0; }
 uint64_t nvn_dirty_now(void) { return g_dirty_now; }
 int nvn_dirty_since(const void *addr, size_t len, uint64_t stamp) { (void)addr; (void)len; return g_dirty_written > stamp; }
 

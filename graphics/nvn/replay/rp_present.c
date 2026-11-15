@@ -190,11 +190,19 @@ uint64_t nvn_be_present(const tex_t *t, double period_s, const int crop[4]) {
                     snprintf(b, sizeof b, "分时（写跟踪）：每帧缺页 %.0f 次、宿主写前解保护 %.0f 页、改保护 %.0f 次共 %.0f 页 %.1f 毫秒", (double)(fl - f0) / f, (double)(pr - p0) / f, (double)(mc - c0) / f, (double)(mpg - g0) / f, (double)(mns - n0) / 1e6 / f);
                     nvn_plat_log(NVN_PLAT_LOG_INFO, "present", b);
                     f0 = fl; p0 = pr; c0 = mc; g0 = mpg; n0 = mns; }
-                {   // 线程内备忘（#974）：写跟踪取范围 / 池查找各命中多少；计数是调用线程自己的，这里读到的是打印这一行的线程（回放线程）的
-                    static uint64_t sh0, ss0, ph0, pl0; uint64_t sh = 0, ss = 0, ph = 0, pl = 0; nvn_dirty_span_memo_stats(&sh, &ss); rp_pool_memo_stats(&ph, &pl);
-                    snprintf(b, sizeof b, "分时（线程内备忘，每帧）：写跟踪取范围 命中 %.0f 次、线性扫 %.0f 次；池查找 备忘命中 %.0f 次 / 共 %.0f 次", (double)(sh - sh0) / f, (double)(ss - ss0) / f, (double)(ph - ph0) / f, (double)(pl - pl0) / f);
+                {   // 写跟踪取范围的有序索引（#1133）：索引答了多少次、每次访问几个节点、退回线性扫几次；池数与这一窗口的登记数。
+                    // 计数是调用线程自己的，这里读到的是打印这一行的线程（回放线程）的；池数 / 登记数是全局的
+                    static uint64_t xh0, xs0, xn0, ad0; uint64_t xh = 0, xs = 0, xn = 0; nvn_dirty_span_stats(&xh, &xs, &xn);
+                    int dl = 0, du = 0; uint64_t da = 0; nvn_dirty_slot_stats(&dl, &du, &da);
+                    snprintf(b, sizeof b, "分时（取范围索引，每帧）：索引答 %.0f 次（平均每次访问 %.1f 个节点）、退回线性扫 %.0f 次；池 %d 个（占用槽 %d）、本窗口登记 %.1f 次",
+                             (double)(xh - xh0) / f, xh > xh0 ? (double)(xn - xn0) / (double)(xh - xh0) : 0.0, (double)(xs - xs0) / f, dl, du, (double)(da - ad0) / f);
                     nvn_plat_log(NVN_PLAT_LOG_INFO, "present", b);
-                    sh0 = sh; ss0 = ss; ph0 = ph; pl0 = pl; }
+                    xh0 = xh; xs0 = xs; xn0 = xn; ad0 = da; }
+                {   // 线程内备忘（#974）：池查找命中多少；计数是调用线程自己的，这里读到的是打印这一行的线程（回放线程）的
+                    static uint64_t ph0, pl0; uint64_t ph = 0, pl = 0; rp_pool_memo_stats(&ph, &pl);
+                    snprintf(b, sizeof b, "分时（线程内备忘，每帧）：池查找 备忘命中 %.0f 次 / 共 %.0f 次", (double)(ph - ph0) / f, (double)(pl - pl0) / f);
+                    nvn_plat_log(NVN_PLAT_LOG_INFO, "present", b);
+                    ph0 = ph; pl0 = pl; }
                 t_last = now; n_last = g_n_shown + 1; d_last = nd;
             }
         }
