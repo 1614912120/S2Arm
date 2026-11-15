@@ -309,7 +309,7 @@
 "controller.scanning" = "Recherche en cours, toucher pour annuler";
 "controller.turnOnBluetooth" = "Activer le Bluetooth et réessayer";
 "error.sentence" = "%@. %@";
-"img.importFolder" = "Déposer ici pour importer";
+"img.importFolder" = "Import Here";
 "img.scanFailed.title" = "Impossible d'importer le fichier du jeu";
 "img.noShaders.title" = "Ce fichier de jeu est incomplet";
 "img.noShaders.body" = "« %@ » est incomplet. Remplacez-le par le « <nom du jeu>.img » du dossier « S2Arm Self-Sign Export » sur votre ordinateur, ou connectez votre téléphone et cliquez sur « Send to iPhone » dans S2Arm sur votre ordinateur.";

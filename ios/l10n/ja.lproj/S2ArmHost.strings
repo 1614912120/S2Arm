@@ -309,7 +309,7 @@
 "controller.scanning" = "検索中、タップでキャンセル";
 "controller.turnOnBluetooth" = "Bluetooth をオンにして再試行";
 "error.sentence" = "%@. %@";
-"img.importFolder" = "ここにインポート";
+"img.importFolder" = "Import Here";
 "img.scanFailed.title" = "ゲームファイルをインポートできませんでした";
 "img.noShaders.title" = "このゲームファイルは不完全です";
 "img.noShaders.body" = "「%@」は不完全です。PC の「S2Arm Self-Sign Export」フォルダ内の「<ゲーム名>.img」に置き換えるか、iPhone を接続して PC の S2Arm で「Send to iPhone」をクリックしてください。";
