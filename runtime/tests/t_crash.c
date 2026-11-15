@@ -45,6 +45,7 @@ static int frames_logged(uint64_t fp, char *out, size_t cap) {
     int c = 0; for (char *p = out; (p = strstr(p, "  #")); p += 3) c++;
     return c;
 }
+static void *ww_hammer(void *p) { volatile uint64_t *c = p; for (int i = 0; i < 100000; i++) { uint64_t v = *c; *c = v + 1; } return NULL; }   // ⑧：本线程那格反复读改写
 int main(void) {
     char log[4096];
     static uint64_t st[64] __attribute__((aligned(16)));   // 手搭帧：每帧 {上一帧 fp, 返回地址}，地址递增（同真栈：调用者帧在高处）
@@ -164,6 +165,22 @@ int main(void) {
       eq("⑦ 区间内第 1 次（+0x48）记下", 1, strstr(out, w1) != NULL);
       eq("⑦ 区间内第 2 次（重新设只读后 +0x40）记下", 1, strstr(out, w2) != NULL);
       eq("⑦ 区间外那次不记、没有第 3 次", 1, strstr(out, "第 3 次被写") == NULL);
+      munmap((void *)pg, 0x4000); }
+    // ⑧ 写监视下多线程同时写同一页（区间外）：期望不崩、所有写都进去（测试机2 实测：两条线程同时缺页，后到的那条看到标记已清就落进崩溃路径）。
+    //   8 条线程各往同页区间外自己那格写 10 万次、监视线程同时反复重新设只读；期望按构造：子进程正常退出、每格 = 100000
+    { char path[] = "/tmp/t_crash_ww2_XXXXXX"; int fd = mkstemp(path);
+      volatile uint64_t *pg = mmap(NULL, 0x4000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+      char env[64]; snprintf(env, sizeof env, "%llx:8", (unsigned long long)(uintptr_t)(pg + 0x700));
+      pid_t c = fork();
+      if (c == 0) {
+          g_s2a_logfd = fd; setenv("S2A_WRITE_WATCH", env, 1); s2a_crash_install(); usleep(50000);
+          pthread_t th[8];
+          for (long i = 0; i < 8; i++) pthread_create(&th[i], NULL, ww_hammer, (void *)(pg + 16 * i));
+          for (int i = 0; i < 8; i++) pthread_join(th[i], NULL);
+          int ok = 1; for (int i = 0; i < 8; i++) ok &= pg[16 * i] == 100000; _exit(ok ? 0 : 3);
+      }
+      int ws = 0; waitpid(c, &ws, 0); close(fd); unlink(path);
+      eq("⑧ 写监视下 8 线程同页并发写：不崩、每格都写满 100000", 1, WIFEXITED(ws) && WEXITSTATUS(ws) == 0);
       munmap((void *)pg, 0x4000); }
     if (bad) { printf("✗ t_crash：%d/%d 项不符\n", bad, n); return 1; }
     printf("✓ t_crash：%d 项崩溃现场全符（回溯好链、坏指针不二次缺页、未映射起点、两段式第一段先落盘、两线程同时崩两份现场都在、调用点反查导入名）\n", n);
