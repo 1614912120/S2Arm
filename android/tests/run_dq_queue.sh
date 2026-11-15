@@ -85,7 +85,7 @@ PYMUT
 neg() {   # $1 = 变异名，$2 = 日志里必须出现的红（正则），$3 = 第一条红发生时所在阶段（正则），$4 = 1：没有红行但在该阶段崩溃（信号）也算
     build "$out/neg_$1" "$out/m_$1" -DTEST_TIMEOUT_S=40
     run "$out/neg_$1" "$out/log_$1"
-    local first_red phase_at ok=0
+    local first_red="" phase_at="（无红行、无崩溃）" ok=0
     first_red=$(grep -m1 '【红】' "$out/log_$1" || true)
     if [ -n "$first_red" ]; then
         phase_at=$(awk '/^阶段开始：/ { ph = $0 } /【红】/ { print ph; exit }' "$out/log_$1")
