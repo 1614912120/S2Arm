@@ -1,4 +1,8 @@
 #import "sgrade_style.h"
+#import "sgrade_line.h"
+NSDictionary *s2a_ios_sgrade_state(NSString *gid);   // ios/game_options.m：S 级按类状态（同作业层 sgradeState）
+// 正在跑的这款（同 settings.m current_gid）：自动关记录按款存，传 nil 会读到 App 级那份
+static NSString *sgrade_running_gid(void) { const char *g = getenv("S2A_LAUNCH_GAME_ID"); return g && *g ? @(g) : nil; }
 #import "vpad_cheats.h"
 void s2a_ios_sgrade_counts(NSString *gid, NSInteger *cheatOn, NSInteger *cheatAll, NSInteger *patchOn, NSInteger *patchAll);   // ios/game_options.m
 #import "app_settings.h"
@@ -325,6 +329,14 @@ static UILabel *textLabel(UIFontTextStyle style) {
             pTitle = S2AL(@"settings.fps.patchTitle");
             pNote = target > 0 ? [NSString stringWithFormat:S2AL(@"settings.fps.patchNote"), (long)target] : S2AL(@"settings.patchNote");
         } else if ([key isEqualToString:@"S2AWidescreen"] && wsP) pNote = S2AL(@"settings.fullscreen.patchNote");
+        // S 级状态句（三端同一句，三端状态与文案对照定稿）：在用哪一份 / 已自动关（何时、为什么；打开开关就是重新打开）/
+        //   版本不对写版本号 / 补丁库里没有 / 出包时没打入；没有可说的（pending 以外的未知）照旧上面那句
+        if ([key isEqualToString:@"S2AFps60"] || [key isEqualToString:@"S2AWidescreen"]) {
+            BOOL ws = [key isEqualToString:@"S2AWidescreen"]; NSString *cat = ws ? @"widescreen" : @"fps";
+            NSString *line = s2a_sgrade_line(cat, s2a_ios_sgrade_state(sgrade_running_gid())[cat], ws ? S2AL(@"cpatch.group.widescreen") : S2AL(@"cpatch.group.fps"), target,
+                ^NSString *(NSDate *when) { return [NSDateFormatter localizedStringFromDate:when dateStyle:NSDateFormatterShortStyle timeStyle:NSDateFormatterNoStyle]; });
+            if (line) pNote = line;
+        }
         if (pNote) {
             UITableViewCell *sub = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
             sub.textLabel.text = pTitle ?: cell.textLabel.text; sub.textLabel.font = cell.textLabel.font; sub.textLabel.adjustsFontForContentSizeCategory = YES;

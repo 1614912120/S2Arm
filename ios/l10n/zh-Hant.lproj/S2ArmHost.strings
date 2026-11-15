@@ -516,3 +516,17 @@
 "vpad.screenLock.note" = "外接顯示器時用，點三下恢復";
 "vpad.screenLock.hint" = "如需關閉手機黑屏，請連續點擊3次螢幕";
 "vpad.screenLock.unlock" = "恢復手機螢幕";
+"sgrade.state.on.adaptive" = "使用中：社群滿螢幕補丁（依螢幕比例自動選）";
+"sgrade.state.on.fixed" = "使用中：社群滿螢幕補丁（固定畫幅）";
+"sgrade.state.on.own" = "使用中：S2Arm 通用滿螢幕（這款沒有社群滿螢幕補丁，S2Arm 驗證過能鋪滿）";
+"sgrade.state.on.fps" = "使用中：最高 %1$@ 幀";
+"sgrade.state.off_user" = "已關";
+"sgrade.state.off_auto.crash" = "已自動關閉：%1$@ 遊戲當機時它開著";
+"sgrade.state.off_auto.stall" = "已自動關閉：%1$@ 畫面停住時它開著";
+"sgrade.state.version.newer" = "補丁庫裡是 %1$@ 版的，你這份是 %2$@。把遊戲更新到 %1$@ 後重新出包就能用。";
+"sgrade.state.version.older" = "補丁只有舊版本 %1$@ 的，你這個版本暫時沒有。";
+"sgrade.state.version.port_failed" = "已試過移植到你這份，沒成功。";
+"sgrade.state.none" = "補丁庫裡還沒有這款遊戲的%1$@補丁。";
+"sgrade.state.opted_out" = "沒打入：出包時取消了「出包時打入」。重新出包時勾上就有。";
+"sgrade.state.pending.ios" = "電腦上有可用的新補丁：在電腦的 S2Arm 點「S 級優化升級」裝進來。";
+"sgrade.state.mac_only" = "畫面補丁只在 Mac 版裡。";

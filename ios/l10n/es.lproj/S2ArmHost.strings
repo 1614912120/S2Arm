@@ -510,3 +510,17 @@
 "vpad.screenLock.note" = "Para pantallas externas. Toca 3 veces para restaurar.";
 "vpad.screenLock.hint" = "Para restaurar la pantalla del teléfono, toca 3 veces seguidas";
 "vpad.screenLock.unlock" = "Restaurar pantalla del teléfono";
+"sgrade.state.on.adaptive" = "En uso: parche de pantalla completa de la comunidad (elegido según la relación de aspecto de tu pantalla)";
+"sgrade.state.on.fixed" = "En uso: parche de pantalla completa de la comunidad (relación de aspecto fija)";
+"sgrade.state.on.own" = "En uso: pantalla completa de S2Arm (este juego no tiene parche de la comunidad; comprobado por S2Arm)";
+"sgrade.state.on.fps" = "En uso: hasta %1$@ fps";
+"sgrade.state.off_user" = "Desactivado";
+"sgrade.state.off_auto.crash" = "Desactivado automáticamente: estaba activado cuando el juego se cerró de golpe el %1$@";
+"sgrade.state.off_auto.stall" = "Desactivado automáticamente: estaba activado cuando la imagen se congeló el %1$@";
+"sgrade.state.version.newer" = "La biblioteca de parches lo tiene para la versión %1$@; la tuya es %2$@. Actualiza el juego a %1$@ y vuelve a exportarlo para usarlo.";
+"sgrade.state.version.older" = "Solo hay parches para la versión anterior %1$@; para tu versión todavía no hay.";
+"sgrade.state.version.port_failed" = "Intentamos adaptarlo a tu versión, pero no funcionó.";
+"sgrade.state.none" = "La biblioteca de parches aún no tiene parche de %1$@ para este juego.";
+"sgrade.state.opted_out" = "No añadido: «Añadir al compilar» estaba desactivado al exportar. Actívalo y vuelve a exportar.";
+"sgrade.state.pending.ios" = "Hay parches nuevos: abre S2Arm en tu ordenador y elige «Mejora a grado S».";
+"sgrade.state.mac_only" = "Los parches de gráficos son solo para Mac.";

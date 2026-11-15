@@ -75,6 +75,13 @@ extension S2ArmLauncherModel {
     /// 同上，另带金手指：cheats 改开关（键「文件名/条目名」），cheatsImport 导入 txt（作业层 communitySave，pack/jobs/cheats.py）
     func launchSettingsAll(_ gameID: String, change: [String: Any]? = nil, patches: [String: Bool]? = nil,
                            cheats: [String: Bool]? = nil, cheatsImport: [String]? = nil) async throws -> ([String: LaunchOption], [LaunchPatch], [LaunchCheat], String) {
+        let all = try await launchSettingsFull(gameID, change: change, patches: patches, cheats: cheats, cheatsImport: cheatsImport)
+        return (all.0, all.1, all.2, all.3)
+    }
+
+    /// 同上，另带 S 级每类状态（作业层 sgradeState：widescreen / fps / gfx，作业层；没出这个字段 = 空，界面不画状态句）
+    func launchSettingsFull(_ gameID: String, change: [String: Any]? = nil, patches: [String: Bool]? = nil, cheats: [String: Bool]? = nil,
+                            cheatsImport: [String]? = nil) async throws -> ([String: LaunchOption], [LaunchPatch], [LaunchCheat], String, [String: SGradeCategoryState]) {
         var extra: [String: Any] = [:]
         if let change { extra["settings"] = change }
         if let patches { extra["graphics"] = patches }
@@ -87,7 +94,13 @@ extension S2ArmLauncherModel {
             return LaunchPatch(id: id, label: g["label"] as? String ?? id, enabled: g["enabled"] as? Bool ?? false, result: g["result"] as? String ?? "")
         }
         let ch = result["cheats"] as? [String: Any] ?? [:]
-        return (mac, gfx, (ch["items"] as? [[String: Any]] ?? []).compactMap(LaunchCheat.init), ch["reason"] as? String ?? "")
+        let sg = (result["sgradeState"] as? [String: Any] ?? [:]).compactMapValues { ($0 as? [String: Any]).map(SGradeCategoryState.init) }
+        return (mac, gfx, (ch["items"] as? [[String: Any]] ?? []).compactMap(LaunchCheat.init), ch["reason"] as? String ?? "", sg)
+    }
+
+    /// 一键重开（作业 sgradeReenable）：key = fullscreen / fps / 补丁编号 / 金手指键；清掉自动关记录、开关设回开
+    func sgradeReenable(_ gameID: String, key: String) async throws {
+        _ = try await saveJob("sgradeReenable", gameID: gameID, extra: ["key": key])
     }
 }
 
@@ -103,6 +116,8 @@ struct LaunchSettingsSheet: View {
     @State private var patches: [LaunchPatch] = []
     @State private var cheats: [LaunchCheat] = []
     @State private var cheatsReason = ""
+    /// S 级每类状态（作业层 sgradeState）；满屏 / 60 帧两行按它写状态句、没补丁时也照样出一行灰字说为什么（定稿表）
+    @State private var sgrade: [String: SGradeCategoryState] = [:]
     @State private var failure: String?
     @State private var saving = false
     @State private var loaded = false
@@ -184,7 +199,8 @@ struct LaunchSettingsSheet: View {
         switch item.type {
         case "patches": return !patches.isEmpty
         case "page", "cheats": return true
-        default: return options[item.id].map { !$0.hidden } ?? false
+        // 满屏 / 60 帧：没补丁原先整行藏起来；有状态句（没有补丁 / 版本不同 / 没打入…）就照样出一行灰字说为什么（维护者 11-15：不隐藏）
+        default: return options[item.id].map { !$0.hidden || stateLine(item.id) != nil } ?? false
         }
     }
 
@@ -230,14 +246,34 @@ struct LaunchSettingsSheet: View {
                 .disabled(option?.available != true || saving || model.busy)
             }
         default:
-            let option = options[item.id]
-            CardRow(title, detail: option?.available == false ? loc.backend(option?.reason ?? "") : item.detail(lang)) {
-                Toggle("", isOn: Binding(get: { option?.value as? Bool ?? false }, set: { on in Task { await load([item.id: on]) } }))
-                    .toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(title)
-                    .accessibilityIdentifier("launch." + item.id)
-                    .disabled(option?.available != true || saving || model.busy)
+            let option = options[item.id], state = stateLine(item.id)
+            CardRow(title, detail: option?.available == false ? loc.backend(option?.reason ?? "") : item.detail(lang), detail2: state?.text ?? "") {
+                if let key = state?.reenable {
+                    Button(t("sgrade.state.reenable")) { Task { await reenable(key) } }.buttonStyle(LauncherSecondaryButtonStyle())
+                        .accessibilityIdentifier("launch." + item.id + ".reenable").disabled(saving || model.busy)
+                } else if option?.hidden != true {   // 包里没有这一类的补丁：只写为什么，不给开关
+                    Toggle("", isOn: Binding(get: { option?.value as? Bool ?? false }, set: { on in Task { await load([item.id: on]) } }))
+                        .toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(title)
+                        .accessibilityIdentifier("launch." + item.id)
+                        .disabled(option?.available != true || saving || model.busy)
+                }
             }
         }
+    }
+
+    /// 满屏 / 60 帧那一行的状态句（SGradeStateText，定稿表）；其余设置项没有
+    private func stateLine(_ id: String) -> (text: String, reenable: String?)? {
+        let cat = id == "widescreen" ? "widescreen" : id == "fps60" ? "fps" : ""
+        guard !cat.isEmpty, let s = sgrade[cat] else { return nil }
+        return SGradeStateText.line(cat: cat, catName: t("export.sgrade.cat." + cat), s, t: t,
+                                    date: { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(Locale(identifier: lang))) },
+                                    backend: { loc.backend($0) })
+    }
+    private func reenable(_ key: String) async {
+        saving = true
+        do { try await model.sgradeReenable(gameID, key: key) } catch { failure = (error as? JobClientError)?.message ?? error.localizedDescription }
+        saving = false
+        await load(nil)
     }
 
     /// 每条写清来源与作者（维护者 11-12：每条在游戏内和启动器里写清作者和来源库）；版本不对写原因；运行中写 Cheats.cs 的状态
@@ -264,7 +300,7 @@ struct LaunchSettingsSheet: View {
         saving = true; defer { saving = false }
         do {
             if items.isEmpty { items = try GameSettingsSpec.macItems() }
-            (options, patches, cheats, cheatsReason) = try await model.launchSettingsAll(gameID, change: change, patches: change2, cheats: change3, cheatsImport: cheatsImport)
+            (options, patches, cheats, cheatsReason, sgrade) = try await model.launchSettingsFull(gameID, change: change, patches: change2, cheats: change3, cheatsImport: cheatsImport)
             failure = nil; loaded = true
         } catch {
             failure = (error as? JobClientError)?.message ?? error.localizedDescription
