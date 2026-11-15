@@ -83,6 +83,8 @@
 "crash.off.body" = "La última vez el juego se cerró con %@ activado, así que esta vez está desactivado. Puedes volver a activarlo en Ajustes.";
 "crash.off.prompt" = "La última vez el juego se cerró con %@ activado, así que esta vez está desactivado. Puedes volver a activarlo en Ajustes.\n\nEnviarnos el diagnóstico nos ayuda a solucionarlo. El paquete contiene solo registros de ejecución, sin partidas guardadas, claves ni archivos del juego.";
 "crash.off.title" = "Se desactivó lo que estaba activado cuando el juego se cerró";
+"crash.restored.title" = "Se volvió a activar lo que se desactivó tras el último cierre inesperado";
+"crash.restored.body" = "%@ se desactivó cuando el juego se cerró; esta versión de S2Arm lo vuelve a activar. Si vuelve a cerrarse, se desactivará de nuevo.";
 "sgrade.title" = "Mejoras de grado S";
 "sgrade.note" = "Si un parche es incompatible y hace que el juego se cierre, se desactiva automáticamente la próxima vez que inicies, para que puedas seguir jugando.";
 "sgrade.counts" = "%ld activados · %ld en total";

@@ -83,6 +83,8 @@
 "crash.off.body" = "Le jeu a quitté la dernière fois avec %@ activé, donc c'est désactivé cette fois. Vous pouvez le réactiver dans Réglages.";
 "crash.off.prompt" = "Le jeu a quitté la dernière fois avec %@ activé, donc c'est désactivé cette fois. Vous pouvez le réactiver dans Réglages.\n\nNous envoyer le diagnostic nous aide à corriger le problème. Le paquet contient uniquement des journaux d'exécution — pas de sauvegardes, clés ou fichiers de jeu.";
 "crash.off.title" = "Les réglages actifs lors du dernier plantage ont été désactivés";
+"crash.restored.title" = "Les réglages désactivés après le dernier plantage ont été réactivés";
+"crash.restored.body" = "%@ avait été désactivé après le plantage du jeu ; cette version de S2Arm le réactive. En cas de nouveau plantage, il sera de nouveau désactivé.";
 "sgrade.title" = "Améliorations de rang S";
 "sgrade.note" = "Si un correctif est incompatible et fait planter le jeu, il est désactivé automatiquement au prochain lancement pour que vous puissiez continuer à jouer.";
 "sgrade.counts" = "%ld activés · %ld au total";
