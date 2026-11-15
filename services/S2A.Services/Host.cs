@@ -592,6 +592,7 @@ namespace S2A.Services
         {
             Ryujinx.HLE.S2AHooks.NroMap = &Native.NroMap;
             Ryujinx.HLE.S2AHooks.NroUnmap = &Native.NroUnmap;
+            Ryujinx.HLE.S2AHooks.NroKeep = &Native.NroKeep;
         }
 
         private static unsafe System.Memory<byte>? GuestViewOf(ulong va, int size) =>

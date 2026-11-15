@@ -8,7 +8,7 @@
 #include <stdint.h>
 
 enum { NVN_RB_CBUF = 1, NVN_RB_SAMP, NVN_RB_TEX, NVN_RB_IMG, NVN_RB_TBUF,
-       NVN_RB_SBUFP, NVN_RB_SUPPORT, NVN_RB_C1, NVN_RB_DRV0, NVN_RB_DRV2, NVN_RB_SAMPT, NVN_RB_UBOP, NVN_RB_TEXU, NVN_RB_SAMPU, NVN_RB_SAMPI, NVN_RB_SBUFU, NVN_RB_TEXD, NVN_RB_SAMPD, NVN_RB_IMGA, NVN_RB_TEXA, NVN_RB_SAMPA, NVN_RB_GEOMETRY, NVN_RB_UVX, NVN_RB_LB, NVN_RB_UBOLEN, NVN_RB_SBSZ, NVN_RB_PUSH, NVN_RB_TBUFU, NVN_RB_IMGU, NVN_RB_GMEM, NVN_RB_GMEML, NVN_RB_TEXP, NVN_RB_SAMPP, NVN_RB_UBOA };   // UBOA: 计算存储缓冲来自「用户 UBO 内 8 字节 guest 裸指针」（map 3，UBO 槽 src_reg + 字节偏移 src_off）   // UVX: S2Arm widen 16:9 sampling remap table (dmsh_build.py fs_uvx; widen_glue.inc uvx_fill); LB: #800 sampler LOD bias table (dmsh_red.py fs_lb; nvn_mtl.m lb_fill)
+       NVN_RB_SBUFP, NVN_RB_SUPPORT, NVN_RB_C1, NVN_RB_DRV0, NVN_RB_DRV2, NVN_RB_SAMPT, NVN_RB_UBOP, NVN_RB_TEXU, NVN_RB_SAMPU, NVN_RB_SAMPI, NVN_RB_SBUFU, NVN_RB_TEXD, NVN_RB_SAMPD, NVN_RB_IMGA, NVN_RB_TEXA, NVN_RB_SAMPA, NVN_RB_GEOMETRY, NVN_RB_UVX, NVN_RB_LB, NVN_RB_UBOLEN, NVN_RB_SBSZ, NVN_RB_PUSH, NVN_RB_TBUFU, NVN_RB_IMGU, NVN_RB_GMEM, NVN_RB_GMEML, NVN_RB_TEXP, NVN_RB_SAMPP, NVN_RB_UBOA, NVN_RB_TBLEAD };   // UBOA: 计算存储缓冲来自「用户 UBO 内 8 字节 guest 裸指针」（map 3，UBO 槽 src_reg + 字节偏移 src_off）   // UVX: S2Arm widen 16:9 sampling remap table (dmsh_build.py fs_uvx; widen_glue.inc uvx_fill); LB: #800 sampler LOD bias table (dmsh_red.py fs_lb; nvn_mtl.m lb_fill)
 // TEXA / SAMPA: an array of n handles in the driver table c2 that the shader indexes at run time (dmsh_build.py c2_array): element k = the texture / sampler of the slot whose c2 word lies
 // at byte off + 8k (combined, else separate); words outside both tables give the dummy. Luigi's Mansion 3's shadow cascades
 // IMGA: SPIRV-Cross's MSL 2.3 image atomics: a device atomic_uint / atomic_int pointer (<image name>_atomic) beside the image of NVN image slot r; the replay binds the image's storage address
@@ -51,6 +51,10 @@ typedef struct {
     //   slot order's (Civilization VI: texture IDs in uniform slot 13, sampler handles in slot 12, the shader's OR names slot 12 first). pair = 0: no other half (read as before)
     uint8_t pair, pair_sid;  // pair_sid: the other half is a sampler ID word, shifted by 20 (its SAMPU sid)
     uint16_t pair_reg, pair_off;
+    // #798 TBLEAD（gal_spvx.c spv_tbias，Dsh.cs kind tblead）：一个纹素缓冲的前导元素数（uint，着色器取数下标加它、取宽度减它）。宿主把视图建在向下取整到线性贴图对齐的边界上、
+    //   宽度多出这么多元素，参数块里这一项指向常量表里值为它的一格（nvn_mtl.m tbl_bind）。tbl：TBUF / TBUFU / TEX 上 = 1 + 它那一项在 b[] 里的下标（0 = 没有，走 GPU 对齐副本）；
+    //   TBLEAD 上 = 1 + 它所属纹素缓冲在 b[] 里的下标
+    uint16_t tbl;
 } nvn_rbind;
 // SBSZ 表一项一项怎么填（nvn_mtl.m len_fill 调用；tests/t_sbsz.c 手算核）：q[成员的参数号] = 该存储缓冲当前绑定的字节数，返回表长（至少 1）。
 //   SBUFP / UBOP：bound(ctx, b) 给出当前绑定的字节数（没绑 0，游戏没给长度 UINT32_MAX & ~15 = 不夹）；GMEM / GMEML（原始内存池表与写日志）：bound 给整段长度；SBUFU：不夹。
@@ -88,6 +92,7 @@ typedef struct {
     uint8_t dyn;             // Has TEXD / SAMPD bindings: c2's texture and sampler tables hold slot indices for this shader
     uint8_t pool;            // Has TEXP / SAMPP bindings (it also sets bindless): its argument block holds pool table addresses, which change when a table is rebuilt (nvn_mtl.m g_psnap_gen)
     uint8_t has_atomic_image; // Native image atomic binding; ordinary draw/dispatch needs no atomic prescan
+    uint8_t has_tbl;         // #798: some texel buffer has a lead entry (TBLEAD; nvn_mtl.m tbl_bind)
     uint8_t has_unb;         // some TEX binding has an unnorm_bit (nvn_mtl.m ub_*: the host fills s2a_flags.yzw per draw); 0 = byte-for-byte the support buffer as before
     uint16_t unb_uncov;      // TEX bindings whose unnorm_bit is -1 (binding outside the bitmap: > 31, geometry, no unique mapping): normalization stays compiled in
     uint8_t has_user;        // bit 0: user_out known (vertex json user_out), bit 1: user_in known (pixel json user_in); a library without them leaves both 0

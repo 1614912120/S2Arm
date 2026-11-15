@@ -695,6 +695,9 @@ static int img_update(const char *proc_docs, const char *path, const uint8_t *h,
     if (!ok) { snprintf(g_img_err, sizeof g_img_err, "%s 是着色器更新包，手机上还没有这款游戏（%s）的本体：先放导出文件夹里这款的完整 .img", fn, gid); return -13; }
     if (memcmp(bh + 32, h + 32, 64)) { char bp[65]; memcpy(bp, bh + 32, 64); bp[64] = 0;
         snprintf(g_img_err, sizeof g_img_err, "%s 配的本体（资源包号 %.12s）不是手机上这一版（%.12s）：按电脑上同一次导出的完整 .img 和更新包一起用", fn, pid, bp); return -14; }
+    // 本体刚认领、游戏库还没解开（.applied 不是这份清单）：先不套。解开时要按目录表整理资源包目录，这边同时往 shaders/ 写派生件会被删掉、
+    //   报「写 … 失败：No such file or directory」（诊断#fe33c2 D-33EH：完整 .img 与更新包一起放，更新包在本体解开途中被套）。返回 1 = 原样留着，下次扫描（回前台 / 重新检查）再套
+    if (img_needs_apply(root)) { LOG("资源导入：%s 等本体解开后再套（本体还没解开）", fn); return 1; }
     int ufd = open(path, O_RDONLY); if (ufd < 0) { snprintf(g_img_err, sizeof g_img_err, "读 %s 失败：%s", fn, strerror(errno)); return -4; }
     uint64_t to, tl; memcpy(&to, h + 112, 8); memcpy(&tl, h + 120, 8); upd_ent *ue; size_t un;
     if (upd_read_toc(ufd, to, tl, &ue, &un)) { close(ufd); snprintf(g_img_err, sizeof g_img_err, "%s 目录表坏了", fn); return -10; }
