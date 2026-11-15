@@ -960,6 +960,7 @@ static void fill_caps(struct nvn_gpu_vk *vk, const nvn_gpu_open_desc *d) {
     // B2：设备 advertise VK_GOOGLE_display_timing 且 debug.s2a.display_timing=1（默认关）才有
     // 每帧实际上屏时刻可报——能力位如实反映 advertise∧启用，时刻取不到时按契约报 UNKNOWN。
     if (vk->dev->has_display_timing) c->caps |= NVN_GPU_CAP_SHOWN_TIME;
+    if (vk->dev->depth_clip_control_enabled) c->caps |= NVN_GPU_CAP_DEPTH_CLIP_CTL;
     if (vk->dev->draw_indirect_count_enabled && vk->dev->draw_indirect_count &&
         vk->dev->draw_indexed_indirect_count && f.multiDrawIndirect && f.drawIndirectFirstInstance)
         c->caps |= NVN_GPU_CAP_INDIRECT_COUNT;
@@ -2841,6 +2842,19 @@ static nvn_gpu_rc pipe_build(const nvn_gpu_pipe_desc *d, struct nvn_gpu_pipe_s *
     vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
     vp.viewportCount = 1;
     vp.scissorCount = 1;
+    // clip_neg1：裁剪深度 [-1, 1]（顶点着色器没做 near = -w 的深度改写，见 nvn_backend.h；只在 CAP_DEPTH_CLIP_CTL 时会是 1）
+    VkPipelineViewportDepthClipControlCreateInfoEXT vp_dcc;
+    memset(&vp_dcc, 0, sizeof vp_dcc);
+    vp_dcc.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_DEPTH_CLIP_CONTROL_CREATE_INFO_EXT;
+    vp_dcc.negativeOneToOne = VK_TRUE;
+    if (d->clip_neg1) {
+        if (!g.dev->depth_clip_control_enabled) {
+            nvn_gpu_rc bad = fail(err, NVN_GPU_E_UNSUPPORTED, "裁剪深度 [-1, 1]：设备没开 VK_EXT_depth_clip_control");
+            destroy_pipe_objects(p);
+            return bad;
+        }
+        vp.pNext = &vp_dcc;
+    }
 
     VkPipelineRasterizationStateCreateInfo rs;
     memset(&rs, 0, sizeof rs);
