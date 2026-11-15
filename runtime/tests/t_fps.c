@@ -32,6 +32,19 @@ int main(void) {
                "c main 0x100 word 3942f661 52800021\n"          // 改指令行：运行时跳过
                "slot 2041 f32 200 100\nslot 2042 i32 1\nspeed 2040 0.5 2.0\npresent30 if slot 2042 == 0\n");
     fclose(f);
+    {   // 11-14 撤我方 60 帧：缺省（没设 S2A_CAPS_OWN）包里的 fps.tsv 不装——60 帧开着也不写 w 行、不放开出图间隔。期望手写：main+0x1000 仍 0、DM_PRESENT_INTERVAL 不设。
+        //   旧实现：照装，w 行写 60、设 display → 红
+        fflush(stdout); pid_t p = fork(); if (p < 0) return 1;
+        if (!p) {
+            fails = 0; unsetenv("S2A_CAPS_OWN"); unsetenv("DM_PRESENT_INTERVAL"); unsetenv("S2A_FPS_TABLE"); unsetenv("S2A_FPS"); setenv("S2A_FSTEP", "0", 1); setenv("S2A_FPS60", "1", 1);
+            s2a_fps_start(dir); usleep(250000);
+            int32_t a; memcpy(&a, img + 0x1000, 4); expect("缺省不用我方帧率表：60 帧开也不写 w 行 main+0x1000（仍 0）", 0, a);
+            expect("缺省不用我方帧率表：不设 DM_PRESENT_INTERVAL", 0, getenv("DM_PRESENT_INTERVAL") != NULL);
+            _exit(fails);
+        }
+        int st = 0; waitpid(p, &st, 0); expect("缺省不用我方帧率表子进程：不符项数", 0, WIFEXITED(st) ? WEXITSTATUS(st) : 99);
+    }
+    setenv("S2A_CAPS_OWN", "1", 1);   // 以下测我方帧率表装载机制本身（留给内部对照，S2A_CAPS_OWN=1 才装）
     {   // speed 行带秒槽（11-06 王国之泪布料 / 头发时钟改读实测秒数）。期望手算：33.3 ms → 步长 1.0、秒 1/30 = 0.0333；16.7 ms → 0.5、0.01667；
         //   运行中关 → 步长 1.0、秒 1/30；秒槽与步长槽相同 → 整行报红、两槽都不写（仍是上一张表留下的值）。旧实现：秒槽不写（仍 0）→ 红
         fflush(stdout); pid_t p = fork(); if (p < 0) return 1;

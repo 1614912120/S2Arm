@@ -22,6 +22,7 @@
 // 随包表：fps.tsv（出包组装 pack/ship_ext.py 从产物根拷进 App，runtime/build.mk 按这行自动收清单）
 #include "native.h"
 #include "s2a_unattended.h"
+#include "caps.h"   // s2a_caps_own：我方帧率表缺省不装
 #include <errno.h>
 static _Thread_local FILE *g_boot_file;
 void s2a_fps_abort_boot_inputs(void) {
@@ -259,6 +260,8 @@ void s2a_fps_start(const char *dir) {
     atomic_store(&g_on, fps_on_at_start()); cpatch_follow(atomic_load(&g_on));   // 没有我方帧率表的款，社区帧率补丁也按这个开关定
     char path[1100]; const char *e = getenv("S2A_FPS_TABLE");
     if (e && *e) strlcpy(path, e, sizeof path); else snprintf(path, sizeof path, "%s/fps.tsv", dir);
+    // 我方帧率表缺省不装（只用社区补丁，caps.c s2a_caps_own）：包里带着也不用，60 帧开关只管社区帧率补丁；S2A_CAPS_OWN=1 或显式 S2A_FPS_TABLE（单测 / 对照）照旧装
+    if (!s2a_caps_own() && !(e && *e)) { if (!access(path, R_OK)) LOG("帧率表 %s：不用（只用社区帧率补丁；S2A_CAPS_OWN=1 才装我方帧率表）", path); start_published(s2a_cpatch_fps_count() > 0, 0); return; }
     FILE *f = fopen(path, "r"); if (!f) { start_published(s2a_cpatch_fps_count() > 0, 0); return; }
     g_boot_file = f;
     char line[256]; int present = 0, bad = 0; const char *bid = s2a_main_build_id();
