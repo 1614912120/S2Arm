@@ -751,10 +751,19 @@ static struct s2a_libpack *libpack_for_locked(const char *root) {
     return lp;
 }
 // 取一份（图形：keys 是 vs / fs 两阶段键；计算：ckey 非空）。1 = 取到（*bytes 归调用方 free）
+// 测试：图形预编只放行身份前两字节落在 [lo, hi) 的程序；范围读自手机上的文件（每局读一次），没有文件 = 全放行
+static int lprange_ok(const uint8_t id[32]) {
+    static int lo = -1, hi = 0x10000;
+    if (lo < 0) { lo = 0; FILE *f = fopen("/sdcard/Android/data/org.s2arm.game.t0100f2c0115b6000/files/lprange.txt", "r");
+        if (f) { if (fscanf(f, "%x %x", (unsigned *)&lo, (unsigned *)&hi) != 2) { lo = 0; hi = 0x10000; } fclose(f); }
+        char b[96]; snprintf(b, sizeof b, "离线库定位范围 [%04x, %04x)", lo, hi); nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b); }
+    int v = id[0] << 8 | id[1];
+    return v >= lo && v < hi;
+}
 static int libpack_fetch(const uint8_t identity[32], const uint8_t (*gkeys)[8], int nst, const uint8_t *ckey, int state_ok,
                          const struct s2a_direct_compile_context *pc, uint8_t **bytes, size_t *len) {
     const char *root = getenv("S2A_SHADER_REVISION_ROOT");
-    if (!root || (!ckey && (nst != 2 || !state_ok)) || nvn_plat_flag("no_libpack", 0)) return 0;
+    if (!root || (!ckey && (nst != 2 || !state_ok || !lprange_ok(identity))) || nvn_plat_flag("no_libpack", 0)) return 0;
     char lw[192] = ""; int lrc = S2A_LIBPACK_MISS;
     pthread_mutex_lock(&g_lp_mu);
     if (!g_lp_bad_init) { nvn_hm_init(&g_lp_bad, 32); g_lp_bad_init = 1; }
