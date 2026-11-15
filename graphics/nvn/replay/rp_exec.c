@@ -128,6 +128,7 @@ enum { SUB_STEP = 64 };       // 一次提交在时间线上占 64 个值：最�
 static uint32_t g_mid;         // 这次提交已经用掉几个中间值
 static uint64_t g_split_base;  // 上次中途交段时的累计绘制笔数
 static int g_ret_n;            // OP_CALL 嵌套深度
+int nvn_cmd_call_resolve(uint64_t h, uint64_t *to);   // hle_nvn.c：CALL 目标解析（0 照执行，2 跳到同设备地址的新录制，1 隔离中，-1 块已复用）
 
 static void red(const char *fmt, const char *why) { char b[256]; snprintf(b, sizeof b, fmt, why); nvn_plat_log(NVN_PLAT_LOG_RED, "replay", b); }
 static void pre_done(void *user, const nvn_gpu_done *d) {
@@ -559,6 +560,12 @@ static uint64_t exec_list(const uint8_t *p) {
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
             case OP_CALL: { uint64_t t; memcpy(&t, a, 8);
                 if (g_ret_n >= 64) { nvn_unimpl("rec", "call_depth_over_64", p); break; }
+                {   // #768338 安全阀（同 nvn_mtl.m OP_CALL，判据在 hle_nvn.c nvn_cmd_call_target）：目标落在命令记录区却不是任何录制的句柄
+                    //   （它的录制被覆盖、块已被别的录制复用）→ 记红、跳过这次调用，不执行不相干的内容；还在隔离区的旧录制照常执行
+                    uint64_t to; int ck = nvn_cmd_call_resolve(t, &to); if (ck == 2) { t = to; ck = 0; }   // 同一设备地址上有新录制：跳到它（同真机，#768338 根修）
+                    if (ck < 0) { static unsigned n; if (n++ < 8) { char m[200]; snprintf(m, sizeof m, "command-list call into reused host blocks: target %#llx is no recording's handle, call skipped (depth %d)", (unsigned long long)t, g_ret_n);
+                        nvn_plat_log(NVN_PLAT_LOG_RED, "replay", m); } break; }
+                }
                 g_ret_n++; uint64_t sub = exec_list((const uint8_t *)(uintptr_t)t); g_ret_n--;
                 // 逐命令账：OP_CALL 只记这个记录自身的递归开销（取参数、压 / 弹一层），子列表里每条命令已经在子层各自记过；
                 // 记整段会把同一批命令算两遍（与帧级账那条是同一个毛病的两半）。t_cmd 在子列表开始前取、now 在它返回后取，

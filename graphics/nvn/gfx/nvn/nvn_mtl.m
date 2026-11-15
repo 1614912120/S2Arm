@@ -2438,6 +2438,8 @@ static void rt_keep_state(void);
 static void ghost_finish_submission(void);
 static void alias_dead_views(void);
 static void bcal_sweep_overwritten(void);
+int nvn_cmd_call_target(uint64_t h);   // hle_nvn.c：回放 CALL 核目标（#768338 安全阀）
+int nvn_cmd_call_resolve(uint64_t h, uint64_t *to);   // hle_nvn.c：按设备地址解析 CALL 目标（#768338 根修）
 static const char *cctx_snap(void);   // What is in this submission (printed into the failure line on error; defined before nvn_be_exec)
 static void lc_land(void); static int g_nlc;   // lazy clears waiting (lc_push; fb_prepare lands them before a feedback read)
 static _Atomic int g_seg_inflight;   // main command buffers committed and not reported back yet (sub_cut)
@@ -10715,7 +10717,7 @@ static int fz_next(fz_cursor *c, const uint8_t **out, op_hdr *oh, const void **o
                 continue;
             case OP_JUMP: memcpy(&c->p, a, 8); continue;
             case OP_MULTI_DRAW: c->bad = 1; return 0;   // its live draws and their argument addresses are resolved at replay (draw_multi): a lookahead cannot move work across the range (c7ba23df)
-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (c->ret_n >= (int)(sizeof c->ret / sizeof *c->ret)) { c->bad = 1; return 0; }
+            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (nvn_cmd_call_resolve(t, &t) < 0) break; if (c->ret_n >= (int)(sizeof c->ret / sizeof *c->ret)) { c->bad = 1; return 0; }
                 c->ret[c->ret_n++] = c->p + h.size; c->p = (const uint8_t *)t; continue; }
             default: break;
         }
@@ -10820,7 +10822,7 @@ static int ds_scan(const uint8_t *p, ds_st *ds, int depth) {
         switch (h.op) {
             case OP_END: return DS_RET;
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (depth >= 8) return DS_USED;
+            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (nvn_cmd_call_resolve(t, &t) < 0) break; if (depth >= 8) return DS_USED;
                 int r = ds_scan((const uint8_t *)t, ds, depth + 1); if (r != DS_RET) return r; break; }
             case OP_UPDATE_UB: if (ubd_on()) break; return DS_FREE;   // deferred in-pass updates (ubd_on) no longer end the pass: keep scanning, or a later draw in this pass that needs depth would find it unattached
             case OP_SET_RT: case OP_COPY_B2B: case OP_CLEAR_BUF: case OP_COPY_B2T: case OP_COPY_T2B: case OP_COPY_T2T: case OP_CLEAR_TEX: case OP_DISPATCH: case OP_DLSS: return DS_FREE;
@@ -11441,7 +11443,7 @@ static void sdx_walk(const uint8_t *p, int depth) {
         switch (h.op) {
             case OP_END: return;
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); sdx_walk((const uint8_t *)t, depth + 1); break; }
+            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (nvn_cmd_call_resolve(t, &t) >= 0) sdx_walk((const uint8_t *)t, depth + 1); break; }
             case OP_SET_RT: { const p_set_rt *r = set_rt_rec(a, h.size, &g_pp_rt_buf); g_pp_rt = r; g_pp_rtseq = seq; seq_push(&g_rtx_seq, &g_rtx_n, &g_rtx_cap, seq);
                 for (int k = 0; k < r->n && k < 8; k++) if (r->color[k]) sdx_bucket(r->color[k]->serial, 1);
                 if (r->depth) sdx_bucket(r->depth->serial, 1);
@@ -15388,6 +15390,20 @@ void nvn_be_exec(const uint8_t *p) {
             case OP_BEGIN: break;
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
             case OP_CALL: { uint64_t t; memcpy(&t, a, 8);
+                {   // #768338 安全阀 + 探针（hle_nvn.c nvn_cmd_call_target）：目标块已被别的录制复用 → 记现场、跳过这次调用；目标已被覆盖但还在隔离区 → 照常执行，记一行
+                    uint64_t to; int ck = nvn_cmd_call_resolve(t, &to);
+                    if (ck == 2) { static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+                        if (k <= 4 || !(k & (k - 1))) MLOG("command-list call follows the device address: target %#llx was re-recorded at the same command memory, running %#llx (as the device does; %llu so far)",
+                                                           (unsigned long long)t, (unsigned long long)to, (unsigned long long)k);
+                        t = to; ck = 0; }
+                    if (ck < 0) { static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+                        if (k <= 8 || !(k & (k - 1))) MLOG("【红】 command-list call into reused host blocks: target %#llx is in the command-record area but is no recording's handle (its recording was overwritten and the blocks reused): call skipped; caller list %p, depth %d, frame %llu (%llu so far)",
+                                                           (unsigned long long)t, list, g_ret_n - base, (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)k);
+                        break; }
+                    if (ck > 0) { static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+                        if (k <= 8 || !(k & (k - 1))) MLOG("【黄】 command-list call into an overwritten recording still in quarantine: target %#llx (blocks intact, run as recorded); caller list %p, depth %d, frame %llu (%llu so far)",
+                                                           (unsigned long long)t, list, g_ret_n - base, (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)k); }
+                }
                 if (g_ret_n - base >= CALL_DEPTH_MAX || !call_push(p + h.size, list)) {
                     static int red; if (!red++) MLOG("【红】 command-list call nested %d deep (limit %d, or the return stack could not grow): skipped this call; the commands may call back into themselves (first case)", g_ret_n - base, CALL_DEPTH_MAX);
                     break; }
