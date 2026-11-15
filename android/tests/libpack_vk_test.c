@@ -74,8 +74,7 @@ static const char *VS_JSON =
     "{\"msl_name\":\"vp_s0\",\"kind\":\"sbuf\",\"index\":0,\"reg\":7,\"rw\":true,\"arg_id\":1},"
     "{\"msl_name\":\"vp_t_tcb_8\",\"kind\":\"tex\",\"reg\":5,\"arg_id\":2},"
     "{\"msl_name\":\"vp_t_tcb_8Smplr\",\"kind\":\"samp_tex\",\"reg\":5,\"arg_id\":3},"
-    "{\"msl_name\":\"vp_c4\",\"kind\":\"cbuf\",\"reg\":1,\"arg_id\":4},"
-    "{\"msl_name\":\"gal_ubo_len\",\"kind\":\"ubolen\",\"arg_id\":5}],"
+    "{\"msl_name\":\"gal_ubo_len\",\"kind\":\"ubolen\",\"arg_id\":4}],"
     "\"vertex_inputs\":[{\"location\":1},{\"location\":3}]}";
 
 static const char *PS_JSON =
@@ -90,8 +89,7 @@ static const char *VS_BUFFER_JSON =
     "{\"msl_name\":\"vp_s0\",\"kind\":\"sbuf\",\"index\":0,\"reg\":7,\"rw\":true,\"arg_id\":1},"
     "{\"msl_name\":\"vp_t_tcb_8\",\"kind\":\"tbuf\",\"reg\":5,\"arg_id\":2},"
     "{\"msl_name\":\"vp_t_tcb_8Smplr\",\"kind\":\"samp_tex\",\"reg\":5,\"arg_id\":3},"
-    "{\"msl_name\":\"vp_c4\",\"kind\":\"cbuf\",\"reg\":1,\"arg_id\":4},"
-    "{\"msl_name\":\"gal_ubo_len\",\"kind\":\"ubolen\",\"arg_id\":5}],"
+    "{\"msl_name\":\"gal_ubo_len\",\"kind\":\"ubolen\",\"arg_id\":4}],"
     "\"vertex_inputs\":[{\"location\":1},{\"location\":3}]}";
 
 // 计算键：c0 驱动常量段 / 用户 cbuf / 三种存储来源 / 组合纹理 + 采样器半边 / support / Metal 专用 ubolen，
@@ -192,10 +190,8 @@ int main(void) {
               "tex reg5 → texture binding=12 slot=8+5*2=18");
         CHECK(!has(j, "\"slot\":10") && !has(j, "\"slot\":5,") && !has(j, "\"slot\":5}"),
               "负控：不是 reg*2(=10) 也不是 reg 原值(=5)");
-        CHECK(!has(j, "\"binding\":30"),
+        CHECK(!has(j, "\"binding\":24"),
               "ubolen（Metal 专用越界长度表，Vulkan 版 .spv 不声明）不出行");
-        CHECK(has(j, "\"kind\":\"uniform\",\"stage\":\"vs\",\"set\":0,\"binding\":24,\"slot\":4"),
-              ".spv 声明的绑定 24 → _b.json arg 4 的 cbuf reg1 → uniform slot 4");
         CHECK(!has(j, "Smplr") && !has(j, "samp_tex"), "Smplr 采样器半边不出行");
         // ps→fs 改名、阶段号 4、sep-tex/img 槽（同一程序里的 fs 键）
         CHECK(has(j, "\"stage\":\"fs\""), "ps → v1 fs 改名");
@@ -214,7 +210,7 @@ int main(void) {
             CHECK(p.stage[0].present && p.stage[1].present &&
                   p.stage[0].spirv_bytes == sizeof libpack_vert_spv && p.stage[0].attr_mask == 10,
                   "fd vs+fs present + spirv + attr_mask=10");
-            CHECK(p.binding_count == 7, "6+3 条反射 -1 采样器半边 -1 ubolen = 7 条 v1 绑定");
+            CHECK(p.binding_count == 6, "5+3 条反射 -1 采样器半边 -1 ubolen = 6 条 v1 绑定");
             struct fd_binding *b0 = NULL, *b6 = NULL, *b12 = NULL, *b24 = NULL, *b10 = NULL, *b16 = NULL;
             for (int i = 0; i < p.binding_count; i++) {
                 if (p.bindings[i].binding == 0) b0 = &p.bindings[i];
@@ -230,7 +226,7 @@ int main(void) {
                   "fd sbuf → storage_kind1 slot7 writable");
             CHECK(b12 && b12->kind == 2 && b12->tex_slot == 5 && !b12->texel_buffer,
                   "fd tex → texture tex_slot=5（slot18→byte0x48→(0x48-0x20)/8 回环）");
-            CHECK(b24 && b24->kind == 0 && b24->slot == 4, "fd 绑定 24 = cbuf slot 4");
+            CHECK(!b24, "fd 没有 ubolen 那一条");
             // sep-tex 回环：slot90→byte0x168→int8 128 溢出负值 → tex_slot<0（独立纹理不属
             //   组合槽映射，如实不挂槽，不是静默错绑）
             CHECK(b10 && b10->kind == 2 && b10->tex_slot < 0 && b10->stage_idx == 1,
@@ -358,71 +354,6 @@ int main(void) {
                   "记录越出分片 → REJECT（不是按长度盲读）");
             s2a_libpack_close(l2);
         }
-    }
-
-    // ---- .spv 声明的绑定为准（11-14 真机：图形预编全部漏绑 support_buffer，整屏画黑） ----
-    // 期望（手算）：片元 .spv 在绑定 52 = 8×6+4 声明 support_buffer、_b.json 不列它 → v1 补一行 program 级 support（解析成 is_support）；
-    //   _b.json 自己列了 support（arg 8）→ 不重复补；.spv 的绑定 24 在 _b.json 只有 ubolen 对应 / 完全没有对应 → 整个程序 REJECT。
-    {
-        static const char *PS_SUP_JSON =
-            "{\"key\":\"1032547698badcfe_b\",\"stage\":\"ps\",\"dm_ctl\":\"1032547698badcfe\",\"bindings\":["
-            "{\"msl_name\":\"fp_c3\",\"kind\":\"cbuf\",\"reg\":0,\"arg_id\":0}]}";
-        static const char *PS_SUP_LISTED_JSON =
-            "{\"key\":\"1032547698badcfe_b\",\"stage\":\"ps\",\"dm_ctl\":\"1032547698badcfe\",\"bindings\":["
-            "{\"msl_name\":\"fp_c3\",\"kind\":\"cbuf\",\"reg\":0,\"arg_id\":0},"
-            "{\"msl_name\":\"support_buffer\",\"kind\":\"support\",\"arg_id\":8}]}";
-        static const char *VS_UBOLEN_DECLARED =   // 绑定 24 在 .spv 里有，_b.json 只说它是 ubolen（v1 不出行的宿主表）
-            "{\"key\":\"0123456789abcdef_b\",\"stage\":\"vs\",\"dm_ctl\":\"0123456789abcdef\",\"bindings\":["
-            "{\"msl_name\":\"vp_c3\",\"kind\":\"cbuf\",\"reg\":0,\"arg_id\":0},"
-            "{\"msl_name\":\"vp_s0\",\"kind\":\"sbuf\",\"index\":0,\"reg\":7,\"rw\":true,\"arg_id\":1},"
-            "{\"msl_name\":\"vp_t_tcb_8\",\"kind\":\"tex\",\"reg\":5,\"arg_id\":2},"
-            "{\"msl_name\":\"gal_ubo_len\",\"kind\":\"ubolen\",\"arg_id\":4}]}";
-        static const char *VS_MISSING =           // 绑定 24 在 _b.json 里完全没有
-            "{\"key\":\"0123456789abcdef_b\",\"stage\":\"vs\",\"dm_ctl\":\"0123456789abcdef\",\"bindings\":["
-            "{\"msl_name\":\"vp_c3\",\"kind\":\"cbuf\",\"reg\":0,\"arg_id\":0},"
-            "{\"msl_name\":\"vp_s0\",\"kind\":\"sbuf\",\"index\":0,\"reg\":7,\"rw\":true,\"arg_id\":1},"
-            "{\"msl_name\":\"vp_t_tcb_8\",\"kind\":\"tex\",\"reg\":5,\"arg_id\":2}]}";
-        struct { const char *vs, *ps; const uint8_t *fspv; size_t fn; int want; const char *what; } cs[4] = {
-            { VS_JSON, PS_SUP_JSON, libpack_support_frag_spv, sizeof libpack_support_frag_spv, 0, "_b.json 不列 support" },
-            { VS_JSON, PS_SUP_LISTED_JSON, libpack_support_frag_spv, sizeof libpack_support_frag_spv, 0, "_b.json 自己列了 support" },
-            { VS_UBOLEN_DECLARED, PS_SUP_JSON, libpack_support_frag_spv, sizeof libpack_support_frag_spv, -1, "绑定 24 只有 ubolen 对应" },
-            { VS_MISSING, PS_SUP_JSON, libpack_support_frag_spv, sizeof libpack_support_frag_spv, -1, "绑定 24 在 _b.json 里没有" },
-        };
-        uint8_t keys[6][8] = {{0}};
-        const uint8_t kv[8] = { 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef }, kp[8] = { 0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe };
-        memcpy(keys[0], kv, 8); memcpy(keys[1], kp, 8);
-        for (int t = 0; t < 4; t++) {
-            snprintf(g_dir, sizeof g_dir, "%s/sup%d", tmpl, t);
-            CHECK(mkdir(g_dir, 0700) == 0, "create support pack directory");
-            struct trec r[4] = {
-                { .key = 0x0123456789abcdef, .kind = 1,  .len = (uint32_t)strlen(cs[t].vs) },
-                { .key = 0x0123456789abcdef, .kind = 52, .len = sizeof libpack_vert_spv },
-                { .key = 0x1032547698badcfe, .kind = 1,  .len = (uint32_t)strlen(cs[t].ps) },
-                { .key = 0x1032547698badcfe, .kind = 52, .len = (uint32_t)cs[t].fn },
-            };
-            const uint8_t *pl2[4] = { (const uint8_t *)cs[t].vs, libpack_vert_spv, (const uint8_t *)cs[t].ps, cs[t].fspv };
-            size_t n2[4] = { strlen(cs[t].vs), sizeof libpack_vert_spv, strlen(cs[t].ps), cs[t].fn };
-            CHECK(mk_pack(r, 4, pl2, n2, 1) == 0, "support pack written");
-            struct s2a_libpack *sl = NULL;
-            CHECK(s2a_libpack_open(&sl, g_dir) == 1, "open support pack");
-            uint8_t *j = NULL; size_t jl = 0; char w[192] = "";
-            int rc = s2a_libpack_program_v1(sl, keys, 0x3, 1, "h", "c", &j, &jl, w, sizeof w);
-            if (cs[t].want) {
-                CHECK(rc == -1 && !j, cs[t].what);
-            } else {
-                const char *sup = "\"kind\":\"support\",\"stage\":\"program\",\"set\":0,\"binding\":52}";
-                const char *a = j ? strstr((const char *)j, sup) : NULL;
-                CHECK(rc == 0 && a && !strstr(a + 1, sup), cs[t].what);   // 恰好一行
-                struct fd_program p; char pw[192] = ""; memset(&p, 0, sizeof p);
-                int found = 0;
-                if (j && nvn_vk_program_parse_graphics(j, jl, &p, pw, sizeof pw) == 0)
-                    for (int i = 0; i < p.binding_count; i++) if (p.bindings[i].binding == 52 && p.bindings[i].is_support) found++;
-                CHECK(found == 1, "解析后绑定 52 是 program 级支撑缓冲（恰好一个）");
-                nvn_vk_program_free(&p);
-            }
-            free(j); s2a_libpack_close(sl);
-        }
-        snprintf(g_dir, sizeof g_dir, "%s", tmpl);
     }
 
     // ---- 计算键：合成 kind "compute" 的 v1，过 nvn_vk_program_parse_compute，绑定号与槽按手算 ----

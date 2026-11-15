@@ -377,42 +377,6 @@ static int lp_emit_bindings(struct jw *j, struct s2a_jv top, const char *lib_sta
 
 // 一个阶段：取键的 _b.json + _b.spv → 校验 → 往 jw 写 stage 项与 bindings 项。
 // 返回 0 成功 / 1 miss / -1 reject
-// .spv 实际声明的描述符绑定（OpDecorate Binding）与名为 support_buffer 的那一个。_b.json 是 Metal 反射，
-//   支撑缓冲在 Metal 里另有传法、_b.json 常常不列它；而 Vulkan 版 .spv 照样声明（参数号 8 处，绑定 = 8×6 + 阶段号）。
-//   只按 _b.json 出 v1 的话描述符布局里没有它，着色器读到的倍率 / 标志位是未定义值，整屏画黑（11-14 真机：一款大型
-//   开放世界游戏只放行图形预编即黑、只放行计算即正常；该款库里一对 vs / fs 的 .spv 各多一个 support_buffer 绑定 48 / 52）。
-//   返回 0 = 解析成功；*nb 个绑定号写进 out（最多 cap 个），*support = support_buffer 的绑定号（没有 = -1）。
-static int lp_spv_bindings(const uint8_t *spv, size_t n, uint32_t *out, int cap, int *nb, int *support) {
-    const uint32_t *w = (const uint32_t *)spv; size_t nw = n / 4;
-    uint32_t sid = 0; *nb = 0; *support = -1;
-    if (nw < 5) return -1;
-    for (size_t pass = 0; pass < 2; pass++)   // 第一遍找名字（OpName 在 OpDecorate 之前，但不依赖顺序）
-        for (size_t i = 5; i < nw; ) {
-            uint32_t op = w[i] & 0xffff, wc = w[i] >> 16;
-            if (!wc || i + wc > nw) return -1;
-            if (pass == 0 && op == 5 && wc >= 3 && !strncmp((const char *)&w[i + 2], "support_buffer", (wc - 2) * 4)) sid = w[i + 1];
-            if (pass == 1 && op == 71 && wc >= 4 && w[i + 2] == 33) {   // OpDecorate <id> Binding <n>
-                if (*nb < cap) out[(*nb)++] = w[i + 3];
-                if (sid && w[i + 1] == sid) *support = (int)w[i + 3];
-            }
-            i += wc;
-        }
-    return 0;
-}
-// _b.json 里某个参数号的绑定是不是 v1 有意不出行的种类（Metal 专用宿主表 / 采样器半边）
-static int lp_json_has_binding(struct s2a_jv top, int stage_no, uint32_t binding, int *skipped_kind) {
-    struct s2a_jv arr; *skipped_kind = 0;
-    if (s2a_jv_obj_find(top, "bindings", &arr) || !s2a_jv_is_array(arr)) return 0;
-    int n = s2a_jv_arr_count(arr);
-    for (int i = 0; i < n; i++) {
-        struct s2a_jv b; uint32_t arg = 0; char kind[24] = "";
-        if (s2a_jv_arr_item(arr, i, &b) || jf_u32(b, "arg_id", &arg) || arg * 6 + (uint32_t)stage_no != binding) continue;
-        if (!jf_str(b, "kind", kind, sizeof kind) && (!strcmp(kind, "ubolen") || !strcmp(kind, "uvx") || !strcmp(kind, "lb") || !strcmp(kind, "sbsize")))
-            { *skipped_kind = 1; continue; }
-        return 1;
-    }
-    return 0;
-}
 static int lp_stage_emit(struct s2a_libpack *lp, const uint8_t key[8], unsigned nvn, int compute,
                          struct jw *stages, struct jw *binds, int *bind_sep, uint32_t *stage_mask,
                          char *why, size_t why_size) {
@@ -461,24 +425,6 @@ static int lp_stage_emit(struct s2a_libpack *lp, const uint8_t key[8], unsigned 
             { lp_fail(why, why_size, "%s has tex_scales entries (scaled-access bindings not mapped)", khex); goto done; }
         const char *v1_stage = lp_v1_stage_name(st);
         if (lp_emit_bindings(binds, top, st, stage_no, v1_stage, compute, bind_sep, why, why_size)) goto done;
-        {   // 以 .spv 声明的绑定为准：support_buffer 补出（_b.json 没列时），其余每个绑定号都得在 _b.json 里有出处，否则整个程序拒收退回现编
-            uint32_t sb[64]; int nb = 0, sup = -1;
-            if (lp_spv_bindings(spv, sn, sb, 64, &nb, &sup)) { lp_fail(why, why_size, "%s _b.spv decorations unreadable", khex); goto done; }
-            for (int i = 0; i < nb; i++) {
-                int skipped = 0;
-                if ((int)sb[i] == sup) {
-                    if (!lp_json_has_binding(top, stage_no, sb[i], &skipped)) {   // _b.json 有 support 行时 lp_emit_bindings 已经出过
-                        jw_fmt(binds, "%s{\"kind\":\"support\",\"stage\":\"program\",\"set\":0,\"binding\":%u}", *bind_sep ? "," : "", sb[i]);
-                        *bind_sep = 1;
-                    }
-                    continue;
-                }
-                if (!lp_json_has_binding(top, stage_no, sb[i], &skipped)) {
-                    lp_fail(why, why_size, "%s _b.spv binding %u has no %s_b.json binding", khex, sb[i], skipped ? "mappable " : "");
-                    goto done;
-                }
-            }
-        }
         jw_fmt(stages, "%s{\"stage\":\"%s\",\"spirv\":\"", *stage_mask ? "," : "", v1_stage);
         jw_b64(stages, spv, sn);
         if (mask) jw_fmt(stages, "\",\"attributeReadMask\":%u}", mask);
