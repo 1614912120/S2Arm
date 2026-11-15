@@ -34,6 +34,8 @@
 // 弱链接[lab]：s2a_hud_brief_show（ios/hud.m 简版性能浮层；输入工作台不链 hud.m / 原生核，取不到就不显示）
 void s2a_hud_brief_show(UIView *root, BOOL on) __attribute__((weak_import));
 BOOL s2a_ios_ext_connected(void) __attribute__((weak_import));
+// 弱链接[lab]：s2a_fi_set_live（graphics/nvn/gfx/nvn/nvn_present_fi.inc 补帧当场开 / 关；输入工作台不链图形层，取不到就不切）
+void s2a_fi_set_live(int on) __attribute__((weak_import));
 #import "app_settings.h"   // 齿轮菜单：存档管理 / 更多设置（s2a_settings_runtime / s2a_settings_present）
 #import "play_layout.h"
 #include "s2a_docs.h"   // iOS 进程级容器 Documents（s2a_container_docs）
@@ -501,6 +503,9 @@ typedef BOOL (^VPFlag)(void);
     // 性能浮层（hud.m 简版：右上角「帧率 · 内存」），改完立即显示 / 收起
     [items addObject:[self live:@"vp.hud.brief" title:S2AL(@"vpad.menu.hud") note:S2AL(@"vpad.menu.hud.note") on:^BOOL{ return [d boolForKey:@"S2APerfHUD"]; } disabled:nil
                             run:^{ BOOL on = ![d boolForKey:@"S2APerfHUD"]; [d setBool:on forKey:@"S2APerfHUD"]; if (s2a_hud_brief_show) s2a_hud_brief_show(ws.superview, on); }]];
+    // 补帧（11-14 维护者手测后定：没有社区帧率补丁的 30 帧款缺省开，MetalFX 30 → 60）：当场开 / 关、按游戏记住（settings.m s2a_ios_fi_on）
+    [items addObject:[self live:@"vp.fi" title:S2AL(@"vpad.menu.fi") note:S2AL(@"vpad.menu.fi.note") on:^BOOL{ return s2a_ios_fi_on(); } disabled:nil
+                            run:^{ BOOL on = !s2a_ios_fi_on(); s2a_ios_set_fi(on); if (s2a_fi_set_live) s2a_fi_set_live(on); }]];
     // 只在外接显示器场景存在时提供，避免没有用途的菜单项占位。
     if (s2a_ios_ext_connected && s2a_ios_ext_connected()) {
         UIAction *screenLock = [UIAction actionWithTitle:S2AL(@"vpad.screenLock.title") image:[UIImage systemImageNamed:@"lock.fill"] identifier:@"vpad.screenLock.action" handler:^(__unused UIAction *action) {
@@ -1360,6 +1365,7 @@ void s2a_vpad_attach(UIView *root) {
     S2AVPadView *v = [[S2AVPadView alloc] initWithFrame:root.bounds];
     g_vpad = v;
     v.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight; [root addSubview:v];
+    if (s2a_fi_set_live) s2a_fi_set_live(s2a_ios_fi_on());   // 补帧开关按游戏记住（起局即按设置，局中由齿轮菜单切）
     if (s2a_hud_brief_show && [NSUserDefaults.standardUserDefaults boolForKey:@"S2APerfHUD"]) s2a_hud_brief_show(root, YES);   // 简版性能浮层（齿轮菜单「性能浮层」）跨局记住
     s2a_controller_attach(root, ^(BOOL enabled) { [v setInputEnabled:enabled]; });
     { int cw0 = 1280, ch0 = 720; if (s2a_game_canvas) s2a_game_canvas(&cw0, &ch0);

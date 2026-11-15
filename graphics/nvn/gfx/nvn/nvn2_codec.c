@@ -933,10 +933,19 @@ static void *cv_worker(void *arg) {
 // 持 mu
 static void cv_drop_inputs(cvdec *d) { while (d->qn) { free(d->q[d->qh].p); d->qh = (d->qh + 1) % d->qcap; d->qn--; } }
 
+static void cv_teardown(cvdec *d, int guest_event);
 static Result cv_init(void *t, int codec, uint32_t w, uint32_t h) {
     w &= 0xffff; h &= 0xffff;
     // H.264 宿主还没接（VideoToolbox 的 H.264 每台苹果设备都有，接上就是硬件解码）：不出假画面，初始化直接失败，游戏的播放库随即中止
     if (codec == CV_H264) { LOG("【红】Switch 2 视频：H.264 解码器（%ux%u）宿主还没接：初始化回失败", w, h); return RES_FAIL; }
+    // 同一块对象没 Finalize 又 Initialize（12 份诊断，0.3.5–0.3.10，时之笛过场 / 玩家开始事件后）：真机 SDK 不中止，照新参数重新初始化。
+    //   原先这里 die（「初始化两次」）。先把旧的宿主解码器收掉（停线程、放缓冲与同步点），游戏对象里的事件不销毁（已归这一次），再按新的建
+    {
+        pthread_mutex_lock(&g_dec_mu); cvdec *old = NULL;
+        for (int i = 0; i < 64; i++) if (g_dec[i] && g_dec[i]->guest == t) { old = g_dec[i]; g_dec[i] = NULL; break; }
+        pthread_mutex_unlock(&g_dec_mu);
+        if (old) { LOG("【黄】Switch 2 视频：解码器 %p 没 Finalize 又初始化：先收掉旧的 %s 解码器，按新的 %ux%u 重建", t, cv_name[old->codec], w, h); cv_teardown(old, 0); }
+    }
     cvdec *d = calloc(1, sizeof *d); if (!d) die("Switch 2 视频：内存不足");
     d->guest = t; d->codec = codec; d->w = (int)w; d->h = (int)h; d->last = -1;
 #if TARGET_OS_OSX
@@ -962,14 +971,21 @@ static Result cv_init(void *t, int codec, uint32_t w, uint32_t h) {
 static void cv_fini(void *t) {
     cvdec *d = cv_of(t);
     pthread_mutex_lock(&g_dec_mu); for (int i = 0; i < 64; i++) if (g_dec[i] == d) g_dec[i] = NULL; pthread_mutex_unlock(&g_dec_mu);
+    cv_teardown(d, 1);
+}
+// 收掉一个宿主解码器（已从 g_dec 摘下）。guest_event：连游戏对象里的 SystemEvent 一起销毁（正常 Finalize）；
+//   0 = 游戏在同一块对象上重新初始化，那块事件已归新的一次所有，只放掉我们这边的引用
+static void cv_teardown(cvdec *d, int guest_event) {
+    void *t = d->guest;
     pthread_mutex_lock(&d->mu); d->quit = 1; pthread_cond_broadcast(&d->cv); pthread_mutex_unlock(&d->mu);
     DM_BLOCK_BEGIN(); pthread_join(d->th, NULL); DM_BLOCK_END();
     cv_reset_codec(d); cv_drop_inputs(d); free(d->q); free(d->vt_u); free(d->vt_v);
     sp_free(d->ctr);
     static void (*destroy)(void *);
-    if (!destroy) destroy = (void (*)(void *))gsym("_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE");
-    // 托管句柄随之关掉
-    destroy((uint8_t *)t + 8);
+    if (guest_event) {
+        if (!destroy) destroy = (void (*)(void *))gsym("_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE");
+        destroy((uint8_t *)t + 8);   // 托管句柄随之关掉
+    }
     s2a_event_release(d->ready_ev);
     LOG("Switch 2 视频：%s 解码器结束，出帧 %llu；解码 %llu 包，每包平均 %.2f ms、最长 %.2f ms；写进图像每帧平均 %.2f ms（%s）", cv_name[d->codec], (unsigned long long)d->frames, (unsigned long long)d->dec_n,
         d->dec_n ? d->dec_ns / 1e6 / (double)d->dec_n : 0.0, d->dec_max / 1e6, d->wr_n ? d->wr_ns / 1e6 / (double)d->wr_n : 0.0,

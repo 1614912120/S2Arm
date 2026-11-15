@@ -191,6 +191,10 @@ namespace Ryujinx.HLE.HOS.Services.Hid
         }
 
         // S2A：输入泵每 250 ms 查游戏收不收掌机格 / Player1（不分配，GetSupportedPlayers 是迭代器）
+        // S2A：游戏声明收哪些手柄号 / 样式之后、这次服务调用返回之前回调（IHidServer SetSupportedNpadIdType / SetSupportedNpadStyleSet）：
+        //   宿主虚拟手柄跟随游戏声明改接（掌机格 → Player1 Pro 等）在声明这一刻同步做完，同真机——掌机里握着的 Joy-Con 在声明时就归到它收的手柄号，
+        //   游戏之后 ActivateNpad、建自己的手柄对象时看到的已是改好的连接。原先只靠输入泵 250 ms 轮询，改接落在游戏初始化中途任意时刻
+        public static System.Action<Switch> S2ASupportedChanged;
         internal bool IsSupportedPlayer(PlayerIndex player) => (uint)player < (uint)_supportedPlayers.Length && _supportedPlayers[(int)player];
 
         internal IEnumerable<PlayerIndex> GetSupportedPlayers()
