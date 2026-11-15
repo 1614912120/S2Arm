@@ -1,10 +1,12 @@
 // 崩溃现场（旧库 crash.c 改后搬，只留信号处理本身）：出错地址、pc / lr 换成模块内偏移、寄存器、帧指针回溯、线程表。
 #include "native.h"
+#include "s2a_docs.h"   // 崩溃落点标记写在文档根（s2a_crash_install 时算好路径，信号里只 open / write）
 #include "../../platform/plat.h"
 #include <signal.h>
 #include <dlfcn.h>
 #include <sys/ucontext.h>
 #include <unistd.h>
+#include <fcntl.h>
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #else
@@ -365,6 +367,17 @@ static void crash_other_wait(int sig) {
 //   读退出码的地方：shell 里被信号结束的 $? 仍是 128 + sig；作业层 Context.run 把 Python 的负返回码折回 128 + sig（pack/jobs/core.py）
 static int g_crash_quiet;   // s2a_crash_install 时取（信号处理里不读环境）：native.h s2a_crash_quiet
 __attribute__((weak)) uint64_t s2a_window_span_crash(uint64_t low_largest) { (void)low_largest; return 0; }   // vawin.c 强定义：低区碰底死的局记跨度（#1143）
+// 崩溃落点（11-15 S 级优化「崩了自动关」归因）：<文档根>/crash_where 一行 game / patch / host——pc 或 lr 落在游戏模块（含补丁区）= game / patch，
+//   两个都在宿主代码 = host。读的一方：Mac pack/jobs/cheats.py note_crash（收局后）、iOS ios/game_options.m（下次启动前），读完删。
+//   宿主自己的崩溃第一次不替玩家关补丁（D-RRES：宿主贴图上传崩溃把自适应满屏关了，补丁没错，修好后也回不来）
+static char g_where_path[1100];
+static void crash_where_note(uint64_t pc, uint64_t lr) {
+    if (!g_where_path[0] || g_crash_quiet) return;
+    module_t *m = module_of((void *)pc), *ml = module_of((void *)lr);
+    const char *w = m ? (s2a_in_patch(m, pc) ? "patch\n" : "game\n") : ml ? "game\n" : "host\n";
+    int fd = open(g_where_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) { (void)!write(fd, w, strlen(w)); close(fd); }
+}
 __attribute__((weak)) void s2a_guest_run_mark_crash(void) {}   // runtime/src/vawin.c 强定义：「在跑」标记改写成 crash（闪退不算死于内存，#909）
 static void crash_reraise(int sig) {
     s2a_guest_run_mark_crash();
@@ -492,6 +505,7 @@ static void on_crash(int sig, siginfo_t *si, void *ctx) {
         crash_raw(sig, si, uc, 1); crash_other_wait(sig);
     }
     uint64_t pc = uc->uc_mcontext->__ss.__pc, lr = uc->uc_mcontext->__ss.__lr, fp = uc->uc_mcontext->__ss.__fp;
+    crash_where_note(pc, lr);
     crash_raw(sig, si, uc, 0);
     // 崩在现编着色器里（graphics/nvn/host/dsh_miss.inc，#467）：把正在编的那支输入落盘成 <键>.inflight.*，诊断包带走。只用 open / write，排在原始现场之后、完整报告之前
     { if (g_dsh_crash_dump) g_dsh_crash_dump(); }
@@ -531,6 +545,7 @@ void s2a_crash_thread_init(void) {
     if (e) LOG("【红】崩溃：备用栈安装失败 errno=%d", e);
 }
 void s2a_crash_install(void) {
+    s2a_docs_path(g_where_path, sizeof g_where_path, "crash_where");
     int sigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE, SIGABRT};   // SIGABRT：die() 与 C# FailFast 都走 abort，要现场
     g_dsh_crash_dump = (void (*)(void))dlsym(RTLD_DEFAULT, "s2a_dsh_crash_dump");
     g_crash_quiet = s2a_crash_quiet();

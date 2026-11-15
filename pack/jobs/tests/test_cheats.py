@@ -207,6 +207,36 @@ class CheatsTests(unittest.TestCase):
         self.assertIs(community.load_launch(self.c, GID)["settings"].get("widescreen"), False)
         self.assertEqual([x["kind"] for x in cheats.crashed(self.c, self.game)], ["fs"])
 
+    def test_host_crash_spares_first_then_turns_off(self):
+        # 11-15：运行时写的落点是 host（两头都在宿主代码）= 多半是 S2Arm 自己的毛病：第一次不关、只记；同一组开关再崩才关。落点 game 照常关。期望手写
+        self._two_patches(1)
+        docs = self.t / "docs"; docs.mkdir()
+        (docs / "crash_where").write_text("host\n")
+        cheats.note_crash(self.c, self.game, docs)
+        self.assertEqual(self._on(), ([], ["gfx:B1", "widescreen:A1"], True))           # 第一次：没关
+        self.assertFalse((docs / "crash_where").exists())                              # 落点读完删
+        self.assertEqual(cheats.crashed(self.c, self.game), [])
+        (docs / "crash_where").write_text("host\n")
+        cheats.note_crash(self.c, self.game, docs)
+        self.assertEqual(self._on(), ([], [], False))                                  # 同组再崩：照常关（都验过、没收局记录 → 全关）
+        self._two_patches(1); community.launch_path(self.c, GID).unlink()
+        (docs / "crash_where").write_text("game\n")
+        cheats.note_crash(self.c, self.game, docs)
+        self.assertEqual(self._on(), ([], [], False))                                  # 落点在游戏：第一次就关
+
+    def test_auto_off_comes_back_after_update(self):
+        # 自动关时记下引擎版本；换了版本起局前重开一次（只开当时关的），记录删掉；同版本不动。期望手写
+        self._two_patches(1)
+        (self.c.engine / "engine.json").write_text(json.dumps({"version": "0.4.1"}))
+        cheats.note_crash(self.c, self.game)
+        self.assertEqual(self._on(), ([], [], False))
+        self.assertEqual(cheats.restore_after_update(self.c, self.game), [])           # 同版本：不动
+        (self.c.engine / "engine.json").write_text(json.dumps({"version": "0.4.2"}))
+        back = cheats.restore_after_update(self.c, self.game)
+        self.assertEqual(sorted(back), [("fps", "fps60"), ("patch", "gfx:B1"), ("patch", "widescreen:A1")])
+        self.assertEqual(self._on(), ([], ["gfx:B1", "widescreen:A1"], True))
+        self.assertEqual(cheats.restore_after_update(self.c, self.game), [])           # 只重开一次
+
     def test_crash_with_nothing_on_records_nothing(self):
         cheats.note_crash(self.c, self.game)
         self.assertEqual(cheats.crashed(self.c, self.game), [])

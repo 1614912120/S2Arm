@@ -9,6 +9,7 @@
 #import "cpatch_model.h"
 #import "s2a_l10n.h"
 #include "s2a_docs.h"
+#include "native.h"   // LOG（崩溃恢复两行日志）
 #include <stdlib.h>
 #include <string.h>
 
@@ -207,15 +208,64 @@ NSArray<NSDictionary *> *s2a_ios_crash_suspects_for(NSString *gid) {
 //   崩了按 GoodOn 找新开的，没有再逐层扩大
 static NSSet<NSString *> *crash_good(NSString *gid) { NSArray *a = [s2a_ios_settings_defaults_for(gid) arrayForKey:@"S2ACrashGoodOn"]; return a ? [NSSet setWithArray:a] : nil; }
 NSArray<NSDictionary *> *s2a_ios_crash_pick_for(NSString *gid) { return S2ACrashNarrow(s2a_ios_crash_suspects_for(gid), crash_good(gid)); }
+// 崩溃落点（runtime/src/crash.c crash_where_note 写 <这款文档根>/crash_where：game / patch / host），读完删
+static NSString *crash_where_take(NSString *gid) {
+    NSString *p = [[s2a_ios_cheats_dir_for(gid) stringByDeletingLastPathComponent] stringByAppendingPathComponent:@"crash_where"];
+    NSString *w = [[NSString stringWithContentsOfFile:p encoding:NSUTF8StringEncoding error:nil] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    [NSFileManager.defaultManager removeItemAtPath:p error:nil];
+    return w ?: @"";
+}
+static NSString *app_version(void) { return [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @""; }
+// 上一局死在前台、要自动关的这几条（同 pack/jobs/cheats.py note_crash，11-15「优化 S 级优化，不是撤」）：
+//   落点两头都在宿主代码（host）= 多半是 S2Arm 自己的毛病：第一次不关、只记下这组开关（S2ACrashHostOnce），同一组再崩才关；
+//   要关的记下 App 版本（S2ACrashAutoOff），换了版本自动重开一次（s2a_ios_crash_session_begin）。→ 这次要关的（空 = 不关）
+NSArray<NSDictionary *> *s2a_ios_crash_decide_for(NSString *gid) {
+    NSArray<NSDictionary *> *items = s2a_ios_crash_pick_for(gid);
+    NSString *where = crash_where_take(gid);
+    if (!items.count) return items;
+    NSUserDefaults *d = s2a_ios_settings_defaults_for(gid);
+    NSMutableArray *tags = [NSMutableArray array]; for (NSDictionary *it in s2a_ios_crash_suspects_for(gid)) [tags addObject:S2ACrashTag(it)];
+    [tags sortUsingSelector:@selector(compare:)];
+    if ([where isEqualToString:@"host"] && ![[d arrayForKey:@"S2ACrashHostOnce"] isEqualToArray:tags]) {
+        [d setObject:tags forKey:@"S2ACrashHostOnce"];
+        LOG("崩溃恢复：上一局崩在宿主代码（不在游戏 / 补丁区），这次先不关补丁 / 金手指；同样开着再崩才关");
+        return @[];
+    }
+    [d removeObjectForKey:@"S2ACrashHostOnce"];
+    NSMutableArray *rec = [NSMutableArray array];
+    for (NSDictionary *it in items) [rec addObject:@{@"kind": it[@"kind"], @"key": it[@"key"], @"name": it[@"name"] ?: @""}];
+    [d setObject:@{@"ver": app_version(), @"items": rec} forKey:@"S2ACrashAutoOff"];
+    return items;
+}
+void s2a_dprompt_notice(NSString *title, NSString *body, double delay, double seconds);   // dprompt.m
 void s2a_ios_crash_session_begin(NSString *gid, BOOL prev_clean) {
     if (!gid.length) return;
     NSUserDefaults *d = s2a_ios_settings_defaults_for(gid);
+    // 上次崩溃自动关掉的：App 换了版本就重开一次（只开当时关的），并告诉玩家；记录删掉
+    NSDictionary *ao = [d dictionaryForKey:@"S2ACrashAutoOff"];
+    if (ao && [ao[@"ver"] length] && ![ao[@"ver"] isEqualToString:app_version()]) {
+        NSString *dir = s2a_ios_cheats_dir_for(gid); NSMutableSet *con = cheats_enabled(dir); BOOL cheats = NO; NSArray<S2ACPatchGroup *> *groups = nil;
+        NSMutableArray *names = [NSMutableArray array];
+        for (NSDictionary *it in ao[@"items"]) {
+            NSString *k = it[@"kind"];
+            if ([k isEqual:@"cheat"]) { [con addObject:it[@"key"]]; cheats = YES; }
+            else if ([k isEqual:@"fps"]) s2a_ios_set_fps60_for(gid, YES);
+            else if ([k isEqual:@"fs"]) s2a_ios_set_fullscreen(gid, YES);
+            else { if (!groups) groups = patch_groups(gid); S2ACPatchSetEnabled(groups, d, it[@"key"], YES); }
+            if ([it[@"name"] length]) [names addObject:it[@"name"]];
+        }
+        if (cheats) s2a_ios_cheats_write_enabled(dir, con);
+        [d removeObjectForKey:@"S2ACrashAutoOff"];
+        NSString *joined = [names componentsJoinedByString:S2AL(@"common.listSeparator")];
+        LOG("崩溃恢复：App 换了版本（%s → %s），重开上次崩溃时自动关掉的 %s", [ao[@"ver"] UTF8String], app_version().UTF8String, joined.UTF8String);
+        if (names.count) s2a_dprompt_notice(S2AL(@"crash.restored.title"), [NSString stringWithFormat:S2AL(@"crash.restored.body"), joined], 3, 8);
+    }
     NSArray *last = [d arrayForKey:@"S2ACrashSessionOn"];
     if (prev_clean && last) [d setObject:last forKey:@"S2ACrashGoodOn"];
     NSMutableArray *now = [NSMutableArray array]; for (NSDictionary *it in s2a_ios_crash_suspects_for(gid)) [now addObject:S2ACrashTag(it)];
     [d setObject:now forKey:@"S2ACrashSessionOn"];
 }
-NSArray<NSDictionary *> *s2a_ios_crash_suspects(void) { return g_s2a_crash_asked ? @[] : s2a_ios_crash_pick_for(current_gid()); }
+NSArray<NSDictionary *> *s2a_ios_crash_suspects(void) { return g_s2a_crash_asked ? @[] : s2a_ios_crash_decide_for(current_gid()); }
 void s2a_ios_crash_session_begin_single(int prev_clean) { if (!g_s2a_crash_asked) s2a_ios_crash_session_begin(current_gid(), prev_clean); }   // 单款壳（diag.m）；多款容器已在 app.m 记过
 void s2a_ios_crash_turn_off_for(NSString *gid, NSArray<NSDictionary *> *items) {
     NSString *dir = s2a_ios_cheats_dir_for(gid); NSMutableSet *con = cheats_enabled(dir); BOOL cheats = NO;

@@ -84,6 +84,8 @@
 "crash.off.body" = "The game quit last time while %@ was on, so it’s off this time. You can turn it back on in Settings.";
 "crash.off.prompt" = "The game quit last time while %@ was on, so it’s off this time. You can turn it back on in Settings.\n\nSending us the diagnostics helps us fix it. The bundle contains only run logs — no saves, keys or game files.";
 "crash.off.title" = "Turned off what was on when the game quit";
+"crash.restored.title" = "Turned back on what was switched off after a crash";
+"crash.restored.body" = "%@ was switched off after the game crashed; this version of S2Arm turns it back on. If it crashes again it will be switched off again.";
 "sgrade.title" = "S-grade enhancements";
 "sgrade.note" = "If a patch is incompatible and makes the game crash, it is turned off automatically the next time you launch, so you can keep playing.";
 "sgrade.counts" = "%ld on · %ld in all";

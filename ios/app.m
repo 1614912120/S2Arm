@@ -844,7 +844,7 @@ static void library_play_go(const char *gid, S2ASceneDelegate *sd);
 //   记下已处理，进游戏后 diag.m 不再处理一遍（只问发诊断）
 //   v0.4.1：只关出事的那份（game_options.m s2a_ios_crash_pick_for），并记下这局开着的（s2a_ios_crash_session_begin）。
 //   多款容器一律在这里处理（g_s2a_crash_asked 先置上）：原先上一局死的是别的游戏时这里提前返回、没置标记，进游戏后 diag.m 会把这一款开着的关掉
-NSArray<NSDictionary *> *s2a_ios_crash_pick_for(NSString *gid);
+NSArray<NSDictionary *> *s2a_ios_crash_decide_for(NSString *gid);
 void s2a_ios_crash_session_begin(NSString *gid, BOOL prev_clean);
 void s2a_ios_crash_turn_off_for(NSString *gid, NSArray<NSDictionary *> *items);
 extern int g_s2a_crash_asked;
@@ -854,7 +854,7 @@ static void crash_auto_off(const char *gid) {
     NSString *g = @(gid);
     char d[1024]; if (s2a_container_docs(d, sizeof d) <= 0) return;
     BOOL same = [[NSUserDefaults.standardUserDefaults stringForKey:@"S2ALastGameId"] isEqualToString:g], fg = s2a_sesmark_prev(d) == S2A_SESMARK_FG;
-    NSArray<NSDictionary *> *items = same && fg ? s2a_ios_crash_pick_for(g) : @[];
+    NSArray<NSDictionary *> *items = same && fg ? s2a_ios_crash_decide_for(g) : @[];   // 宿主自己崩第一次不关（game_options.m）
     if (items.count) s2a_ios_crash_turn_off_for(g, items);
     s2a_ios_crash_session_begin(g, same && !fg);   // 关完再记这局开着的；上一局是这款且好好收局 → 那局开着的升为「好的」
     if (!items.count) return;
