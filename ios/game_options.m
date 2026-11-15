@@ -189,15 +189,28 @@ NSArray<NSDictionary *> *s2a_ios_crash_suspects_for(NSString *gid) {
     for (NSDictionary *e in s2a_ios_cheat_entries(dir)) if ([con containsObject:e[@"key"]]) [out addObject:@{@"kind": @"cheat", @"key": e[@"key"], @"name": e[@"name"]}];
     // 社区补丁：开着的都算（11-13 起没选过 = 默认开，不再只算玩家自己开的）；帧率补丁跟 60 帧开关，开着就把「60 帧」算进去（关掉 = 关 60 帧）
     NSUserDefaults *d = s2a_ios_settings_defaults_for(gid);
-    NSArray<S2ACPatchGroup *> *groups = patch_groups(gid); NSSet *pon = S2ACPatchEnabled(groups, d); BOOL fps = NO;
+    NSArray<S2ACPatchGroup *> *groups = patch_groups(gid); NSSet *pon = S2ACPatchEnabled(groups, d); BOOL fps = NO, fpsVerified = NO;
     for (S2ACPatchGroup *g in groups) for (S2ACPatchItem *it in g.items) {
-        if (it.followsFps60) fps = YES;
-        else if ([pon containsObject:it.ident]) [out addObject:@{@"kind": @"patch", @"key": it.ident, @"name": it.title}];
+        if (it.followsFps60) { fps = YES; fpsVerified |= it.defaultOn; }
+        else if ([pon containsObject:it.ident]) [out addObject:@{@"kind": @"patch", @"key": it.ident, @"name": it.title, @"verified": @(it.defaultOn)}];
     }
-    if (fps && s2a_ios_fps60_on_for(gid)) [out addObject:@{@"kind": @"fps", @"key": @"fps60", @"name": S2AL(@"cpatch.group.fps")}];
+    if (fps && s2a_ios_fps60_on_for(gid)) [out addObject:@{@"kind": @"fps", @"key": @"fps60", @"name": S2AL(@"cpatch.group.fps"), @"verified": @(fpsVerified)}];
     return out;
 }
-NSArray<NSDictionary *> *s2a_ios_crash_suspects(void) { return g_s2a_crash_asked ? @[] : s2a_ios_crash_suspects_for(current_gid()); }
+// 只关出事的那份（v0.4.1，规则 ios/cpatch_model.m S2ACrashNarrow）：每局开始记下这局开着的（S2ACrashSessionOn），上一局好好收局的那份升为 S2ACrashGoodOn；
+//   崩了按 GoodOn 找新开的，没有再逐层扩大
+static NSSet<NSString *> *crash_good(NSString *gid) { NSArray *a = [s2a_ios_settings_defaults_for(gid) arrayForKey:@"S2ACrashGoodOn"]; return a ? [NSSet setWithArray:a] : nil; }
+NSArray<NSDictionary *> *s2a_ios_crash_pick_for(NSString *gid) { return S2ACrashNarrow(s2a_ios_crash_suspects_for(gid), crash_good(gid)); }
+void s2a_ios_crash_session_begin(NSString *gid, BOOL prev_clean) {
+    if (!gid.length) return;
+    NSUserDefaults *d = s2a_ios_settings_defaults_for(gid);
+    NSArray *last = [d arrayForKey:@"S2ACrashSessionOn"];
+    if (prev_clean && last) [d setObject:last forKey:@"S2ACrashGoodOn"];
+    NSMutableArray *now = [NSMutableArray array]; for (NSDictionary *it in s2a_ios_crash_suspects_for(gid)) [now addObject:S2ACrashTag(it)];
+    [d setObject:now forKey:@"S2ACrashSessionOn"];
+}
+NSArray<NSDictionary *> *s2a_ios_crash_suspects(void) { return g_s2a_crash_asked ? @[] : s2a_ios_crash_pick_for(current_gid()); }
+void s2a_ios_crash_session_begin_single(int prev_clean) { if (!g_s2a_crash_asked) s2a_ios_crash_session_begin(current_gid(), prev_clean); }   // 单款壳（diag.m）；多款容器已在 app.m 记过
 void s2a_ios_crash_turn_off_for(NSString *gid, NSArray<NSDictionary *> *items) {
     NSString *dir = s2a_ios_cheats_dir_for(gid); NSMutableSet *con = cheats_enabled(dir); BOOL cheats = NO;
     NSArray<S2ACPatchGroup *> *groups = nil;
