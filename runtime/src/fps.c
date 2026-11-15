@@ -141,7 +141,6 @@ int s2a_fps_enabled(void) { return atomic_load(&g_on); }
 // 本帧帧率来源（11-14，补帧进主线）：2 = 真帧率来源开着（社区帧率补丁；S2A_CAPS_OWN=1 时也含我方帧率表）——出图补帧这一帧让路，游戏自己跑 60；
 //   1 = 没有，补帧可补（graphics/nvn/gfx/nvn/nvn_present_fi.inc fi_wanted 每帧读，弱定义恒 1）。优先级：社区帧率补丁 > 补帧 > 原帧率；60 帧开关局中切换随即跟上
 int s2a_fps_source(void) { return atomic_load(&g_on) && s2a_fps_real_source() ? 2 : 1; }
-int s2a_fps_live(void) { return eff(); }   // 60 帧此刻真在生效（用户开 + 无降档 + 梯子没压）
 void s2a_fps_hold(int hold) {
     pthread_mutex_lock(&g_control_mu);
     if (atomic_exchange(&g_hold, hold ? 1 : 0) != (hold ? 1 : 0)) { if (g_ready) apply(); LOG("帧率表：档位梯子%s", hold ? "压回游戏原帧率" : "放开，回 60 帧"); }

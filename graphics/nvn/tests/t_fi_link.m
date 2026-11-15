@@ -35,6 +35,27 @@ int main(void) { @autoreleasepool {
     }
     pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 0; g_classic_busy = 0; g_fi_inflight = 1; int b1 = link_layer_busy(); g_fi_inflight = 0; int b0 = link_layer_busy(); pthread_mutex_unlock(&g_pq_mu);
     CHECK(b1 == 1 && b0 == 0, "③ 显示链等：经典出图空闲、在途补帧 1 笔 → 不能挂（%d）；在途归零 → 能挂（%d）", b1, b0);
+    // ④ 显示链跟补帧开关（审计 P1-188）。期望手写：补帧开（g_fi_state 1）、玩家局中关 → 这一帧不补、显示链回到不补帧时的方式（g_link_base 1）；
+    //   再开 → 0；整段回退 fi_off → 1；补丁要的 120 Hz 链（2）不动。旧实现关补帧 / 回退后显示链仍是 0（红）
+    {
+        g_fi_state = 1; g_link_base = 1; g_dm_present_link = 0;
+        s2a_fi_set_live(0); int r0 = fi_wanted(); int l0 = g_dm_present_link;
+        s2a_fi_set_live(1); int r1 = fi_wanted(); int l1 = g_dm_present_link;
+        fi_off("测试：整段回退"); int l2 = g_dm_present_link;
+        g_fi_state = 1; g_dm_present_link = 2; s2a_fi_set_live(0); (void)fi_wanted(); int l3 = g_dm_present_link; s2a_fi_set_live(1); g_fi_state = 0; g_dm_present_link = 0;
+        CHECK(r0 == 0 && l0 == 1 && r1 == 1 && l1 == 0 && l2 == 1 && l3 == 2, "④ 显示链跟补帧：局中关 → 不补、链 %d（期望 1）；再开 → 补、链 %d（期望 0）；回退 → 链 %d（期望 1）；120 Hz 链不动 → %d（期望 2）", l0, l1, l2, l3);
+    }
+    // ⑤ 补帧超时不等（审计 P1-189）：迟到的插值读着的输入图由 in_busy 护着，出图线程写之前才等。期望手写：没人读 → 立即返回（< 5 ms）；
+    //   有 1 个读者、50 ms 后读完 → 等约 50 ms（40–500 ms）。旧实现没有这层（迟到时补帧任务自己多等最多 1 秒才记票）
+    if (@available(macOS 26.0, iOS 26.0, *)) {
+        NvPresentFI *f = [NvPresentFI new];
+        double t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6; fi_in_wait(f, 1); double idle = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6 - t0;
+        pthread_mutex_lock(&g_pq_mu); f->in_busy[1] = 1; pthread_mutex_unlock(&g_pq_mu);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            pthread_mutex_lock(&g_pq_mu); f->in_busy[1] = 0; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu); });
+        t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6; fi_in_wait(f, 1); double busy = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6 - t0;
+        CHECK(idle < 5 && busy >= 40 && busy < 500, "⑤ 写输入图前：没人读 %.1f ms 返回（期望 < 5）；有迟到的插值读着、50 ms 后读完 → 等 %.1f ms（期望 40–500）", idle, busy);
+    }
     printf("%s t_fi_link：%u 项，%u 项不符\n", failures ? "✗" : "✓", checks, failures);
     return failures != 0;
 } }

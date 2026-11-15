@@ -595,6 +595,15 @@ void s2a_cpatch_fps_follow(int on) {
     if (any) st_flush_locked();
     pthread_mutex_unlock(&g_st_lock);
 }
+// 这一份帧率补丁此刻是否被选中开着（服务层 FpsLocker.cs 每秒按份问）：选中 → 选中档的目标帧率；没选中 / 帧率关 / 包里没有这份 → 0。
+//   FPSLocker 的定期写入只该写选中那一份、按选中的档求值（审计 P1-184：原先跟 s2a_fps_live 一律按 60 写进每一份，选 120 档时和已开的 120 补丁抢同一处）
+int s2a_cpatch_fps_unit(const char *id) {
+    int pick = g_fps_target;
+    if (!id || g_fps_on <= 0 || pick <= 0) return 0;
+    const char *grp = fps_group_pick(pick);
+    for (int i = 0; i < g_nfu; i++) if (!strcmp(g_fu[i].id, id) && fps_chosen(&g_fu[i], 1, pick, grp)) return pick;
+    return 0;
+}
 // 停帧救场（11-14 维护者「补丁导致停帧时在局内自动关掉、恢复出图」）：出图停住看门（runtime/src/ap_host.c）判到「首帧后 30 秒窗口新上屏 ≤ 15 帧」时调（s2a_ap_crawl_due）。
 //   社区帧率补丁开着 → 当场关（写回原值、出图链与节拍回 60 Hz），并记成「这款下次也关」——同「崩了自动关」一套规矩，从崩溃扩到停帧
 //   （停帧不崩溃，原先玩家只看到画面不动、声音照常）。补丁里只在起局时写一次的设定（如交换间隔）关掉后这局回不来，提示里叫玩家重开。
