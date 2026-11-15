@@ -323,6 +323,24 @@ static void t_fence_sync(void) {
     uint64_t got = 0; CHECK(sync_published(&s, &got) == 1 && got == f0 + 64 && nvn_be_last_fence() == f0 + 64);
 }
 
+// CALL 目标核对替身（真身在 hle_nvn.c，本单测不链前端）：缺省都算活录制；用例把 g_call_reused 设成某个句柄，它就回 -1（块已被复用）
+static uint64_t g_call_reused;
+int nvn_cmd_call_resolve(uint64_t h, uint64_t *to) { *to = h; return g_call_reused && h == g_call_reused ? -1 : 0; }
+// #768338 安全阀：CALL 的目标块已被别的录制复用 → 跳过这次调用（子列表的设置不生效）、记一行红；CALL 之后的记录照常执行。
+//   反证：去掉 rp_exec.c 的 ck < 0 跳过，子列表照执行，alpha_ref 被写成 0.25
+static void t_call_reused(void) {
+    stream a = {0}, sub = {0};
+    p_alpha_ref *ar = put(&sub, OP_ALPHA_REF, sizeof *ar); ar->ref = 0.25f; end(&sub);
+    uint8_t *r = put(&a, OP_CALL, 8); uint64_t h = (uint64_t)(uintptr_t)sub.b; memcpy(r, &h, 8);
+    p_set_patch_size *ps = put(&a, OP_SET_PATCH_SIZE, sizeof *ps); ps->size = 6;
+    end(&a);
+    rp_S.alpha_ref = 0; int red0 = g_red_lines; g_call_reused = h;
+    submit1(&a); fake_complete(NVN_GPU_DONE_OK);
+    g_call_reused = 0;
+    if (rp_S.alpha_ref != 0 || rp_S.patch_size != 6 || g_red_lines - red0 != 1) printf("CALL 目标已复用：alpha_ref %.2f（期望 0）、patch_size %u（期望 6）、红行 +%d（期望 1）\n", rp_S.alpha_ref, (unsigned)rp_S.patch_size, g_red_lines - red0);
+    CHECK(rp_S.alpha_ref == 0 && rp_S.patch_size == 6 && g_red_lines - red0 == 1);
+}
+
 static void t_jump_call(void) {
     stream a = {0}, b = {0}, sub = {0};
     p_alpha_ref *ar = put(&sub, OP_ALPHA_REF, sizeof *ar); ar->ref = 0.5f; end(&sub);
@@ -1634,6 +1652,32 @@ static void t_gs_dirty_and_topology(void) {
     end(&t); submit1(&t); fake_complete(NVN_GPU_DONE_OK);
     CHECK(g_gdraws == 2);
     CHECK(nvn_unimpl_count("draw", "geometry_topology_unimplemented") == 1);
+    // #696：GS + 不带索引、非间接的三角带，按 GL 序展开成三角形列表再交给原生 GS。期望按 GL 4.6 §10.1.6 手算（不跑被测的展开函数）：
+    //   第 i 个三角形偶 i 为 (i, i+1, i+2)、奇 i 为 (i+1, i, i+2)；Vulkan 原生三角带的奇三角形是 (i, i+2, i+1)。首顶点进 base vertex，实例数与首实例不变
+    { stream u = {0}; p_draw *ts = put(&u, OP_DRAW, sizeof *ts); ts->prim = 5; ts->first = 7; ts->count = 4; ts->instances = 32; ts->base_instance = 3;
+      end(&u); submit1(&u); fake_complete(NVN_GPU_DONE_OK);
+      CHECK(g_gdraws == 3 && nvn_unimpl_count("draw", "geometry_topology_unimplemented") == 1);
+      CHECK(g_last_da.prim == 4 && g_last_pdesc.prim == 4 && g_last_req.prim == 4 && g_last_pdesc.prim_restart == 0);
+      CHECK(g_last_da.itype == 2 && g_last_da.ibuf == &g_arena_buf && g_last_da.count == 6 && g_last_da.base_vertex == 7 && g_last_da.first == 0);
+      CHECK(g_last_da.instances == 32 && g_last_da.base_instance == 3);
+      { const uint32_t e[6] = {0, 1, 2, 2, 1, 3}; CHECK(g_last_da.count == 6 && !memcmp(g_arena + g_last_da.ioff, e, sizeof e)); } }
+    { stream u = {0}; p_draw *ts = put(&u, OP_DRAW, sizeof *ts); ts->prim = 5; ts->count = 5; ts->instances = 1;   // 奇数个顶点：3 个三角形
+      end(&u); submit1(&u); fake_complete(NVN_GPU_DONE_OK);
+      CHECK(g_gdraws == 4 && g_last_da.prim == 4 && g_last_da.base_vertex == 0);
+      { const uint32_t e[9] = {0, 1, 2, 2, 1, 3, 2, 3, 4}; CHECK(g_last_da.count == 9 && !memcmp(g_arena + g_last_da.ioff, e, sizeof e)); } }
+    { stream u = {0}; p_draw *ts = put(&u, OP_DRAW, sizeof *ts); ts->prim = 5; ts->count = 2; ts->instances = 1;   // 不足 3 个顶点：不画、不报红
+      end(&u); submit1(&u); fake_complete(NVN_GPU_DONE_OK);
+      CHECK(g_gdraws == 4 && nvn_unimpl_count("draw", "geometry_topology_unimplemented") == 1); }
+    // 读数之外的组合照旧报未接：带索引的三角带、间接的三角带、三角扇
+    { stream u = {0}; p_draw_idx *di = put(&u, OP_DRAW_IDX, sizeof *di); di->prim = 5; di->itype = 1; di->count = 4; di->instances = 1; di->ibuf = 0x5000;
+      end(&u); submit1(&u); fake_complete(NVN_GPU_DONE_OK);
+      CHECK(g_gdraws == 4 && nvn_unimpl_count("draw", "geometry_topology_unimplemented") == 2); }
+    { stream u = {0}; p_draw *ts = put(&u, OP_DRAW, sizeof *ts); ts->prim = 5; ts->ind = 0x6000;
+      end(&u); submit1(&u); fake_complete(NVN_GPU_DONE_OK);
+      CHECK(g_gdraws == 4 && nvn_unimpl_count("draw", "geometry_topology_unimplemented") == 3); }
+    { stream u = {0}; p_draw *ts = put(&u, OP_DRAW, sizeof *ts); ts->prim = 6; ts->count = 4; ts->instances = 1;
+      end(&u); submit1(&u); fake_complete(NVN_GPU_DONE_OK);
+      CHECK(g_gdraws == 4 && nvn_unimpl_count("draw", "geometry_topology_unimplemented") == 4); }
     g_snap_prog = NULL; pass_fresh();
 }
 // 不同阶段同槽的三个 UBO 有不同哨兵；只重绑 GS 后检查对应阶段与管线。
@@ -3053,7 +3097,7 @@ int main(int argc, char **argv) {
     t_one_commit_per_submit();
     t_event_after_done();
     t_fence_sync();
-    t_jump_call();
+    t_jump_call(); t_call_reused();
     t_bad_record();
     t_dirty_bits();
     t_deferred_bind();

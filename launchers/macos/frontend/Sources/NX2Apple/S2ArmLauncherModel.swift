@@ -1095,7 +1095,8 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     private func crashedBeforePlay(_ gameID: String) async throws -> [String] {
         let result = try await saveJob("community", gameID: gameID, extra: [:])
-        return (result["crashed"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
+        // 帧率补丁那条（kind fps，作业层 cheats.note_crash / note_stall）没有补丁名：交 CrashPromptHost 按界面语言写「帧率」
+        return (result["crashed"] as? [[String: Any]] ?? []).compactMap { ($0["kind"] as? String) == "fps" ? CrashPrompt.fpsName : $0["name"] as? String }
     }
 
     private func playChecked(_ game: GameSummary, uiLanguage: String?) {

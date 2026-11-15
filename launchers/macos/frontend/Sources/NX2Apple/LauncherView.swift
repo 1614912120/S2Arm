@@ -114,7 +114,7 @@ struct LauncherView: View {
             UploadDiagnosticsSheet(model: model, gameID: target.id.isEmpty ? nil : target.id, operations: nil, fallback: "") { model.diagUploadFor = nil }.environmentObject(loc)
         }
         .background(DownstreamPromptHost(model: model))   // 下游深度方案确认页（DownstreamConfirmSheet.swift）
-        .background(CrashPromptHost(model: model))       // 上次开着金手指 / 补丁时异常退出：开局前问要不要先关掉
+        .background(CrashPromptHost(model: model))       // 上次开着金手指 / 补丁时异常退出：已当场关掉，开局时通知关了哪几条
         .alert(txt("game.delete.title").replacingOccurrences(of: "{0}", with: deleteFor?.name ?? ""), isPresented: Binding(get: { deleteFor != nil }, set: { if !$0 { deleteFor = nil } })) {
             Button(txt("game.cancel"), role: .cancel) { deleteFor = nil }
             Button(txt("game.delete.confirm"), role: .destructive) { if let g = deleteFor { model.deleteGame(g) }; deleteFor = nil }
@@ -183,13 +183,16 @@ struct LauncherView: View {
     private var topBarRow: some View {
         HStack(spacing: 12) {
             // 点品牌名回欢迎页（社区贡献者补丁 #2）
-            Button { installFor = nil; model.goToLibrary(); model.welcomeHome = true } label: {
-                Text(brand).font(.manrope(22, .bold)).tracking(-0.6).lineLimit(1).fixedSize()
+            // 版本号（11-11 维护者：玩家截图时我们一眼看出是哪一版）：正式版 v0.3.0，开发版 v0.2.9-dev+短提交号（build_app.py 写进 Info.plist）。
+            //   11-14 体验梳理第二轮：放到品牌名下面一行小字——右侧按钮在系统标题栏里、不给窗口内容让位，同一行时长版本号会被「玩家」等按钮盖住
+            VStack(alignment: .leading, spacing: 0) {
+                Button { installFor = nil; model.goToLibrary(); model.welcomeHome = true } label: {
+                    Text(brand).font(.manrope(19, .bold)).tracking(-0.5).lineLimit(1).fixedSize()
+                }
+                .buttonStyle(.plain).accessibilityIdentifier("top.brand")
+                Text(verbatim: Self.displayVersion).font(.manrope(10.5, .semibold)).monospacedDigit().foregroundStyle(.secondary)
+                    .lineLimit(1).fixedSize().textSelection(.enabled).accessibilityIdentifier("topbar.version")
             }
-            .buttonStyle(.plain).accessibilityIdentifier("top.brand")
-            // 版本号（11-11 维护者：玩家截图时我们一眼看出是哪一版）：正式版 v0.3.0，开发版 v0.2.9-dev+短提交号（build_app.py 写进 Info.plist）
-            Text(verbatim: Self.displayVersion).font(.manrope(12.5, .semibold)).monospacedDigit().foregroundStyle(.secondary)
-                .lineLimit(1).fixedSize().textSelection(.enabled).accessibilityIdentifier("topbar.version")
             Spacer()
         }
         .padding(.leading, 90).padding(.trailing, 24)   // the window's traffic lights sit in the transparent title bar

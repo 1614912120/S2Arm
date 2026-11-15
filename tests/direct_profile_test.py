@@ -885,6 +885,10 @@ class Profiles(unittest.TestCase):
         stub.write_text("#!/bin/sh\ncase \" $* \" in *' --show-sdk-version '*) echo 27.0; exit 0;; *' metal --version '*) echo 'Apple metal version 1'; exit 0;; esac\nexit 1\n")
         stub.chmod(0o755)
         env["PATH"] = str(bin_dir) + os.pathsep + env["PATH"]
+        # direct_lib.sh 开头 source pack/srcs.sh 只为 prog_id，可 srcs.sh 一 source 就按源码哈希在运行根里找 nx_unpack、没有就现编；本例运行根是临时目录，
+        #   每跑一次都 dotnet build 一遍（2–30 秒；门禁里还要排本树 C# 构建锁，曾等到 720 秒超时）。这条路不解包、不跑 nx_unpack：
+        #   给一个不存在的路径（srcs.sh 认 S2A_NX_UNPACK 就不找不编），真用到它会当场报错而不是悄悄绿（11-14 门禁提速）
+        env["S2A_NX_UNPACK"] = str(self.base / "no-nx-unpack-needed")
         p = subprocess.run(["bash", str(REPO / "pack/stage_direct.sh"), "fixture"], env=env, capture_output=True, text=True)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         self.assertIn("离线 0 支、运行时首遇现编", p.stdout + p.stderr)

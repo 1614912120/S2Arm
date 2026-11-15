@@ -9,7 +9,17 @@
 // ⑤ 争锁压力：4 条游戏线程按 SDK 用户态写法（CAS 抢锁、置等待位后 0x1A、放锁 CAS 不成则 0x1B）各进出临界区 20000 次，
 //    期望：临界区内同时只有 1 条（重入计数恒为 0）、非原子计数 = 80000。反例：同样线程不加锁跑，检测器必须报出重叠（证明判据能抓到违规）。
 // ⑥ 线程名：主线程登记后名为「nx-<GetThreadId 返回的 id>」（能耗 / sample 拆账按线程名对上线程表）。
+#define S2A_LOGCAP_IMPL   // 本单测给 s2a_log_out 强定义：照常写出，另把现场导出的「同步调用」行截下来判（㉙）
 #include "../src/native.h"
+#include <string.h>
+#include <stdatomic.h>
+static char g_cap[65536]; static size_t g_capn; static _Atomic int g_cap_on;
+#ifndef S2A_LOG_OUT_WEAK   // 安卓暂停夹具（runtime/tests/support/run_pause_wait_host.py）把 thread.c 与本文件拼进同一单元、thread.c 先带进了弱定义：那里不跑 ㉙，不再定义
+void s2a_log_out(int fd, const char *p, size_t n) {
+    ssize_t w = write(fd, p, n); (void)w;
+    if (atomic_load(&g_cap_on) && (strstr(p, "同步调用") || strstr(p, "寄存器 x")) && g_capn + n < sizeof g_cap) { memcpy(g_cap + g_capn, p, n); g_capn += n; g_cap[g_capn] = 0; }
+}
+#endif
 #include <stdatomic.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
@@ -179,6 +189,11 @@ static int64_t wait30(void *p) { struct wait30 *w = p; struct timespec a; clock_
     uint64_t r[31] = {0, (uint64_t)w->hs, 1, 30000000};
     if (w->kind) { r[0] = (uint64_t)w->ow; r[1] = 2; r[2] = 7; r[3] = 30000000; svc_thread(0x34, r); } else svc_thread(0x18, r);
     int64_t v = ns_since(a) - 30000000; w->bad_rc += r[0] != 0xEA01; return v; }
+static _Alignas(4) _Atomic uint32_t g_sv; static _Atomic int g_sv_go, g_sv_done, g_sv_exit;
+static void sv_spinner(uint64_t arg) { (void)arg;   // ㉙：3 次 SignalToAddress 后在游戏代码里空转（不进系统调用 → 线程表里是「在跑」）
+    for (int i = 0; i < 3; i++) { uint64_t r[31] = {(uint64_t)&g_sv, 0, 7, 1}; svc_thread(0x35, r); }
+    atomic_store(&g_sv_done, 1); while (!atomic_load(&g_sv_go)) { }
+    atomic_store(&g_sv_exit, 1); uint64_t e[31] = {0}; svc_thread(0x0A, e); }
 static void spawn(void (*f)(uint64_t), uint64_t arg, uint32_t *h) {
     uint64_t r[31] = {0, (uint64_t)f, arg, 0, 44, 0}; svc_thread(0x08, r); if (h) *h = (uint32_t)r[1];
     uint64_t s_[31] = {r[1]}; svc_thread(0x09, s_);
@@ -943,6 +958,24 @@ int main(void) {
     stress(0);
     CHECK(g_overlap > 0, "反例（不加锁）：检测器没抓到重叠（重叠 %d 次、计数 %ld）——判据失效", atomic_load(&g_overlap), g_count);
     int ov0 = atomic_load(&g_overlap);
+
+    {   // ㉙ 停帧现场：「在跑」的线程打最近的同步类系统调用（号、参数、地址处的值、返回）。期望手写：游戏线程对 g_sv 发 3 次
+        //   SignalToAddress（类型 0、数 1，无人等待 → 返回 0，值不变 7）后空转；导出现场应恰有 3 行是 svc 0x35、参数首个 = &g_sv、调前调后都是 7、返回 0。
+        //   反证：去掉 thread.c 里打印这几行的那段 → 0 行
+        atomic_store(&g_sv, 7); atomic_store(&g_sv_go, 0); atomic_store(&g_sv_done, 0);
+        g_case = "㉙ 停帧现场的同步调用";
+        void s2a_core_leave(void);
+        spawn(sv_spinner, 0, NULL); s2a_core_leave();   // 同 ⑦：主线程放核，空转线程拿核跑；导出现场是宿主侧、不用核
+        int ok = wait_flag(&g_sv_done, 5000);
+        g_capn = 0; g_cap[0] = 0; atomic_store(&g_cap_on, 1); void s2a_thread_dump(void); s2a_thread_dump(); atomic_store(&g_cap_on, 0);
+        char want[160]; snprintf(want, sizeof want, "svc 0x35 参数 %#llx 0 0x7 0x1，地址处值 调前 0x7 调后 0x7，返回 0", (unsigned long long)(uintptr_t)&g_sv);
+        int hits = 0; for (const char *q = g_cap; (q = strstr(q, want)); q++) hits++;
+        CHECK(ok && hits == 3, "㉙ 停帧现场没打出在跑线程最近的同步调用（期望恰 3 行含「%s」，实 %d 行；空转线程跑到 %d），截到：%s", want, hits, ok, g_cap);
+        // 同一份现场：在跑线程还要打通用寄存器（x0–x28 共 8 行）。反证：去掉寄存器那段 → 0 行
+        int regl = 0; for (const char *q = g_cap; (q = strstr(q, "寄存器 x28 ")); q++) regl++;
+        CHECK(regl >= 1, "㉙ 停帧现场没打在跑线程的通用寄存器（寄存器 x28 行 %d 个）", regl);
+        atomic_store(&g_sv_go, 1); wait_flag(&g_sv_exit, 5000);   // 空转线程退出、放核后主线程再往下
+    }
 
     {   // ⑦
         g_case = "⑦ 暂停空转线程放核";

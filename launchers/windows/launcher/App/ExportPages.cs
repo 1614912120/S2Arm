@@ -341,7 +341,6 @@ public sealed partial class EnvironmentWindow
         }
         body.Children.Add(GameHeader(game));
         body.Children.Add(SGradeCard(game));   // S 级优化（Beta，11-13，同 Mac SGradeCard.swift）：这款这个版本命中了哪些社区补丁，命中的出包时自动打入
-        body.Children.Add(Muted(T("batch.hint")));   // 批量出包（v0.2.4）：添加游戏一次放进多款，导入完列成清单连续出包
 
         // platforms
         var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
@@ -1201,7 +1200,7 @@ public sealed partial class EnvironmentWindow
         var text = new StackPanel { Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
         text.Children.Add(new TextBlock { Text = T("export.boost.title"), FontSize = 24, FontWeight = FontWeight.Black, Foreground = Diag((SGoldHi, 0), (SGold, 0.5), (SRose, 1)) });
         text.Children.Add(new TextBlock { Text = string.Join(" · ", parts), FontSize = 15, FontWeight = FontWeight.SemiBold, Foreground = Ink, TextWrapping = TextWrapping.Wrap });
-        text.Children.Add(WrappedMuted(T("export.boost.hint"), 13));
+        text.Children.Add(WrappedMuted(T("export.boost.hint.win"), 13));   // 金手指在哪开按平台各写各的（Mac 版 export.boost.hint 写 Mac 启动设置）
         Grid.SetColumn(text, 1); row.Children.Add(text);
         var card = new Border { Child = row, Padding = new Thickness(22, 18), CornerRadius = new CornerRadius(18), BorderThickness = new Thickness(1),
             Background = new SolidColorBrush(A(SGold, 0.08)), BorderBrush = new SolidColorBrush(A(SGold, 0.35)) };

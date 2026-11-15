@@ -250,7 +250,9 @@ import S2ArmAppleAdapter
             case "install":   // 装机窗（进度 / 完成页）：同点顶栏「查看结果」
                 guard let g = game() else { return .bad("没有这个 gameId") }
                 model.showEnvironment = false; model.showInstallFor = g.id
-            default: return .bad("page 只认 environment / export / library / install")
+            case "sgradeUpgrade":   // S 级优化升级页（同点游戏库「S 级优化升级」）：截图核界面用
+                model.showEnvironment = false; model.exportFor = nil; model.sgradeUpgradeOpen = true
+            default: return .bad("page 只认 environment / export / library / install / sgradeUpgrade")
             }
             return .ok()
         case ("POST", "/refresh"):
