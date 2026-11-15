@@ -266,7 +266,7 @@ struct LaunchSettingsSheet: View {
     }
 }
 
-/// 开局前的崩溃提示（维护者 11-12：「崩了再恢复」）：上次开着 X、Y 时游戏退出了，要先关掉它们吗？「关掉 / 继续开着」，不替玩家自动关
+/// 开局时的崩溃通知（11-13 维护者改定：不问）：上次开着 X、Y 时游戏退出了，作业层已当场关掉（pack/jobs/cheats.py note_crash），这里只告诉玩家关了哪几条、可去启动设置重开
 struct CrashPrompt: Identifiable {
     let id = UUID()
     let game: GameSummary

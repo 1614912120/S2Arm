@@ -1377,7 +1377,7 @@
   "s2arm.export.dlc": "DLC × %d",
   "s2arm.export.elapsed": "Elapsed",
   "s2arm.export.finishAt": "done around %@",
-  "s2arm.export.hint": "Keep your Mac plugged in and awake for a large game’s first export, which may take tens of minutes",
+  "s2arm.export.hint": "A large game's first export takes tens of minutes; keep your Mac plugged in and awake. Add several games to export in a row",
   "s2arm.export.installExisting": "Already exported? Install on iPhone",
   "s2arm.export.log": "Details",
   "s2arm.export.noDlc": "No DLC",

@@ -77,10 +77,13 @@ package struct CardRow<Trailing: View>: View {
     let dot: Color?
     let help: String
     let open: Bool?
+    /// 控件另起一行（11-14 体验梳理第二轮）：说明长、右边又有两个按钮时，横排会把说明挤成一条窄栏折五六行
+    let stacked: Bool
     let trailing: Trailing
 
     package init(_ title: String, detail: String = "", detail2: String = "", dot: Color? = nil, help: String = "", open: Bool? = nil,
-                 @ViewBuilder trailing: () -> Trailing) {
+                 stacked: Bool = false, @ViewBuilder trailing: () -> Trailing) {
+        self.stacked = stacked
         self.title = title
         self.detail = detail
         self.detail2 = detail2
@@ -91,7 +94,24 @@ package struct CardRow<Trailing: View>: View {
     }
 
     package var body: some View {
-        HStack(spacing: LauncherTheme.Space.section) {
+        Group {
+            if stacked {
+                VStack(alignment: .leading, spacing: LauncherTheme.Space.medium) {
+                    texts
+                    HStack { Spacer(minLength: 0); trailing.launcherRowControls() }
+                }
+            } else {
+                HStack(spacing: LauncherTheme.Space.section) {
+                    texts
+                    trailing.launcherRowControls()
+                }
+            }
+        }
+        .padding(.horizontal, LauncherTheme.Metrics.cardInset).padding(.vertical, LauncherTheme.Space.large)
+        .frame(minHeight: 68)
+    }
+
+    private var texts: some View {
             VStack(alignment: .leading, spacing: LauncherTheme.Space.xSmall) {
                 HStack(spacing: 6) {
                     if let dot { Circle().fill(dot).frame(width: 7, height: 7).accessibilityHidden(true) }
@@ -117,10 +137,6 @@ package struct CardRow<Trailing: View>: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            trailing.launcherRowControls()
-        }
-        .padding(.horizontal, LauncherTheme.Metrics.cardInset).padding(.vertical, LauncherTheme.Space.large)
-        .frame(minHeight: 68)
     }
 }
 
