@@ -15,6 +15,8 @@ import os
 import re
 import shutil
 import stat
+import subprocess
+import sys
 from pathlib import Path
 
 import layout
@@ -51,6 +53,27 @@ def image_compat(image, manifest):
         libs = [p.name[2:] for p in (Path(image) / "shaders/direct").glob("b-*") if p.is_dir()]
         chain = libs[0] if len(libs) == 1 else None
     return dict(hostAbi=manifest.get("hostAbi", 1), dmshChain=chain)
+
+
+LSREGISTER = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+# 系统应用登记里所有 S2ArmGame.app 记录逐条注销（含早已删掉的路径：系统照样给它们出启动台图标）。$1 = lsregister
+FORGET_SCRIPT = ('"$1" -dump 2>/dev/null | grep "path:.*/S2ArmGame\\.app" | sed "s/.*path: *//; s/ (0x[0-9a-f]*)$//" | sort -u'
+                 ' | while IFS= read -r p; do "$1" -u "$p" 2>/dev/null; done')
+
+
+def forget_registrations(lsregister=None, wait=False):
+    """#1126：Mac 宿主是直接执行 Contents/MacOS/s2arm-host 起局的，系统每次起它都会把这个 .app 登记进应用登记库，
+    启动台 / 应用程序里就多出一个灰色「S2ArmGame」；引擎更新、换库后旧路径的登记还留着（玩家实测 43 条、34 条指向已删路径）。
+    宿主不需要登记（启动器不经启动服务打开它）：每局结束后把全部 S2ArmGame.app 登记注销。
+    后台脱离进程做（导出整张登记表约 3 秒），不拖慢回游戏库；失败不影响游戏，只是图标还在。wait=True 给单测"""
+    lsregister = lsregister or os.environ.get("S2A_LSREGISTER") or LSREGISTER   # 单测改指（jobcase：不碰本机真登记）
+    if sys.platform != "darwin" or not os.path.exists(lsregister):
+        return None
+    p = subprocess.Popen(["/bin/bash", "-c", FORGET_SCRIPT, "forget", lsregister], stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    if wait:
+        p.wait()
+    return p
 
 
 def host_exe(c, sha):
