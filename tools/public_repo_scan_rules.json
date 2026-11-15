@@ -560,7 +560,6 @@
       "android/codecs/tests/vectors/*.pps-change",
       "android/tests/fixtures/input-identity-v1/*.bin",
       "compat/tree/src/Ryujinx.Graphics.Vulkan/Effects/Textures/*.bin",
-      "graphics/tools/shbake/tests/refpso/*.gz",
       "launchers/windows/launcher/App/Assets/Fonts/*.ttf",
       "shell/Sources/ShellUI/Resources/*.ttf",
       "runtime/tests/cpatch_loader/module.nso",
@@ -587,7 +586,6 @@
       "runtime/fps/*.tsv",
       "runtime/tests/cpatch/*.tsv",
       "graphics/tools/shbake/tests/trlog_baseline.tsv",
-      "graphics/tools/shbake/tests/refpso/*.tsv",
       "android/codecs/tests/vectors/*.txt",
       "android/codecs/tests/vectors/*.json",
       "android/codecs/tests/vectors/*.hex",
@@ -625,7 +623,6 @@
       "graphics/widen/tables/*",
       "runtime/fps/*.tsv",
       "runtime/tests/cpatch/*.tsv",
-      "graphics/tools/shbake/tests/refpso/*",
       "graphics/tools/shbake/tests/trlog_baseline.tsv"
     ],
     "payload_directories": [
