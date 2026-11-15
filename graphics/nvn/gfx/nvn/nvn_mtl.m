@@ -621,15 +621,22 @@ static void udc_selftest(void) {
 }
 static void bcd_prewarm(void);   // no BC: start building the decompression pipeline (defined with bcd_pso)
 static void ixc_prewarm(void); static void tensor_sq_prewarm(void);   // Switch 2: start building the indirect conversion / tensor stand-in kernels (defined with ixc_run / tensor_sq_pass)
-void mtl_init(void) {
-    if (g_dev) return;
-    const char *vbc = getenv("DM_NVN_VBUF_CACHE"); g_vbuf_cache = !(vbc && !strcmp(vbc, "0"));
+// 起局时的出图方式（mtl_init 首局、nvn_be_begin_session 每局开头共用同一判法，11-15：每局开头原先只按 DM_PRESENT_LINK 设、缺省 1，
+//   补帧开着也起显示链——进程内重启 / 切游戏后补帧任务与显示链同时取画布，CAMetalLayerInvalidOperation 闪退，#ee56e7 / #1155 的另一条入口）。
+//   0 = 出图线程自己取画布、1 = 60 Hz 显示链、2 = 高刷显示链
+static int present_link_from_env(void) {
     const char *link = getenv("DM_PRESENT_LINK");
-    g_dm_present_link = link ? atoi(link) : 1; if (g_dm_present_link < 0 || g_dm_present_link > 2) g_dm_present_link = 1;   // Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
+    int v = link ? atoi(link) : 1; if (v < 0 || v > 2) v = 1;   // Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
     // 出图补帧走出图线程自己取画布，一开始就不建显示链接。例外：社区帧率补丁已要了 120 Hz 显示链（DM_PRESENT_LINK=2，runtime/src/cpatch.c fps_link）——
     //   补丁开着时补帧每帧让路（fi_wanted），走原出图路径；这里再清成 0，原路径就没有显示链、只能按固定 60 Hz 出，120 档被锁在 60
     //   （11-15 iPhone 实机一款 120 帧补丁的游戏局内：补帧开 60.0 帧、DM_PRESENT_FI=0 120.0 帧）
-    { const char *fi = getenv("DM_PRESENT_FI"); if (fi && !strcmp(fi, "1") && g_dm_present_link != 2) g_dm_present_link = 0; }
+    { const char *fi = getenv("DM_PRESENT_FI"); if (fi && !strcmp(fi, "1") && v != 2) v = 0; }
+    return v;
+}
+void mtl_init(void) {
+    if (g_dev) return;
+    const char *vbc = getenv("DM_NVN_VBUF_CACHE"); g_vbuf_cache = !(vbc && !strcmp(vbc, "0"));
+    g_dm_present_link = present_link_from_env();
     const char *latency = getenv("DM_PRESENT_LATENCY");
     if (latency && atoi(latency) > 0) g_present_latency = atoi(latency);
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
