@@ -425,6 +425,10 @@ if ! grep -q "C907 保留路径管线缓存落盘：已核对" "$out/log"; then
     echo "【红】没跑到 C907（停局保留会话时的管线缓存落盘）" >&2
     exit 1
 fi
+if ! grep -q "C205 图形管线散列表：增长 / 多次翻倍 / 增长失败沿用旧表 / 逐字节逐字段 / 先比散列 / 两条退路已核对" "$out/log"; then
+    echo "【红】没跑到 C205（图形管线散列表：增长重排、起始 16 桶多次翻倍、增长分配失败沿用旧表、散列覆盖每个字节 / 字段、先比存下的散列、两条退路）" >&2
+    exit 1
+fi
 bad=$(grep -cE "Validation Error|VUID-" "$out/log" || true)
 if [ "$bad" -ne 0 ]; then
     echo "【红】validation 报错 $bad 条：" >&2

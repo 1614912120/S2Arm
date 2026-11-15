@@ -1381,6 +1381,18 @@ static void t_decl_view(void) {
     CHECK(rp_view_by_id_decl(11, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 1, &g_fake_cmd, NULL) == z);
     CHECK(rp_view_by_id_decl(-1, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 1, &g_fake_cmd, NULL) == z);
     CHECK(g_tex_creates == creates + 1 && g_nup == 6 && g_red_lines == red);
+    // #1147 空槽：单槽取池容量内一个没登记的号（句柄 0 → tex_base + 0 落在驱动保留区、TexturePoolInitialize 不写）→ 绑同一张声明类型零贴图、
+    //   不跳整笔、不报红，只记信息计数；号越过池容量、负号、池容量未知（没登记池）仍取不到 → 调用方照旧报 texture_slot_unresolved
+    nvn_be_set_tex_pool_n(64);
+    uint64_t ez0 = rp_empty_slot_zero_count();
+    CHECK(rp_view_by_id_decl(40, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 0, &g_fake_cmd, NULL) == z);
+    CHECK(rp_view_by_id_decl(41, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 0, &g_fake_cmd, NULL) == z);
+    CHECK(rp_empty_slot_zero_count() == ez0 + 2 && g_tex_creates == creates + 1 && g_red_lines == red);
+    CHECK(rp_view_by_id_decl(64, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 0, &g_fake_cmd, NULL) == NULL);
+    CHECK(rp_view_by_id_decl(-1, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 0, &g_fake_cmd, NULL) == NULL);
+    nvn_be_set_tex_pool_n(0);
+    CHECK(rp_view_by_id_decl(40, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 0, &g_fake_cmd, NULL) == NULL);
+    CHECK(rp_empty_slot_zero_count() == ez0 + 2);
     // 不能桥接的不同维度组合（#936）：记账，绑声明类型的零贴图（同 iOS / Ryujinx），不把原视图交下去。
     nvn_gpu_view original = rp_view_by_id(11, &g_fake_cmd, NULL);
     creates = g_tex_creates;

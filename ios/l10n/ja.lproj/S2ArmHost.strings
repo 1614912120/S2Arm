@@ -451,6 +451,7 @@
 "settings.fps.knownIssue.message" = "このゲームでは 60 FPS に既知の問題があります。ゲームの速度が異常な場合はオフにしてください。";
 "settings.fps.native" = "このゲームは元から 60 FPS です";
 "settings.group.dev" = "開発";
+"settings.devEntry" = "開発と診断";
 "settings.notStarted" = "ゲームが起動していません";
 "settings.restart.message" = "今すぐゲームを再起動しますか? 未保存の進行状況は失われますので、ゲーム内でセーブ済みであることを確認してください。";
 "settings.restart.messageLater" = "保存した設定は次回ゲーム起動時に有効になります。";

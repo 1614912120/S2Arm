@@ -307,8 +307,10 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
           pthread_mutex_lock(&g_texmem_mu); uint64_t th = g_texmem_hit, tm_ = g_texmem_miss; g_texmem_hit = g_texmem_miss = 0; uint32_t tn = g_texmem_n; uint64_t tb = g_texmem_bytes; pthread_mutex_unlock(&g_texmem_mu);
           snprintf(b, sizeof b, "贴图显存池（每帧，近 300 帧）：复用 %.1f 次、向驱动要 %.1f 次；池里现有 %u 块 %llu MB", th / 300.0, tm_ / 300.0, tn, (unsigned long long)(tb >> 20));
           nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
-        { uint64_t ns = __atomic_exchange_n(&g_pl_ns, 0, __ATOMIC_RELAXED), n = __atomic_exchange_n(&g_pl_n, 0, __ATOMIC_RELAXED), st = __atomic_exchange_n(&g_pl_steps, 0, __ATOMIC_RELAXED);
-          snprintf(b, sizeof b, "取管线查找（每帧，近 300 帧）：%.1f 次、共 %.0f 微秒、每次比 %.1f 条", n / 300.0, ns / 300.0 / 1000.0, n ? (double)st / (double)n : 0.0);
+        { uint64_t ns = __atomic_exchange_n(&g_pl_ns, 0, __ATOMIC_RELAXED), n = __atomic_exchange_n(&g_pl_n, 0, __ATOMIC_RELAXED), st = __atomic_exchange_n(&g_pl_steps, 0, __ATOMIC_RELAXED), cm = __atomic_exchange_n(&g_pl_cmp, 0, __ATOMIC_RELAXED);
+          pthread_mutex_lock(&g_mu); const unsigned htn = g_pipe_ht_n, htc = g_pipe_cnt; pthread_mutex_unlock(&g_mu);
+          snprintf(b, sizeof b, "取管线查找（每帧，近 300 帧）：%.1f 次、共 %.0f 微秒、每次走 %.1f 条（其中逐字段比 %.2f 条）；散列桶 %u 个、图形管线 %u 条",
+              n / 300.0, ns / 300.0 / 1000.0, n ? (double)st / (double)n : 0.0, n ? (double)cm / (double)n : 0.0, htn, htc);
           nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
         { uint64_t dn = __atomic_exchange_n(&g_dv_n, 0, __ATOMIC_RELAXED), dt = __atomic_exchange_n(&g_dv_ns[0], 0, __ATOMIC_RELAXED), dl = __atomic_exchange_n(&g_dv_ns[1], 0, __ATOMIC_RELAXED);
           uint64_t gn = __atomic_exchange_n(&g_gmu_n, 0, __ATOMIC_RELAXED), gw = __atomic_exchange_n(&g_gmu_wait_n, 0, __ATOMIC_RELAXED), gwn = __atomic_exchange_n(&g_gmu_wait_ns, 0, __ATOMIC_RELAXED);
