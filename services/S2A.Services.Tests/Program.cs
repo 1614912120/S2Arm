@@ -2710,6 +2710,12 @@ namespace S2A.Services.Tests
                             string p178_d1 = string.Join(",", SaveTransfer.DroppedUsers(p178_tgt, p178_bak).Order());
                             string p178_d2 = string.Join(",", SaveTransfer.DroppedUsers(p178_tgt, p178_tgt).Order());
                             Check("存档恢复（P1-178）：备份里没有的本地玩家 / 两边相同", $"{p178_u2} / （空）", $"{p178_d1} / {(p178_d2.Length == 0 ? "（空）" : p178_d2)}");
+                            // 余项：要删的摘要文件名。拿掉 U2、第一个玩家是 U2 → 带后缀那份 + 无后缀那份；第一个玩家是 U1（在备份里）→ 只删 U2 带后缀那份；认不出第一个玩家（null）→ 也只删带后缀那份
+                            string p178_n1 = string.Join(",", SaveTransfer.StateFilesToDrop(new[] { p178_u2 }, p178_u2.ToUpperInvariant()));
+                            string p178_n2 = string.Join(",", SaveTransfer.StateFilesToDrop(new[] { p178_u2 }, p178_u1));
+                            string p178_n3 = string.Join(",", SaveTransfer.StateFilesToDrop(new[] { p178_u2 }, null));
+                            Check("存档恢复（P1-178 余项）：第一个玩家被拿掉 / 没被拿掉 / 认不出", $"savedata-state-{p178_u2}.txt,savedata-state.txt / savedata-state-{p178_u2}.txt / savedata-state-{p178_u2}.txt",
+                                  $"{p178_n1} / {p178_n2} / {p178_n3}");
                         }
 
                         // 审计 P1-163：摘要按内容。同路径同大小同修改时间、内容不同 → 摘要不同；只改修改时间 → 摘要不变（原先两向都错）
