@@ -215,8 +215,6 @@
 "vpad.menu.holdLock.note" = "Maintenir 2 s pour verrouiller ; ce jeu uniquement";
 "vpad.menu.hud" = "Superposition de performances";
 "vpad.menu.hud.note" = "Fréquence d'images et mémoire dans le coin supérieur droit";
-"vpad.menu.fi" = "Génération d'images";
-"vpad.menu.fi.note" = "Remonte de 30 FPS à 60 : plus fluide, avec un peu plus de latence ; s'applique immédiatement";
 "vpad.menu.manageLayouts" = "Importer / Exporter / Enregistrer sous…";
 "vpad.menu.ns2pro" = "Activer la manette Switch 2 Pro";
 "vpad.menu.pad" = "Manettes & Mouvement";
@@ -288,8 +286,6 @@
 "app.restartToApply" = "Redémarrer le jeu pour appliquer";
 "app.widen.once" = "Problèmes d'affichage plein écran détectés. Le plein écran sera réessayé au prochain lancement.";
 "app.widen.onceHot" = "Problèmes d'affichage plein écran détectés, le format d'origine est utilisé cette fois. Le plein écran sera réessayé au prochain lancement.";
-"app.widen.persist" = "Problèmes d'affichage plein écran détectés, le jeu démarrera désormais en format d'origine. Vous pouvez réactiver le plein écran dans les Réglages.";
-"app.widen.persistHot" = "Problèmes d'affichage plein écran détectés, le jeu est revenu au format d'origine et le conservera. Vous pouvez réactiver le plein écran dans les Réglages.";
 "app.widen.title" = "Plein écran";
 "common.later" = "Plus tard";
 "common.restartLater" = "Redémarrer plus tard";
@@ -524,3 +520,15 @@
 "sgrade.state.opted_out" = "Non ajouté : « Ajouter à la compilation » était désactivé lors de l’export. Activez-le et exportez à nouveau.";
 "sgrade.state.pending.ios" = "De nouveaux patchs sont disponibles : ouvrez S2Arm sur votre ordinateur et choisissez « Mise à niveau classe S ».";
 "sgrade.state.mac_only" = "Les patchs graphiques sont réservés à la version Mac.";
+"sgrade.row.fps" = "Déblocage d'i/s";
+"sgrade.src.fs.adaptive" = "Correctif de la communauté · s'adapte à l'écran";
+"sgrade.src.fs.fixed" = "Correctif de la communauté · format fixe";
+"sgrade.src.fs.own" = "Plein écran S2Arm (pas de correctif de la communauté pour ce jeu)";
+"sgrade.src.fps.patch" = "Correctif de la communauté · jusqu’à %1$@ i/s";
+"sgrade.src.fps.fi" = "Génération d'images : de 30 à 60 i/s";
+"sgrade.src.fps.fi.nopatch" = "Génération d'images : de 30 à 60 i/s (pas de correctif de la communauté pour ce jeu)";
+"sgrade.unavail.fi" = "Cet appareil ne prend pas en charge la génération d'images";
+"sgrade.cheats.none" = "Pas encore de codes de triche pour ce jeu · vous pouvez les importer sur votre ordinateur";
+"sgrade.cpatch.detail" = "Détails des correctifs de la communauté";
+"sgrade.state.off_auto.widen_fit" = "Désactivé automatiquement : le %1$@, le plein écran ne remplissait pas l'écran ou étirait l'image";
+"sgrade.notice.fullscreen_off" = "Le plein écran S2Arm n'a pas fonctionné cette fois : il a été désactivé et le jeu tourne normalement. Vous pouvez le réactiver depuis le menu en forme d'engrenage pour réessayer.";
