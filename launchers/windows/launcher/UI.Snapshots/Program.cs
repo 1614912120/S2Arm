@@ -349,6 +349,11 @@ SetW(pack, "catalog", new LibraryCatalog([atDefault, elsewhere], true, "密钥�
 SetW(pack, "librarySummary", "library.completed"); SetW(pack, "libraryDiagnostics", "");
 pack.Height = 2100;   // 设置页最长：装机方式 + 环境检查 + 运行路径都要在一张图里
 SaveP("tidy_02_settings", () => Navigate(pack, "settings"));
+// 换游戏库没换成（D-3P26）：失败原因常驻在设置页游戏库一行下面（作业层原句按界面语言翻）
+SetW(pack, "libraryFailure", (string)pack.GetType().GetMethod("LibraryFailed", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+    .Invoke(pack, [@"C:\Program Files\S2Arm\games", "游戏库不能放在 S2Arm 启动器自己的文件夹里，也不能包含它（升级时这个文件夹会整个替换，库会被一起删掉）：换一个文件夹。"])!);
+SaveP("tidy_03_settings_library_failed", () => Navigate(pack, "settings"));
+SetW(pack, "libraryFailure", "");
 // S 级优化（v0.4.0，同 Mac）：封面左上角金色 S、游戏库「S 级优化升级」入口、升级页三态（有可升级 / 都没找到原始程序 / 查找中）
 pack.Height = 1100;
 SetW(pack, "catalog", new LibraryCatalog([atDefault with { SGrade = true }, elsewhere], true, "密钥已就绪"));
