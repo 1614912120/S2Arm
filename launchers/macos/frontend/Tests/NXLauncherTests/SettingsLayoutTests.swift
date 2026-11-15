@@ -20,7 +20,7 @@ import S2ArmAppleAdapter
         let navigation = fixture.model.gamepad
         navigation.source.controllers = { [] }
         for language in [Lang.zh, .en] {
-            for width: CGFloat in [800, 1120, 1440] {
+            for width: CGFloat in [800, 1000, 1120, 1440] {
                 fixture.model.home.search = ""
                 let page = AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture").frame(width: width, height: 630))
                 let (host, window) = try await render(page, fixture: fixture, language: language)

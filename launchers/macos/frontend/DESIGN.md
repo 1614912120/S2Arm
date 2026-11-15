@@ -67,4 +67,4 @@ build/venv/bin/python3 launchers/macos/build_app.py
 bash tools/contrib_check.sh --base origin/main
 ```
 
-`SettingsLayoutTests` 使用原创、无游戏资源的夹具，检查中英文页面尺寸、操作边界、下拉选择、键位清除与保存、滑块调整、签名引导和文案规则。首页搜索还检查输入框属于原窗口、展开不新增窗口、查询保留、清除后保持展开，以及三种宽度下控制栏不越界或换行；签名布局在两种宽度下核对父子右边缘。前端测试已接入 `launchers/macos/test.sh`，独立核对发现数与完成数。设置 `S2A_SETTINGS_SHOTS` 可输出真实 SwiftUI 窗口截图；截图不代替交互测试。新增页面或变体时一并检查禁用、加载、失败、长名称与滚动状态。
+`SettingsLayoutTests` 使用原创、无游戏资源的夹具，检查中英文页面尺寸、操作边界、下拉选择、键位清除与保存、滑块调整、签名引导和文案规则。首页搜索还检查输入框属于原窗口、展开不新增窗口、查询保留、清除后保持展开，以及四种宽度下控制栏不越界或换行；签名布局在两种宽度下核对父子右边缘。前端测试已接入 `launchers/macos/test.sh`，独立核对发现数与完成数。设置 `S2A_SETTINGS_SHOTS` 可输出真实 SwiftUI 窗口截图；截图不代替交互测试。新增页面或变体时一并检查禁用、加载、失败、长名称与滚动状态。
