@@ -323,6 +323,16 @@ static void pc_fb_note_desc(const nvn_gpu_pass_desc *d, int slot, uint32_t gen, 
 static void pc_destroy_all(void);
 enum { PIPE_HT_N = 1024 };
 static uint64_t g_desc_ns[4], g_desc_nw, g_desc_sets, g_desc_hit;   // 描述符四步：分配 / 构造写入项 / 写入 / 绑定；写入的描述符条数；重写的组数
+// 诊断累加器（g_desc_* / g_draw_ns）只增不清零：每个读者自带一份「上次读到的值」，读数 = 当前 − 上次。
+// 近 300 帧读数（backend_vulkan_wsi.inc）与每 5 秒的逐笔读数（nvn_gpu_draw 末尾）原先各自对同一批累加器 exchange 清零，
+// 互相取走对方窗口里的一部分，两边读数的每帧值、每笔值都偏小（nvk_gputime 开着时）。
+// 64 位累加器只增不清零，不会溢出：纳秒累加器按每秒 1e9 算，约 584 年才回绕。
+// 「上次读到的值」是各读者函数里的 static，与同一个函数里原有的 np / w_t0 / w_n 一样，只由调用这个函数的那一个线程读写，不加锁。
+static inline uint64_t diag_delta(const uint64_t *g, uint64_t *last) {
+    const uint64_t cur = __atomic_load_n(g, __ATOMIC_RELAXED), d = cur - *last;
+    *last = cur;
+    return d;
+}
 // 诊断读数（nvk_gputime 开着才计）：贴图 / 视图 / 帧缓冲的建与拆各用多久、各几次。
 // 0 vkCreateImage，1 要显存并绑定，2 默认视图，3 帧缓冲，4 附件视图，5 拆视图，6 从帧缓冲表里摘（pc_drop_view），7 拆贴图（视图 + 图 + 还显存）
 static uint64_t g_life_ns[8], g_life_n[8];
@@ -330,6 +340,7 @@ static uint64_t g_life_ns[8], g_life_n[8];
 #define LIFE_ADD(i) do { if (g_draw_tm) { uint64_t ln_ = now_ns(); __atomic_fetch_add(&g_life_ns[i], ln_ - lt_, __ATOMIC_RELAXED); __atomic_fetch_add(&g_life_n[i], 1, __ATOMIC_RELAXED); lt_ = ln_; } } while (0)
 static uint64_t now_ns(void);
 static int g_draw_tm; static uint64_t g_draw_ns[3];   // 绘制入口分段计时：描述符 / 状态 / 顶点索引与绘制调用
+static uint64_t g_draw_log_ns = 5000000000ull;         // 逐笔读数（nvn_gpu_draw 末尾）的周期，缺省 5 秒；测试钩子 nvn_gpu_vk_test_diag_timing 可缩短
 static void draw_tm_init(void) { if (!g_draw_tm) g_draw_tm = nvn_plat_flag("nvk_gputime", 0) != 0; }   // 与 GPU 时间戳同一个开关
 // 回放线程取 g_mu（nvk_gputime 开着才计）：先 trylock，没拿到的记「真等了几次、等了多久」。持 g_mu 的别的线程（游戏工作线程销毁视图、
 // 完成线程摘段）会把回放线程挡在这里；回放耗时里有多少是在这儿干等，看这一项。只用在回放线程独占的录制路径上（cmd_ref_at / 附件视图 / 建视图）。
@@ -4377,19 +4388,20 @@ void nvn_gpu_draw(nvn_gpu_cmd ch, const nvn_gpu_draw_args *a) {
         // 每 5 秒一次：把后端逐笔的三段（描述符 / 状态 / 顶点索引与绘制调用）摊到每笔上打印，
         // 找到后端这笔 5 微秒里到底是谁（真机读数见坑记录续 27）。
         static uint64_t w_t0; static uint64_t w_n;
+        static uint64_t l_draw[3], l_desc[4], l_dnw, l_dsets;   // 这个读者上次读到的累加器值（不清零共享累加器，见 diag_delta）
         w_n++;
         const uint64_t now = dt3;
         if (!w_t0) w_t0 = now;
-        if (now - w_t0 >= 5000000000ull) {
-            const uint64_t a0 = __atomic_exchange_n(&g_draw_ns[0], 0, __ATOMIC_RELAXED);
-            const uint64_t a1 = __atomic_exchange_n(&g_draw_ns[1], 0, __ATOMIC_RELAXED);
-            const uint64_t a2 = __atomic_exchange_n(&g_draw_ns[2], 0, __ATOMIC_RELAXED);
-            const uint64_t d0 = __atomic_exchange_n(&g_desc_ns[0], 0, __ATOMIC_RELAXED);
-            const uint64_t d1 = __atomic_exchange_n(&g_desc_ns[1], 0, __ATOMIC_RELAXED);
-            const uint64_t d2 = __atomic_exchange_n(&g_desc_ns[2], 0, __ATOMIC_RELAXED);
-            const uint64_t d3 = __atomic_exchange_n(&g_desc_ns[3], 0, __ATOMIC_RELAXED);
-            const uint64_t dnw = __atomic_exchange_n(&g_desc_nw, 0, __ATOMIC_RELAXED);
-            const uint64_t dsets = __atomic_exchange_n(&g_desc_sets, 0, __ATOMIC_RELAXED);
+        if (now - w_t0 >= __atomic_load_n(&g_draw_log_ns, __ATOMIC_RELAXED)) {
+            const uint64_t a0 = diag_delta(&g_draw_ns[0], &l_draw[0]);
+            const uint64_t a1 = diag_delta(&g_draw_ns[1], &l_draw[1]);
+            const uint64_t a2 = diag_delta(&g_draw_ns[2], &l_draw[2]);
+            const uint64_t d0 = diag_delta(&g_desc_ns[0], &l_desc[0]);
+            const uint64_t d1 = diag_delta(&g_desc_ns[1], &l_desc[1]);
+            const uint64_t d2 = diag_delta(&g_desc_ns[2], &l_desc[2]);
+            const uint64_t d3 = diag_delta(&g_desc_ns[3], &l_desc[3]);
+            const uint64_t dnw = diag_delta(&g_desc_nw, &l_dnw);
+            const uint64_t dsets = diag_delta(&g_desc_sets, &l_dsets);
             char b2[320];
             snprintf(b2, sizeof b2, "后端逐笔（微秒/笔，共 %llu 笔）：入口 %.2f（描述符准备 %.2f / 更新 %.2f / 绑定 %.2f / 收尾 %.2f）、状态 %.2f、顶点索引与绘制 %.2f；描述符更新 %.2f 笔/笔（%.1f 套）",
                      (unsigned long long)w_n,
@@ -6408,6 +6420,12 @@ void nvn_gpu_vk_test_delay_segment(uint64_t signal, uint32_t ms) {
 
 // 测试钩子（同步校验的检测器负控）：on = 0 时派发前不再按传输写补屏障，用来证明用例测得出缺屏障。只给测试用。
 void nvn_gpu_vk_test_xfer_barrier(int on) { g_test_no_xfer_bar = !on; }
+
+// 测试钩子（C207）：直接开 / 关诊断计时（nvk_gputime 的效果，g_draw_tm），并把逐笔读数的周期改成 draw_log_ns 纳秒（0 = 还原 5 秒）。只给测试用。
+void nvn_gpu_vk_test_diag_timing(int on, uint64_t draw_log_ns) {
+    __atomic_store_n(&g_draw_log_ns, draw_log_ns ? draw_log_ns : 5000000000ull, __ATOMIC_RELAXED);
+    g_draw_tm = on != 0;
+}
 
 // 测试钩子（与 vk_clear 的 s2a_vk_clear_set_submit_fault 同一口径）：下一段 commit 按提交失败处理。
 void nvn_gpu_vk_test_set_fault(int mode) {
