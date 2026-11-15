@@ -952,6 +952,34 @@ def _export_img(c, pack, dst):
         raise Failure("写导出用的游戏文件失败：" + (tool_reason(log) or str(e)), code="package_failed") from e
 
 
+EXPORT_STAMPS = "export-stamps.json"   # 私有目录：上次导出文件夹里每个 .img 的来源戳（不往玩家的导出文件夹里放杂文件）
+
+
+def _pack_stamp(c, pack):
+    """这款导出 .img 的来源戳：资源包里每个文件的相对路径 / 大小 / 修改时间 + 写 .img 的程序（pack/img.py）摘要。
+    戳一样 = 这次写出来的 .img 和上次逐字节相同（#1132：加一款新游戏也把 8 款 53 GB 全重写一遍、约 18 分钟）"""
+    h = hashlib.sha256()
+    h.update(hashlib.sha256((c.engine / "pack/img.py").read_bytes()).digest())
+    root = Path(pack)
+    for p in sorted(root.rglob("*")):
+        if p.is_file():
+            st = p.stat()
+            h.update(f"{p.relative_to(root).as_posix()}\0{st.st_size}\0{st.st_mtime_ns}\n".encode())
+    return h.hexdigest()
+
+
+def _reuse_export(old, new, old_stamp, stamp):
+    """上次导出的这个文件来源没变、文件还在：硬链接过来沿用，不重写（几 GB 的 .img 秒过）。硬链接不动旧文件，
+    这次导出中途失败旧导出文件夹照样完整；建不了硬链接（exFAT 等）或戳不同 → False，照常重写"""
+    if old_stamp is None or old_stamp != stamp or not old.is_file():
+        return False
+    try:
+        os.link(old, new)
+    except OSError:
+        return False
+    return True
+
+
 UPDATE_SUFFIX = {"zh": " 着色器更新包.img", "en": " shader update.img"}
 
 
@@ -1233,12 +1261,18 @@ def export_phone(c, gid=None):
         shutil.rmtree(work / "assemble", ignore_errors=True)
         c.begin("写各款游戏的 .img（含着色器库）与着色器更新包", 3, 4)
         used, listed = set(), []
+        prev, stamps = export_dir(c), {}
+        old_stamps = read(c.private / EXPORT_STAMPS, {}) or {}
         for g in games:
             f = _img_name(names.get(g, g), g, used)
-            _export_img(c, layout.ios_pack(c, g), out / f)
+            stamp = _pack_stamp(c, layout.ios_pack(c, g))
+            if not _reuse_export(prev / f, out / f, old_stamps.get(f), stamp):
+                _export_img(c, layout.ios_pack(c, g), out / f)
             # 着色器更新包（维护者 11-13）：只含派生件，几百 MB；手机上已有这款同一版本体时只放它就能换着色器，不用重拷几 GB 的 .img
             u = _update_name(f, ui_lang(c))
-            _export_update(c, layout.ios_pack(c, g), out / u)
+            if not _reuse_export(prev / u, out / u, old_stamps.get(u), stamp):
+                _export_update(c, layout.ios_pack(c, g), out / u)
+            stamps[f] = stamps[u] = stamp
             listed.append(dict(gameId=g, name=names.get(g, g), file=f, update=u))
         c.begin("写安装说明", 4, 4)
         lang = ui_lang(c); readme = EXPORT_READMES[lang]
@@ -1255,6 +1289,8 @@ def export_phone(c, gid=None):
                     pass
     finally:
         shutil.rmtree(work, ignore_errors=True)
+    if dest == want:   # 来源戳只记正式导出文件夹里的（换到带时刻的新名字时下次不沿用）
+        atomic(c.private / EXPORT_STAMPS, stamps)
     size = sum(p.stat().st_size for p in dest.iterdir() if p.is_file())
     if skipped:
         c.diagnostic("这几款没放进这次导出（要按新版重新「打 iPhone 包」）：" + "、".join(skipped), code="container_stale", severity="warning")
