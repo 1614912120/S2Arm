@@ -78,7 +78,7 @@ def fetch_rcodesign(dest, side, cache=None):
                 data = t.extractfile(f"{top}/{inner}").read()
         (dest / out).write_bytes(data)
     os.chmod(dest / member, 0o755)
-    (dest / "来源.txt").write_text(f"rcodesign（apple-codesign {RCODESIGN_VERSION}，Gregory Szorc，MPL-2.0：LICENSE-apple-codesign-MPL-2.0.txt），官方发布件原样附带。\n"
+    (dest / "来源.txt").write_text(f"rcodesign（apple-codesign {RCODESIGN_VERSION}，Gregory Szorc，MPL-2.0：LICENSE-apple-codesign-MPL-2.0.txt），官方发布件原样附带。\n"  # 非玩家句
                                   f"来源：{RCODESIGN_DOWNLOAD}{name}\n源码：{RCODESIGN_SOURCE}\n", encoding="utf-8")
     return dest / member
 
@@ -257,7 +257,7 @@ def normalize_p12(src, dest, password):
                 os.close(cr)
             ok, why = b.returncode == 0, why + b.stderr.decode(errors="replace")
         elif a.returncode == 0:
-            why += "；p12 里缺私钥或证书"
+            why += "；p12 里缺私钥或证书"  # 非玩家句
     if not ok or not Path(dest).is_file():
         Path(dest).unlink(missing_ok=True)
         raise Failure("证书打不开：密码不对，或 .p12 文件坏了。", code="devcert_password", internal=why.strip()[-400:])
@@ -299,7 +299,7 @@ class Secrets:
         r = subprocess.run(["/usr/bin/security", "-i"], input=f'add-generic-password -U -s {KEYCHAIN_SERVICE} -a {account} -l "S2Arm developer certificate" -w {encoded}\n',
                            capture_output=True, text=True)
         if r.returncode or "error" in (r.stdout + r.stderr).lower():
-            raise Failure("证书密码没存进钥匙串：" + (r.stderr or r.stdout).strip()[-200:], code="devcert_keychain")
+            raise Failure("证书密码没存进钥匙串：" + (r.stderr or r.stdout).strip()[-200:], code="devcert_keychain")  # 非玩家句
 
     def load(self, account):
         if os.name == "nt":

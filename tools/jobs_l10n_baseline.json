@@ -660,100 +660,12 @@
   "text": "（任务 "
  },
  {
-  "file": "devcert.py",
-  "text": "DPAPI 失败"
- },
- {
-  "file": "devcert.py",
-  "text": "来源.txt"
- },
- {
-  "file": "devcert.py",
-  "text": "证书密码没存进钥匙串："
- },
- {
-  "file": "devcert.py",
-  "text": "；p12 里缺私钥或证书"
- },
- {
   "file": "diag.py",
   "text": "devicectl 等了 {0} 秒没有返回，已停止等待"
  },
  {
   "file": "diag.py",
   "text": "拉回 "
- },
- {
-  "file": "diag_upload.py",
-  "text": "Mac（前端里打包或启动）"
- },
- {
-  "file": "diag_upload.py",
-  "text": "[问题] "
- },
- {
-  "file": "diag_upload.py",
-  "text": "{0}超过 {0} 秒还没完成（{0}），已停止。{0}"
- },
- {
-  "file": "diag_upload.py",
-  "text": "上传太频繁了，稍等一分钟再试。{0}"
- },
- {
-  "file": "diag_upload.py",
-  "text": "上传服务出错了（{0}）。{0}"
- },
- {
-  "file": "diag_upload.py",
-  "text": "上传服务没收下这份诊断包（{0}）。"
- },
- {
-  "file": "diag_upload.py",
-  "text": "上传服务没给回短码。{0}"
- },
- {
-  "file": "diag_upload.py",
-  "text": "上传服务的回应看不懂。{0}"
- },
- {
-  "file": "diag_upload.py",
-  "text": "上传服务还没开通。{0}"
- },
- {
-  "file": "diag_upload.py",
-  "text": "上传诊断"
- },
- {
-  "file": "diag_upload.py",
-  "text": "出包的电脑（一键出包命令）"
- },
- {
-  "file": "diag_upload.py",
-  "text": "可以先导出诊断包，手动发给我们。"
- },
- {
-  "file": "diag_upload.py",
-  "text": "打包诊断"
- },
- {
-  "file": "diag_upload.py",
-  "text": "本机整理日志太慢，和网络无关"
- },
- {
-  "file": "diag_upload.py",
-  "text": "网络太慢或连接卡住"
- },
- {
-  "file": "diag_upload.py",
-  "text": "诊断包有 {0} MB，超过上传上限 {0} MB。{0}"
- },
- {
-  "file": "diag_upload.py",
-  "text": "连不上上传服务（检查一下网络）。{0}"
- },
- {
-  "file": "diag_upload.py",
-  "text": "问题回报.yml"
  },
  {
   "file": "downstream.py",
@@ -1568,46 +1480,6 @@
   "text": "选的文件夹不是这款游戏（里面的 game.json 游戏号对不上）。"
  },
  {
-  "file": "libloc.py",
-  "text": "FAT32 盘上单个文件最多 4 GB，超过 4 GB 的游戏在这里出不了。"
- },
- {
-  "file": "libloc.py",
-  "text": "Google 云端硬盘"
- },
- {
-  "file": "libloc.py",
-  "text": "iCloud 云盘"
- },
- {
-  "file": "libloc.py",
-  "text": "iCloud 云盘（桌面与文稿同步）"
- },
- {
-  "file": "libloc.py",
-  "text": "云盘（文件提供程序）"
- },
- {
-  "file": "libloc.py",
-  "text": "按现有 {0} 款游戏算，出包会多占约 {0} GB"
- },
- {
-  "file": "libloc.py",
-  "text": "每出一款游戏会多占大约两份游戏内容的空间"
- },
- {
-  "file": "libloc.py",
-  "text": "游戏库在 {fmt} 格式的磁盘上，已按你的选择继续用（出包会多占空间）。"
- },
- {
-  "file": "libloc.py",
-  "text": "游戏库在「{cloud}」的同步目录里。出包时游戏库里会写几十 GB 的中间文件，云盘会把它们上传、换成占位文件，出包中途读不到文件或变得很慢。请把游戏库换到本机磁盘上不同步的位置（例如默认位置）。游戏原件放在哪都行，不受影响。"
- },
- {
-  "file": "libloc.py",
-  "text": "这个盘是 {fmt}，可以用，但{extra}；放在 NTFS 格式的盘上更省空间。"
- },
- {
   "file": "library.py",
   "text": "\n…[已省略中间部分]…\n"
  },
@@ -2344,62 +2216,6 @@
   "text": "重跑改写 {0} 失败（退出码 {0}）："
  },
  {
-  "file": "save_formats.py",
-  "text": "Checkpoint 取 {0}"
- },
- {
-  "file": "save_formats.py",
-  "text": "ExtraData0 用户号 {0}"
- },
- {
-  "file": "save_formats.py",
-  "text": "yuzu 用户号 {0}"
- },
- {
-  "file": "save_formats.py",
-  "text": "{0} 下没有存档文件"
- },
- {
-  "file": "save_formats.py",
-  "text": "与这款游戏自己的存档比对不出"
- },
- {
-  "file": "save_formats.py",
-  "text": "只有 cheats/（金手指），不是存档"
- },
- {
-  "file": "save_formats.py",
-  "text": "来源不是目录或 zip"
- },
- {
-  "file": "save_formats.py",
-  "text": "来源是链接"
- },
- {
-  "file": "save_formats.py",
-  "text": "没有这款游戏自己的存档可比"
- },
- {
-  "file": "save_formats.py",
-  "text": "结构存疑"
- },
- {
-  "file": "save_formats.py",
-  "text": "认不出布局（JKSV / 裸文件路径里没有程序号），须指明程序号"
- },
- {
-  "file": "save_formats.py",
-  "text": "认出 {0} 份存档（{0}），须指明程序号"
- },
- {
-  "file": "save_formats.py",
-  "text": "，按不剥导入"
- },
- {
-  "file": "save_formats.py",
-  "text": "：唯一子目录 0/ 可能是 Ryujinx 提交目录也可能是游戏的存档槽位，"
- },
- {
   "file": "saves.py",
   "text": "S2A 带存档起局完成："
  },
@@ -2634,66 +2450,6 @@
  {
   "file": "toolchain.py",
   "text": "；组件损坏时请重新安装完整应用。"
- },
- {
-  "file": "updater.py",
-  "text": "GitHub 暂时限制了这个网络的查询次数"
- },
- {
-  "file": "updater.py",
-  "text": "GitHub 返回错误（HTTP {0}），当前版本没有变化。稍后再试，或打开下载页手动下载。"
- },
- {
-  "file": "updater.py",
-  "text": "{0} 不对"
- },
- {
-  "file": "updater.py",
-  "text": "{0}失败（{0}），当前版本没有变化。请检查网络后重试，或打开下载页手动下载。"
- },
- {
-  "file": "updater.py",
-  "text": "。当前版本没有变化，稍后再试，或打开下载页手动下载。"
- },
- {
-  "file": "updater.py",
-  "text": "亮点"
- },
- {
-  "file": "updater.py",
-  "text": "新功能"
- },
- {
-  "file": "updater.py",
-  "text": "新版的清单和发布版本对不上，已停止，当前版本没有变化。"
- },
- {
-  "file": "updater.py",
-  "text": "新版的签名校验没通过，已停止，当前版本没有变化。"
- },
- {
-  "file": "updater.py",
-  "text": "更新地址不是官方来源，已停止。"
- },
- {
-  "file": "updater.py",
-  "text": "更新没有完成，旧版没有变化（{0}）。请检查网络后重试。"
- },
- {
-  "file": "updater.py",
-  "text": "超时"
- },
- {
-  "file": "updater.py",
-  "text": "连接 GitHub"
- },
- {
-  "file": "updater.py",
-  "text": "，约 {0} 分钟后恢复"
- },
- {
-  "file": "updater.py",
-  "text": "，过一会儿会恢复"
  },
  {
   "file": "winenv.py",

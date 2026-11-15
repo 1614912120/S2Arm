@@ -4,7 +4,8 @@ launchers/macos/adapter/Sources/S2ArmAppleAdapter/Resources/Localizable.json，�
 这里扫 pack/jobs/*.py（不含 tests/）里含中文的字符串字面量与 f-string，对照表里查不到的就是「英文界面会露中文」。
 
 - 整句查；f-string 的 {表达式} 当 {0} 占位，对照表里带 {N} 的句式能套上也算；按「\\n」「；」拆开每段都查得到也算（同 BackendText.translate）。
-- 不算：docstring、日志调用（名字含 log / print / debug / warn / trace）的参数、行尾带「# 非玩家句」的行（内部键、正则、比对用的原句）。
+- 不算：docstring、日志调用（名字含 log / print / debug / warn / trace）的参数、行尾带「# 非玩家句」的行：内部键、正则、比对用的原句、
+  必须逐字保留的中文（问题模板选项），以及用 + 拼句的片段（拼出来的整句句式另写进对照表）。
 - 存量缺口记在 tools/jobs_l10n_baseline.json（文件名 + 原句），只许变少：新增的缺口退出 1、点名文件:行；基线里已补上的只提示，不报红（别的支删代码不该打红你）。
 
 用法：jobs_l10n_lint.py [仓库根]            检查

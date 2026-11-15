@@ -11,6 +11,12 @@ final class BackendTextTests: XCTestCase {
         XCTAssertEqual(BackendText.launcherText("no.such.key", language: "ja"), "[no.such.key]")
     }
 
+    /// 作业层拼出来的整句按多占位句式翻，占位里的中文再翻、数字原样（11-14 i18n 第四批：诊断上传总时限）
+    func testMultiSlotPatternTranslatesSlots() {
+        XCTAssertEqual(BackendText.translate("上传诊断超过 90 秒还没完成（网络太慢或连接卡住），已停止。可以先导出诊断包，手动发给我们。", language: "en"),
+                       "Uploading diagnostics didn't finish within 90 seconds (the network is too slow or the connection stalled), so it was stopped. You can export a diagnostic package and send it to us yourself.")
+    }
+
     func testWholeSentenceAndSharedLabels() {
         XCTAssertEqual(BackendText.translate("游戏已停止。", language: "en"), "Game stopped.")
         XCTAssertEqual(BackendText.translate("游戏库所在磁盘", language: "en"), "Library Drive")

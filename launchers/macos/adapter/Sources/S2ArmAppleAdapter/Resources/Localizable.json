@@ -7402,5 +7402,197 @@
  {
   "source": "batch.py 没有输出。",
   "en": "The batch script printed nothing."
+ },
+ {
+  "source": "游戏库在「{0}」的同步目录里。出包时游戏库里会写几十 GB 的中间文件，云盘会把它们上传、换成占位文件，出包中途读不到文件或变得很慢。请把游戏库换到本机磁盘上不同步的位置（例如默认位置）。游戏原件放在哪都行，不受影响。",
+  "en": "Your game library is inside the sync folder of \"{0}\". Building writes tens of GB of working files there, which the cloud drive uploads and replaces with placeholders, so the build can't read them or slows to a crawl. Move the library to a local folder that isn't synced (the default location works). Your original game files can stay wherever they are."
+ },
+ {
+  "source": "这个盘是 {0}，可以用，但{1}；放在 NTFS 格式的盘上更省空间。",
+  "en": "This drive is {0}. It works, but {1}; a drive formatted as NTFS uses less space."
+ },
+ {
+  "source": "FAT32 盘上单个文件最多 4 GB，超过 4 GB 的游戏在这里出不了。",
+  "en": "FAT32 drives can't hold a single file over 4 GB, so games larger than 4 GB can't be built here."
+ },
+ {
+  "source": "游戏库在 {0} 格式的磁盘上，已按你的选择继续用（出包会多占空间）。",
+  "en": "The library is on a {0} drive. Using it as you chose (builds will take more space)."
+ },
+ {
+  "source": "iCloud 云盘",
+  "en": "iCloud Drive"
+ },
+ {
+  "source": "云盘（文件提供程序）",
+  "en": "Cloud drive (File Provider)"
+ },
+ {
+  "source": "Google 云端硬盘",
+  "en": "Google Drive"
+ },
+ {
+  "source": "iCloud 云盘（桌面与文稿同步）",
+  "en": "iCloud Drive (Desktop & Documents sync)"
+ },
+ {
+  "source": "每出一款游戏会多占大约两份游戏内容的空间",
+  "en": "each game you build takes about twice its size in extra space"
+ },
+ {
+  "source": "按现有 {0} 款游戏算，出包会多占约 {1} GB",
+  "en": "for your {0} games, building will take about {1} GB more"
+ },
+ {
+  "source": "连接 GitHub",
+  "en": "Connecting to GitHub"
+ },
+ {
+  "source": "超时",
+  "en": "timed out"
+ },
+ {
+  "source": "{0}失败（{1}），当前版本没有变化。请检查网络后重试，或打开下载页手动下载。",
+  "en": "{0} failed ({1}). Your current version is unchanged. Check your network and try again, or download it from the download page."
+ },
+ {
+  "source": "更新地址不是官方来源，已停止。",
+  "en": "The update address isn't an official source. Stopped."
+ },
+ {
+  "source": "GitHub 返回错误（HTTP {0}），当前版本没有变化。稍后再试，或打开下载页手动下载。",
+  "en": "GitHub returned an error (HTTP {0}). Your current version is unchanged. Try again later, or download it from the download page."
+ },
+ {
+  "source": "新版的签名校验没通过，已停止，当前版本没有变化。",
+  "en": "The new version failed its signature check. Stopped; your current version is unchanged."
+ },
+ {
+  "source": "新版的清单和发布版本对不上，已停止，当前版本没有变化。",
+  "en": "The new version's manifest doesn't match the release. Stopped; your current version is unchanged."
+ },
+ {
+  "source": "更新没有完成，旧版没有变化（{0}）。请检查网络后重试。",
+  "en": "The update didn't finish; your current version is unchanged ({0}). Check your network and try again."
+ },
+ {
+  "source": "GitHub 暂时限制了这个网络的查询次数，约 {0} 分钟后恢复。当前版本没有变化，稍后再试，或打开下载页手动下载。",
+  "en": "GitHub is temporarily limiting requests from this network; it should clear in about {0} minutes. Your current version is unchanged. Try again later, or download it from the download page."
+ },
+ {
+  "source": "GitHub 暂时限制了这个网络的查询次数，过一会儿会恢复。当前版本没有变化，稍后再试，或打开下载页手动下载。",
+  "en": "GitHub is temporarily limiting requests from this network; it will clear in a while. Your current version is unchanged. Try again later, or download it from the download page."
+ },
+ {
+  "source": "DPAPI 失败",
+  "en": "DPAPI failed"
+ },
+ {
+  "source": "{0}；p12 里缺私钥或证书",
+  "en": "{0}; the .p12 is missing its private key or certificate"
+ },
+ {
+  "source": "结构存疑：唯一子目录 0/ 可能是 Ryujinx 提交目录也可能是游戏的存档槽位，{0}，按不剥导入",
+  "en": "Layout unclear: the only subfolder 0/ could be a Ryujinx commit folder or one of the game's save slots; {0}, so it was imported as is"
+ },
+ {
+  "source": "与这款游戏自己的存档比对不出",
+  "en": "comparing with this game's own save didn't settle it"
+ },
+ {
+  "source": "没有这款游戏自己的存档可比",
+  "en": "there is no save of this game to compare with"
+ },
+ {
+  "source": "来源是链接",
+  "en": "The source is a link"
+ },
+ {
+  "source": "来源不是目录或 zip",
+  "en": "The source is not a folder or a zip"
+ },
+ {
+  "source": "认出 {0} 份存档（{1}），须指明程序号",
+  "en": "Found {0} saves ({1}); specify the title ID"
+ },
+ {
+  "source": "{0} 下没有存档文件",
+  "en": "No save files under {0}"
+ },
+ {
+  "source": "yuzu 用户号 {0}",
+  "en": "yuzu user {0}"
+ },
+ {
+  "source": "Checkpoint 取 {0}",
+  "en": "Checkpoint {0}"
+ },
+ {
+  "source": "ExtraData0 用户号 {0}",
+  "en": "ExtraData0 user {0}"
+ },
+ {
+  "source": "认不出布局（JKSV / 裸文件路径里没有程序号），须指明程序号",
+  "en": "Couldn't recognize the layout (no title ID in the JKSV / plain file path); specify the title ID"
+ },
+ {
+  "source": "只有 cheats/（金手指），不是存档",
+  "en": "Only cheats/ (cheats), not a save"
+ },
+ {
+  "source": "可以先导出诊断包，手动发给我们。",
+  "en": "You can export a diagnostic package and send it to us yourself."
+ },
+ {
+  "source": "{0}超过 {1} 秒还没完成（{2}），已停止。{3}",
+  "en": "{0} didn't finish within {1} seconds ({2}), so it was stopped. {3}"
+ },
+ {
+  "source": "上传服务没给回短码。{0}",
+  "en": "The upload service didn't return a short code. {0}"
+ },
+ {
+  "source": "打包诊断",
+  "en": "Packaging diagnostics"
+ },
+ {
+  "source": "本机整理日志太慢，和网络无关",
+  "en": "collecting logs on this computer was too slow; not a network problem"
+ },
+ {
+  "source": "上传诊断",
+  "en": "Uploading diagnostics"
+ },
+ {
+  "source": "网络太慢或连接卡住",
+  "en": "the network is too slow or the connection stalled"
+ },
+ {
+  "source": "上传服务的回应看不懂。{0}",
+  "en": "Couldn't understand the upload service's reply. {0}"
+ },
+ {
+  "source": "上传服务还没开通。{0}",
+  "en": "The upload service isn't set up yet. {0}"
+ },
+ {
+  "source": "诊断包有 {0} MB，超过上传上限 {1} MB。{2}",
+  "en": "The diagnostic package is {0} MB, over the {1} MB upload limit. {2}"
+ },
+ {
+  "source": "上传太频繁了，稍等一分钟再试。{0}",
+  "en": "Too many uploads; wait a minute and try again. {0}"
+ },
+ {
+  "source": "上传服务出错了（{0}）。{1}",
+  "en": "The upload service ran into an error ({0}). {1}"
+ },
+ {
+  "source": "连不上上传服务（检查一下网络）。{0}",
+  "en": "Can't reach the upload service (check your network). {0}"
+ },
+ {
+  "source": "上传服务没收下这份诊断包（{0}）。",
+  "en": "The upload service didn't accept this diagnostic package ({0})."
  }
 ]
