@@ -53,6 +53,16 @@ static class Program
             state.State1 = input * a2 + output * b2;
             outputBuffer[i] = output;
         }
+        RefRestart(ref state);
+    }
+
+    // #1182：调用末尾某级状态出现 NaN / Inf 就整级清零（IIR 的 NaN 状态会永久传染，见 S2ADspBiquadHelper.ClearIfNotFinite）——两条路径共同的规格，照规格手写
+    static void RefRestart(ref BiquadFilterState s)
+    {
+        if (!float.IsFinite(s.State0) || !float.IsFinite(s.State1) || !float.IsFinite(s.State2) || !float.IsFinite(s.State3))
+        {
+            s.State0 = 0f; s.State1 = 0f; s.State2 = 0f; s.State3 = 0f;
+        }
     }
 
     static void RefMulti(ReadOnlySpan<BiquadFilterParameter2> parameters, Span<BiquadFilterState> states, Span<float> outputBuffer, ReadOnlySpan<float> inputBuffer, uint sampleCount)
@@ -73,6 +83,7 @@ static class Program
                 state.State2 = output;
                 outputBuffer[i] = output;
             }
+            RefRestart(ref state);
         }
     }
 

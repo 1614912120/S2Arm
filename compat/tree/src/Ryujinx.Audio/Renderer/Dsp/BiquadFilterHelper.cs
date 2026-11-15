@@ -161,6 +161,7 @@ namespace Ryujinx.Audio.Renderer.Dsp
                 }
 
                 state.State0 = s0; state.State1 = s1;
+                S2ADspBiquadHelper.ClearIfNotFinite(ref state); // S2Arm (#1182)：状态出现 NaN / Inf 就清零，见 S2ADspBiquadHelper.ClearIfNotFinite
                 return;
             }
 
@@ -174,6 +175,8 @@ namespace Ryujinx.Audio.Renderer.Dsp
 
                 outputBuffer[i] = output;
             }
+
+            S2ADspBiquadHelper.ClearIfNotFinite(ref state); // S2Arm (#1182)
         }
 
         /// <summary>
@@ -217,6 +220,8 @@ namespace Ryujinx.Audio.Renderer.Dsp
 
                 outputBuffer[i] += FloatingPointHelper.MultiplyRoundUp(output, volume);
             }
+
+            S2ADspBiquadHelper.ClearIfNotFinite(ref state); // S2Arm (#1182)：状态出现 NaN / Inf 就清零，见 S2ADspBiquadHelper.ClearIfNotFinite
         }
 
         /// <summary>
@@ -268,6 +273,8 @@ namespace Ryujinx.Audio.Renderer.Dsp
                 outputBuffer[i] += mixState;
                 volume += ramp;
             }
+
+            S2ADspBiquadHelper.ClearIfNotFinite(ref state); // S2Arm (#1182)
 
             return mixState;
         }
@@ -326,6 +333,7 @@ namespace Ryujinx.Audio.Renderer.Dsp
                     }
 
                     state.State0 = s0; state.State1 = s1; state.State2 = s2; state.State3 = s3;
+                    S2ADspBiquadHelper.ClearIfNotFinite(ref state); // S2Arm (#1182)：状态出现 NaN / Inf 就清零，见 S2ADspBiquadHelper.ClearIfNotFinite
                     continue;
                 }
 
@@ -341,6 +349,8 @@ namespace Ryujinx.Audio.Renderer.Dsp
 
                     outputBuffer[i] = output;
                 }
+
+                S2ADspBiquadHelper.ClearIfNotFinite(ref state); // S2Arm (#1182)
             }
         }
 
@@ -405,6 +415,9 @@ namespace Ryujinx.Audio.Renderer.Dsp
 
                 outputBuffer[i] += FloatingPointHelper.MultiplyRoundUp(output, volume);
             }
+
+            S2ADspBiquadHelper.ClearIfNotFinite(ref state0); // S2Arm (#1182)
+            S2ADspBiquadHelper.ClearIfNotFinite(ref state1);
         }
 
         /// <summary>
@@ -475,6 +488,9 @@ namespace Ryujinx.Audio.Renderer.Dsp
                 outputBuffer[i] += mixState;
                 volume += ramp;
             }
+
+            S2ADspBiquadHelper.ClearIfNotFinite(ref state0); // S2Arm (#1182)
+            S2ADspBiquadHelper.ClearIfNotFinite(ref state1);
 
             return mixState;
         }
