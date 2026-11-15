@@ -1,4 +1,4 @@
-// 出图补帧逐帧判定（graphics/nvn/gfx/nvn/nvn_fi_rule.h）。期望按规则手写（jhz 11-13：只给按 30 帧档或更低档推进、并且跑满的帧补；60 帧档一律不补）：
+// 出图补帧逐帧判定（graphics/nvn/gfx/nvn/nvn_fi_rule.h）。期望按规则手写（维护者 11-13：只给按 30 帧档或更低档推进、并且跑满的帧补；60 帧档一律不补）：
 #include <stdio.h>
 #include "../gfx/nvn/nvn_fi_rule.h"
 int main(void) {

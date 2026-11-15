@@ -59,10 +59,10 @@ static id<MTLTexture> fi_tex(MTLPixelFormat pf, int w, int h, MTLTextureUsage u)
 }
 // 输入缩拷与补出帧上屏共用的一遍：采源图（按裁剪）写目标
 API_AVAILABLE(macos(26.0), ios(26.0))
-// 自算运动矢量（DM_PRESENT_FI_MV，缺省 1；-1 取反对照方向，0 = 零矢量）：零矢量时 MetalFX 只能混合前后两帧，镜头快转时重影（11-14 测试机1 一款 30 帧开放世界游戏：主角半透明叠在岩壁上）。
+// 自算运动矢量（DM_PRESENT_FI_MV，缺省 1；-1 取反对照方向，0 = 零矢量）：零矢量时 MetalFX 只能混合前后两帧，镜头快转时重影（11-14 iPhone 实机 一款 30 帧开放世界游戏：主角半透明叠在岩壁上）。
 //   在 1/4 分辨率亮度图上做块匹配：块 8×8（原图 32×32 像素），每块一个线程组、1024 线程各算一个位移（-16..15，原图约 ±64 像素），块与搜索窗先读进组内共享内存；
 //   块位移按块中心双线性铺成整张运动矢量图（输入图像素，当前帧 → 前一帧）；-1 = 取反（MetalFX 方向约定没把握时对照用）。
-//   11-14 第一版每块一个线程（全画面约 920 线程、每线程串行 7 万次比较）在测试机1 上多花约 5 ms、九成多帧超预算跳过，改成每块一组
+//   11-14 第一版每块一个线程（全画面约 920 线程、每线程串行 7 万次比较）在iPhone 实机 上多花约 5 ms、九成多帧超预算跳过，改成每块一组
 static int fi_mv_mode(void) { static int v = -2; if (v == -2) { const char *e = getenv("DM_PRESENT_FI_MV"); v = e ? atoi(e) : 1; if (v) MLOG("present frame interpolation: computed motion vectors (DM_PRESENT_FI_MV=%d), 8x8 blocks on a quarter-size luma, search +-16", v); } return v; }
 API_AVAILABLE(macos(26.0), ios(26.0))
 static int fi_mv_setup(NvPresentFI *f) {
@@ -151,7 +151,7 @@ static NvPresentFI *fi_get(CAMetalLayer *layer, NSUInteger cw, NSUInteger ch) {
     double s = ch > (NSUInteger)maxh ? (double)maxh / ch : 1;
     int iw = (int)(cw * s) & ~1, ih = (int)(ch * s) & ~1;
     if (f && f->hw == hw && f->hh == hh && f->hpf == layer.pixelFormat && f->w == iw && f->h == ih) return f;
-    if (f && (f->w != iw || f->h != ih)) {   // 画面比例变了（11-13 Duo：开局竖屏、几秒后转横屏）：插值器的输入尺寸是建时定死的，等在途的活做完、整个重建
+    if (f && (f->w != iw || f->h != ih)) {   // 画面比例变了（11-13 iPhone 实机：开局竖屏、几秒后转横屏）：插值器的输入尺寸是建时定死的，等在途的活做完、整个重建
         dispatch_sync(f->q, ^{});
         MLOG("present frame interpolation: the game picture changed to %lux%lu (input %dx%d → %dx%d), rebuilding", (unsigned long)cw, (unsigned long)ch, f->w, f->h, iw, ih);
         g_fi = nil; f = nil;
