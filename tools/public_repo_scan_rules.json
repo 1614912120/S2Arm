@@ -260,6 +260,16 @@
       "reason": "第三方 Gommon 库作者构建机的 PDB 路径（编进上游 dll，不是维护方路径）。"
     },
     {
+      "id": "s2arm_synthetic_systemdata",
+      "categories": [
+        "uncovered_unreviewed_type"
+      ],
+      "paths": [
+        "services/S2A.Services/systemdata_synth.tar"
+      ],
+      "reason": "服务层内置的合成空系统数据，由 tools/make_sysdata_synth_tar.py 调用 pack/sysdata_synth.py 生成，不含主机固件或游戏数据；CI 扫描前运行 tests/sysdata_synth_tar_test.py，逐字节核对归档与生成器输出。仅登记这一精确路径，归档正文仍未扫描。"
+    },
+    {
       "id": "upstream_ryujinx_binaries",
       "categories": [
         "uncovered_unreviewed_type"
