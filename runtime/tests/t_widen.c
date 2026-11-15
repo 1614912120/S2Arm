@@ -298,6 +298,28 @@ int main(void) {
         int st = 0; waitpid(c, &st, 0);
         CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, "⑨%c i2h 打包整数宽高的高半按屏高、低半随搭档 movz（退出 %d）", k ? 'p' : 'o', WIFEXITED(st) ? WEXITSTATUS(st) : -1);
     }
+    // ⑨q / ⑨r 搭档认不出（#1180：0.4.0 出包把搭档 MOVZ 让给社区补丁、换成补丁开关跳转）：只有 i2h 0x28（MOVK x8,#1080,LSL#32 = 0xf2c08708），
+    //   0x20 是跳转 B（0x14000008，低 5 位恰是 8 → 配对规则判「别的指令写了 x8」断开）。⑨q 满屏关（启用 0，屏 1920×1080）；⑨r 满屏开（启用 1，屏 2346×1080）。
+    //   期望（手算）：两种都保持原指令结果 = 1080 << 32 | 1920 = 0x0000043800000780。旧代码低半按 0 → 0x0000043800000000，交换链宽 0 黑屏（红）
+    for (int k = 0; k < 2; k++) {
+        fflush(stdout); pid_t c = fork();
+        if (c == 0) {
+            module_t *m = &g_mod[16 + k]; snprintf(m->name, sizeof m->name, "main"); m->key_page_size = 16384; m->key_page_off = 0;
+            m->base = (uint8_t *)mmap(NULL, 0x8000, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+            m->text_end = 0x4000; m->patch_off = -1; m->file_image_len = 0x8000;
+            uint32_t br = 0x14000008u; memcpy(m->base + 0x20, &br, 4);
+            char q[600]; snprintf(q, sizeof q, "%s/main.widen.tsv", T); FILE *g = fopen(q, "w");
+            fprintf(g, "0\t0x28\ti2h\tf2c08708\n"); fclose(g);
+            snprintf(q, sizeof q, "%s/widen_enable.handheld.tsv", T); g = fopen(q, "w");
+            fprintf(g, "模块\t偏移\t种类\t启用\nmain\t0x28\ti2h\t%d\n", k); fclose(g);
+            unsetenv("S2A_WIDEN_SITES"); unsetenv("S2A_DOCKED");
+            int s2a_screen_switch(int, int); s2a_screen_w(); s2a_screen_h(); s2a_screen_switch(k ? 2346 : 1920, 1080);
+            s2a_widen_load(m, T); uint64_t *sl = (uint64_t *)m->base + WSLOT, w0 = 0x0000043800000780ull;
+            printf("⑨%c i2h 搭档认不出（满屏%s）期望 %#llx → %#llx\n", k ? 'r' : 'q', k ? "开" : "关", (unsigned long long)w0, (unsigned long long)sl[0]); fflush(stdout);
+            _exit(sl[0] == w0 ? 0 : 1); }
+        int st = 0; waitpid(c, &st, 0);
+        CHECK(WIFEXITED(st) && WEXITSTATUS(st) == 0, "⑨%c i2h 搭档认不出时整格保持原值（满屏%s），不按 0 写宽（退出 %d）", k ? 'r' : 'q', k ? "开" : "关", WIFEXITED(st) ? WEXITSTATUS(st) : -1);
+    }
 #endif
     // ⑩–⑬：宿主门 lytsz / capsz
     snprintf(p, sizeof p, "%s/main.widen.tsv", T); f = fopen(p, "w");
