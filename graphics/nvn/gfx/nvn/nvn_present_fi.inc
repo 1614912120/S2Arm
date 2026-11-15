@@ -23,7 +23,7 @@ API_AVAILABLE(macos(26.0), ios(26.0))
     dispatch_semaphore_t slot_free[3];
     dispatch_queue_t q; uint64_t last_seq, jobs;
     uint64_t made, skipped, shown_mid, declined, last_in_ns; double ms_sum, ms_max, gpu_sum;
-    double bd_enc, bd_queue, bd_cb, bd_n;   // 拆账（常开，每 300 帧一行）：作业开始→提交 / 提交→GPU 开始（排在游戏 GPU 工作后面等）/ GPU 结束→完成回调，毫秒累计   // declined：按规则不补的帧（60 帧档 / 跑不满），原图直接上屏
+    double bd_enc, bd_queue, bd_cb, bd_n; uint64_t made_win0;   // made_win0：本窗口开头的补成数（MetalFX GPU 平均按本窗口补成次数除）   // 拆账（常开，每 300 帧一行）：作业开始→提交 / 提交→GPU 开始（排在游戏 GPU 工作后面等）/ GPU 结束→完成回调，毫秒累计   // declined：按规则不补的帧（60 帧档 / 跑不满），原图直接上屏
 }
 @end
 @implementation NvPresentFI @end
@@ -89,13 +89,13 @@ static int fi_mv_setup(NvPresentFI *f) {
         "    if (sl == 0) { uint bi = k2 & 0x3FFu; float best = as_type<float>(k2 & ~0x3FFu); int2 bd = int2(int(bi % 32) - 16, int(bi / 32) - 16);\n"
         "      if (zsad <= best * 1.02 + 0.05) bd = int2(0);   // 不动或平坦处偏向零位移，免得乱跳\n"
         "      out[b.y * nb.x + b.x] = float2(bd) * 4; } } }\n"
-        "kernel void spread(device const float2* blk [[buffer(0)]], constant uint2& nb [[buffer(1)]], constant float& sign [[buffer(2)]], texture2d<float, access::write> mv [[texture(0)]],\n"
+        "kernel void spread(device const float2* blk [[buffer(0)]], constant uint2& nb [[buffer(1)]], constant float& sign [[buffer(2)]], constant uint& sc [[buffer(3)]], texture2d<float, access::write> mv [[texture(0)]],\n"
         "                   texture2d<float, access::read> cur [[texture(1)]], texture2d<float, access::read> prev [[texture(2)]], uint2 g [[thread_position_in_grid]]) {\n"
         "  if (g.x >= mv.get_width() || g.y >= mv.get_height()) return;\n"
-        "  float2 u = (float2(g) + 0.5) / 32.0 - 0.5; int2 i0 = int2(floor(u)); float2 t = u - float2(i0);\n"
+        "  uint2 gp = g * sc + sc / 2; float2 u = (float2(g) + 0.5) * float(sc) / 32.0 - 0.5; int2 i0 = int2(floor(u)); float2 t = u - float2(i0);\n"
         "  int2 a = clamp(i0, int2(0), int2(nb) - 1), c = clamp(i0 + 1, int2(0), int2(nb) - 1);\n"
         "  float2 v = mix(mix(blk[a.y * nb.x + a.x], blk[a.y * nb.x + c.x], t.x), mix(blk[c.y * nb.x + a.x], blk[c.y * nb.x + c.x], t.x), t.y);\n"
-        "  if (all(abs(cur.read(g).rgb - prev.read(g).rgb) < 0.004)) v = float2(0);   // 前后两帧这个像素一样（界面、静止物体）：不动，免得跟着背景被搬走\n"
+        "  if (all(abs(cur.read(gp).rgb - prev.read(gp).rgb) < 0.004)) v = float2(0);   // 前后两帧这个像素一样（界面、静止物体）：不动，免得跟着背景被搬走\n"
         "  mv.write(float4(v * sign, 0, 0), g); }\n";
     NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(msl) options:nil error:&e];
     if (!lib) { MLOG("【红】 frame interpolation motion shader: %s", e.localizedDescription.UTF8String); return 0; }
@@ -123,8 +123,8 @@ static void fi_mv_encode(NvPresentFI *f, id<MTLCommandBuffer> c, id<MTLTexture> 
     [en setBuffer:f->mvBlocks offset:0 atIndex:0]; [en setBytes:nb length:sizeof nb atIndex:1];
     [en dispatchThreadgroups:MTLSizeMake(f->bw, f->bh, 1) threadsPerThreadgroup:MTLSizeMake(32, 32, 1)];   // 每块一组，组内 1024 线程各算一个位移（±16 → 32×32）
     [en memoryBarrierWithScope:MTLBarrierScopeBuffers];
-    [en setComputePipelineState:f->mvSpread]; [en setBuffer:f->mvBlocks offset:0 atIndex:0]; [en setBytes:nb length:sizeof nb atIndex:1]; [en setBytes:&sign length:4 atIndex:2];
-    [en setTexture:f->motion atIndex:0]; [en setTexture:cur atIndex:1]; [en setTexture:prev atIndex:2]; [en dispatchThreads:MTLSizeMake(f->w, f->h, 1) threadsPerThreadgroup:tg];
+    [en setComputePipelineState:f->mvSpread]; [en setBuffer:f->mvBlocks offset:0 atIndex:0]; [en setBytes:nb length:sizeof nb atIndex:1]; [en setBytes:&sign length:4 atIndex:2]; uint32_t sc = (uint32_t)(f->w / f->motion.width); [en setBytes:&sc length:4 atIndex:3];
+    [en setTexture:f->motion atIndex:0]; [en setTexture:cur atIndex:1]; [en setTexture:prev atIndex:2]; [en dispatchThreads:MTLSizeMake(f->motion.width, f->motion.height, 1) threadsPerThreadgroup:tg];
     [en endEncoding];
 }
 API_AVAILABLE(macos(26.0), ios(26.0))
@@ -163,14 +163,17 @@ static NvPresentFI *fi_get(CAMetalLayer *layer, NSUInteger cw, NSUInteger ch) {
     if (!f) {
         f = [NvPresentFI new]; f->w = iw; f->h = ih;
         MTLFXFrameInterpolatorDescriptor *d = [dc new];
-        d.inputWidth = d.outputWidth = (NSUInteger)iw; d.inputHeight = d.outputHeight = (NSUInteger)ih;
+        // 实验 DM_PRESENT_FI_MVQ=1：运动矢量 / 深度按 1/4 尺寸交给 MetalFX（颜色与输出仍是游戏画面尺寸；我们的块匹配本来就在 1/4 亮度图上做，原先再铺回全尺寸）
+        static int mvq = -1; if (mvq < 0) { const char *e = getenv("DM_PRESENT_FI_MVQ"); mvq = e && !strcmp(e, "1"); if (mvq) MLOG("present frame interpolation: motion / depth at quarter size (DM_PRESENT_FI_MVQ=1)"); }
+        int mw = mvq && fi_mv_mode() ? iw / 4 : iw, mh = mvq && fi_mv_mode() ? ih / 4 : ih;
+        d.outputWidth = (NSUInteger)iw; d.outputHeight = (NSUInteger)ih; d.inputWidth = (NSUInteger)mw; d.inputHeight = (NSUInteger)mh;
         d.colorTextureFormat = d.outputTextureFormat = MTLPixelFormatBGRA8Unorm; d.depthTextureFormat = MTLPixelFormatR32Float; d.motionTextureFormat = MTLPixelFormatRG16Float;
         f->mfx = [d newFrameInterpolatorWithDevice:g_dev]; f->mq = [g_dev newCommandQueue];
         if (!f->mfx || !f->mq) { fi_off("MetalFX makes no frame interpolator for this size"); return nil; }
         for (int i = 0; i < 3; i++) f->in_tex[i] = fi_tex(MTLPixelFormatBGRA8Unorm, iw, ih, f->mfx.colorTextureUsage | MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead);
         f->mid_tex = fi_tex(MTLPixelFormatBGRA8Unorm, iw, ih, f->mfx.outputTextureUsage | MTLTextureUsageShaderRead);
-        f->depth = fi_tex(MTLPixelFormatR32Float, iw, ih, f->mfx.depthTextureUsage | MTLTextureUsageRenderTarget);
-        f->motion = fi_tex(MTLPixelFormatRG16Float, iw, ih, f->mfx.motionTextureUsage | MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite);
+        f->depth = fi_tex(MTLPixelFormatR32Float, mw, mh, f->mfx.depthTextureUsage | MTLTextureUsageRenderTarget);
+        f->motion = fi_tex(MTLPixelFormatRG16Float, mw, mh, f->mfx.motionTextureUsage | MTLTextureUsageRenderTarget | MTLTextureUsageShaderWrite);
         if (!f->in_tex[0] || !f->in_tex[1] || !f->in_tex[2] || !f->mid_tex || !f->depth || !f->motion) { fi_off("cannot create the interpolation textures"); return nil; }
         {   // 常数深度 1、零运动：清一次
             id<MTLCommandBuffer> c = [f->mq commandBuffer]; MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor new];
@@ -263,7 +266,7 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
         else if (pair) {
             id<MTLFXFrameInterpolator> fx = f->mfx; static uint64_t last_pair_seq = UINT64_MAX;
             fx.colorTexture = f->in_tex[k]; fx.prevColorTexture = f->in_tex[(k + 2) % 3]; fx.outputTexture = f->mid_tex;
-            fx.depthTexture = f->depth; fx.motionTexture = f->motion; fx.motionVectorScaleX = fx.motionVectorScaleY = 1;
+            fx.depthTexture = f->depth; fx.motionTexture = f->motion; fx.motionVectorScaleX = fx.motionVectorScaleY = (float)f->motion.width / (float)f->w;   // 矢量按全尺寸像素算；按 1/4 尺寸交时换成输入像素
             fx.deltaTime = period > 0 ? (float)period : 1.f / 30; fx.nearPlane = .1f; fx.farPlane = 1000; fx.fieldOfView = 60; fx.aspectRatio = (float)f->w / f->h;
             fx.jitterOffsetX = fx.jitterOffsetY = 0; fx.depthReversed = NO; fx.shouldResetHistory = last_pair_seq == UINT64_MAX || seq - 1 != last_pair_seq;   // 断开过（不补的帧 / 跳过）就重置历史
             id<MTLCommandBuffer> c = [f->mq commandBuffer]; c.label = @"present frame interpolation (MetalFX)";
@@ -295,8 +298,8 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
 #endif
     } else fi_ticket_done(ticket);
     if (++f->jobs % 300 == 0) { MLOG("present frame interpolation up to game frame %llu: interpolated %llu, skipped %llu (over %.1f ms or failed), not interpolated by the rule %llu (60 fps tier or frame late), shown %llu; job mean %.2f ms, max %.2f ms, MetalFX GPU mean %.2f ms; on screen (system reported) interpolated %llu, game frames %llu",
-                                     (unsigned long long)f->jobs, (unsigned long long)f->made, (unsigned long long)f->skipped, g_fi_budget_ms, (unsigned long long)f->declined, (unsigned long long)f->shown_mid, f->ms_sum / 300, f->ms_max, f->made ? f->gpu_sum / 300 : 0,
-                                     (unsigned long long)atomic_load(&g_fi_on_mid), (unsigned long long)atomic_load(&g_fi_on_real)); f->ms_sum = f->ms_max = f->gpu_sum = 0;
+                                     (unsigned long long)f->jobs, (unsigned long long)f->made, (unsigned long long)f->skipped, g_fi_budget_ms, (unsigned long long)f->declined, (unsigned long long)f->shown_mid, f->ms_sum / 300, f->ms_max, f->made > f->made_win0 ? f->gpu_sum / (double)(f->made - f->made_win0) : 0,
+                                     (unsigned long long)atomic_load(&g_fi_on_mid), (unsigned long long)atomic_load(&g_fi_on_real)); f->ms_sum = f->ms_max = f->gpu_sum = 0; f->made_win0 = f->made;
                                  if (f->bd_n) MLOG("present frame interpolation breakdown (%.0f jobs): start → commit %.2f ms, commit → GPU start %.2f ms (waiting behind other GPU work), GPU %s, GPU end → completion callback %.2f ms",
                                                    f->bd_n, f->bd_enc / f->bd_n, f->bd_queue / f->bd_n, "see MetalFX GPU mean above", f->bd_cb / f->bd_n);
                                  f->bd_enc = f->bd_queue = f->bd_cb = f->bd_n = 0; }
