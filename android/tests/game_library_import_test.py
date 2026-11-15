@@ -42,8 +42,8 @@ STUBS = {
  public static final int MODE_PRIVATE=0; private static final java.util.Map<String,SharedPreferences> prefs=new java.util.HashMap<>();
  public SharedPreferences getSharedPreferences(String name,int mode){if(mode!=MODE_PRIVATE)throw new AssertionError("unexpected preference mode");
   String key=root.getAbsolutePath()+"/"+name; return prefs.computeIfAbsent(key,k->new MemoryPreferences());}
- public final String getString(int id,Object... args){if(id>=7&&id<=15||id>=113&&id<=114||id>=120&&id<=124)return "L"+id;   // 游戏库页面文案
-  if(id>=100&&id<113||id>=115&&id<=118)return id==100?"PLAYER_ERR "+java.util.Arrays.toString(args):"E"+id;   // PlayerError 玩家文案
+ public final String getString(int id,Object... args){if(id>=7&&id<=15||id>=113&&id<=115||id>=134&&id<=138)return "L"+id;   // 游戏库页面文案（115：导入进度；134–138：原地使用）
+  if(id>=100&&id<113||id>=130&&id<=133)return id==100?"PLAYER_ERR "+java.util.Arrays.toString(args):"E"+id;   // PlayerError 玩家文案（130–133：原地读取的报错）；116–118 保存诊断不许被要
   throw new AssertionError("diagnostic string unexpectedly requested");}
  private static class MemoryPreferences implements SharedPreferences {
   private final java.util.Map<String,Boolean> values=new java.util.HashMap<>();
