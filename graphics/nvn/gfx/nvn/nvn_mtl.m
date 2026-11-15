@@ -17057,7 +17057,7 @@ static void *link_main(void *arg) {   // Display link thread: started when switc
     @autoreleasepool {
     CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
     link_rt_declare();
-    pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 1; while (g_classic_busy) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);   // Wait for the present thread to finish handing over the frame it holds
+    pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 1; while (link_layer_busy()) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);   // 经典出图与在途补帧（nvn_present_fi.inc）都交完   // Wait for the present thread to finish handing over the frame it holds
     NvMetalDisplayLinkDelegate *delegate = [NvMetalDisplayLinkDelegate new];
     CAMetalDisplayLink *link = [[CAMetalDisplayLink alloc] initWithMetalLayer:layer];
     pthread_mutex_lock(&g_pq_mu);
