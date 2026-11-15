@@ -647,7 +647,7 @@ def assemble(c, gid, others=(), *, failed=(), root=None, dest=None, agreed=None)
         roots[gid] = Path(root) if root else usable_kit(c, gid, sid, failed)
         if roots[gid] is None:
             raise Failure("这款的 iPhone 版不是这一版 S2Arm 出的（或还没出）：先「打 iPhone 包」，再装到 iPhone。", code="container_stale")
-    in_library = {g["id"].upper() for g in c.catalog()["games"]}
+    in_library = {g["id"].upper() for g in c.catalog()["games"] if not g.get("hidden")}   # 从游戏库删掉的（hidden）按已删处理：不再放进容器
     stale, deleted, missing = [], [], set()
     names = {g["id"].upper(): g.get("name") or g["id"] for g in c.catalog()["games"]}
     for g in others:

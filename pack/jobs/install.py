@@ -1192,10 +1192,12 @@ def export_phone(c, gid=None):
     if gid:
         if not img_pack(ios_pack(c, gid)):
             raise Failure("这款的 iPhone 包是旧格式，导出不了这款的 .img 文件：请重新「打 iPhone 包」后再导出。", code="pack_missing")
-    names = {g["id"].upper(): g.get("name") or g["id"] for g in c.catalog()["games"]}
+    games_all = c.catalog()["games"]
+    names = {g["id"].upper(): g.get("name") or g["id"] for g in games_all}
+    hidden = {g["id"].upper() for g in games_all if g.get("hidden")}   # 从游戏库删掉的（library.remove 只置 hidden）：不再导出（#1132：删了照样被带上）
     others, skipped = [], []
     for g in sorted(names):
-        if g == gid:
+        if g == gid or g in hidden:
             continue
         pack = layout.ios_pack(c, g)
         if not (layout.ios_kit(c, g) / "main.npdm").is_file() or not (pack / "manifest.json").is_file():
