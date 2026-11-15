@@ -469,11 +469,13 @@ def display_version(c, game):   # 解包目录删了：退回游戏库记的版�
         from build import shared_dir
         for line in (shared_dir(c, game) / "extract/unpack.tsv").read_text(encoding="utf-8").splitlines():
             k, _, v = line.partition("\t")
-            if k == "display_version":
+            if k == "display_version" and v.strip():
                 return v.strip()
     except (OSError, ImportError, UnicodeDecodeError, Failure):
         pass
-    return str(game.get("version") or game.get("display") or "").lstrip("vV")
+    # 旧版库（11-10 前出包）catalog 顶层没记 version / display：按包列表取实际跑的版本（有更新取最新更新），同游戏库卡片
+    import community
+    return str(game.get("version") or game.get("display") or community._version(game) or "").lstrip("vV")
 
 
 def bid_hit(build16, theirs):
