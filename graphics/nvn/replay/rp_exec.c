@@ -198,6 +198,7 @@ static void sub_release(struct sub *s) {
     for (int i = 0; i < s->ngw; i++) rp_buf_gpu_write_land(s->gw[i].pool_key, s->gw[i].id, 0);
     free(s->gw); free(s->oe); free(s->p); free(s->oc); free(s);
 }
+static void light_done(void *user, const nvn_gpu_done *d) { (void)user; (void)d; }   // 补点亮栅栏的空段：没有副作用要写回
 static void sub_orphan(struct sub *s) {
     __atomic_store_n(&s->orphan, 1, __ATOMIC_RELEASE);
     if (!__atomic_load_n(&s->mids, __ATOMIC_ACQUIRE)) sub_release(s);
@@ -349,8 +350,14 @@ uint64_t nvn_be_sub_commit(void) {
         if (s) sub_orphan(s);
         if (g_pre) { nvn_gpu_cmd_abort(g_pre); g_pre = NULL; }
         // 时间线照样往前走一格：这次提交里的同步对象已经按 g_fence + SUB_STEP 发布（OP_FENCE_SYNC），中途交出去的段也已经用掉了这一格里的中间值。
-        // 不走的话，下一次提交会把同一批值再用一遍（后端要求严格递增），而等这一格的游戏线程要到下一次提交做完才被放行。
-        g_fence += SUB_STEP;
+        // 不走的话，下一次提交会把同一批值再用一遍（后端要求严格递增）。
+        // 这一格还要有人点亮（审计 P1-174）：再开一个空段、以这一格的值提交，做完时完成值推到这一格，等它的游戏线程不必等下一次提交；
+        //   游戏若先等这一格再发下一次提交，不点亮就互等。空段也开不出来时后端已在失败 / 关闭 / 内存耗尽，这一格按后端的失败口径处理，只报一次红。
+        const uint64_t f = g_fence + SUB_STEP;
+        nvn_gpu_err err = {0}; nvn_gpu_cmd_desc d = {0, "nvn submit (light fence)"}; nvn_gpu_cmd ec = NULL;
+        if (!nvn_gpu_ok(nvn_gpu_cmd_begin(&d, &ec, &err)) || !ec) { static int said; if (!said++) red("开段失败后补点亮栅栏的空段也开不出来（之后同样的失败不再逐条报）：%s", err.why); }
+        else if (!nvn_gpu_ok(nvn_gpu_cmd_commit(ec, f, light_done, NULL, &err))) red("补点亮栅栏的空段提交失败：%s", err.why);
+        g_fence = f;
         return g_fence;
     }
     nvn_gpu_err err = {0}; uint64_t f = g_fence + SUB_STEP;
