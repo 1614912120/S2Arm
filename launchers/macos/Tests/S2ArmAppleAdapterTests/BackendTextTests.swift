@@ -3,6 +3,14 @@ import XCTest
 
 /// 作业层文字的翻译（BackendText）：真资源包（Localizable.json + 共享体验规格），期望值按对照表里的英文手写。
 final class BackendTextTests: XCTestCase {
+    /// 共享文案表缺这门语言回落英文、缺键才显示 [键名]（11-14 i18n 打底）：duration.s 只有 zh-Hans / en 两列
+    func testLauncherTextFallsBackToEnglish() {
+        XCTAssertEqual(BackendText.launcherText("duration.s", language: "zh-Hans"), "{0} 秒")
+        XCTAssertEqual(BackendText.launcherText("duration.s", language: "en"), "{0}s")
+        XCTAssertEqual(BackendText.launcherText("duration.s", language: "ja"), "{0}s")
+        XCTAssertEqual(BackendText.launcherText("no.such.key", language: "ja"), "[no.such.key]")
+    }
+
     func testWholeSentenceAndSharedLabels() {
         XCTAssertEqual(BackendText.translate("游戏已停止。", language: "en"), "Game stopped.")
         XCTAssertEqual(BackendText.translate("游戏库所在磁盘", language: "en"), "Library Drive")

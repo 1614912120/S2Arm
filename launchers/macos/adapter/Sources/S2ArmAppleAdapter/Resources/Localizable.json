@@ -7398,5 +7398,9 @@
  {
   "source": "没有勾选要删除的项。",
   "en": "Nothing is selected to delete."
+ },
+ {
+  "source": "batch.py 没有输出。",
+  "en": "The batch script printed nothing."
  }
 ]

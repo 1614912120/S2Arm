@@ -91,6 +91,11 @@ var languageKeys = new SharedText("""
 {"schema":1,"contract":"s2a.experience.v1","launcher":{"items":[{"id":"language.zh-Hans","zh-Hans":"简体中文","en":"Simplified Chinese"},{"id":"language.en","zh-Hans":"英文","en":"English"}]},"errors":{"items":[]}}
 """);
 Check(languageKeys.Get("language.en", "en") == "English", "language id is not mistaken for a translated leaf");
+var extraLanguage = new SharedText("""
+{"schema":1,"contract":"s2a.experience.v1","launcher":{"items":[{"id":"action.check","zh-Hans":"检查","en":"Check","ja":"確認"}]},"errors":{"items":[]}}
+""");
+Check(extraLanguage.Get("action.check", "ja") == "確認", "a language column beyond zh-Hans / en is read");
+Check(extraLanguage.Get("action.check", "fr") == "Check", "a language without this key's translation falls back to English");
 void RejectResource(string items, string label)
 {
     var json = "{\"schema\":1,\"contract\":\"s2a.experience.v1\",\"launcher\":{\"items\":" + items + "},\"errors\":{\"items\":[]}}";

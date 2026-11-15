@@ -44,14 +44,15 @@ public sealed class SharedText
             if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("id", out var id) ||
                 id.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(id.GetString()))
                 throw new FormatException("Launcher resource id is missing.");
+            // 每列一种语言（zh-Hans / en 必有，以后加的 zh-Hant / ja …可以逐键补，缺的 Get 回落英文；11-14 i18n 打底）
             var values = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var language in new[] { "zh-Hans", "en" })
+            foreach (var column in item.EnumerateObject())
             {
-                if (!item.TryGetProperty(language, out var value) || value.ValueKind != JsonValueKind.String ||
-                    string.IsNullOrWhiteSpace(value.GetString()))
-                    throw new FormatException("Launcher resource requires both language values.");
-                values.Add(language, value.GetString()!);
+                if (column.Name == "id" || column.Value.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(column.Value.GetString())) continue;
+                values[column.Name] = column.Value.GetString()!;
             }
+            if (!values.ContainsKey("zh-Hans") || !values.ContainsKey("en"))
+                throw new FormatException("Launcher resource requires both language values.");
             if (!texts.TryAdd(id.GetString()!, values))
                 throw new FormatException("Duplicate launcher resource id.");
         }
