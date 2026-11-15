@@ -214,6 +214,14 @@ int main(void) {
             if (got != ex[i].want) { printf("✗ ⑥ 降级退出 idle=%d n=%d lim=%d s=%d → %d（期望 %d）\n", ex[i].idle, ex[i].n, ex[i].lim, ex[i].s, got, ex[i].want); bad++; }
             else printf("✓ ⑥ 降级退出 idle=%d n=%d lim=%d s=%d → %d\n", ex[i].idle, ex[i].n, ex[i].lim, ex[i].s, got);
         }
+        // ⑥c 停帧救场判据（11-14）：30 秒窗口新上屏 ≤ 15 帧（< 0.5 帧/秒）算停帧。期望手写：0 / 4（交换间隔 1000 在 120 Hz 下 30 秒约 3.6 帧）/ 15 → 是；16 / 1800 → 否
+        int s2a_ap_crawl_due(uint64_t);
+        struct { uint64_t d; int want; } cr[] = {{0, 1}, {4, 1}, {15, 1}, {16, 0}, {1800, 0}};
+        for (unsigned i = 0; i < sizeof cr / sizeof *cr; i++) {
+            int got = s2a_ap_crawl_due(cr[i].d);
+            if (got != cr[i].want) { printf("✗ ⑥c 停帧救场判据 30 秒 %llu 帧 → %d（期望 %d）\n", (unsigned long long)cr[i].d, got, cr[i].want); bad++; }
+            else printf("✓ ⑥c 停帧救场判据 30 秒 %llu 帧 → %d\n", (unsigned long long)cr[i].d, got);
+        }
         // ⑥b 第 2 档提示时刻：退出时退出前 NOTICE_S 秒，但不早于「打完现场」（钳位）；不退出（s=0，缺省）时停满 NOTICE_IDLE_S 秒（q）提示（审计 P1-4），q=0 关
         int s2a_ap_stall_notice_after(int, int, int, int, int, int);
         struct { int idle, n, lim, s, ns, q, want; } nt[] = {

@@ -278,6 +278,7 @@ struct CrashPrompt: Identifiable {
     let game: GameSummary
     let uiLanguage: String?
     let names: [String]
+    static let fpsName = "\u{1}fps"   // 帧率补丁那条的占位名，显示时换成界面语言的「帧率」（export.sgrade.cat.fps）
 }
 
 struct CrashPromptHost: View {
@@ -291,7 +292,7 @@ struct CrashPromptHost: View {
                    isPresented: Binding(get: { model.crashPrompt != nil }, set: { if !$0, model.crashPrompt?.id == p?.id { model.crashPrompt = nil } })) {
                 Button(t("crash.cheats.ok"), role: .cancel) { model.crashPrompt = nil }
             } message: {
-                Text(t("crash.cheats.body").replacingOccurrences(of: "{0}", with: (p?.names ?? []).joined(separator: loc.lang == .zh ? "、" : ", ")))
+                Text(t("crash.cheats.body").replacingOccurrences(of: "{0}", with: (p?.names ?? []).map { $0 == CrashPrompt.fpsName ? t("export.sgrade.cat.fps") : $0 }.joined(separator: loc.lang == .zh ? "、" : ", ")))
             }
     }
 }

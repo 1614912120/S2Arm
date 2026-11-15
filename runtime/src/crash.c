@@ -334,7 +334,9 @@ static void crash_other_wait(int sig) {
 //   处理函数里本信号是屏蔽的，先放开再抛；万一没结束（不该发生）照旧 _exit(128 + sig)。
 //   读退出码的地方：shell 里被信号结束的 $? 仍是 128 + sig；作业层 Context.run 把 Python 的负返回码折回 128 + sig（pack/jobs/core.py）
 static int g_crash_quiet;   // s2a_crash_install 时取（信号处理里不读环境）：native.h s2a_crash_quiet
+__attribute__((weak)) void s2a_guest_run_mark_crash(void) {}   // runtime/src/vawin.c 强定义：「在跑」标记改写成 crash（闪退不算死于内存，#909）
 static void crash_reraise(int sig) {
+    s2a_guest_run_mark_crash();
     if (g_crash_quiet) _exit(128 + sig);   // 辅助运行 / 静默起局：现场已写进日志，不按信号死（不弹系统「意外退出」框）
     signal(sig, SIG_DFL);
     sigset_t m; sigemptyset(&m); sigaddset(&m, sig); pthread_sigmask(SIG_UNBLOCK, &m, NULL);
