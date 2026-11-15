@@ -23,6 +23,7 @@ __attribute__((constructor)) static void cheats_register_host(void) { void (*f)(
 #include <stdint.h>
 #include <math.h>
 #include "../runtime/include/s2a_input_config.h"
+#include "../runtime/include/s2a_pad_face.h"
 #include "../graphics/metal/gal_abi.h"
 #include "../graphics/nvn/gfx/nvn/nvn_present_fit.h"   // pf_viewport / pf_out_aspect：直连上屏摆放（鼠标当触屏的画面矩形）
 #include <pthread.h>
@@ -260,6 +261,8 @@ static _Atomic int input_muted;   // 失焦 / 退出确认条开着（同 sample
 static pthread_mutex_t g_compose_mu = PTHREAD_MUTEX_INITIALIZER;   // 主线程的采样发布段与手柄快速路径互斥；publish 的序号快照也只允许一个写者在锁内
 static dispatch_queue_t pad_input_queue(void);
 static void pad_event_fast(GCController *controller);
+static uint32_t controller_face_bits(GCController *controller);
+static int primary_face_map(GCController *controller);
 static void touch_end(void);   // 鼠标左键当触屏（见下）：抬起 / 复位补一帧 End
 static void reset_input(void) {
     [keys removeAllObjects]; [mouse removeAllObjects]; modifiers = 0; [key_up_polls removeAllObjects]; [stale_keys removeAllObjects];
@@ -582,11 +585,9 @@ static void sample_home_quit(GCExtendedGamepad *pad) {
     if (!pad) return;
     static __weak GCController *claimed;   // Home 默认归系统（启动台 / 游戏面板）：每个手柄接管一次
     if (pad.controller != claimed && pad.buttonHome) { pad.buttonHome.preferredSystemGestureState = GCSystemGestureStateDisabled; claimed = pad.controller; }
-    // 确认 / 取消按 Switch 的 A / B（与游戏内同一套对应：s2a_pad_abxy_order，按键布局）
-    GCControllerButtonInput *face[4] = {pad.buttonA, pad.buttonB, pad.buttonX, pad.buttonY};
-    int order[4]; s2a_pad_abxy_order(s2a_pad_kind(pad.controller.productCategory.UTF8String, [pad isKindOfClass:GCXboxGamepad.class],
-        [pad isKindOfClass:GCDualShockGamepad.class] || [pad isKindOfClass:GCDualSenseGamepad.class]), s2a_pad_layout(), order);
-    BOOL home = pad.buttonHome.isPressed, a = face[order[0]].isPressed, b = face[order[1]].isPressed;
+    // 退出确认与主玩家四键映射相同；原始系统键态只映射一次。
+    uint32_t face = (uint32_t)s2a_face_apply(controller_face_bits(pad.controller), primary_face_map(pad.controller));
+    BOOL home = pad.buttonHome.isPressed, a = (face & 1) != 0, b = (face & 2) != 0;
     s2a_hq_action act = s2a_hq_step(&g_hq, now_ns(), home || (pad.buttonMenu.isPressed && pad.buttonOptions.isPressed), home, a, b);
     if (act != S2A_HQ_NONE) home_quit_ui(act);
 }
@@ -863,6 +864,92 @@ static NSDictionary *player_config_maps[3];
 //   玩家 2–4 没给自己的映射就照玩家 1 的全局那份（没存过分玩家键位时行为与原来完全一致）
 static NSDictionary *slot_cfg(int slot) {
     return slot >= 1 && slot <= 3 && player_config_maps[slot - 1] ? player_config_maps[slot - 1] : config;
+}
+
+// 启动器原子写入的主手柄四键设置。主线程在合成锁内刷新，手柄回调在同一把锁内读取。
+// 按手柄家族分别保存，只作用于槽 0；没有设置 = 平台默认 A/B/X/Y（PS 的 ×/○/□/△）。
+static NSDictionary *g_face_maps;
+static __weak S2AControllerFaceOverlay *g_face_overlay; // owned by the game's content view
+static s2a_face_overlay_hold g_face_overlay_hold;
+static uint64_t g_face_check_at;
+static struct timespec g_face_stamp;
+static BOOL g_face_had_file;
+static void pad_face_refresh(BOOL force) {
+    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if (!force && now < g_face_check_at) return;
+    g_face_check_at = now + 250000000;
+    const char *override = getenv("S2A_PAD_FACE_FILE");
+    NSString *path = override ? @(override) : [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/S2Arm/pad-order.face.json"];
+    struct stat info;
+    BOOL exists = stat(path.fileSystemRepresentation, &info) == 0;
+    if (!force && exists == g_face_had_file && (!exists || (info.st_mtimespec.tv_sec == g_face_stamp.tv_sec && info.st_mtimespec.tv_nsec == g_face_stamp.tv_nsec))) return;
+    g_face_had_file = exists; if (exists) g_face_stamp = info.st_mtimespec;
+    g_face_maps = @{};
+    if (!exists) return;
+    NSError *error = nil;
+    NSData *data = [NSData dataWithContentsOfFile:path options:0 error:&error];
+    id json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:&error] : nil;
+    if (![json isKindOfClass:NSDictionary.class] || ![json[@"schema"] isEqual:@1] || ![json[@"profiles"] isKindOfClass:NSDictionary.class]) {
+        fprintf(stderr, "[s2a] 【红】主手柄四键设置读不出来：%s；本次按平台默认键位\n", error.localizedDescription.UTF8String ?: "格式不正确");
+        return;
+    }
+    NSMutableDictionary *valid = [NSMutableDictionary new];
+    for (NSString *family in json[@"profiles"]) {
+        id value = json[@"profiles"][family];
+        if (![value isKindOfClass:NSNumber.class] || [value doubleValue] != [value intValue] || !s2a_face_valid([value intValue])) {
+            fprintf(stderr, "[s2a] 【红】主手柄 %s 四键设置无效；本次按平台默认键位\n", family.UTF8String); return;
+        }
+        valid[family] = value;
+    }
+    g_face_maps = [valid copy];
+}
+static NSString *controller_face_family(GCController *controller) {
+    if (!controller) return @"nintendo"; // 专用通道及 Switch HID 已按任天堂 A/B/X/Y 上报
+    GCExtendedGamepad *pad = controller.extendedGamepad;
+    NSString *name = [[NSString stringWithFormat:@"%@ %@", controller.productCategory ?: @"", controller.vendorName ?: @""] lowercaseString];
+    if ([pad isKindOfClass:GCDualSenseGamepad.class] || [pad isKindOfClass:GCDualShockGamepad.class] || [name containsString:@"dualsense"] || [name containsString:@"dualshock"]) return @"playstation";
+    if ([pad isKindOfClass:GCXboxGamepad.class] || [name containsString:@"xbox"]) return @"xbox";
+    if ([name containsString:@"nintendo"] || [name containsString:@"switch"] || [name containsString:@"joy-con"] || [name containsString:@"joycon"]) return @"nintendo";
+    return @"other";
+}
+static int primary_face_map(GCController *controller) {
+    NSNumber *value = g_face_maps[controller_face_family(controller)];
+    return value ? value.intValue : S2A_FACE_IDENTITY;
+}
+static uint32_t controller_face_bits(GCController *controller) {
+    GCPhysicalInputProfile *p = controller.physicalInputProfile;
+    NSArray *names = @[GCInputButtonA, GCInputButtonB, GCInputButtonX, GCInputButtonY];
+    uint32_t bits = 0;
+    for (int i = 0; i < 4; i++) if (p.buttons[names[i]].isPressed) bits |= 1u << i;
+    return bits;
+}
+static uint32_t primary_face_buttons(int slot, GCController *controller, uint32_t raw, uint32_t sampled) {
+    if (slot != 0) return sampled;
+    return sampled | ((uint32_t)s2a_face_apply(raw, primary_face_map(controller)) & 15u);
+}
+// 四颗实体键只经主手柄映射；其余手柄键的游戏配置、键鼠及背键仍可产生原有动作。
+static NSDictionary *primary_face_cfg(NSDictionary *cfg) {
+    static NSDictionary *previous, *filtered;
+    if (previous != cfg) {
+        previous = cfg;
+        NSMutableDictionary *buttons = [cfg[@"gamepad"] mutableCopy] ?: [NSMutableDictionary new];
+        NSSet *faces = [NSSet setWithArray:@[@"east", @"south", @"north", @"west"]];
+        for (NSString *target in buttons.allKeys) if ([faces containsObject:buttons[target]]) [buttons removeObjectForKey:target];
+        NSMutableDictionary *copy = [cfg mutableCopy]; copy[@"gamepad"] = buttons; filtered = [copy copy];
+    }
+    return filtered;
+}
+static void face_overlay_update(GCController *controller, BOOL chord, BOOL available) {
+    if (!g_face_overlay) return;
+    static __weak GCController *previous;
+    if (previous != controller) { g_face_overlay_hold = (s2a_face_overlay_hold){0}; previous = controller; }
+    BOOL visible = s2a_face_overlay_step(&g_face_overlay_hold, clock_gettime_nsec_np(CLOCK_UPTIME_RAW), chord, available);
+    NSString *family = controller_face_family(controller);
+    int map = primary_face_map(controller);
+    if (![g_face_overlay.family isEqual:family] || g_face_overlay.mapping != map) {
+        g_face_overlay.family = family; g_face_overlay.mapping = map; g_face_overlay.needsDisplay = YES;
+    }
+    g_face_overlay.hidden = !visible;
 }
 // 按配置表把一只手柄的键名 / 轴名映射成 Switch 按键位 + 摇杆（不含键盘 / 鼠标；调用方负责叠加）
 static void map_pad_inputs(NSDictionary *cfg, NSDictionary *all, NSDictionary *axes, uint32_t *out_buttons, int32_t sticks[4]) {
@@ -1141,12 +1228,13 @@ static void sample_input(void) {
     int32_t kbd_sticks[4] = {0}; uint32_t kbd_buttons = 0;
     uint32_t slot_buttons[S2A_MAX_PADS] = {0};
     int32_t slot_sticks[S2A_MAX_PADS][4] = {{0}};
+    BOOL primary_chord = NO, primary_available = NO;
     GCExtendedGamepad *active = focused ? active_pad(GCController.controllers) : nil;
     // 玩家 1 的体感 / 震动跟着占槽 0 的那只系统手柄（上一拍的槽位表）；槽 0 不是系统手柄时照旧用最近有输入的那只（#520 E）
     GCExtendedGamepad *lead = focused && pad_owner[0].extendedGamepad ? pad_owner[0].extendedGamepad : active;
     sample_motion(lead);
     if (lead) rumble_select(lead.controller);   // 失焦不换会话：切回来同一个手柄接着震
-    if (focused) sample_home_quit(active);
+    if (focused) sample_home_quit(lead);
     // 失焦 / 退出确认条打开：照旧不喂输入（发一份全零）。手柄槽位仍然要扫，否则窗口一失焦服务层就以为只剩 1 只手柄，会把玩家 2 的格子拆掉
     BOOL muted = !focused || g_hq.open;
     // 键盘 / 鼠标映射：键盘分配成一位玩家时照它那位的键位（顺序表第 i 位 = 玩家 i+1，玩家 2–4 的映射在 player_config_maps[0..2]）；
@@ -1179,6 +1267,7 @@ static void sample_input(void) {
     // —— 与手柄快速路径共用 g_compose_mu 的采样发布段：键鼠 / 静音快照、槽位镜像、槽位原子量、发布都在锁内交接，
     //    两条线谁拿到锁谁重读要合的那份再发布，交错也不会丢键 ——
     pthread_mutex_lock(&g_compose_mu);
+    pad_face_refresh(NO);
     // 键盘 / 鼠标快照：快速路径合槽 0 时读的就是这两份（失焦 / 开退出确认条时 kbd_buttons 本来就是 0）
     atomic_store(&kbd_buttons_snap, kbd_buttons);
     for (int i = 0; i < 4; i++) atomic_store(&kbd_sticks_snap[i], kbd_sticks[i]);
@@ -1309,6 +1398,7 @@ static void sample_input(void) {
         int s = slot_of[j];
         if (s < 0) continue;   // 超过 S2A_MAX_PADS 只：多出来的不参与
         NSDictionary *pad_cfg = slot_cfg(s);   // 槽 i = 玩家 i+1：照各玩家自己的键位映射采样（没给就照玩家 1 的那份）
+        if (s == 0) pad_cfg = primary_face_cfg(pad_cfg);
         pad_id[s] = live_ids[j];
         if (live_ble[j] == S2A_PAD_ORDER_GEN1 || live_ble[j] == S2A_PAD_ORDER_GEN1_PAIR) {
             gen1_unit *u = gen1_of(live_ids[j]);
@@ -1321,6 +1411,19 @@ static void sample_input(void) {
         else if (live_hid[j]) { const s2a_hid_pad *h = live_hid[j]; sample_coded_state(h->buttons, h->lx, h->ly, h->rx, h->ry, pad_cfg, &slot_buttons[s], slot_sticks[s]); }
         else if (live_pads[j]) { pad_owner[s] = live_ctrls[j]; pad_slot_owner[s] = live_ctrls[j]; sample_pad_state(live_pads[j], pad_cfg, &slot_buttons[s], slot_sticks[s]); }
         else { pad_owner[s] = live_ctrls[j]; pad_slot_owner[s] = live_ctrls[j]; sample_profile_state(live_ctrls[j], pad_cfg, &slot_buttons[s], slot_sticks[s]); }
+        if (live_ble[j] != S2A_PAD_ORDER_KEYBOARD) {
+            uint32_t raw = live_ctrls[j] ? controller_face_bits(live_ctrls[j])
+                : live_hid[j] ? live_hid[j]->buttons
+                : live_ble[j] >= 0 ? ble[live_ble[j]].buttons : gen1_state[gen1_of(live_ids[j]) - g_gen1].buttons;
+            slot_buttons[s] = primary_face_buttons(s, live_ctrls[j], raw, slot_buttons[s]);
+            if (s == 0) {
+                primary_available = YES;
+                GCPhysicalInputProfile *profile = live_ctrls[j].physicalInputProfile;
+                primary_chord = live_ctrls[j]
+                    ? profile.buttons[GCInputLeftThumbstickButton].isPressed && profile.buttons[GCInputRightThumbstickButton].isPressed
+                    : (raw & 0x30) == 0x30;
+            }
+        }
     }
     int ns2_style[NS2_RELAY_PLAYERS] = {0};   // 玩家 2 起的单只 Joy-Con 照它占的那一格的样式整形（下一拍读时用；没占格 = 转横握）
     for (int i = 0; i < S2A_MAX_PADS; i++) for (int p = 0; p < NS2_RELAY_PLAYERS; p++) if (pad_id[i] == &ns2_slot_id[p]) ns2_style[p] = atomic_load(&g_slot_style[i]);
@@ -1355,6 +1458,7 @@ static void sample_input(void) {
     publish_input(slot_buttons[0], slot_sticks[0]);   // 玩家 1：旧 ABI + 事件驱动 ABI（含鼠标视角）
     publish_keyboard(muted);   // R5：键盘区原始键态（先落键态再唤醒，泵醒来读到同一拍）
     pthread_mutex_unlock(&g_compose_mu);
+    face_overlay_update(pad_owner[0], primary_chord, primary_available && !muted);
 }
 // Switch 2 Pro 输入事件化（11-12 延迟管线调研，同 A2 的事件直达）：ns2_controller.c 的报文线程
 //   （直连传输回调 / 通道读线程）发现快照变化就调这里。此前 NS2 输入靠 120Hz 主线程定时器拉取快照，
@@ -1404,8 +1508,10 @@ static void pad_event_fast(GCController *controller) {
     if (slot < 0) { pthread_mutex_unlock(&g_compose_mu); return; }
     uint32_t buttons = 0; int32_t sticks[4] = {0};
     NSDictionary *pad_cfg = slot_cfg(slot);   // 槽 i = 玩家 i+1：照各玩家自己的键位映射采样
+    if (slot == 0) pad_cfg = primary_face_cfg(pad_cfg);
     if (controller.extendedGamepad) sample_pad_state(controller.extendedGamepad, pad_cfg, &buttons, sticks);
     else sample_profile_state(controller, pad_cfg, &buttons, sticks);
+    buttons = primary_face_buttons(slot, controller, controller_face_bits(controller), buttons);
     if (atomic_load(&input_muted)) {
         buttons = 0; memset(sticks, 0, sizeof sticks);
     } else if (slot == 0) {
@@ -1887,6 +1993,14 @@ void s2a_front_run(void (*guest_main)(void)) {
         S2AMetalView *view = [[S2AMetalView alloc] initWithFrame:NSMakeRect(0, 0, 1280, 720)];
         view.wantsLayer = YES; CAMetalLayer *layer = [CAMetalLayer layer]; layer.opaque = YES; layer.backgroundColor = NSColor.blackColor.CGColor;   // 固定出图尺寸时等比居中的余边（#575）
         view.layer = layer; window.contentView = view; window.acceptsMouseMovedEvents = YES;
+        S2AControllerFaceOverlay *faceOverlay = [[S2AControllerFaceOverlay alloc] initWithFrame:NSMakeRect(992, 20, 268, 180)];
+        faceOverlay.autoresizingMask = NSViewMinXMargin | NSViewMaxYMargin;
+        [view addSubview:faceOverlay]; g_face_overlay = faceOverlay;
+        [NSDistributedNotificationCenter.defaultCenter addObserverForName:@"org.s2arm.controller-face-map.changed" object:nil queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *note) {
+            (void)note;
+            pthread_mutex_lock(&g_compose_mu); pad_face_refresh(YES); pthread_mutex_unlock(&g_compose_mu);
+            sample_input();
+        }];
         delegate.window = window;
         screen_fps_note(window);
         [NSNotificationCenter.defaultCenter addObserverForName:NSWindowDidChangeScreenNotification object:window queue:NSOperationQueue.mainQueue usingBlock:^(NSNotification *n) { screen_fps_note(n.object); }];

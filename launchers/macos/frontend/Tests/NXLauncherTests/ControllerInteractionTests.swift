@@ -8,6 +8,17 @@ import XCTest
 @testable import NX2AppleUI
 
 @MainActor final class ControllerInteractionTests: XCTestCase {
+    func testConfirmationHintUsesTheMappedFaceButton() {
+        let source = LauncherPadSource()
+        let snapshot = GCController.withExtendedGamepad()
+        source.controllers = { [snapshot] }
+        var symbols: [PadShortcut: String] = [:]
+        source.updatePresentation = { _, value in symbols = value }
+        source.refreshPresentation()
+        XCTAssertEqual(symbols[.primary], "a.circle", "未改映射时，完成与确认应提示实体 A，不能显示 Menu")
+        XCTAssertEqual(symbols[.back], "b.circle")
+    }
+
     func testShortcutHintsFollowConnectionAndShowOneGlyphPerButton() async throws {
         _ = NSApplication.shared
         let navigation = LauncherPadNavigation()

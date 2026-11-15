@@ -81,8 +81,9 @@ import NXLauncher
                 }
                 host.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(80))
                 let frames = navigation.controlTargets(in: window).map { window.convertFromScreen($0.frame) }
-                XCTAssertEqual(Set(navigation.controlTargets(in: window).map(\.id)), ["controller.system.settings", "controller.switch-options"],
-                               "系统手柄默认只提供系统设置和独立 Switch 入口，不能出现伪装成 DualSense 的重连按钮")
+                XCTAssertEqual(Set(navigation.controlTargets(in: window).map(\.id)), ["controller.system.settings", "controller.switch-options",
+                    "controller.face.0", "controller.face.1", "controller.face.2", "controller.face.3", "controller.face.switch", "controller.face.reset"],
+                               "系统手柄提供连接设置和主玩家四键映射，不能出现伪装成 DualSense 的重连按钮")
                 XCTAssertEqual(host.bounds.width, 380, accuracy: 0.5)
                 XCTAssertGreaterThanOrEqual(frames.count, 2, "必须测到 Switch 入口和蓝牙设置按钮")
                 print("popover-insets name=\(name) zh=\(zh) width=\(host.bounds.width) frames=\(frames)")

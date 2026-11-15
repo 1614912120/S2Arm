@@ -201,17 +201,14 @@ extension LauncherView {
         HStack(spacing: 20) {
             Label(loc.t("home.navigate"), systemImage: "dpad").font(.manrope(11.5))
             Spacer(minLength: 8)
-            homeHint("A", homeSelected.map(homePrimaryTitle) ?? loc.t("home.select"))
-            homeHint("B", loc.t("home.back"))
-            homeHint("Y", loc.t("home.details"))
+            homeHint(.primary, homeSelected.map(homePrimaryTitle) ?? loc.t("home.select"))
+            homeHint(.back, loc.t("home.back"))
+            homeHint(.tertiary, loc.t("home.details"))
         }.foregroundStyle(.white.opacity(0.6)).padding(.horizontal, 54).frame(height: 48)
             .accessibilityIdentifier("home.controller-hints").controllerConnectedOnly()
     }
-    private func homeHint(_ button: String, _ title: String) -> some View {
-        HStack(spacing: 6) {
-            Text(button).font(.manrope(10, .bold)).frame(width: 19, height: 19).overlay(Circle().strokeBorder(.white.opacity(0.45)))
-            Text(title).font(.manrope(11.5))
-        }.fixedSize()
+    private func homeHint(_ shortcut: PadShortcut, _ title: String) -> some View {
+        HomeControllerHint(presentation: navigation.presentation, shortcut: shortcut, title: title)
     }
     private func homePrimarySymbol(_ game: GameSummary) -> String {
         if model.busy { return "arrow.up.forward.app" }
@@ -259,6 +256,8 @@ extension LauncherView {
         navigation.source.relayPath = { model.controller.phase == .ready && !model.controller.assigning ? model.controller.socketURL.path : nil }
         navigation.source.relayAllowed = { !model.playSessionActive && !model.controller.assigning }
         navigation.source.relayConnected = { model.controller.deviceCount > 0 }
+        navigation.source.assignment = { model.controller.assignment }
+        navigation.source.faceMapping = { model.controller.faceMaps.mapping(for: $0) }
         navigation.onAction = { action in
             if action == .back, !showingHome, !model.showsWelcome { model.goToLibrary(); return true }
             guard showingHome else { return false }
@@ -302,5 +301,17 @@ extension LauncherView {
             default: return false
             }
         }
+    }
+}
+
+private struct HomeControllerHint: View {
+    @ObservedObject var presentation: PadPresentation
+    let shortcut: PadShortcut
+    let title: String
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: presentation.symbols[shortcut] ?? shortcut.symbol).font(.system(size: 19))
+            Text(title).font(.manrope(11.5))
+        }.fixedSize()
     }
 }

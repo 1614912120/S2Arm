@@ -710,7 +710,7 @@ import S2ArmAppleAdapter
         }
     }
 
-    func testExportContentUsesABoundedWidthAlignedWithTheFooter() async throws {
+    func testExportContentUsesABoundedWidthAlignedToTheLeft() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
         fixture.model.refresh()
@@ -729,10 +729,10 @@ import S2ArmAppleAdapter
                 let targets = fixture.navigation.controlTargets(in: window)
                 let cover = try XCTUnwrap(targets.first { $0.id == "export.cover" })
                 let start = try XCTUnwrap(padFocus.frames["main"]?.first { $0.id == "export.start" })
-                let expectedLeft = max(48, width - 48 - 1120)
+                let expectedContentWidth = min(1120, width - 96)
                 print("export-bounded \(language.code)/\(width): left=\(cover.frame.minX - bounds.minX), right=\(width - start.frame.maxX)")
-                XCTAssertEqual(cover.frame.minX - bounds.minX, expectedLeft, accuracy: 1, "出包内容最多 1120 pt 宽并靠右，小窗口保持 48 pt 边距")
-                XCTAssertEqual(width - start.frame.maxX, 48, accuracy: 1, "底栏操作应与内容右边缘对齐")
+                XCTAssertEqual(cover.frame.minX - bounds.minX, 48, accuracy: 1, "出包内容最多 1120 pt 宽并靠左，左边距保持 48 pt")
+                XCTAssertEqual(width - start.frame.maxX, 48, accuracy: 1, "底栏操作应保持距窗口右边缘 48 pt")
                 XCTAssertTrue(bounds.contains(cover.frame))
                 XCTAssertTrue(CGRect(x: 0, y: 0, width: width, height: 630).contains(start.frame))
                 fixture.navigation.source.controllers = { [] }; fixture.navigation.attach(window); fixture.navigation.source.stop()
@@ -740,7 +740,7 @@ import S2ArmAppleAdapter
                 fixture.navigation.focus("export.location")
                 try await Task.sleep(for: .milliseconds(60))
                 let location = try XCTUnwrap(fixture.navigation.controlTargets(in: window).first { $0.id == "export.location" })
-                XCTAssertEqual(bounds.maxX - location.frame.maxX, 62, accuracy: 1, "存放位置行的右缘也应与内容对齐，只含行内的 14 pt 边距")
+                XCTAssertEqual(location.frame.maxX - cover.frame.minX, expectedContentWidth - 14, accuracy: 1, "存放位置行的右缘也应与内容对齐，只含行内的 14 pt 边距")
                 fixture.navigation.hide()
                 if let scroll = scrollViews(in: host).first, let document = scroll.documentView {
                     let clip = scroll.contentView

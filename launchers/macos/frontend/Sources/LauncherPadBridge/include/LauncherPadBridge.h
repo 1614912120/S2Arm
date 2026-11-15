@@ -33,3 +33,6 @@ s2a_launcher_pad_client *s2a_launcher_pad_open(const char *path);
 int s2a_launcher_pad_poll(s2a_launcher_pad_client *client, s2a_launcher_pad_sample *sample);
 void s2a_launcher_pad_close(s2a_launcher_pad_client *client);
 int s2a_launcher_pad_decode(const void *bytes, size_t length, s2a_launcher_pad_sample *sample);
+int s2a_launcher_face_valid(int map);
+int s2a_launcher_face_source(int map, int target);
+uint64_t s2a_launcher_face_apply(uint64_t buttons, int map);

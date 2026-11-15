@@ -223,6 +223,7 @@ enum LauncherPadSpatial {
         for observer in notifications { NotificationCenter.default.removeObserver(observer) }; notifications.removeAll()
         for overlay in overlays.values { overlay.removeFromSuperview() }; overlays.removeAll()
         onAction = nil; defaultFocus = { nil }; context = { "home" }; text = { $0 }; source.relayPath = { nil }; source.relayAllowed = { true }; source.relayConnected = { false }
+        source.assignment = { PlayerAssignment() }; source.faceMapping = { _ in .identity }
         controls.removeAll(); window = nil
     }
     func hide() { visible = false; clearRings() }

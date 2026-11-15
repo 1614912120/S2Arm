@@ -186,6 +186,11 @@ struct Switch2ProConnectionPopover: View {
                         }
                         .accessibilityIdentifier("controller.players")
                     }
+                    if let primary = controller.assignment.primaryPad(in: systems.pads) {
+                        ControllerFaceMappingEditor(store: controller.faceMaps, family: ControllerFaceFamily(primary.family), simplifiedChinese: zh)
+                    } else if controller.assignment.primaryIsNintendo {
+                        ControllerFaceMappingEditor(store: controller.faceMaps, family: .nintendo, simplifiedChinese: zh)
+                    }
                     // 两只以上手柄才有得分配（一对 Joy-Con 算两只、蓝牙手柄也算）
                     if controller.allDevices.count + systems.pads.count >= 2 {
                         Button(zh ? "分配玩家" : "Assign players") { controller.startAssign() }
@@ -199,6 +204,7 @@ struct Switch2ProConnectionPopover: View {
         .padding(20)
         .frame(width: 380)   // 比稿（340）宽一些：标题不会整行撑满
         .background(.regularMaterial)
+        .launcherDropdownHost()
         .preferredColorScheme(.dark)
     }
 }

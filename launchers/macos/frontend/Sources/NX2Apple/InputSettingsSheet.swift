@@ -193,8 +193,14 @@ struct InputSettingsSheet: View {
             }
             VStack(alignment: .leading, spacing: 7) {
                 Label(t("gamepad"), systemImage: "gamecontroller").font(LauncherTheme.TypeStyle.section)
-                LauncherDropdown(options: [("", t("unbound"))] + InputConfig.padCodes.map { ($0, names.pad($0)) },
-                                 selection: config.gamepad[selected] ?? "", label: t("gamepad"), fill: true) { value in
+                if player == 1 {
+                    Text(loc.lang == .zh ? "主手柄四键在顶栏手柄弹窗设置，这里可绑定其余实体按键" : "Set the primary pad’s four face buttons in the controller popover; bind its other buttons here")
+                        .font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                let codes = player == 1 ? Array(InputConfig.padCodes.dropFirst(4)) : InputConfig.padCodes
+                let binding = config.gamepad[selected] ?? ""
+                LauncherDropdown(options: [("", t("unbound"))] + codes.map { ($0, names.pad($0)) },
+                                 selection: codes.contains(binding) ? binding : "", label: t("gamepad"), fill: true) { value in
                     recording = nil
                     let pad = value.isEmpty ? nil : value, target = selected
                     let holder = pad.flatMap { p in config.gamepad.first { $0.key != target && $0.value == p }?.key }

@@ -44,7 +44,7 @@
      "label": {"zh-Hans": "社区补丁", "en": "Community patches"},
      "note": {"zh-Hans": "匹配此版本的画面与帧率补丁，同组限选一个，下次启动生效", "en": "Graphics and frame rate patches for this version, one per group, applied on the next launch"}},
     {"id": "input", "type": "page", "scope": "game", "apply": "live", "platforms": ["ios", "mac"], "group": "controls",
-     "label": {"zh-Hans": "手柄与按键", "en": "Controller and keys"},
+     "label": {"zh-Hans": "手柄设置", "en": "Controller settings"},
      "note": {"zh-Hans": "设置 Mac 手柄与键盘映射，或 iPhone 虚拟手柄布局", "en": "Configure Mac controller and keyboard bindings, or the iPhone touch layout"}},
     {"id": "rumble", "type": "bool", "default": true, "scope": "game", "apply": "live", "platforms": ["ios", "mac"], "group": "controls", "ios_key": "S2ARumbleOn",
      "label": {"zh-Hans": "震动", "en": "Rumble"},

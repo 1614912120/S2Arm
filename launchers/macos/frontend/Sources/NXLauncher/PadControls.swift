@@ -22,13 +22,13 @@ package struct PadControl {
     package let preferred: Bool
     package var shortcuts: [PadShortcut] = []
 }
-/// A always operates the focused control. Menu/Options submits the sheet without
-/// stealing A from editable fields; B returns, X/Y are explicit secondary actions.
+/// A operates the focused control; Menu remains a submit alias for editable
+/// sheets. Hints show the mapped physical A/B/X/Y of the primary player's pad.
 package enum PadShortcut: String, CaseIterable {
     case primary, back, secondary, tertiary
     package var symbol: String {
         switch self {
-        case .primary: return "line.3.horizontal.circle"
+        case .primary: return "a.circle"
         case .back: return "b.circle"
         case .secondary: return "x.circle"
         case .tertiary: return "y.circle"

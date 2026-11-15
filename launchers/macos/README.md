@@ -115,6 +115,14 @@ bash launchers/macos/test_controller.sh
 标题回归检查主副标题基线、长版本与路径的单行省略，以及后台任务出现和消失时原生顶栏的宽度避让。
 此检查覆盖应用内交互；蓝牙配对、射频断连、震动和实体按键手感须另用真手柄验证。
 
+主玩家的四键映射在顶栏手柄弹窗编辑，PS、Xbox、Switch 分别保存。未设置时按键帽语义处理
+（PS × / Xbox A 确认，PS ○ / Xbox B 返回）；可选 Switch 位置布局或逐键修改，已占用的目标自动互换。
+首页、弹窗提示固定跟随玩家分配中的主手柄，实际输入与显示使用同一份映射。
+Mac 游戏读取同目录的 `pad-order.face.json`，保存后即时通知刷新，并保留轮询同步；只接管主玩家四颗实体键，
+其余手柄、键鼠和背键配置仍按原路径处理。游戏内长按 L3 + R3 一秒显示或收起四键小浮窗。
+专项测试覆盖默认 / Switch 位置布局、逐键修改、保存恢复、按住时切换、玩家切换及真实 SwiftUI 下拉操作；
+游戏输入与小浮窗的无资产检查运行 `bash tests/macos_native_input_test.sh`。
+
 ## DMG installation window / 拖拽安装窗口
 
 安装窗口沿用 [GitHub Pages 下载页](../../docs/site/index.html) 的近黑底、奶油白、

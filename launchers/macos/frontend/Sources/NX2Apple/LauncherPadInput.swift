@@ -17,12 +17,13 @@ struct LauncherPadInput: Equatable {
     var rightY: Float = 0
     var neutral: Bool { buttons == 0 && abs(x) < 0.55 && abs(y) < 0.55 && abs(rightY) < 0.55 }
 
-    static func system(_ pad: GCExtendedGamepad) -> Self {
+    static func system(_ pad: GCExtendedGamepad, mapping: ControllerFaceMapping = .identity) -> Self {
         var input = Self(x: pad.leftThumbstick.xAxis.value, y: pad.leftThumbstick.yAxis.value, rightY: pad.rightThumbstick.yAxis.value)
         let buttons: [(GCControllerButtonInput?, Int)] = [(pad.buttonA, 0), (pad.buttonB, 1), (pad.buttonX, 2), (pad.buttonY, 3),
             (pad.leftShoulder, 6), (pad.rightShoulder, 7), (pad.leftTrigger, 8), (pad.rightTrigger, 9),
             (pad.buttonMenu, 10), (pad.buttonOptions, 11)]
         for (button, bit) in buttons where button?.isPressed == true { input.buttons |= 1 << bit }
+        input.buttons = mapping.apply(input.buttons)
         if pad.dpad.xAxis.value < -0.5 { input.buttons |= 1 << 12 }
         if pad.dpad.xAxis.value > 0.5 { input.buttons |= 1 << 14 }
         if pad.dpad.yAxis.value > 0.5 { input.buttons |= 1 << 13 }
@@ -84,6 +85,8 @@ struct LauncherPadRepeater {
     var relayAllowed: () -> Bool = { true }
     var controllers: () -> [GCController] = { GCController.controllers() }
     var relayConnected: () -> Bool = { false }
+    var assignment: () -> PlayerAssignment = { PlayerAssignment() }
+    var faceMapping: (ControllerFaceFamily) -> ControllerFaceMapping = { _ in .identity }
     var isActive: () -> Bool = { NSApp.isActive }
     var updatePresentation: (Bool, [PadShortcut: String]) -> Void = { _, _ in }
     var refresh: () -> Void = {}
@@ -95,7 +98,6 @@ struct LauncherPadRepeater {
     private var lastPacketAt: TimeInterval = 0
     private var token = ""
     private var repeater = LauncherPadRepeater()
-    private var hintController: ObjectIdentifier?
     private let notifications: NotificationCenter
     private var announced: [ObjectIdentifier: GCController] = [:]
     private var disconnected = Set<ObjectIdentifier>()
@@ -144,22 +146,22 @@ struct LauncherPadRepeater {
         let listed = controllers()
         let ids = Set(listed.map(ObjectIdentifier.init))
         for id in ids { announced[id] = nil }
-        return listed.filter { !disconnected.contains(ObjectIdentifier($0)) } + Array(announced.values)
+        let current = listed.filter { !disconnected.contains(ObjectIdentifier($0)) } + Array(announced.values)
+        let idsToRead = Set(SystemControllers.snapshot(current).map(\.id))
+        return current.filter { idsToRead.contains(ObjectIdentifier($0)) }
     }
     func refreshPresentation() {
         publishPresentation(currentControllers())
         refresh()
     }
     private func publishPresentation(_ pads: [GCController]) {
-        let activePad = pads.first { $0.extendedGamepad.map { !LauncherPadInput.system($0).neutral } ?? false }
-            ?? pads.first { ObjectIdentifier($0) == hintController } ?? pads.first
-        hintController = activePad.map(ObjectIdentifier.init)
+        let primary = assignment().primarySystem(in: pads)
         var symbols: [PadShortcut: String] = [:]
-        if let pad = activePad?.extendedGamepad {
-            symbols = [.primary: pad.buttonMenu.sfSymbolsName ?? PadShortcut.primary.symbol,
-                       .back: pad.buttonB.sfSymbolsName ?? PadShortcut.back.symbol,
-                       .secondary: pad.buttonX.sfSymbolsName ?? PadShortcut.secondary.symbol,
-                       .tertiary: pad.buttonY.sfSymbolsName ?? PadShortcut.tertiary.symbol]
+        if let primary {
+            let family = ControllerFaceFamily.of(primary)
+            symbols = faceMapping(family).symbols(for: family)
+        } else if assignment().primaryIsNintendo || relayConnected() || relay.ready != 0 {
+            symbols = faceMapping(.nintendo).symbols(for: .nintendo)
         }
         updatePresentation(!pads.isEmpty || relayConnected() || relay.ready != 0, symbols)
     }
@@ -189,23 +191,29 @@ struct LauncherPadRepeater {
             }
         }
         let pads = currentControllers()
+        let primary = assignment().primarySystem(in: pads)
         publishPresentation(pads)
         refresh()
         var input = LauncherPadInput()
-        for pad in pads.compactMap(\.extendedGamepad) {
-            let state = LauncherPadInput.system(pad)
+        for controller in pads {
+            guard let pad = controller.extendedGamepad else { continue }
+            let mapping = controller === primary ? faceMapping(ControllerFaceFamily.of(controller)) : .identity
+            let state = LauncherPadInput.system(pad, mapping: mapping)
             input.buttons |= state.buttons
             if abs(state.x) > abs(input.x) { input.x = state.x }
             if abs(state.y) > abs(input.y) { input.y = state.y }
             if abs(state.rightY) > abs(input.rightY) { input.rightY = state.rightY }
         }
         if relay.ready != 0 {
-            input.buttons |= relay.buttons
+            input.buttons |= (primary == nil && (assignment().primaryIsNintendo || assignment().units.isEmpty))
+                ? faceMapping(.nintendo).apply(relay.buttons) : relay.buttons
             if abs(relay.x) > abs(input.x) { input.x = relay.x }
             if abs(relay.y) > abs(input.y) { input.y = relay.y }
             if abs(relay.right_y) > abs(input.rightY) { input.rightY = relay.right_y }
         }
-        let nextToken = pads.map { String(describing: ObjectIdentifier($0)) }.joined(separator: ",") + ":\(relay.ready):\(relay.epoch)"
+        let mapping = primary.map { faceMapping(ControllerFaceFamily.of($0)) } ?? faceMapping(.nintendo)
+        let nextToken = pads.map { String(describing: ObjectIdentifier($0)) }.joined(separator: ",")
+            + ":\(relay.ready):\(relay.epoch):\(primary.map { String(describing: ObjectIdentifier($0)) } ?? ""):\(mapping.code)"
         if token != nextToken { token = nextToken; repeater.reset() }
         for action in repeater.actions(input, time: now) { receive(action) }
     }

@@ -35,7 +35,7 @@ struct ExportView: View {
                 }
                 .frame(maxWidth: 1120, alignment: .leading)
                 .padding(.horizontal, LauncherTheme.Metrics.libraryInset).padding(.top, 22).padding(.bottom, 40)
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             Divider().opacity(0.3)
             actionBar

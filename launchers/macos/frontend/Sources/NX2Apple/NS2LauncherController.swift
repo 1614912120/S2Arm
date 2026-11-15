@@ -98,6 +98,7 @@ final class NS2LauncherController: ObservableObject {
     private let notifications: NotificationCenter
     private var observers: [NSObjectProtocol] = []
     let socketURL: URL
+    let faceMaps: ControllerFaceMapStore
     private var process: Process?
     private var output: Pipe?
     private var input: Pipe?   // 运行中改设定（两只怎么用）经 stdin 一行命令交给连接程序，不用重连
@@ -109,6 +110,7 @@ final class NS2LauncherController: ObservableObject {
     init(socketURL: URL, store: UserDefaults? = nil, orderFile: URL = PlayerAssignment.orderFileURL, watchGame: Bool = false,
          systemControllers: @escaping () -> [GCController] = { GCController.controllers() }, notifications: NotificationCenter = .default) {
         self.socketURL = socketURL
+        faceMaps = ControllerFaceMapStore(fileURL: orderFile.deletingPathExtension().appendingPathExtension("face.json"))
         self.systemControllers = systemControllers
         self.notifications = notifications
         orderFileURL = orderFile

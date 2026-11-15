@@ -703,6 +703,90 @@ static void test_pad_layout(void) {
     puts("Mac pad layout: automatic / Switch / Xbox take effect on the next read passed");
 }
 
+// 同一份四键配置在主线程与事件回调路径生效，原始键态始终只映射一次。
+static void test_primary_face_maps(void) {
+    GCController *c = [GCController controllerWithExtendedGamepad];
+    GCExtendedGamepad *pad = c.extendedGamepad;
+    GCControllerButtonInput *face[] = {pad.buttonA, pad.buttonB, pad.buttonX, pad.buttonY};
+    config = default_config(); pad_slot_owner[0] = c;
+    atomic_store(&input_muted, 0); atomic_store(&kbd_buttons_snap, 0);
+    for (int i = 0; i < 4; i++) atomic_store(&kbd_sticks_snap[i], 0);
+    int codes[] = {0xe4, 0xb1, 0x4e};
+    uint32_t expected[3][4] = {{1, 2, 4, 8}, {2, 1, 8, 4}, {4, 8, 1, 2}};
+    int checks = 0;
+    for (int layout = 0; layout < 3; layout++) {
+        g_face_maps = @{@"other": @(codes[layout])};
+        for (int key = 0; key < 4; key++) {
+            [face[key] setValue:1];
+            uint32_t sampled; int32_t sticks[4];
+            sample_pad_state(pad, primary_face_cfg(config), &sampled, sticks);
+            uint32_t raw = controller_face_bits(c);
+            expect(primary_face_buttons(0, c, raw, sampled) == expected[layout][key], "main-player face map: physical key reaches agreed Switch button");
+            pad_event_fast(c);
+            expect(s2a_vpad_read_pad(0, sticks) == expected[layout][key], "main-player face map: event callback publishes the same mapped button");
+            expect(primary_face_buttons(1, c, raw, sampled) == sampled, "main-player map does not overwrite player 2's bindings");
+            [face[key] setValue:0]; pad_event_fast(c);
+            expect(s2a_vpad_read_pad(0, sticks) == 0, "releasing a remapped key clears its target");
+            checks += 4;
+        }
+    }
+    expect(primary_face_buttons(0, nil, 1u << 2, (1u << 7)) == ((1u << 7) | 4), "Switch channel mapping preserves shoulders and normal Nintendo face labels");
+    expect(primary_face_buttons(0, c, 0, 1) == 1, "a non-face input bound to A keeps its game action");
+    g_face_maps = @{@"nintendo": @0xb1};
+    expect(primary_face_buttons(0, nil, 1, 0) == 2, "Switch channel can use a custom primary mapping too");
+    int valid = 0;
+    for (int code = 0; code < 256; code++) if (s2a_face_valid(code)) {
+        valid++;
+        for (unsigned bits = 0; bits < 16; bits++) expect((s2a_face_apply(bits | (1u << 20), code) & ~15u) == (1u << 20), "all permutations preserve non-face keys");
+    }
+    expect(valid == 24, "exactly the 24 permutations are accepted");
+    NSString *file = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"s2arm-face-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+    setenv("S2A_PAD_FACE_FILE", file.UTF8String, 1);
+    [@"{\"schema\":1,\"profiles\":{\"other\":177}}" writeToFile:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    pad_face_refresh(YES);
+    expect(primary_face_map(c) == 0xb1, "game host reads the launcher's persisted document");
+    [@"{\"schema\":1,\"profiles\":{}}" writeToFile:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    pad_face_refresh(YES);
+    expect(primary_face_map(c) == 0xe4, "restoring defaults takes effect live without restarting the game");
+    [NSFileManager.defaultManager removeItemAtPath:file error:nil];
+    setenv("S2A_PAD_FACE_FILE", "/nonexistent/s2arm-face.json", 1); pad_face_refresh(YES);
+    pad_slot_owner[0] = nil;
+    printf("Mac primary face mapping: %d input checks, 24 permutations x 16 states, live save/reset passed\n", checks);
+}
+
+static void test_controller_face_overlay(void) {
+    s2a_face_overlay_hold hold = {0};
+    expect(!s2a_face_overlay_step(&hold, 0, 1, 1), "overlay chord starts hidden");
+    expect(!s2a_face_overlay_step(&hold, 999999999, 1, 1), "overlay does not open before one second");
+    expect(s2a_face_overlay_step(&hold, 1000000000, 1, 1), "one-second L3/R3 chord opens the overlay");
+    expect(s2a_face_overlay_step(&hold, 4000000000, 1, 1), "held chord toggles only once");
+    s2a_face_overlay_step(&hold, 4100000000, 0, 1);
+    s2a_face_overlay_step(&hold, 4200000000, 1, 1);
+    expect(!s2a_face_overlay_step(&hold, 5200000000, 1, 1), "the next fresh chord closes the overlay");
+    s2a_face_overlay_step(&hold, 6000000000, 1, 0);
+    expect(!s2a_face_overlay_step(&hold, 8000000000, 1, 1), "focus gain cannot activate a chord held while inactive");
+    s2a_face_overlay_step(&hold, 8100000000, 0, 1);
+    s2a_face_overlay_step(&hold, 8200000000, 1, 1);
+    expect(s2a_face_overlay_step(&hold, 9200000000, 1, 1), "release rearms the chord");
+    expect(!s2a_face_overlay_step(&hold, 9300000000, 0, 0), "disconnect hides the overlay");
+    S2AControllerFaceOverlay *view = [[S2AControllerFaceOverlay alloc] initWithFrame:NSMakeRect(0, 0, 268, 180)];
+    view.family = @"playstation"; view.mapping = 0xb1;
+    expect([view.rows isEqual:@[@"△ → X", @"□ → Y", @"× → B", @"○ → A"]], "PS overlay shows the exact physical-to-Switch map in diamond order");
+    view.family = @"xbox";
+    expect([view.rows isEqual:@[@"Y → X", @"X → Y", @"A → B", @"B → A"]], "Xbox overlay shows only its own four physical buttons");
+    view.mapping = 0xe4;
+    expect([view.rows isEqual:@[@"Y → Y", @"X → X", @"A → A", @"B → B"]], "default mapping is reflected in the overlay too");
+    expect([view hitTest:NSMakePoint(30, 30)] == nil, "small overlay leaves game mouse input available");
+    view.family = @"playstation"; view.mapping = 0xb1; view.hidden = NO;
+    NSString *output = NSProcessInfo.processInfo.environment[@"S2A_SETTINGS_SHOTS"];
+    if (output) {
+        NSBitmapImageRep *bitmap = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
+        [view cacheDisplayInRect:view.bounds toBitmapImageRep:bitmap];
+        [[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:[output stringByAppendingPathComponent:@"game-face-overlay.png"] atomically:YES];
+    }
+    puts("Mac controller face overlay: 9 chord timing cases, PS/Xbox/default rows and mouse passthrough passed");
+}
+
 // 分玩家键位（槽 i = 玩家 i+1，InputSettingsSheet 按玩家保存）：玩家 2–4 没给自己的映射（S2A_INPUT_CONFIG_P2..P4 没给 / 读不懂）
 //   就照玩家 1 的全局那份，行为与原来完全一致；给了就槽位各照各的采样。期望手算（虚拟手柄 buttonA 自动布局按「东」上报，
 //   默认配置目标 A ← 东键 → 按下读 Switch A 第 0 位）：玩家 2 的映射把目标 B 绑到东键（"B": "east"）→
@@ -1095,6 +1179,7 @@ static void test_shared_input_config(void) {
 }
 int main(int argc, const char **argv) {
     setenv("S2A_PAD_ORDER_FILE", "/nonexistent/s2arm-pad-order.json", 1);   // 不读本机分配过的顺序表（#520 E）
+    setenv("S2A_PAD_FACE_FILE", "/nonexistent/s2arm-face.json", 1);
     // 兜底手柄（macos/hid_pad.m，#934）：Switch 简易 HID 键号 1 = B（南）、2 = A（东）、3 = Y（西）、4 = X（北）、9 = −、10 = +；13 Home 不进键位
     expect(s2a_hid_pad_switch_button_bit(1) == (1u << 1) && s2a_hid_pad_switch_button_bit(2) == (1u << 0) &&
            s2a_hid_pad_switch_button_bit(3) == (1u << 3) && s2a_hid_pad_switch_button_bit(4) == (1u << 2), "HID pad face buttons follow Switch labels");
@@ -1336,6 +1421,8 @@ int main(int argc, const char **argv) {
         test_pad_fast_path();
         test_profile_only_pad();
     test_pad_layout();
+    test_primary_face_maps();
+    test_controller_face_overlay();
         test_per_player_config();
         test_save_atomic_warning();
         test_lan_warning();

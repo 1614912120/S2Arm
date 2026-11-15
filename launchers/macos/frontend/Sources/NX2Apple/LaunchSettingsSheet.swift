@@ -1,7 +1,7 @@
 // S2Arm（不是上游文件）：一款游戏的启动设置（「开始游戏」旁的齿轮、「更多」菜单里同一入口；11-09 维护者）。
 //   设置项只从共享定义表 launchers/shared/game_settings.v1.json 读（iOS 游戏内菜单同一份），这里不另写文案和缺省；
 //   读写走作业层 community / communitySave（存这款游戏文件夹的 launch.json），改完下次开始游戏生效，不用重新准备。
-//   可用与否按这款的能力清单，不可用时显示原因。「手柄与按键」打开现有的按键设置页。
+//   可用与否按这款的能力清单，不可用时显示原因。「手柄设置」打开现有的手柄设置页。
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
@@ -96,7 +96,7 @@ struct LaunchSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: S2ArmLauncherModel
     let gameID: String
-    /// 「手柄与按键」：关掉本页、打开按键设置页
+    /// 「手柄设置」：关掉本页、打开同一款游戏的手柄设置页
     var openInput: () -> Void = {}
     @State private var items: [GameSettingItem] = []
     @State private var options: [String: LaunchOption] = [:]
@@ -177,6 +177,8 @@ struct LaunchSettingsSheet: View {
 
     /// 补丁一栏只在这款列得出补丁时出现；开关 / 选项要作业层给了状态才画
     private func visible(_ item: GameSettingItem) -> Bool {
+        // 主玩家四键改在顶栏手柄弹窗设置；共享定义和旧布局值仍供其他平台读取。
+        if item.id == "padFace" { return false }
         switch item.type {
         case "patches": return !patches.isEmpty
         case "page", "cheats": return true
