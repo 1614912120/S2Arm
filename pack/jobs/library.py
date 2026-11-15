@@ -619,6 +619,21 @@ def _size_of(path):
     return sum((Path(d) / f).lstat().st_size for d, _, files in os.walk(path) for f in files)
 
 
+def _size_on(path, cluster):
+    """拷到分配单元为 cluster 字节的卷上要占的空间：每个文件按簇向上取整、每个目录至少占一簇（exFAT 目录项本身也占簇）；cluster ≤ 0 = 读不到，按原始大小。
+    #1112：exFAT 1 MB 簇的外接盘上，92 GB / 21 万个文件的游戏库实际要约 280 GB，按原始大小估「251 GB 够」放行后写到盘满"""
+    if cluster <= 0:
+        return _size_of(path)
+    up = lambda n: -(-n // cluster) * cluster
+    if path.is_symlink() or path.is_file():
+        return up(path.lstat().st_size)
+    total = 0
+    for d, dirs, files in os.walk(path):
+        total += cluster
+        total += sum(up((Path(d) / f).lstat().st_size) for f in files)
+    return total
+
+
 def _sha256(path):
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -774,9 +789,12 @@ def move_library(c, source):
         pairs = _move_pairs(c, source)
         c.library.mkdir(parents=True, exist_ok=True)
         cross = [(a, b) for a, b in pairs if not _same_volume(a, c.library)]
-        need = sum(_size_of(a) for a, _ in cross)
-        if need and shutil.disk_usage(c.library).free < need:
-            raise Failure("新位置空间不够，游戏库没有搬。", code="disk_full")
+        cluster = volume_cluster(c.library)
+        need = sum(_size_on(a, cluster) for a, _ in cross)   # 按新位置的簇算实际占用（#1112：exFAT 大簇上小文件多，实际要原始大小的好几倍）
+        free = shutil.disk_usage(c.library).free
+        if need and free < need:
+            big = f"（这块盘的分配单元是 {cluster // 1024} KB，游戏库里小文件多，实际要占约 {need / 1e9:.0f} GB）" if cluster >= (64 << 10) else ""
+            raise Failure(f"新位置空间不够，游戏库没有搬：要约 {need / 1e9:.0f} GB，只剩 {free / 1e9:.0f} GB{big}。", code="disk_full")
         stage = c.library / ".s2arm-moving"
         done, staged = [], {}
         try:
@@ -818,7 +836,11 @@ def move_library(c, source):
                     _discard(b)
                 else:
                     _rename_library_path(c, b, a)
-            _discard(stage)
+            try:
+                _discard(stage)
+            except OSError as error:   # #1112：清临时目录自己出错不许盖住起因（原先盘满的 ENOSPC 被 rmtree 的 FileNotFoundError 盖掉，251 GB 留在盘上没人知道）
+                c.diagnostic(f"换库失败后，新位置的临时文件夹没删干净，可以手动删除：{c.redact(str(stage))}（{c.redact(str(error))}）",
+                             code="library_move_failed", severity="warning")
             with contextlib.suppress(OSError):
                 (c.library / ".s2arm-work").rmdir()   # 回滚后别留下搬的时候建的空目录
             raise
@@ -852,7 +874,20 @@ def _discard(p):
                     continue
                 with contextlib.suppress(OSError):
                     os.chmod(Path(d) / f, 0o644)
-        shutil.rmtree(p)
+        _rmtree_gone_ok(p)
+
+
+def _rmtree_gone_ok(p):
+    """删整棵目录，中途已经不在的项当删完（#1112：exFAT 上 AppleDouble「._」附属文件随主文件一起没了，rmtree 报 FileNotFoundError 半途停下）；
+    别的错照抛"""
+    def gone(_fn, _path, exc):
+        error = exc if isinstance(exc, BaseException) else exc[1]
+        if not isinstance(error, FileNotFoundError):
+            raise error
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(p, onexc=gone)
+    else:
+        shutil.rmtree(p, onerror=gone)
 
 
 def _within(path, parent):
