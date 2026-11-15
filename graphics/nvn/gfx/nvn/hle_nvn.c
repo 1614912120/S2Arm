@@ -3325,7 +3325,7 @@ __attribute__((weak)) int dm_low_power_now(void) { return 0; }   // Low Power Mo
 // Per-frame ring for the long-frame log (GPU time only arrives 8 frames late, so store first and judge later)
 #define LFN 16
 typedef struct { uint64_t f; double fr, nv, t_s, make_ms, up_mb, up_ms, sw_ms, sc_ms; unsigned pso, lib, up, rup; char stl[1024]; } lf_rec;   // sw / sc: submit wall / submit-thread CPU; stl: upload stall breakdown (nvn_be_stall_take)
-void nvn_be_stall_take(char *out, size_t n);
+__attribute__((weak)) void nvn_be_stall_take(char *out, size_t n) { if (n) out[0] = 0; }   // Upload stall breakdown for the long-frame line; strong definition in the Metal backend (nvn_mtl.m), none on Android: empty
 static lf_rec g_lf[LFN];
 __attribute__((weak)) void dm_longframe_note(const char *what) { LOG("[longframe] %s", what); }   // Default (graphics unit tests); the strong definition in the host's diag.c adds scene context and writes perf.txt
 extern void nvn_be_create_ns(uint64_t *lib_ns, uint64_t *pso_ns); extern uint64_t nvn_be_upload_bytes(void); extern void nvn_be_pkg_stats(uint64_t *uploads, uint64_t *reuploads);
