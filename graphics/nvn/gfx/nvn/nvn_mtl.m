@@ -5913,7 +5913,8 @@ static void shmap_load_once(void) {
     uint64_t mis[4];   // mis: texture slots 0-255 already reported for a type mismatch (tex_mis_note)
     uint64_t d2d[4];   // texture slots 0-255 whose sampler type the offline translation did not know and took as 2D (library resolution_scale_reasons "unknown_missing_fact:sampler_type:...slot=N"; audit #1534 P1-20 probe)
     NSString *ventry, *fnpfx; id<MTLFunction> vfn; int vfn_state;   // fnpfx: a batched library's function name prefix s<key>_ (json fn_prefix, dmsh_build.py unity_flush); ventry stays the logical entry name
-    uint32_t spill, spill_slot; } @end   // spill: a compute shader's shared memory moved to a device buffer, bytes per threadgroup, bound at spill_slot (dmsh_build.py spill_fix; dispatch)   // vertex: the entry point loaded (by the depth mode); vfn: the same entry of the shadow-input library <key>_bv (vin_fn; state 0 untried, 1 loaded, 2 failed)
+    uint32_t spill, spill_slot;
+    NSString *mslnote, *mslsrc; } @end   // spill: a compute shader's shared memory moved to a device buffer, bytes per threadgroup, bound at spill_slot (dmsh_build.py spill_fix; dispatch)   // vertex: the entry point loaded (by the depth mode); vfn: the same entry of the shadow-input library <key>_bv (vin_fn; state 0 untried, 1 loaded, 2 failed)
 @implementation NvShader
 - (void)dealloc { free(rf.c1); free(rf.b); }
 @end
@@ -6261,8 +6262,29 @@ static int tensor_native_json(NSDictionary *j) {
     return enabled && (enabled == 1 || (flags & 1)) && [j[@"tensor_mma_abi"] intValue] == 1 && [j[@"tensor_mma_count"] intValue] > 0
         && [g_dev supportsFamily:MTLGPUFamilyApple7];
 }
+// #065090：一份 MSL 的摘要，给慢编译那一行（pso_archive.h par_slow_begin）：总行数、FNV-1a 64 哈希、main0 体行数（「kernel void main0(」那行到其后第一行单独的「}」，
+//   同 DshOutline.Compute 的 end - entry）、拆出的 s2a_outline_ 个数、main0 是否 optnone（GiantFix 压不平时加）。拆分门槛 8192 行同 DshOutline KernelLines：
+//   拆了 → 「split into N helpers」；没拆且 main0 体 ≥ 8192 → 「over the 8192-line split threshold, not split」（满足条件却被 DshOutline 放弃，见其各 return msl）
+static NSString *msl_note(NSString *pc, NSString *src) {
+    const char *p = src.UTF8String; if (!p) return nil;
+    uint64_t h = 1469598103934665603ull; long lines = 0, entry = -1, body = -1, ln = 0; int helpers = 0, optnone = 0;
+    for (const char *q = p, *b = p; ; q++) {
+        if (*q && *q != '\n') { h = (h ^ (uint8_t)*q) * 1099511628211ull; continue; }
+        size_t n = (size_t)(q - b);
+        if (n || *q) lines++;
+        if (entry < 0 && (n >= 18 && !memcmp(b, "kernel void main0(", 18))) entry = ln;
+        else if (entry < 0 && n >= 37 && !memcmp(b, "[[clang::optnone]] kernel void main0(", 37)) { entry = ln; optnone = 1; }
+        else if (entry >= 0 && body < 0 && n == 1 && b[0] == '}') body = ln - entry;
+        if (n >= 50 && !memcmp(b, "static __attribute__((noinline)) void s2a_outline_", 50)) helpers++;
+        if (!*q) break;
+        h = (h ^ (uint8_t)'\n') * 1099511628211ull; b = q + 1; ln++;
+    }
+    const char *v = helpers ? "split" : body >= 8192 ? "over the 8192-line split threshold, not split" : body >= 0 ? "under the 8192-line split threshold" : "no main0 kernel";
+    return helpers ? [NSString stringWithFormat:@"%@ fallback translation, %ld lines, fnv %016llx, main0 body %ld lines, split into %d helpers%s", pc, lines, (unsigned long long)h, body, helpers, optnone ? ", optnone" : ""]
+                   : [NSString stringWithFormat:@"%@ fallback translation, %ld lines, fnv %016llx, main0 body %ld lines, %s%s", pc, lines, (unsigned long long)h, body, v, optnone ? ", optnone" : ""];
+}
 static NvShader *shader_build(NSString *pc, int stage, int layer, int depth_zero) {
-    NSError *e = nil;
+    NSError *e = nil; NSString *mnote = nil, *msrc = nil;   // #065090 msl_note
     // S2Arm: a key missing from the library is looked up in DM_MSL_FALLBACK (the on-device fallback translation writes <key>_b.metal + .json there; iOS cannot store a metallib built at runtime)
     NSString *dir = g_msl_dir;
     NSData *jd = json_from_pack(pc.UTF8String);   // S2Arm: from the library container, or its file without one (lib_pack.inc)
@@ -6292,14 +6314,17 @@ static NvShader *shader_build(NSString *pc, int stage, int layer, int depth_zero
     if (!lib) lib = dir == g_msl_dir ? lib_from_pack(pc.UTF8String, &e) : [NSFileManager.defaultManager fileExistsAtPath:lp] ? lib_from_file(lp, &e) : nil;
     if (lib && ul) { os_unfair_lock_lock(&ulock); if (!ulibs) ulibs = [NSMutableDictionary dictionary]; if (!ulibs[ul]) ulibs[ul] = lib; else lib = ulibs[ul]; os_unfair_lock_unlock(&ulock); }
     if (!lib && dir != g_msl_dir) {   // S2Arm fallback: MSL source compiled here, same options as the offline chain (dm_msl_opts)
-        NSString *src = [NSString stringWithContentsOfFile:[NSString stringWithFormat:@"%@/%@.metal", dir, pc] encoding:NSUTF8StringEncoding error:&e];
-        if (src) { MTLCompileOptions *co = dm_msl_opts(); t_lib_layer = [src containsString:@"render_target_array_index"]; lib = [g_dev newLibraryWithSource:src options:co error:&e]; }
+        NSString *sp = [NSString stringWithFormat:@"%@/%@.metal", dir, pc], *src = [NSString stringWithContentsOfFile:sp encoding:NSUTF8StringEncoding error:&e];
+        if (src) { MTLCompileOptions *co = dm_msl_opts(); t_lib_layer = [src containsString:@"render_target_array_index"]; lib = [g_dev newLibraryWithSource:src options:co error:&e]; mnote = msl_note(pc, src); msrc = sp; }
         if (lib) MLOG("shader %s loaded from the fallback translation (%s)", pc.UTF8String, fb);
     }
     if (!lib || !j) { MLOG("【红】 failed to load shader %s: %s", pc.UTF8String, e ? e.localizedDescription.UTF8String : "no reflection json"); return nil; }
     if (![j[@"chain"] isEqual:@DMSH_CHAIN]) { MLOG("【红】 shader %s has translation chain version %s, but this host expects %s", pc.UTF8String, [[j[@"chain"] description] UTF8String], DMSH_CHAIN); return nil; }
     if (layer && !j[@"entry_layer"]) { MLOG("【红】 vertex shader %s has no layer entry points", pc.UTF8String); return nil; }
     NvShader *o = [NvShader new]; o->gs_loc = o->lay_loc = -1;
+    // 出包库没有源：带上出包时的翻译器指纹与本宿主的（只升级 App 不重写已出包的库，COMPUTE_REPAIR.md：指纹不同 = 别的翻译器出的，拆分要重新出包或 repair_compute.py）
+    o->mslnote = mnote ?: [NSString stringWithFormat:@"%@ %s (no source on the device; translator %@, this build %s)", pc, dir == g_msl_dir ? "packaged library" : "fallback library file",
+                           [j[@"xfp"] isKindOfClass:[NSString class]] ? j[@"xfp"] : @"unknown", fb_xfp() ?: "unknown"]; o->mslsrc = msrc;
     o->fnpfx = [j[@"fn_prefix"] isKindOfClass:[NSString class]] ? j[@"fn_prefix"] : @"";
     if (stage == 0 && [j[@"layer_from"] isKindOfClass:[NSDictionary class]]) { o->lay_loc = [j[@"layer_from"][@"loc"] intValue]; o->lay_comp = [[j[@"layer_from"][@"comp"] description] UTF8String][0]; }
     char err[160];
@@ -9095,7 +9120,9 @@ static void warm_task_(WarmTask *t) {
             if (cs && cs->tensor == 1) { g_warm_skip_fz++; g_warm_done++; return; }   // a tensor-core network program: never dispatched (nvn_tensor.inc), no pipeline
             id<MTLFunction> fn = cs && t->fc ? se_warm(cs, t->fc) : cs ? cs->fn : nil;   // S2Arm #800: a C line's emulation bits (warm_parse): the variant a run before made, else made at its first use
             if (cs && !fn) { g_warm_skip_fz++; g_warm_done++; return; }
+            t_par_msl_note = !cs ? NULL : (t->fc ? [@"sampler-emulation variant of " stringByAppendingString:cs->mslnote ?: @"?"] : cs->mslnote).UTF8String; t_par_msl_src = cs && !t->fc ? cs->mslsrc.fileSystemRepresentation : NULL;
             id ps = fn ? par_compute(fn, par_ckey(cs, t->fc), &e) : nil;
+            t_par_msl_note = t_par_msl_src = NULL;
             if (cs && !ps) MLOG("【红】 background compute pipeline creation failed: %s", e.localizedDescription.UTF8String);
             if (ps) { WarmItem *item = [WarmItem new]; item->kind = 2; item->fc = t->fc; item->key = t->key; item->shader = cs; item->object = ps; warm_enqueue(item); g_warm_cps++; }
             g_warm_done++; return;
@@ -14356,7 +14383,9 @@ static void dispatch(const p_dispatch *dp) {
         //   计算管线最终编好的 18 支，7 支用了 10–60 秒；跳过的那次派发游戏不会重发（D-EVQ3：那支 20.5 秒编好后 18 秒仍不出帧），10 秒跳过把「顿一下」变成整局卡死
         static int64_t cwait = -2; if (cwait == -2) { const char *v = getenv("DM_NVN_CPSO_WAIT_MS"); long ms = v && *v ? strtol(v, NULL, 10) : 60000; cwait = ms > 0 ? (int64_t)ms * 1000000 : -1; }
         NSError *e = nil; uint64_t bt = bp_now(); int gave_up = 0;
+        t_par_msl_note = (fc ? [@"sampler-emulation variant of " stringByAppendingString:cs->mslnote ?: @"?"] : cs->mslnote).UTF8String; t_par_msl_src = fc ? NULL : cs->mslsrc.fileSystemRepresentation;
         ps = par_compute_wait(fc ? se_fn(cs, fc) : cs->fn, par_ckey(cs, fc), &e, cwait, &gave_up);
+        t_par_msl_note = t_par_msl_src = NULL;
         { uint64_t d_ = bp_now() - bt; g_bp_pso_n++; g_bp_pso_ns += d_; fe_sync_note(d_); }
         if (gave_up) { if (!(cs->logged & (1ull << 40))) { cs->logged |= 1ull << 40; MLOG("【红】 compute pipeline %s%s still compiling after %lld ms: this dispatch skipped (not recorded as failed; used once the background build returns)",
                                                     cs->key, fc ? " (sampler-emulation variant)" : "", (long long)(cwait / 1000000)); } return; }

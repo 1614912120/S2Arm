@@ -125,10 +125,26 @@ static int run_mark_path(char *out, size_t n) {
     char p[1024]; if (!mem_peak_path(p, sizeof p)) return 0;
     char *sl = strrchr(p, '/'); if (!sl) return 0; *sl = 0; snprintf(out, n, "%s/running", p); return 1;
 }
-int s2a_guest_run_died(void) { char p[1100]; struct stat st; return run_mark_path(p, sizeof p) && !stat(p, &st); }
+// 11-15（#909）：闪退不再算「死于内存」。我们的崩溃处理（crash.c crash_reraise）在按信号死之前把标记改写成「crash」：内存上限是系统 SIGKILL，
+//   收不到信号、标记仍是 pid → 照旧开；标记写着 crash = 上一局是我们自己崩的（坏访问 / abort），与内存无关，不强制开、按实测判。
+//   #909 iPhone 17 Pro Max：10 局里 2 局因上一局闪退被强制开，开着的局每 10 秒写闪存 2.7–3.4 GB、一局累计 21.9 GB，关着的局整局 19–34 MB
+static char g_run_mark[1100];   // 本局写过的标记路径（崩溃处理里只能用异步信号安全的调用，路径事先存好）
+int s2a_guest_run_died(void) {
+    char p[1100], b[8] = {0}; if (!run_mark_path(p, sizeof p)) return 0;
+    int fd = open(p, O_RDONLY); if (fd < 0) return 0;
+    ssize_t n = read(fd, b, sizeof b - 1); close(fd);
+    return !(n >= 5 && !memcmp(b, "crash", 5));
+}
+int s2a_guest_run_crashed(void) { char p[1100]; struct stat st; return run_mark_path(p, sizeof p) && !stat(p, &st) && !s2a_guest_run_died(); }   // 只给日志说原因
+void s2a_guest_run_mark_crash(void) {   // 异步信号安全：open / write / close
+    if (!g_run_mark[0]) return;
+    int fd = open(g_run_mark, O_WRONLY | O_TRUNC); if (fd < 0) return;
+    ssize_t w = write(fd, "crash\n", 6); (void)w; close(fd);
+}
 void s2a_guest_run_mark(int running) {
     char p[1100]; if (!run_mark_path(p, sizeof p)) return;
-    if (!running) { unlink(p); return; }
+    if (!running) { unlink(p); g_run_mark[0] = 0; return; }
+    snprintf(g_run_mark, sizeof g_run_mark, "%s", p);
     { char d[1100]; snprintf(d, sizeof d, "%s", p); char *sl = strrchr(d, '/'); if (sl) { *sl = 0; mkdir(d, 0755); } }
     FILE *f = fopen(p, "w"); if (f) { fprintf(f, "%d\n", (int)getpid()); fclose(f); }
 }
@@ -278,6 +294,7 @@ static void guest_file_attach_(void) {
     if (ballast) { room = room > ballast ? room - ballast : 1; LOG("【黄】测试压舱：文件后备判定按余量少 %llu MB 算（S2A_TEST_BALLAST_MB，装模块前才真占）", (unsigned long long)(ballast >> 20)); }
     uint64_t margin = env_mb("S2A_GUEST_FILE_MARGIN_MB", 512), seen = s2a_guest_mem_seen(), host = env_mb("S2A_GUEST_FILE_HOST_MB", 2048), phys = phys_mem();
     int died = room && s2a_guest_run_died(), low = 0;
+    if (room && s2a_guest_run_crashed()) LOG("客体内存文件后备：上一局在前台闪退（我们的崩溃处理记过现场，不是被内存上限杀），不强制开、按实测判");
     char pp0[1024]; int known = mem_peak_path(pp0, sizeof pp0);   // 多款容器还没选游戏：池是容器缺省、读不到本款记录，先不判（装游戏前按本款再判）
     int on = s2a_guest_file_wanted6(e, known || (e && *e) ? pool : 0, room, phys, seen, host, margin, died, &low);
     char pp[1024]; int late = !on && !(e && *e) && room && !mem_peak_path(pp, sizeof pp);   // 多款容器还没选游戏：装游戏前按本款再判
@@ -358,6 +375,7 @@ int s2a_guest_file_retry(void) {
           if (!pool) { uint64_t (*poolf)(void) = (uint64_t (*)(void))dlsym(RTLD_DEFAULT, "s2a_app_pool"); pool = poolf ? poolf() : 0; } }
         int died = s2a_guest_run_died(), low = 0;
         int on = s2a_guest_file_wanted6(NULL, pool, g_gfile_room0, phys, seen, host, margin, died, &low);
+        if (s2a_guest_run_crashed()) LOG("客体内存文件后备：上一局在前台闪退（我们的崩溃处理记过现场，不是被内存上限杀），不强制开、按实测判");
         LOG("客体内存文件后备（装游戏前按本款再判）：%s——%s；本款应用内存池 %llu MB、起局时离单进程内存上限还剩 %llu MB、物理内存 %llu MB、宿主估计 %llu MB、本机本款实测峰值 %llu MB（0 = 没有）",
             on ? "开" : "关", tier_why(on, low, seen, died), (unsigned long long)(pool >> 20), (unsigned long long)(g_gfile_room0 >> 20), (unsigned long long)(phys >> 20),
             (unsigned long long)(host >> 20), (unsigned long long)(seen == UINT64_MAX ? 0 : seen >> 20));

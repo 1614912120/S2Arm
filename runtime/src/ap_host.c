@@ -121,6 +121,11 @@ __attribute__((weak)) int s2a_ui_zh(void) { return 1; }   // 界面语言（s2a_
 static const char *stall_note(void) { return stall_exit_s() > 0 ? S2A_UI(S2A_UI_STALL_EXIT) : S2A_UI(S2A_UI_STALL_WAIT); }
 static void (*g_notice_hook)(const char *);
 void s2a_ap_set_notice_hook(void (*fn)(const char *)) { g_notice_hook = fn; }
+// 停帧救场的判据（11-14）：首帧后连续 30 秒窗口里新上屏 ≤ 15 帧（低于 0.5 帧/秒）。不用「10 秒一帧不出」：帧率补丁把交换间隔写成 1000 时，
+//   120 Hz 节拍下每 8.3 秒还出一帧（60 Hz 下 16.7 秒），10 秒判据被这一帧一次次清零、永远不触发，画面却等于停住（真机实测 A 局）；
+//   也不在 10 秒就动手：有的游戏加载时正常停帧十几秒，过早会把好好的帧率补丁误关。正常游戏 30 秒低于 0.5 帧本来就是坏了
+int s2a_ap_crawl_due(uint64_t frames_in_30s);
+int s2a_ap_crawl_due(uint64_t frames_in_30s) { return frames_in_30s <= 15; }
 static void *stall_watch(void *a) { s2a_thread_name("s2a-ap-stall");
     (void)a; int (*frozen)(void) = (int (*)(void))dlsym(RTLD_DEFAULT, "s2a_guest_frozen");   // 两者都在 thread.c；只链 ap_host 的单测由桩提供
     // 停帧「外因」四态：宿主焦点 / 失焦暂停（游戏 SetOutOfFocusSuspendingEnabled 要的值）/ 宿主睡眠 / 客机冻结。11-11 诊断包（Mac 局 9 次停帧
@@ -132,11 +137,28 @@ static void *stall_watch(void *a) { s2a_thread_name("s2a-ap-stall");
     int (*hd)(const char *) = (int (*)(const char *))dlsym(RTLD_DEFAULT, "s2a_dump_threads");   // tdump.c：宿主线程调用栈（10-24 xc3 停住靠它定出实化互等）
     void (*msg)(const char *) = (void (*)(const char *))dlsym(RTLD_DEFAULT, "s2a_ios_show_message");   // 第 2 档：屏幕上给玩家一句话（见 s2a_ap_stall_notice_after）
     void (*clr)(const char *) = (void (*)(const char *))dlsym(RTLD_DEFAULT, "s2a_ios_clear_message");   // 帧又走了收掉提示（只收这条，别的提示不动）
+    int (*rescue)(void) = (int (*)(void))dlsym(RTLD_DEFAULT, "s2a_cpatch_stall_rescue");   // 停帧救场：帧率补丁开着就当场关（runtime/src/cpatch.c）；只链本文件的单测取不到
+    void (*banner)(const char *, double) = (void (*)(const char *, double))dlsym(RTLD_DEFAULT, "s2a_ios_banner");   // 定时横幅（ios/dprompt.m），救场那句不随帧又走了收掉
     char shown[512] = "";   // 正在屏幕上的那句提示（收的时候按它认）
     uint64_t last = s2a_ap_frames(); int idle = 0, armed = 1, n = 0, noticed = 0, lim = 4 * stall_s();
+    uint64_t ring[30]; int rn = 0, rt = 0, crawled = 0;   // 停帧救场的 30 秒窗口：每秒记一次上屏帧数（客机冻结时清空重来）
     while (!atomic_load(&g_stall_stop)) {
         usleep(250000); uint64_t f = s2a_ap_frames();
         if (atomic_load(&g_stall_stop)) break;
+        if (++rt % 4 == 0) {
+            if (frozen && frozen()) rn = 0;
+            else {
+                if (!crawled && rn >= 30 && s2a_ap_crawl_due(f - ring[rn % 30])) {
+                    crawled = 1;   // 每局只判一次：救场本身也只救一次
+                    LOG("出图停住看门：近 30 秒只上屏 %llu 帧（第 %llu 帧），按停帧处理", (unsigned long long)(f - ring[rn % 30]), (unsigned long long)f);
+                    if (rescue && rescue()) {   // 社区帧率补丁开着 → 已当场关、记下次也关；横幅 8 秒告诉玩家（不随帧恢复收掉，读得完）
+                        const char *t = S2A_UI(S2A_UI_STALL_PATCH_OFF);
+                        if (g_notice_hook) g_notice_hook(t); else if (banner) banner(t, 8); else if (msg) msg(t);
+                    }
+                }
+                ring[rn % 30] = f; rn++;
+            }
+        }
         if (f != last) {   // 帧又走了：收掉提示，下一次停住重新给
             if (noticed) { LOG("出图停住看门：帧又走了（第 %llu 帧），收掉屏幕提示", (unsigned long long)f); if (g_notice_hook) g_notice_hook(NULL); else if (clr) clr(shown); }
             if (n) s2a_dguard_evidence(NULL, 1);   // 直连安全网：停住的证据撤回（自己活过来了）
