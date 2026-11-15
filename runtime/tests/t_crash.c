@@ -182,6 +182,16 @@ int main(void) {
       int ws = 0; waitpid(c, &ws, 0); close(fd); unlink(path);
       eq("⑧ 写监视下 8 线程同页并发写：不崩、每格都写满 100000", 1, WIFEXITED(ws) && WEXITSTATUS(ws) == 0);
       munmap((void *)pg, 0x4000); }
+    // ⑨ 崩溃落点（11-15，crash_where_note）：本单测 module_of 恒为空 = pc / lr 都不在游戏模块 → 文档根下 crash_where 写 host；
+    //   作业层 / iOS 据此「宿主自己崩第一次不关补丁」。期望按构造写死
+    { char dir[] = "/tmp/t_crash_where_XXXXXX"; if (!mkdtemp(dir)) return 1;
+      char path[] = "/tmp/t_crash_w_XXXXXX"; int fd = mkstemp(path);
+      pid_t c = fork();
+      if (c == 0) { setenv("S2A_DOCS", dir, 1); g_s2a_logfd = fd; s2a_crash_install(); *(volatile int *)0x30 = 1; _exit(0); }
+      int ws = 0; waitpid(c, &ws, 0); close(fd); unlink(path);
+      char wp[300], got[16] = {0}; snprintf(wp, sizeof wp, "%s/crash_where", dir);
+      FILE *f = fopen(wp, "r"); if (f) { if (!fgets(got, sizeof got, f)) got[0] = 0; fclose(f); unlink(wp); } rmdir(dir);
+      eq("⑨ 宿主代码里崩：crash_where = host", 1, !strcmp(got, "host\n")); }
     if (bad) { printf("✗ t_crash：%d/%d 项不符\n", bad, n); return 1; }
     printf("✓ t_crash：%d 项崩溃现场全符（回溯好链、坏指针不二次缺页、未映射起点、两段式第一段先落盘、两线程同时崩两份现场都在、调用点反查导入名）\n", n);
     return 0;

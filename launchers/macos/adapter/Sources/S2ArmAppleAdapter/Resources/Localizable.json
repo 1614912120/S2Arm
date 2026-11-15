@@ -9666,5 +9666,21 @@
  {
   "source": "改写运行时留下的模块 {0} 失败（退出码 {0}）：",
   "en": "Rewriting the runtime module {0} failed (exit code {0}): "
+ },
+ {
+  "source": "照常玩就行；如果又崩溃，会再自动关掉，也可以在启动设置里自己关。",
+  "en": "Just play as usual. If it crashes again it will be switched off again, or you can turn it off yourself in Launch Settings."
+ },
+ {
+  "source": "上次游戏崩溃时自动关掉的设置，新版 S2Arm 已重新打开：",
+  "en": "Settings that were switched off after the game crashed are back on in this version of S2Arm: "
+ },
+ {
+  "source": "帧率",
+  "en": "Frame rate"
+ },
+ {
+  "source": "满屏",
+  "en": "Full screen"
  }
 ]
