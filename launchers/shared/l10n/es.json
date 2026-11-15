@@ -3268,6 +3268,7 @@
   "保持电脑不休眠没开成（{0}），作业照常跑；电脑空闲休眠时推送 / 出包会停在半截": "No se pudo mantener el ordenador despierto ({0}). La tarea continúa, pero si el ordenador entra en reposo mientras está inactivo, la subida / compilación se detendrá a medias",
   "批次正被另一个进程改着，稍后再试": "El lote está siendo modificado por otro proceso. Inténtalo de nuevo más tarde",
   "这一批里没有勾了平台的游戏": "Ningún juego de este lote tiene una plataforma seleccionada",
+  "不认识的出包平台：{0}（只支持 {1}）": "Plataforma de compilación desconocida: {0} (compatibles: {1})",
   "这一批里没有 {0}": "{0} no está en este lote",
   "{0} 这一批没有 {1}": "{0} no tiene {1} en este lote",
   "这一批因为磁盘空间不足暂停着：释放空间后点「重试」": "Este lote está en pausa porque el disco está lleno. Libera espacio y luego haz clic en «Reintentar»",

@@ -99,6 +99,9 @@ def create(items, location=None):
     seen = set()
     for raw in items:
         gid, platforms = raw.get("gameId"), [p for p in PLATFORMS if p in (raw.get("platforms") or [])]   # 同一款先出 Mac 再出 iPhone（PLATFORMS 的说明）
+        odd = [p for p in (raw.get("platforms") or []) if p not in PLATFORMS]
+        if odd:   # 不认识的平台明确报错，不静默丢（11-15：上层控制口去掉平台清单前，这一层原先把它悄悄滤掉）
+            raise ValueError(f"不认识的出包平台：{'、'.join(map(str, odd))}（只支持 {' / '.join(PLATFORMS)}）")
         if not isinstance(gid, str) or not gid or gid in seen or not platforms:
             continue
         seen.add(gid)
