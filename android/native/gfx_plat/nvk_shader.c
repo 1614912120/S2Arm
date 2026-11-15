@@ -665,9 +665,15 @@ static struct entry *build(const uint8_t *bytes, size_t len, const struct s2a_so
 // 预热带（[后台]）与提交线程跑的是同一份 work_run，后台因此永远不读 rp_S、不编码命令、不提交。
 // 出包预编库按一组固定的特化状态翻译（translator/dmsh_xlate：深度不改写 = near 为 0、片元坐标不做 Y 取反、透明测试 Always、
 //   不开 alpha 转覆盖、无双源混合；Metal 那边按入口补深度改写，这里没有）。状态不同时取到的 SPIR-V 与现场编的语义不一致：
-//   11-14 王国之泪深度为 near=-w，用了预编库的图形程序画面整片暗 / 缺。只在状态相符时用（状态都进了程序身份，身份即状态）
+//   11-14 王国之泪深度为 near=-w，用了预编库的图形程序画面整片暗 / 缺。只在状态相符时用（状态都进了程序身份，身份即状态）。
+//   深度例外：设备能把管线裁剪深度设成 [-1, 1]（CAP_DEPTH_CLIP_CTL）时 near=-w 也能用，程序标 z_raw，rp_draw 置 clip_neg1
+static int depth_clip_cap(void) {
+    static _Atomic int v = -1; int c = atomic_load(&v);
+    if (c < 0) { nvn_gpu_caps cp; nvn_gpu_caps_get(&cp); c = (cp.caps & NVN_GPU_CAP_DEPTH_CLIP_CTL) != 0; if (cp.caps) atomic_store(&v, c); }
+    return c;
+}
 static int libpack_state_ok(const struct s2a_compile_graphics_src *g) {
-    return !g->depth_mode && !g->y_negate && (!g->alpha_test_compare || !strcmp(g->alpha_test_compare, "Always")) &&
+    return (!g->depth_mode || depth_clip_cap()) && !g->y_negate && (!g->alpha_test_compare || !strcmp(g->alpha_test_compare, "Always")) &&
            !g->alpha_to_coverage_enable && !g->dual_source_blend;
 }
 struct work_snap {
@@ -818,6 +824,7 @@ static struct entry *work_run(const struct work_snap *s, int background) {
         atomic_fetch_add_explicit(&g_n_cache, 1, memory_order_relaxed);
     if (!bytes && libpack_fetch(s->identity, (const uint8_t (*)[8])s->keys, s->nst, NULL, s->lp_ok, &s->pc, &bytes, &len)) {
         struct entry *le = build(bytes, len, s->views, s->nst, s->identity);
+        if (le) le->prog.z_raw = 1;
         free(bytes); bytes = NULL; len = 0;
         if (le && !le->failed) { libpack_note_hit(); return le; }
         if (le) entry_free(le);
@@ -924,6 +931,7 @@ static struct entry *warm_work_run(const struct nvk_prog_rec *rec, int nst) {
         if (rec->c1_ok & (1u << st)) { views[st].c1 = rec->c1[st]; views[st].c1_bytes = NVK_PROG_REC_C1_BYTES; }
     if (!bytes && libpack_fetch(rec->identity, (const uint8_t (*)[8])rec->keys, nst, NULL, rec->lp_ok, &pc, &bytes, &len)) {
         struct entry *le = build(bytes, len, views, nst, rec->identity);
+        if (le) le->prog.z_raw = 1;
         free(bytes); bytes = NULL; len = 0;
         if (le && !le->failed) { libpack_note_hit(); return le; }
         if (le) entry_free(le);

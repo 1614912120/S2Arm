@@ -1009,6 +1009,7 @@ void rp_draw(nvn_gpu_cmd c, const p_draw *dr, const p_draw_idx *di, const void *
         pd.origin_ll = (uint8_t)(rp_origin_lower_left() != 0);
         pd.poly.front = (((rp_S.poly.front == NVN_FRONT_FACE_CCW) != (s2a_nvn_rast_flip != 0)) != (pd.origin_ll != 0)) ? NVN_FRONT_FACE_CCW : NVN_FRONT_FACE_CW;
         pd.depth_clamp = (uint8_t)(rp_S.depth_clamp != 0);
+        pd.clip_neg1 = (uint8_t)(g_prog->z_raw && !rp_depth_zero());   // 程序没做 near = -w 的深度改写：交给管线（只在 CAP_DEPTH_CLIP_CTL 时会出这种程序）
         nvn_gpu_pipe np = NULL; nvn_gpu_err err = {0};
         const uint64_t pg0_ = dt_now();
         int fu_skip = 0;
