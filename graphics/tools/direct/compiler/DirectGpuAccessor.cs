@@ -30,6 +30,7 @@ namespace S2A.DirectCompiler
         public int SamplerSlot = -1;
         // Storage address provenance, resolved from ShaderProgram.Info.SBuffers.
         // Translator guestIndex is deliberately NOT a runtime NVN slot.
+        // 贴图也用 UboSlot / UboOffset：句柄在游戏 UBO 里时的来源（NVN UBO 号、句柄字的字节偏移），此时 Slot = -1。
         public int CbSlot = -1, CbOffset = -1;
         public int NvnSlot = -1, UboPtr = -1, UboSlot = -1, UboOffset = -1;
         public bool Writable;
