@@ -3,7 +3,7 @@
 期望按规则写：登记一条短入口 C:\\Users\\A\\AppData\\Local\\S2A\\j\\gkam → 玩家路径 D:\\Lib\\games\\x\\build\\ios，
   Run.ev 写出的 result 里 ipa 路径
   ① 大小写与登记不同（c:\\users\\a\\appdata\\local\\s2a\\j\\GKAM\\pkg\\t.ipa）→ 换成 D:\\Lib\\games\\x\\build\\ios\\pkg\\t.ipa
-  ② 分隔符是 /（C:/Users/A/AppData/Local/S2A/j/gkam/pkg/t.ipa）→ 换成 D:\\Lib\\games\\x\\build\\ios/pkg/t.ipa（前缀换回，尾巴原样）
+  ② 分隔符是 /（C:/Data/A/AppData/Local/S2A/j/gkam/pkg/t.ipa）→ 换成 D:\\Lib\\games\\x\\build\\ios/pkg/t.ipa（前缀换回，尾巴原样）
   ③ 写法完全一致 → 照旧换回；文案中间夹着短路径（say）→ 照旧换回
   反证：旧实现只走 shortroot.show（逐字替换），① ② 原样留着短路径
 ④ pack/jobs/ipa.py win_oneclick：回报的 ipa 不存在且还在 \\S2A\\j\\ 下 → 报明确的 Failure，不是 WinError 3 / FileNotFoundError"""
@@ -15,7 +15,7 @@ R = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(R)); sys.path.insert(0, str(R / "pack/jobs"))
 from pack.orch import oneclick_win, shortroot   # noqa: E402
 
-SHORT = r"C:\Users\A\AppData\Local\S2A\j\gkam"
+SHORT = r"C:\Data\A\AppData\Local\S2A\j\gkam"
 LONG = r"D:\Lib\games\x\build\ios"
 
 
@@ -28,10 +28,10 @@ class Ev(unittest.TestCase):
             return json.loads(ev.read_text(encoding="utf-8").splitlines()[-1])
 
     def test_case_mismatch(self):
-        self.assertEqual(self.ev(ipa=r"c:\users\a\appdata\local\s2a\j\GKAM\pkg\t.ipa")["ipa"], LONG + r"\pkg\t.ipa")
+        self.assertEqual(self.ev(ipa=r"c:\data\a\appdata\local\s2a\j\GKAM\pkg\t.ipa")["ipa"], LONG + r"\pkg\t.ipa")
 
     def test_slash_mismatch(self):
-        self.assertEqual(self.ev(ipa="C:/Users/A/AppData/Local/S2A/j/gkam/pkg/t.ipa")["ipa"], LONG + "/pkg/t.ipa")
+        self.assertEqual(self.ev(ipa="C:/Data/A/AppData/Local/S2A/j/gkam/pkg/t.ipa")["ipa"], LONG + "/pkg/t.ipa")
 
     def test_exact_and_text(self):
         self.assertEqual(self.ev(ipa=SHORT + r"\pkg\t.ipa")["ipa"], LONG + r"\pkg\t.ipa")
@@ -39,8 +39,8 @@ class Ev(unittest.TestCase):
 
     def test_old_show_alone_fails(self):   # 反证：只用 show（旧实现）换不回 ① ②
         with mock.patch.dict(os.environ, {shortroot.ENV: f"{LONG}\t{SHORT}"}):
-            self.assertIn("s2a", shortroot.show(r"c:\users\a\appdata\local\s2a\j\GKAM\pkg\t.ipa").lower())
-            self.assertIn("S2A/j", shortroot.show("C:/Users/A/AppData/Local/S2A/j/gkam/pkg/t.ipa"))
+            self.assertIn("s2a", shortroot.show(r"c:\data\a\appdata\local\s2a\j\GKAM\pkg\t.ipa").lower())
+            self.assertIn("S2A/j", shortroot.show("C:/Data/A/AppData/Local/S2A/j/gkam/pkg/t.ipa"))
 
 
 class Copy(unittest.TestCase):
@@ -49,7 +49,7 @@ class Copy(unittest.TestCase):
         from core import Failure
         with tempfile.TemporaryDirectory() as d:
             out = Path(d); ev = out / "ev.jsonl"
-            ev.write_text(json.dumps({"ev": "result", "ok": True, "ipa": r"C:\Users\A\AppData\Local\S2A\j\gkam\pkg\t.ipa", "pack": r"C:\x"}) + "\n", encoding="utf-8")
+            ev.write_text(json.dumps({"ev": "result", "ok": True, "ipa": r"C:\Data\A\AppData\Local\S2A\j\gkam\pkg\t.ipa", "pack": r"C:\x"}) + "\n", encoding="utf-8")
             c = mock.Mock(); c.keys = out / "k"; c.engine = out
             with mock.patch.object(ipamod, "bundled_shell", lambda c: "shell"):
                 with self.assertRaises(Failure) as e:
