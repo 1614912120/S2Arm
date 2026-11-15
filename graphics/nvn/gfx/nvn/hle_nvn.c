@@ -25,6 +25,7 @@
 #include "nvn_hmap.h"   // 虚拟池按池指针查（g_vph）
 #include "nvn_drvscan.h"   // nvn_drv_nvrm_recode：NvColorFormat 换成游戏自带驱动的编码
 #include <dlfcn.h>
+#include "../../../../runtime/include/s2a_lowva.h"   // #1143：虚拟池预留记进低区账（vpool_lv）
 #include <mach/mach_time.h>
 #include <CommonCrypto/CommonDigest.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -1917,13 +1918,13 @@ static void sh_grow(cmd_t *o, uint32_t need) {
 // 录制外命令与录制重入的读数（#372 诊断 D-EHK5：竞技场发黑那局只记了首例「command 15 … dropped」，丢了多少、丢在哪个命令缓冲上都不知道）：按命令号计数，
 //   前 8 例带命令缓冲地址与录制状态，与 BeginRecording 重入的地址对得上就是同一条录制被打断；每 300 帧有新增时打一行汇总
 static uint64_t g_frame;   // 定义在下面（帧计数），这里先声明
-static _Atomic uint64_t g_rec_out_op[64], g_rec_out_n, g_rec_reenter_n;
+static _Atomic uint64_t g_rec_out_op[64], g_rec_out_n, g_rec_reenter_n, g_rec_end_idle_n;   // end_idle：EndRecording 落在没在录制的命令缓冲上（#202d02：每帧 Begin / End 一样多却每帧一次重入，看是不是同一缓冲嵌套）
 static void rec_out_summary(uint64_t frame) {
-    static uint64_t said_out, said_re; uint64_t n = atomic_load(&g_rec_out_n), re = atomic_load(&g_rec_reenter_n);
-    if (n == said_out && re == said_re) return;
-    said_out = n; said_re = re; char by[512] = ""; size_t at = 0;
+    static uint64_t said_out, said_re, said_ei; uint64_t n = atomic_load(&g_rec_out_n), re = atomic_load(&g_rec_reenter_n), ei = atomic_load(&g_rec_end_idle_n);
+    if (n == said_out && re == said_re && ei == said_ei) return;
+    said_out = n; said_re = re; said_ei = ei; char by[512] = ""; size_t at = 0;
     for (int i = 0; i < 64 && at < sizeof by - 24; i++) { uint64_t c = atomic_load(&g_rec_out_op[i]); if (c) at += (size_t)snprintf(by + at, sizeof by - at, "%s%d×%llu", at ? "、" : "", i, (unsigned long long)c); }
-    LOG("[nvn] 录制外命令到第 %llu 帧：丢了 %llu 条（按命令号：%s；号见 nvn_obj.h OP_*，15 = BIND_STATE）；BeginRecording 重入 %llu 次", (unsigned long long)frame, (unsigned long long)n, at ? by : "无", (unsigned long long)re);
+    LOG("[nvn] 录制外命令到第 %llu 帧：丢了 %llu 条（按命令号：%s；号见 nvn_obj.h OP_*，15 = BIND_STATE）；BeginRecording 重入 %llu 次、EndRecording 落在没在录制的缓冲上 %llu 次", (unsigned long long)frame, (unsigned long long)n, at ? by : "无", (unsigned long long)re, (unsigned long long)ei);
 }
 static uint8_t *cmd_alloc_cb(cmd_t *o, uint32_t op, uint32_t size, int cb_ok) {
     size = (size + 7) & ~7u;
@@ -2022,6 +2023,7 @@ NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
 }
 NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
     cmd_t *o = CB(c);
+    if (!o->recording) { uint64_t k = atomic_fetch_add(&g_rec_end_idle_n, 1) + 1; if (k <= 8) LOG("【红】 EndRecording on command buffer %p that is not recording (frame %llu, case %llu of the first 8)", (void *)o, (unsigned long long)g_frame, (unsigned long long)k); }
     cmd_alloc(o, OP_END, 8);
     if (o->rec) sh_end(o);
     o->recording = 0;
@@ -4103,6 +4105,7 @@ typedef struct { const uint8_t *phys; uint64_t gen; } vpte;
 // One per virtual pool, allocated at Initialize and freed at Finalize. run: the mapped runs, grown as needed (a texture's pool usually has 1–3; Monster Hunter Rise's heap hundreds)
 struct vpool { const pool_t *pool; uint8_t *base; uint64_t len, size, top; int nrun; struct vrun { uint64_t lo, hi; } *run; vpte **pt;
     int nsh, csh; struct vshp { uint64_t off, stamp; } *sh;   // copied host pages (see vsh_*): offset in the pool, dirty stamp of the last copy
+    int lv;   // 预留记进了低区账（vpool_lv_note；帧录虚拟池区里取的不在低区、不记）
 #if defined(__ANDROID__)
     s2a_vp_alias_table alias;   // dst -> 背板源；vpool_map / vpool_release 维护（#1217 §2.8）
 #endif
@@ -4169,6 +4172,17 @@ static void *vpool_mmap(uint64_t len) {
     if (hole && len > hole) { errno = ENOMEM; return MAP_FAILED; }
     return mmap(NULL, len, PROT_NONE, MAP_ANON | MAP_PRIVATE, -1, 0);
 }
+// 虚拟池的整段预留记进低区账（#1143：马车世界 iPhone 开局 11 个池预留 1368 MB，宿主 3 GB 一分钟内耗光，原先全算「拦不到的」）。
+//   只记账、不设限（不走 acquire）：预留失败照旧逐次减半；账本取不到（单测 / 回放 / 安卓）就不记
+static const s2a_lowva_api *vpool_lv(int *me) {
+    static const s2a_lowva_api *lv; static int user, tried; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mu);
+    if (!tried) { tried = 1;
+        const s2a_lowva_api *(*get)(void) = (const s2a_lowva_api *(*)(void))dlsym(RTLD_DEFAULT, "s2a_lowva"); const s2a_lowva_api *l = get ? get() : NULL;
+        if (l && l->size >= sizeof(s2a_lowva_api) && l->version == S2A_LOWVA_VERSION) { lv = l; user = l->user("Switch 2 虚拟池预留", NULL, NULL); } }
+    pthread_mutex_unlock(&mu);
+    *me = user; return lv;
+}
 static uint8_t *vpool_reserve(const pool_t *o) {   // → the reserved range of a virtual pool, NULL when no address space is left
     if (!(o->flags & 0x200)) return NULL;
     // 1 GB on iOS: Monster Hunter Rise's buffers stay under 0x20100000 through its opening, its textures (32 GB in) are read through the page table, and 4 GB guest + 1 GB stays near the 5 GB
@@ -4181,6 +4195,7 @@ static uint8_t *vpool_reserve(const pool_t *o) {   // → the reserved range of 
 #endif
     uint64_t len = o->size < cap ? o->size : cap;
     void *a = s2a_vp_arena_map ? s2a_vp_arena_map(len) : NULL;   // 帧录进程：从虚拟池区取，回放进程同址放得回（runtime/src/vawin.c）
+    int arena = a != NULL;
     if (!a) a = vpool_mmap(len);
     // 占不到就逐次减半（按 2 MB 页表粒度取整）再占，直到 16 MB：超出预留的映射走「超出预留、只进页表」那支，预留内的地址照常换得回宿主地址
     //   （11-06 FC26 真机：宿主低区被切碎、最大空洞 511 MB，512 MB 的池原先整池放弃，GPU 地址换不回宿主地址，开赛 SIGSEGV；原先只有大于 1 GB 的退一档到 1 GB）
@@ -4188,7 +4203,8 @@ static uint8_t *vpool_reserve(const pool_t *o) {   // → the reserved range of 
         while (a == MAP_FAILED && len > (16ull << 20)) { len = (len >> 1) & ~((2ull << 20) - 1); a = vpool_mmap(len); }
         if (a != MAP_FAILED) LOG("[nvn] virtual pool %p: %#llx bytes of address space not available (errno %d), reserving %#llx instead", (const void *)o, (unsigned long long)want, er, (unsigned long long)len); }
     if (a == MAP_FAILED) { LOG("【红】 virtual pool %p: cannot reserve %#llx bytes of address space (errno %d)", (const void *)o, (unsigned long long)len, errno); return NULL; }
-    vpool_new(o, a, len); vp_lock(); size_t live = g_nvpa; vp_unlock();
+    struct vpool *nv = vpool_new(o, a, len); vp_lock(); size_t live = g_nvpa; vp_unlock();
+    if (!arena) { int me; const s2a_lowva_api *lv = vpool_lv(&me); if (lv && me > 0) { lv->note(me, (int64_t)len); nv->lv = 1; } }
     static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;   // a UE4 game makes one per streamed texture: the first ones and every 1000th
     if (k <= 8 || k % 1000 == 0) LOG("[nvn] virtual pool %p (%#llx bytes, flags %#x): own address range %p+%#llx, physical pages are remapped into it (%llu so far, %zu alive)", (const void *)o, (unsigned long long)o->size, o->flags, a, (unsigned long long)len, (unsigned long long)k, live);
     return a;
@@ -4197,6 +4213,7 @@ static void vpool_release(const pool_t *o) {
     vp_lock(); struct vpool *v = vpool_of(o);
     if (v) { vpool_unpublish(v);
         for (int k = 0; k < v->nrun; k++) nvn_be_pool_del(v->base + v->run[k].lo); vpool_unmap_range(v->base, v->len);
+        if (v->lv) { int me; const s2a_lowva_api *lv = vpool_lv(&me); if (lv && me > 0) lv->note(me, -(int64_t)v->len); }
 #if defined(__ANDROID__)
         // 拆池必须早于 s2a_mem_session_reset：祖先先是 vpool_release 再 reset，否则 unref 会下溢。
         s2a_vp_alias_clear(&v->alias);

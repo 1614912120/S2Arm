@@ -196,6 +196,13 @@ class PatchesTests(unittest.TestCase):
             self.assertEqual((r["build"], r["total"], r["version"]), ("", 0, ""), "没解过包不报版本号（不知道玩家是哪一版）")
             self.assertEqual((r["port"], r["portVersions"]), (False, []), "没解过包不判移植（同版本的满屏会被说成移植）")
             self.assertEqual([(o["version"], o["cats"]) for o in r["others"]], [("1.0", ["widescreen"]), ("1.3.0", ["fps"])])
+            # 旧版库（11-10 前出包）：解包目录已删、catalog 顶层没记版本 → 按包列表取最新更新的显示版本，不退成构建号
+            (sd / "extract/unpack.tsv").unlink()
+            (self.c.library / "catalog.json").write_text(json.dumps({"games": [{"id": GID, "version": None, "display": "", "packages": [
+                {"type": "base", "version": 0, "display": "1.0"}, {"type": "update", "version": 458752, "display": "1.7"},
+                {"type": "update", "version": 393216, "display": "1.6"}, {"type": "dlc", "display": ""}]}]}))
+            cheats.main_build = lambda c, g: "40506B6C03196447"
+            self.assertEqual(patches.match(self.c)["version"], "1.7")
         finally:
             cheats.main_build = real
 

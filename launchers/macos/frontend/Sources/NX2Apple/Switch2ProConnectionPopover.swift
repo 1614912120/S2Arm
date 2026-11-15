@@ -49,12 +49,15 @@ struct Switch2ProConnectionPopover: View {
                 ControllerIcon(glyph: ControllerIcon.header(kind: controller.kind, players: controller.players) ?? .unknown)
                     .frame(width: 48, height: 36)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(controller.title(lang: lang)).font(.manrope(22, .bold)).lineLimit(1).fixedSize(horizontal: true, vertical: false)   // 标题一行、不缩字、不截断
+                    // 标题一行、不缩字；太长截断、悬停看全名（#1151：原先 fixedSize 不截断，长名把整列撑出面板宽度，左边图标和「玩家」被裁）
+                    let title = controller.switch2Title(lang: lang)
+                    Text(title).font(.manrope(22, .bold)).lineLimit(1).truncationMode(.tail).help(title)
                     HStack(spacing: 8) {
                         Circle().fill(Color(nsColor: NS2LauncherController.dotColor(status))).frame(width: 9, height: 9)
                         Text(NS2LauncherController.statusText(status, lang: lang)).font(.manrope(15, .semibold)).foregroundStyle(.secondary)
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("controller.status")
@@ -80,16 +83,19 @@ struct Switch2ProConnectionPopover: View {
             }
 
             // 系统手柄（#520 UI 稿 system.html）：一块——图、标题（一只写系统给的名字，太长一行截断、悬停看全名；多只写数量）、已连接、「打开蓝牙设置」
-            if !systems.pads.isEmpty {
-                let pads = systems.pads
-                let title = pads.count == 1 ? pads[0].name : t("bluetoothCount").replacingOccurrences(of: "{0}", with: "\(pads.count)")
-                let family = Set(pads.map(\.family)).count == 1 ? pads[0].family : .other   // 多只同一类用那一类的图，混着用通用手柄图
+            //   HID 兜底手柄（#1151：GameController 认不出、游戏里按 HID 直读的「… Pro Controller」）一并列在这一块，按 Pro 样式手柄算
+            let fallback = systems.fallback
+            if !systems.pads.isEmpty || !fallback.isEmpty {
+                let names = systems.pads.map(\.name) + fallback
+                let families = systems.pads.map(\.family) + fallback.map { _ in SystemControllers.Family.nintendoPro }
+                let title = names.count == 1 ? names[0] : t("bluetoothCount").replacingOccurrences(of: "{0}", with: "\(names.count)")
+                let family = Set(families).count == 1 ? families[0] : .other   // 多只同一类用那一类的图，混着用通用手柄图
                 PanelSection {
                     HStack(spacing: 12) {
                         ControllerIcon(glyph: ControllerIcon.system(family)).frame(width: 48, height: 36)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(title).font(.manrope(22, .bold)).lineLimit(1).truncationMode(.tail)   // 蓝牙手柄名字太长照截断（缩字太小），悬停看全名
-                                .help(pads.map(\.name).joined(separator: "\n"))
+                                .help(names.joined(separator: "\n"))
                             HStack(spacing: 8) {
                                 Circle().fill(Color(nsColor: NS2LauncherController.dotColor(.connected))).frame(width: 9, height: 9)
                                 Text(NS2LauncherController.statusText(.connected, lang: lang)).font(.manrope(15, .semibold)).foregroundStyle(.secondary)

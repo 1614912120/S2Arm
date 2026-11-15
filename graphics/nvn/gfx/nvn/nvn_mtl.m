@@ -621,15 +621,22 @@ static void udc_selftest(void) {
 }
 static void bcd_prewarm(void);   // no BC: start building the decompression pipeline (defined with bcd_pso)
 static void ixc_prewarm(void); static void tensor_sq_prewarm(void);   // Switch 2: start building the indirect conversion / tensor stand-in kernels (defined with ixc_run / tensor_sq_pass)
-void mtl_init(void) {
-    if (g_dev) return;
-    const char *vbc = getenv("DM_NVN_VBUF_CACHE"); g_vbuf_cache = !(vbc && !strcmp(vbc, "0"));
+// 起局时的出图方式（mtl_init 首局、nvn_be_begin_session 每局开头共用同一判法，11-15：每局开头原先只按 DM_PRESENT_LINK 设、缺省 1，
+//   补帧开着也起显示链——进程内重启 / 切游戏后补帧任务与显示链同时取画布，CAMetalLayerInvalidOperation 闪退，#ee56e7 / #1155 的另一条入口）。
+//   0 = 出图线程自己取画布、1 = 60 Hz 显示链、2 = 高刷显示链
+static int present_link_from_env(void) {
     const char *link = getenv("DM_PRESENT_LINK");
-    g_dm_present_link = link ? atoi(link) : 1; if (g_dm_present_link < 0 || g_dm_present_link > 2) g_dm_present_link = 1;   // Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
+    int v = link ? atoi(link) : 1; if (v < 0 || v > 2) v = 1;   // Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
     // 出图补帧走出图线程自己取画布，一开始就不建显示链接。例外：社区帧率补丁已要了 120 Hz 显示链（DM_PRESENT_LINK=2，runtime/src/cpatch.c fps_link）——
     //   补丁开着时补帧每帧让路（fi_wanted），走原出图路径；这里再清成 0，原路径就没有显示链、只能按固定 60 Hz 出，120 档被锁在 60
     //   （11-15 iPhone 实机一款 120 帧补丁的游戏局内：补帧开 60.0 帧、DM_PRESENT_FI=0 120.0 帧）
-    { const char *fi = getenv("DM_PRESENT_FI"); if (fi && !strcmp(fi, "1") && g_dm_present_link != 2) g_dm_present_link = 0; }
+    { const char *fi = getenv("DM_PRESENT_FI"); if (fi && !strcmp(fi, "1") && v != 2) v = 0; }
+    return v;
+}
+void mtl_init(void) {
+    if (g_dev) return;
+    const char *vbc = getenv("DM_NVN_VBUF_CACHE"); g_vbuf_cache = !(vbc && !strcmp(vbc, "0"));
+    g_dm_present_link = present_link_from_env();
     const char *latency = getenv("DM_PRESENT_LATENCY");
     if (latency && atoi(latency) > 0) g_present_latency = atoi(latency);
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
@@ -793,7 +800,8 @@ static void pool_res(int i) {
     if (g_pools[i].res) return;
     res_add(g_pools[i].buf); res_commit(); g_pools[i].res = 1; g_pool_res_n++;
 }
-__attribute__((weak)) uint8_t *s2a_far_g2h(uint64_t a) { (void)a; return NULL; }   // native far.c; graphics unit tests have no far region
+__attribute__((weak)) uint8_t *s2a_far_g2h(uint64_t a) { (void)a; return NULL; }
+__attribute__((weak)) int s2a_guest_in_file(uint64_t a, uint64_t n) { (void)a; (void)n; return -1; }   // native vawin.c；图形单测没有客体内存文件后备（-1 = 不知道）   // native far.c; graphics unit tests have no far region
 // The game's address of a memory pool may lie in the far part of the alias region (address-space root fix: the host has no address there, the contents live in
 // the shadow, runtime/src/far.c). The zero-copy buffer is then built over the shadow; offsets into the buffer equal offsets from the pool's guest base.
 // A pool mapped by one physical-map request is contiguous in the shadow. One the game made over memory of several requests need not be: the shadow is handed out in 2 MiB blocks in the
@@ -844,6 +852,13 @@ static void nvn_be_pool_add_body(const void *mem, uint64_t size) {
             MLOG("【红】   VM region %#llx+%#llx protection %d (max %d)", (unsigned long long)r, (unsigned long long)rs, vi.protection, vi.max_protection);
             r += rs;
         }
+        // 11-14 #63639b（D-RCQD，6 GB iPhone、一款应用内存池 9216 MB 的游戏、文件后备开）：3.5 GB 的池建不出，日志没有设备上限，判不了是超了单个 buffer 的长度上限
+        //   还是页钉不住。把设备的上限、推荐工作集、物理内存、这段是否文件后备记清楚，再按超没超上限给一句原因
+        { uint64_t maxlen = (uint64_t)g_dev.maxBufferLength, ws = (uint64_t)g_dev.recommendedMaxWorkingSetSize, phys = (uint64_t)NSProcessInfo.processInfo.physicalMemory, len = (uint64_t)(b - a);
+          int file = s2a_guest_in_file((uint64_t)ha, len);
+          MLOG("【红】 memory pool %p+%#llx: device max buffer length %llu MB, recommended working set %llu MB, physical memory %llu MB; this pool %llu MB, guest-file backed %d → %s",
+               mem, (unsigned long long)size, (unsigned long long)(maxlen >> 20), (unsigned long long)(ws >> 20), (unsigned long long)(phys >> 20), (unsigned long long)(len >> 20), file,
+               len > maxlen ? "longer than one Metal buffer may be on this device" : "within the buffer limit: its pages could not be wired (memory)"); }
         MDIE("memory pool %p+%#llx: failed to create the zero-copy buffer over %#lx..%#lx", mem, (unsigned long long)size, (unsigned long)ha, (unsigned long)(ha + (b - a)));
     }
     pthread_mutex_lock(&g_mu);
@@ -4859,6 +4874,18 @@ void nvn_be_mem_kinds(uint64_t *priv_tex, uint64_t *priv_buf, uint64_t *pool_len
         }
     }
 }
+// #1117：驻留集按类拆（同一时刻的快照，字节）：k[0..1] 纹理 个数 / 字节，k[2..3] GPU 独占（私有）缓冲，k[4..5] 共享缓冲（多是零拷贝的内存池缓冲，
+//   存储就是游戏内存本身、不另占），k[6..7] 其他。footprint 只给总量，长局只涨不落时先看是哪一类在涨。视图的 allocatedSize 是 0，不重复算
+void nvn_res_by_kind(uint64_t k[8]) {
+    memset(k, 0, 8 * sizeof k[0]);
+    @autoreleasepool { pthread_mutex_lock(&g_res_mu);
+        for (id o in g_res_objects) { uint64_t b = res_bytes(o); int c;
+            if ([o conformsToProtocol:@protocol(MTLTexture)]) c = 0;
+            else if ([o conformsToProtocol:@protocol(MTLBuffer)]) c = ((id<MTLBuffer>)o).storageMode == MTLStorageModePrivate ? 1 : 2;
+            else c = 3;
+            k[c * 2]++; k[c * 2 + 1] += b; }
+        pthread_mutex_unlock(&g_res_mu); }
+}
 void nvn_be_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
     alias_orphan_pass();   // #357: before the line cap below, which only limits the readout
     nvn_mem_detail(frame);   // before the line cap below: the detailed accounting has its own interval and must not be starved by the 400-line budget
@@ -4890,6 +4917,10 @@ void nvn_be_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
     snprintf(avail, sizeof avail, "%llu MB", (unsigned long long)(os_proc_available_memory() >> 20));
 #endif
     MLOG("memory up to frame %llu: resident %llu MB, GPU allocated %llu MB (counts zero-copy pool buffers at full length), deferred-release queue %lu, residency set %lu, serial objects %u, memory pools %d (resident %d, %llu MB pinned whole by the residency set; peak %d / tracking table capacity %d; freed but alive %lu, %llu MB), shared textures %u, %llu MB (%u of them unreferenced, %llu MB, GPU-written %llu MB; textures by serial %llu MB; evicted with pools %llu, on storage takeover %llu, unreferenced released %llu, %llu MB (never GPU-written %llu, storage rewritten since %llu, for the low-region ledger %llu) in total), texture re-uploads %llu in total, per-frame arena blocks created %llu in total (%llu MB; segments cut for scratch %llu, waits for a block %llu), finalized textures still referenced %u (small table, %llu put in total, %llu held to the end of their submission past it, %llu resolved to shared textures without it); headroom to the system memory limit %s", frame, rss_mb, gpu, nd, nr, ns, live, pres, (unsigned long long)(pres_b >> 20), peak, cap, dead_n, dead_mb, ashared, (unsigned long long)(ash_b >> 20), aorph, (unsigned long long)(aorph_b >> 20), (unsigned long long)(aorph_w >> 20), (unsigned long long)(ser_b >> 20), (unsigned long long)g_alias_evicted, (unsigned long long)g_alias_taken, (unsigned long long)(g_alias_orph_cache + g_alias_orph_rw + g_alias_orph_valve), (unsigned long long)((g_alias_orph_cache_b + g_alias_orph_rw_b + g_alias_orph_valve_b) >> 20), (unsigned long long)g_alias_orph_cache, (unsigned long long)g_alias_orph_rw, (unsigned long long)g_alias_orph_valve, (unsigned long long)g_pkg_reuploads, (unsigned long long)g_arena_made, (unsigned long long)(arena_bytes() >> 20), (unsigned long long)g_arena_cuts, (unsigned long long)arena_waits(), nghost, (unsigned long long)ghost_puts, (unsigned long long)ghost_kept, (unsigned long long)ghost_shared, avail);
+    {   uint64_t k[8]; nvn_res_by_kind(k);
+        MLOG("residency set by kind up to frame %llu: textures %llu, %llu MB; GPU-private buffers %llu, %llu MB; shared buffers (mostly zero-copy memory pools: the game's own memory) %llu, %llu MB; other %llu, %llu MB",
+             frame, (unsigned long long)k[0], (unsigned long long)(k[1] >> 20), (unsigned long long)k[2], (unsigned long long)(k[3] >> 20),
+             (unsigned long long)k[4], (unsigned long long)(k[5] >> 20), (unsigned long long)k[6], (unsigned long long)(k[7] >> 20)); }
     {   // What the memory pools put in the residency set (on a phone: wired), and the uploads read from pools that hold only textures without putting them there (up_tex_src)
         uint64_t pall = 0, pres_b = 0; int pn = 0;
         pthread_mutex_lock(&g_mu); for (int i = 0; i < g_npool; i++) { uint64_t sz = g_pools[i].hi - g_pools[i].lo; pall += sz; if (g_pools[i].res) pres_b += sz; } pn = g_npool; pthread_mutex_unlock(&g_mu);
@@ -17026,7 +17057,7 @@ static void *link_main(void *arg) {   // Display link thread: started when switc
     @autoreleasepool {
     CAMetalLayer *layer = (__bridge CAMetalLayer *)front_metal_layer();
     link_rt_declare();
-    pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 1; while (g_classic_busy) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);   // Wait for the present thread to finish handing over the frame it holds
+    pthread_mutex_lock(&g_pq_mu); g_link_owns_layer = 1; while (link_layer_busy()) pthread_cond_wait(&g_pq_cv, &g_pq_mu); pthread_mutex_unlock(&g_pq_mu);   // 经典出图与在途补帧（nvn_present_fi.inc）都交完   // Wait for the present thread to finish handing over the frame it holds
     NvMetalDisplayLinkDelegate *delegate = [NvMetalDisplayLinkDelegate new];
     CAMetalDisplayLink *link = [[CAMetalDisplayLink alloc] initWithMetalLayer:layer];
     pthread_mutex_lock(&g_pq_mu);
