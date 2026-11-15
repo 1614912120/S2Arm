@@ -438,6 +438,7 @@
 "save.restored" = "Partida guardada restaurada. Puedes iniciar el juego para comprobar tu progreso. Se conservó una copia previa a la restauración (no se crea si no había partida guardada antes).";
 "save.serviceInvalid" = "El servicio de partidas guardadas no devolvió un resultado válido. Cierra y vuelve a abrir la app; se conservan los datos existentes.";
 "save.start" = "Iniciar juego";
+"save.leave" = "Salir (la próxima vez se abre directamente el juego)";
 "save.status.hasSave" = "Tu partida guardada actual se puede exportar. Al importar, primero se comprueban la versión del juego, la propiedad de la cuenta y la integridad del archivo, y luego se solicita confirmación para restaurar.";
 "save.status.noSave" = "Aún no hay partida guardada para exportar. Puedes importar una copia de seguridad o iniciar el juego para crear una partida guardada.";
 "save.tempCleanupFailed" = "No se pudo eliminar una copia temporal, por lo que sigue ocupando espacio. En Archivos, elimina la copia temporal llamada «%@» dentro de la app.";
