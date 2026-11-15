@@ -71,18 +71,22 @@ struct JobSessionView: View {
 
     private var generalPage: some View {
         VStack(alignment: .leading, spacing: 22) {
-            HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Circle().fill(statusColor).frame(width: 9, height: 9)
                 Text(statusText.uppercased()).font(.manrope(12, .bold)).tracking(1.3).foregroundStyle(statusColor)
                 if session.kind != .play {
                     Text("· " + loc.t("s2arm.job.title." + session.kind.rawValue)).font(.manrope(12, .medium)).foregroundStyle(.secondary)
                 }
             }
-            // 一键处理环境的作业以检查项名为题（作业层原句）；游戏名不过翻译
-            Text([.downloadMetal, .downloadIosPlatform, .installDotnet].contains(session.kind) ? loc.backend(session.name) : session.name)
-                .font(.manrope(48, .heavy)).tracking(-1.4).lineLimit(2)
-            if !session.stage.isEmpty, finished == nil {   // 结束了就不再挂最后一个阶段名（停了还写「游戏运行中」）
-                Text(loc.backend(session.stage)).font(.manrope(16, .medium)).foregroundStyle(.secondary)
+            .lineLimit(1)
+            LauncherHeadingLine {
+                // 一键处理环境的作业以检查项名为题（作业层原句）；游戏名不过翻译
+                Text([.downloadMetal, .downloadIosPlatform, .installDotnet].contains(session.kind) ? loc.backend(session.name) : session.name)
+                    .font(.manrope(48, .heavy)).tracking(-1.4)
+            } subtitle: {
+                if !session.stage.isEmpty, finished == nil {   // 结束了就不再挂最后一个阶段名（停了还写「游戏运行中」）
+                    Text(loc.backend(session.stage)).font(.manrope(16, .medium)).foregroundStyle(.secondary).help(loc.backend(session.stage))
+                }
             }
             if finished == nil, session.kind != .play { progress }
             if case .finished(let state) = session.phase, state == .failed || state == .interrupted {

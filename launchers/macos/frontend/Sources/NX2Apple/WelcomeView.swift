@@ -124,11 +124,11 @@ struct WelcomeView: View {
         VStack(alignment: .leading, spacing: 0) {
             Spacer(minLength: 24)
             journey.padding(.bottom, 34)
-            Text(w("title")).font(.manrope(44, .heavy)).tracking(-1.4).lineSpacing(4)
-                .fixedSize(horizontal: false, vertical: true)
-            Text(w("lead")).font(.manrope(16)).foregroundStyle(.secondary).lineSpacing(5)
-                .frame(maxWidth: 440, alignment: .leading).fixedSize(horizontal: false, vertical: true)
-                .padding(.top, 20)
+            LauncherHeadingLine {
+                Text(w("title")).font(.manrope(44, .heavy)).tracking(-1.4).help(w("title"))
+            } subtitle: {
+                Text(w("lead")).font(.manrope(16)).foregroundStyle(.secondary).help(w("lead"))
+            }
             Text(w("soon")).font(.manrope(14, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.75))
                 .padding(.top, 14)
             Spacer(minLength: 24)

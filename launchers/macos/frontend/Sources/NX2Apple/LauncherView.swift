@@ -10,6 +10,7 @@
 // Switch 2 Pro: the top bar adds the controller button and popover (Switch2ProConnectionPopover), and the library starts the
 //   controller connection on appear when the user enabled it (NS2LauncherController).
 // Console Home: selected banners fill the window behind the titlebar; toolbar actions use compact, labeled icons.
+// Headings: brand and version share a baseline, reserving the native titlebar actions' measured width.
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -42,6 +43,7 @@ struct LauncherView: View {
     @State private var showController = false
     @State private var dropTargeted = false
     @State private var showMessages = false
+    @State private var titlebarActionsWidth: CGFloat = 0
     @State var showHomeSearch = false
     let brand: String
 
@@ -203,22 +205,20 @@ struct LauncherView: View {
     private var topBarRow: some View {
         HStack(spacing: 12) {
             // 点品牌名回欢迎页（社区贡献者补丁 #2）
-            // 版本号（11-11 维护者：玩家截图时我们一眼看出是哪一版）：正式版 v0.3.0，开发版 v0.2.9-dev+短提交号（build_app.py 写进 Info.plist）。
-            //   11-14 体验梳理第二轮：放到品牌名下面一行小字——右侧按钮在系统标题栏里、不给窗口内容让位，同一行时长版本号会被「玩家」等按钮盖住
-            VStack(alignment: .leading, spacing: 0) {
+            LauncherHeadingLine {
                 Button { installFor = nil; model.goToLibrary(); model.welcomeHome = true } label: {
-                    Text(brand).font(.manrope(19, .bold)).tracking(-0.5).lineLimit(1).fixedSize()
+                    Text(brand).font(.manrope(19, .bold)).tracking(-0.5)
                 }
-                .controllerButtonStyle(.plain).accessibilityIdentifier("top.brand")
+                .controllerButtonStyle(.plain).controllerID("top.brand")
+            } subtitle: {
                 Text(verbatim: Self.displayVersion).font(.manrope(10.5, .semibold)).monospacedDigit().foregroundStyle(.secondary)
-                    .lineLimit(1).fixedSize().textSelection(.enabled).accessibilityIdentifier("topbar.version")
+                    .textSelection(.enabled).help(Self.displayVersion).accessibilityIdentifier("topbar.version")
             }
-            Spacer()
         }
-        .padding(.leading, 90).padding(.trailing, 24)   // the window's traffic lights sit in the transparent title bar
+        .padding(.leading, 90).padding(.trailing, max(24, titlebarActionsWidth + LauncherTheme.Space.medium))
         .frame(height: 52)   // = a unified toolbar's title bar: the system centres the traffic lights in it, so they share this bar's midline
         .background(TitlebarDoubleClick())
-        .background(UnifiedTitlebar(actions: topActions))
+        .background(UnifiedTitlebar(actions: topActions, actionsWidth: $titlebarActionsWidth))
     }
 
     /// 顶栏右侧的按钮放进标题栏本身：工具栏盖在窗口内容上，内容里的按钮收不到真实点击（11-08 维护者）。
@@ -274,10 +274,35 @@ struct LauncherView: View {
     /// buttons vertically in it. The right-hand actions are its one item, so real clicks reach them.
     private struct UnifiedTitlebar<Actions: View>: NSViewRepresentable {
         let actions: Actions
+        @Binding var actionsWidth: CGFloat
+
+        final class ActionsHost: NSHostingView<Actions> {
+            var didLayout: (() -> Void)?
+            override func layout() { super.layout(); didLayout?() }
+        }
 
         final class Coordinator: NSObject, NSToolbarDelegate {
-            let host: NSHostingView<Actions>
-            init(_ actions: Actions) { host = NSHostingView(rootView: actions) }
+            let host: ActionsHost
+            @Binding private var width: CGFloat
+            init(_ actions: Actions, width: Binding<CGFloat>) {
+                host = ActionsHost(rootView: actions); _width = width
+                super.init()
+                host.didLayout = { [weak self] in self?.reportWidth() }
+            }
+            func update(_ actions: Actions, width: Binding<CGFloat>) {
+                _width = width; host.rootView = actions
+                reportWidth()
+            }
+            private func reportWidth() {
+                guard host.bounds.width > 0, abs(host.bounds.width - width) > 0.5 else { return }
+                // This hosting view lives outside the page's SwiftUI preference tree.
+                // Publish its actual AppKit width after layout, using the latest value.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.host.window != nil else { return }
+                    let value = self.host.bounds.width
+                    if value > 0, abs(value - self.width) > 0.5 { self.width = value }
+                }
+            }
             func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace] }
             func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace] }
             func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? { nil }
@@ -303,9 +328,9 @@ struct LauncherView: View {
             }
         }
 
-        func makeCoordinator() -> Coordinator { Coordinator(actions) }
+        func makeCoordinator() -> Coordinator { Coordinator(actions, width: $actionsWidth) }
         func makeNSView(context: Context) -> NSView { let h = Host(); h.coordinator = context.coordinator; return h }
-        func updateNSView(_ nsView: NSView, context: Context) { context.coordinator.host.rootView = actions }
+        func updateNSView(_ nsView: NSView, context: Context) { context.coordinator.update(actions, width: $actionsWidth) }
     }
 
     private struct OptionsTarget: Identifiable { let id: String }

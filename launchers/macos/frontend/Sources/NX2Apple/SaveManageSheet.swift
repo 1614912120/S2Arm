@@ -79,8 +79,7 @@ struct SaveManageSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                Text(t("save.title")).font(LauncherTheme.TypeStyle.title).tracking(-0.6)
-                Text(gameName).font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary).lineLimit(1)
+                LauncherSheetHeading(t("save.title"), subtitle: gameName)
                 Text(t("save.hint")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
                 // 存档位置 SaveData：原生存档放进去下次起局就用（services SaveFolder.cs）；上次没读进来的原因写在这里

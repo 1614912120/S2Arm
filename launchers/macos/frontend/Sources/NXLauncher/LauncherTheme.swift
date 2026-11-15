@@ -121,6 +121,22 @@ package struct LauncherWindowMaterial: View {
     package var body: some View { Rectangle().fill(.regularMaterial).ignoresSafeArea() }
 }
 
+/// Window and page subtitles follow their title on one shared text baseline.
+package struct LauncherHeadingLine<Title: View, Subtitle: View>: View {
+    let title: Title
+    let subtitle: Subtitle
+    package init(@ViewBuilder title: () -> Title, @ViewBuilder subtitle: () -> Subtitle) {
+        self.title = title(); self.subtitle = subtitle()
+    }
+    package var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: LauncherTheme.Space.medium) {
+            title.lineLimit(1).truncationMode(.tail)
+            subtitle.lineLimit(1).truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 package struct LauncherSheetHeading: View {
     let title: String
     let subtitle: String
@@ -130,10 +146,12 @@ package struct LauncherSheetHeading: View {
     }
     package var body: some View {
         VStack(alignment: .leading, spacing: LauncherTheme.Space.small) {
-            Text(title).font(LauncherTheme.TypeStyle.title).tracking(-0.6).accessibilityAddTraits(.isHeader)
-            if !subtitle.isEmpty {
-                Text(subtitle).font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary)
-                    .lineLimit(1).truncationMode(.middle).help(subtitle)
+            LauncherHeadingLine {
+                Text(title).font(LauncherTheme.TypeStyle.title).tracking(-0.6).accessibilityAddTraits(.isHeader)
+            } subtitle: {
+                if !subtitle.isEmpty {
+                    Text(subtitle).font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary).help(subtitle)
+                }
             }
             if !note.isEmpty {
                 Text(LauncherCopy.note(note)).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary)

@@ -83,13 +83,9 @@ struct ImportSheet: View {
         VStack(alignment: .leading, spacing: 0) {
             let count = model.importedSourceCount
             let remaining = model.pendingSources.count
-            Text(resultText(count == 0 ? "none" : count == 1 ? "one" : "many", count: count))
-                .font(LauncherTheme.TypeStyle.title).tracking(-0.6)
-                .accessibilityAddTraits(.isHeader)
-            Text(resultText(remaining == 1 ? "pendingOne" : "pendingMany", count: remaining) +
-                 (count == 0 ? "" : " " + resultText("inLibrary")))
-                .font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary).padding(.top, 6)
-                .fixedSize(horizontal: false, vertical: true)
+            LauncherSheetHeading(resultText(count == 0 ? "none" : count == 1 ? "one" : "many", count: count),
+                                 subtitle: resultText(remaining == 1 ? "pendingOne" : "pendingMany", count: remaining) +
+                                     (count == 0 ? "" : " " + resultText("inLibrary")))
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(model.pendingSources) { source in
@@ -220,9 +216,7 @@ struct ImportSheet: View {
 
     private var picker: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(w("title")).font(LauncherTheme.TypeStyle.title).tracking(-0.6)
-            Text(w("what")).font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary).lineSpacing(3)
-                .fixedSize(horizontal: false, vertical: true).padding(.top, 6)
+            LauncherSheetHeading(w("title"), subtitle: w("what"))
             Group {
                 if let job {
                     VStack(alignment: .leading, spacing: 10) {

@@ -41,8 +41,11 @@ struct PlayerToolbarButton: View {
 
     private var popover: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(loc.t("s2arm.players.title")).font(LauncherTheme.TypeStyle.panelTitle)
-            Text(loc.t("s2arm.players.intro")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            LauncherHeadingLine {
+                Text(loc.t("s2arm.players.title")).font(LauncherTheme.TypeStyle.panelTitle)
+            } subtitle: {
+                Text(loc.t("s2arm.players.intro")).font(.manrope(12)).foregroundStyle(.secondary).help(loc.t("s2arm.players.intro"))
+            }
             ForEach(players) { row($0) }
             if editing == .adding { field(loc.t("s2arm.players.add.confirm")) { commit { try store.add(text) } } }
             else { Button { start(.adding, "") } label: { Label(loc.t("s2arm.players.add"), systemImage: "plus") }.controllerButtonStyle(.borderless).accessibilityIdentifier("players.add") }

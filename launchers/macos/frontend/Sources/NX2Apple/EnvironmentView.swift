@@ -21,7 +21,7 @@ struct EnvironmentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: LauncherTheme.Space.large) {
-                LauncherSheetHeading(s("nav.settings"), note: summary)
+                LauncherSheetHeading(s("nav.settings"), subtitle: LauncherCopy.note(summary))
                 if model.checking { ProgressView().controlSize(.small) }
             }
             .padding(.horizontal, LauncherTheme.Space.page).padding(.top, LauncherTheme.Space.page).padding(.bottom, LauncherTheme.Space.section)

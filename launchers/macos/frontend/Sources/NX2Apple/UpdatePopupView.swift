@@ -37,10 +37,14 @@ struct UpdatePopupView: View {
 
     private var updateBody: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(t("update.popup.kicker")).font(LauncherTheme.TypeStyle.section).foregroundStyle(LauncherPalette.cream.opacity(0.8))
+            LauncherHeadingLine {
                 Text("S2Arm v" + version).font(LauncherTheme.TypeStyle.title)
-                Text(t("update.popup.meta")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary)
+            } subtitle: {
+                HStack(alignment: .firstTextBaseline, spacing: LauncherTheme.Space.small) {
+                    Text(t("update.popup.kicker")).font(LauncherTheme.TypeStyle.section).foregroundStyle(LauncherPalette.cream.opacity(0.8))
+                        .help(t("update.popup.kicker"))
+                    Text(t("update.popup.meta")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary).help(t("update.popup.meta"))
+                }
             }
             let sections = notes["sections"] as? [[String: Any]] ?? []
             if sections.isEmpty {
@@ -90,9 +94,8 @@ struct UpdatePopupView: View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 12) {
                 Image(systemName: "checkmark.circle").font(.system(size: 26)).foregroundStyle(LauncherPalette.ready)
-                Text(t("update.after.title").replacingOccurrences(of: "{0}", with: version)).font(LauncherTheme.TypeStyle.title)
+                LauncherSheetHeading(t("update.after.title").replacingOccurrences(of: "{0}", with: version), subtitle: t("update.after.lead"))
             }
-            Text(t("update.after.lead")).font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary)
             bullets(notes["highlights"] as? [[String: Any]] ?? [])
             HStack {
                 if let link = releasePage(version) {

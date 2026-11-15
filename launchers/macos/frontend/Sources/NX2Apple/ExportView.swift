@@ -65,21 +65,25 @@ struct ExportView: View {
                 .accessibilityLabel(loc.t("s2arm.custom.cover.help"))
                 .controllerID("export.cover")
                 VStack(alignment: .leading, spacing: 10) {
-                    Button { renameText = game.name; renaming = true } label: {
-                        HStack(alignment: .firstTextBaseline, spacing: 10) {
-                            Text(game.name).font(.manrope(36, .heavy)).tracking(-1.0).lineLimit(2)
-                                .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
-                            Image(systemName: "pencil").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
+                    let version = String(format: loc.t("s2arm.export.version"), game.display.isEmpty ? (game.version("base") ?? "-") : game.display)
+                    LauncherHeadingLine {
+                        Button { renameText = game.name; renaming = true } label: {
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                Text(game.name).font(.manrope(36, .heavy)).tracking(-1.0)
+                                Image(systemName: "pencil").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
+                            }
                         }
-                    }
-                    .controllerButtonStyle(.plain).disabled(model.busy || model.customizing)
-                    .help(loc.t("s2arm.custom.name.help"))
-                    .accessibilityIdentifier("export.name")
-                    .alert(loc.t("s2arm.custom.name.title"), isPresented: $renaming) {
-                        TextField(loc.t("s2arm.custom.name.placeholder"), text: $renameText)
-                        Button(loc.t("s2arm.custom.save")) { model.customize(game, name: renameText) }
-                        if game.customName { Button(loc.t("s2arm.custom.name.reset")) { model.customize(game, name: "") } }
-                        Button(loc.t("s2arm.custom.cancel"), role: .cancel) {}
+                        .controllerButtonStyle(.plain).disabled(model.busy || model.customizing)
+                        .help(loc.t("s2arm.custom.name.help"))
+                        .accessibilityIdentifier("export.name")
+                        .alert(loc.t("s2arm.custom.name.title"), isPresented: $renaming) {
+                            TextField(loc.t("s2arm.custom.name.placeholder"), text: $renameText)
+                            Button(loc.t("s2arm.custom.save")) { model.customize(game, name: renameText) }
+                            if game.customName { Button(loc.t("s2arm.custom.name.reset")) { model.customize(game, name: "") } }
+                            Button(loc.t("s2arm.custom.cancel"), role: .cancel) {}
+                        }
+                    } subtitle: {
+                        Text(version).font(.manrope(14)).foregroundStyle(.secondary).help(version)
                     }
                     if game.customCover {
                         Button(loc.t("s2arm.custom.cover.reset")) { model.customize(game, coverPath: "") }
@@ -92,8 +96,6 @@ struct ExportView: View {
                     if let failed = model.customizeError {
                         Text(loc.backend(failed)).font(.manrope(12.5)).foregroundStyle(LauncherPalette.danger).fixedSize(horizontal: false, vertical: true)
                     }
-                    Text(String(format: loc.t("s2arm.export.version"), game.display.isEmpty ? (game.version("base") ?? "-") : game.display))
-                        .font(.manrope(14)).foregroundStyle(.secondary)
                     HStack(spacing: 6) {
                         if let v = game.version("base") { chip(String(format: loc.t("s2arm.export.base"), v), "shippingbox") }
                         if let v = game.version("update") { chip(String(format: loc.t("s2arm.export.update"), v), "arrow.triangle.2.circlepath") }

@@ -61,7 +61,7 @@ struct Switch2ProConnectionPopover: View {
         return sections
     }
 
-    // 照 #520 UI 稿（#520 UI 稿）：标题 → 状态下一句 → 两只怎么用 → 开关 + 主按钮 → 玩家
+    // 标题与连接状态共用基线；下面依次是操作、分配方法与玩家。
     var body: some View {
         let sections = connectionSections
         VStack(alignment: .leading, spacing: 16) {
@@ -72,12 +72,14 @@ struct Switch2ProConnectionPopover: View {
             HStack(spacing: 12) {
                 ControllerIcon(glyph: ControllerIcon.header(kind: controller.kind, players: controller.players) ?? .unknown)
                     .frame(width: 48, height: 36)
-                VStack(alignment: .leading, spacing: 2) {
+                LauncherHeadingLine {
                     Text(connection.title).font(.manrope(22, .bold)).lineLimit(1).truncationMode(.tail)
                         .help(connection.title)   // 长名称在本行内省略，不能横向 fixedSize 撑宽整列内容
-                    HStack(spacing: 8) {
+                } subtitle: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Circle().fill(Color(nsColor: NS2LauncherController.dotColor(status))).frame(width: 9, height: 9)
                         Text(NS2LauncherController.statusText(status, simplifiedChinese: zh)).font(.manrope(15, .semibold)).foregroundStyle(.secondary)
+                            .help(NS2LauncherController.statusText(status, simplifiedChinese: zh))
                     }
                 }
             }
@@ -112,12 +114,14 @@ struct Switch2ProConnectionPopover: View {
                 PanelSection(separated: sections.contains(where: { $0.source == .switchRelay })) {
                     HStack(spacing: 12) {
                         ControllerIcon(glyph: ControllerIcon.system(family)).frame(width: 48, height: 36)
-                        VStack(alignment: .leading, spacing: 2) {
+                        LauncherHeadingLine {
                             Text(connection.title).font(.manrope(22, .bold)).lineLimit(1).truncationMode(.tail)   // 蓝牙手柄名字太长照截断（缩字太小），悬停看全名
                                 .help(pads.map(\.name).joined(separator: "\n"))
-                            HStack(spacing: 8) {
+                        } subtitle: {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
                                 Circle().fill(Color(nsColor: NS2LauncherController.dotColor(connection.status))).frame(width: 9, height: 9)
                                 Text(NS2LauncherController.statusText(connection.status, simplifiedChinese: zh)).font(.manrope(15, .semibold)).foregroundStyle(.secondary)
+                                    .help(NS2LauncherController.statusText(connection.status, simplifiedChinese: zh))
                             }
                         }
                     }

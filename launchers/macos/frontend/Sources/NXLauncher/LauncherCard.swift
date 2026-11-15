@@ -1,5 +1,5 @@
 // Derived from NX2Apple (MIT; see frontend/NOTICE).
-// S2Arm: shared theme spacing and typography; card actions participate in controller navigation.
+// S2Arm: shared theme spacing and typography; inline page subtitles; card actions participate in controller navigation.
 import SwiftUI
 import AppKit
 import NXCore
@@ -19,7 +19,7 @@ extension StepState {
     }
 }
 
-/// The big title of a page with a note under it.
+/// The big title of a page with an inline subtitle.
 package struct CardPageHeading: View {
     let title: String
     let note: String
@@ -30,9 +30,10 @@ package struct CardPageHeading: View {
     }
 
     package var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        LauncherHeadingLine {
             Text(title).font(.manrope(44, .heavy)).tracking(-1.3)
-            Text(note).font(.manrope(15)).foregroundStyle(.secondary)
+        } subtitle: {
+            Text(note).font(.manrope(15)).foregroundStyle(.secondary).help(note)
         }
     }
 }

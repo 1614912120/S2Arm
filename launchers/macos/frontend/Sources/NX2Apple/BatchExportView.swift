@@ -37,10 +37,10 @@ struct BatchExportView: View {
         VStack(alignment: .leading, spacing: 14) {
             Button { model.closeBatch() } label: { Label(loc.t("s2arm.export.back"), systemImage: "chevron.left").font(.manrope(12.5, .semibold)) }
                 .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("batch.back")
-            HStack(alignment: .firstTextBaseline) {
+            LauncherHeadingLine {
                 Text(t("title")).font(.manrope(32, .heavy)).tracking(-0.8)
-                Spacer()
-                Text(t("hint")).font(.manrope(13)).foregroundStyle(.secondary)
+            } subtitle: {
+                Text(t("hint")).font(.manrope(13)).foregroundStyle(.secondary).help(t("hint"))
             }
             if model.batchState != nil { summaryLine }
         }

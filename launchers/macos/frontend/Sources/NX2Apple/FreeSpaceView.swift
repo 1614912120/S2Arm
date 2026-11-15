@@ -25,15 +25,9 @@ struct FreeSpaceView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    // 标题跟着所在的页走；游戏名只在这一款的页显示，一行，太长截尾（总览不是某一款的）。
-                    Text(overviewMode ? storage("title") : loc.t("s2arm.space.title")).font(LauncherTheme.TypeStyle.title).tracking(-0.6)
-                        .lineLimit(1)
-                    if !overviewMode {
-                        Text(game?.name ?? space?.name ?? gameID).font(LauncherTheme.TypeStyle.body).foregroundStyle(.secondary)
-                            .lineLimit(1).truncationMode(.tail)
-                    }
-                }
+                // 总览不针对某一款；单款页的游戏名跟在标题后。
+                LauncherSheetHeading(overviewMode ? storage("title") : loc.t("s2arm.space.title"),
+                                     subtitle: overviewMode ? "" : game?.name ?? space?.name ?? gameID)
                 Spacer(minLength: 12)
                 if model.spaceFreeing, let note = model.lockWaitNote { Text(loc.backend(note)).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary) }
                 if model.spaceLoading || model.spaceFreeing || model.overviewLoading { ProgressView().controlSize(.small) }

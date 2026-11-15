@@ -90,7 +90,7 @@ struct ExportSessionView: View {
 
     private var heading: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Circle().fill(statusColor).frame(width: 9, height: 9)
                 Text(statusText).font(.manrope(14, .bold)).foregroundStyle(statusColor)
                 if finished == nil {
@@ -99,7 +99,7 @@ struct ExportSessionView: View {
                         .accessibilityIdentifier("export.platformOf")
                 }
             }
-            .accessibilityElement(children: .combine)
+            .lineLimit(1).accessibilityElement(children: .combine)
             if run.platforms.count > 1 {
                 HStack(spacing: 8) {
                     ForEach(Array(run.platforms.enumerated()), id: \.element) { k, platform in pill(k, platform) }
@@ -366,8 +366,12 @@ struct ExportSessionView: View {
             if !succeeded.isEmpty {
                 VStack(alignment: .leading, spacing: 18) {
                     SuccessSeal()
-                    Text(finished == .completed ? x("done.title") : statusText).font(.manrope(52, .heavy)).tracking(-1.6)
-                    Text(x(succeeded.contains(.ios) ? "done.ios" : "done.mac")).font(.manrope(18)).foregroundStyle(.secondary)
+                    LauncherHeadingLine {
+                        Text(finished == .completed ? x("done.title") : statusText).font(.manrope(52, .heavy)).tracking(-1.6)
+                    } subtitle: {
+                        let subtitle = x(succeeded.contains(.ios) ? "done.ios" : "done.mac")
+                        Text(subtitle).font(.manrope(18)).foregroundStyle(.secondary).help(subtitle)
+                    }
                 }
                 if let boost = succeeded.compactMap({ run.outcomes[$0]?.boost }).first(where: { $0.values.contains { $0 > 0 } }) {
                     BoostBanner(boost: boost, text: x)   // 自动配好了金手指 / 补丁：S 级加强生效（开不开玩家在启动设置里定）

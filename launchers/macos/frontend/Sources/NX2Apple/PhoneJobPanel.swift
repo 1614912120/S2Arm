@@ -60,11 +60,12 @@ struct PhoneJobPanel: View {
         let p = session.progress
         let value = p.overall ?? 0
         return VStack(alignment: .leading, spacing: 22) {
-            HStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Circle().fill(LauncherPalette.building).frame(width: 9, height: 9)
                 Text(t(exporting ? "phone.status.running.export" : "phone.status.running." + session.kind.rawValue)).font(.manrope(14, .bold)).foregroundStyle(LauncherPalette.building)
                 if !exporting { Text("· " + device).font(.manrope(13, .medium)).foregroundStyle(.secondary) }
             }
+            .lineLimit(1)
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Text("\(Int(value * 100))%").font(.manrope(58, .heavy)).tracking(-2).monospacedDigit()
                     .contentTransition(.numericText()).animation(.easeOut(duration: 0.5), value: Int(value * 100))
@@ -166,14 +167,17 @@ struct PhoneJobPanel: View {
         return VStack(alignment: .leading, spacing: 20) {
             HStack(alignment: .center, spacing: 18) {
                 SuccessSeal()
-                Text(t("phone.headline.export")).font(.manrope(44, .heavy)).tracking(-1.4).accessibilityIdentifier("phone.title")
+                LauncherHeadingLine {
+                    Text(t("phone.headline.export")).font(.manrope(44, .heavy)).tracking(-1.4).accessibilityIdentifier("phone.title")
+                } subtitle: {
+                    // 路径可点：点了在访达打开。
+                    Button { NSWorkspace.shared.open(URL(fileURLWithPath: o.exportFolder)) } label: {
+                        Text(t("phone.done.export").replacingOccurrences(of: "{0}", with: (o.exportFolder as NSString).abbreviatingWithTildeInPath))
+                            .font(.manrope(16)).foregroundStyle(.secondary).underline()
+                    }
+                    .buttonStyle(.plain).help(o.exportFolder).accessibilityIdentifier("phone.export.path")
+                }
             }
-            // 路径可点：点了在访达打开（维护者 11-11：界面上的路径一律可点打开）
-            Button { NSWorkspace.shared.open(URL(fileURLWithPath: o.exportFolder)) } label: {
-                Text(t("phone.done.export").replacingOccurrences(of: "{0}", with: (o.exportFolder as NSString).abbreviatingWithTildeInPath))
-                    .font(.manrope(16)).foregroundStyle(.secondary).underline().fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
-            }
-            .buttonStyle(.plain).accessibilityIdentifier("phone.export.path")
             HStack(alignment: .top, spacing: 52) {
                 ForEach(Array(stats.enumerated()), id: \.offset) { _, s in
                     VStack(alignment: .leading, spacing: 6) {
@@ -256,9 +260,12 @@ struct PhoneJobPanel: View {
     private func headline(seal: AnyView, title: String, subtitle: String) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             seal
-            Text(title).font(.manrope(52, .heavy)).tracking(-1.6).accessibilityIdentifier("phone.title")
-            if !subtitle.isEmpty {
-                Text(subtitle).font(.manrope(18)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            LauncherHeadingLine {
+                Text(title).font(.manrope(52, .heavy)).tracking(-1.6).accessibilityIdentifier("phone.title")
+            } subtitle: {
+                if !subtitle.isEmpty {
+                    Text(subtitle).font(.manrope(18)).foregroundStyle(.secondary).help(subtitle)
+                }
             }
         }
     }

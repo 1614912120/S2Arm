@@ -353,6 +353,37 @@ import S2ArmAppleAdapter
         }
     }
 
+    func testInlineTitlebarKeepsLongBrandAwayFromNativeActions() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        fixture.model.gamepad.source.controllers = { [] }
+        for language in [Lang.zh, .en] {
+            for width: CGFloat in [800, 1120, 1440] {
+                let page = AnyView(LauncherView(model: fixture.model,
+                    brand: "Original launcher title with a deliberately long name").frame(width: width, height: 630))
+                let (host, window) = try await render(page, fixture: fixture, language: language)
+                defer { window.close() }
+                for backgroundTask in [false, true, false] {
+                    fixture.model.session = backgroundTask ? JobSession(kind: .play, gameID: "fixture", name: "Original task") : nil
+                    fixture.model.sessionHidden = backgroundTask
+                    try await Task.sleep(for: .milliseconds(100))
+                    let targets = fixture.model.gamepad.controlTargets(in: window)
+                    let brand = try XCTUnwrap(targets.first { $0.id == "top.brand" })
+                    let action = try XCTUnwrap(targets.filter { $0.id.hasPrefix("top.") && $0.id != "top.brand" }.min { $0.frame.minX < $1.frame.minX })
+                    let bounds = window.convertToScreen(host.bounds)
+                    print("titlebar-heading \(language.code)/\(width)/\(backgroundTask): gap=\(action.frame.minX - brand.frame.maxX), fitting=\(host.fittingSize.width)")
+                    XCTAssertLessThanOrEqual(host.fittingSize.width, width + 1)
+                    XCTAssertGreaterThanOrEqual(brand.frame.minX - bounds.minX, 89)
+                    XCTAssertLessThanOrEqual(brand.frame.maxX + 12, action.frame.minX, "长品牌名不能覆盖原生标题栏操作")
+                    XCTAssertGreaterThan(brand.frame.width, 2)
+                    try snapshot(host, "titlebar-long-\(language.code)-\(Int(width))-\(backgroundTask)")
+                }
+            }
+        }
+    }
+
     func testHomeSearchDismissesOutsideClicksAndFocusLossWithoutClearingTheQuery() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }

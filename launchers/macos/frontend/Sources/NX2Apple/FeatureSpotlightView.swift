@@ -95,8 +95,12 @@ struct FeatureSpotlightView: View {
                     badges.padding(.horizontal, 24).padding(.top, 18)
                 }
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(text(page["kicker"])).font(.manrope(12.5, .bold)).tracking(0.8).foregroundStyle(Self.gold)
-                    Text(text(page["title"])).font(.manrope(26, .heavy)).padding(.top, 6)
+                    LauncherHeadingLine {
+                        Text(text(page["title"])).font(.manrope(26, .heavy))
+                    } subtitle: {
+                        Text(text(page["kicker"])).font(.manrope(12.5, .bold)).tracking(0.8).foregroundStyle(Self.gold)
+                            .help(Text(text(page["kicker"])))
+                    }
                     HStack(alignment: .top, spacing: 14) {
                         cell("feature.what", page["what"]); cell("feature.how", page["how"]); cell("feature.where", page["where"])
                     }
