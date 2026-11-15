@@ -249,8 +249,9 @@ void nvn_gpu_bind(nvn_gpu_cmd c, nvn_gpu_stage st, const nvn_gpu_binding *b, uin
     if (!g_pass_open) g_bind_outside++;
     int i = (int)st; g_bind_calls[i]++; g_nfb[i] = n; memcpy(g_fb[i], b, (n < 16 ? n : 16) * sizeof *b); }
 void nvn_gpu_draw(nvn_gpu_cmd c, const nvn_gpu_draw_args *a) { (void)c; g_gdraws++; g_last_da = *a; if (!g_pass_open) g_draw_outside++; }
+static uint32_t g_caps_remove;
 static uint32_t g_caps_extra;   // 用例临时打开的能力位（如间接计数多绘）
-void nvn_gpu_caps_get(nvn_gpu_caps *out) { memset(out, 0, sizeof *out); out->min_ubo_align = 64; out->caps = NVN_GPU_CAP_BLIT_SCALED | g_caps_extra; }
+void nvn_gpu_caps_get(nvn_gpu_caps *out) { memset(out, 0, sizeof *out); out->min_ubo_align = 64; out->caps = (NVN_GPU_CAP_BLIT_SCALED | g_caps_extra) & ~g_caps_remove; }
 static int g_arena697_fail;
 nvn_gpu_rc nvn_gpu_arena_alloc(nvn_gpu_cmd c, uint64_t bytes, uint32_t align, nvn_gpu_slice *out, nvn_gpu_err *err) { (void)c; (void)err;
     if(g_arena697_fail) { memset(out,0,sizeof *out);memset(err,0,sizeof *err);
@@ -2898,6 +2899,50 @@ static void t_front_origin_matrix(void) {
     }
     nvn_be_set_origin_lower_left(1); s2a_nvn_rast_flip = 1; pass_fresh();
 }
+// 源反向端点的期望由矩形两端手算，不调用后端转换。
+static void t_color_copy_mirror(void) {
+    for (int axes = 1; axes <= 3; axes++) for (int variant = 0; variant < 4; variant++) {
+        pass_fresh(); g_nbl = g_nct = 0;
+        tex_t a = mk_tex(300, 0, variant >= 2 ? NVN_FORMAT_R11G11B10F : NVN_FORMAT_RGBA8, 64, 32, 3, 0);
+        tex_t b = mk_tex(301, 0x10000, NVN_FORMAT_RGBA8, 64, 32, 3, 0);
+        a.d.target = b.d.target = NVN_TEXTURE_TARGET_2D_ARRAY; a.d.depth = b.d.depth = 4;
+        nvn_tex_layout(&a.d, &a.L); nvn_tex_layout(&b.d, &b.L);
+        stream s = {0}; p_copy_t2t *o = put_t2t(&s, &a, &b);
+        o->has_sv = o->has_dv = 1; o->sv.set_levels = o->dv.set_levels = 1; o->sv.base_level = o->dv.base_level = 1;
+        o->sv.set_layers = o->dv.set_layers = 1; o->sv.min_layer = o->dv.min_layer = 1;
+        o->sr = (NVNcopyRegion){4, 2, 1, 8, 4, 1}; o->dr = (NVNcopyRegion){2, 3, 1, variant & 1 ? 4 : 8, 4, 1};
+        o->flags = (axes & 1 ? NVN_COPY_FLAGS_MIRROR_X_BIT : 0) | (axes & 2 ? NVN_COPY_FLAGS_MIRROR_Y_BIT : 0) |
+            (variant == 1 ? NVN_COPY_FLAGS_LINEAR_FILTER_BIT : 0); end(&s);
+        submit1(&s); fake_complete(NVN_GPU_DONE_OK);
+        CHECK(g_nbl == 1 && g_nct == 0 && nvn_unimpl_kinds() == 0);
+        if (g_nbl) {
+            CHECK(g_bl[0].sr.xoffset == (axes & 1 ? 12 : 4) && g_bl[0].sr.width == (axes & 1 ? -8 : 8));
+            CHECK(g_bl[0].sr.yoffset == (axes & 2 ? 6 : 2) && g_bl[0].sr.height == (axes & 2 ? -4 : 4));
+            CHECK(g_bl[0].sr.zoffset == 0 && g_bl[0].sr.depth == 1 && g_bl[0].dr.xoffset == 2 && g_bl[0].dr.yoffset == 3);
+            CHECK(g_bl[0].dr.width == (variant & 1 ? 4 : 8) && g_bl[0].linear == (variant == 1));
+            CHECK(nvn_be_tex_gpu_owned(301) == 1 && nvn_be_tex_gpu_owned(300) == 0);
+        }
+    }
+    for (int bad = 0; bad < 11; bad++) {
+        pass_fresh(); g_nbl = g_nct = 0;
+        tex_t a = mk_tex(302, 0, bad == 2 ? NVN_FORMAT_DEPTH24_STENCIL8 : bad == 3 ? NVN_FORMAT_R32UI : NVN_FORMAT_RGBA8, 16, 16, 1, 0), b = a;
+        b.serial = bad == 10 ? a.serial : 303;
+        if (bad == 4) a.d.target = b.d.target = NVN_TEXTURE_TARGET_3D;
+        if (bad == 6) a.d.samples = b.d.samples = 4;
+        stream s = {0}; p_copy_t2t *o = put_t2t(&s, &a, &b); o->sr = (NVNcopyRegion){0, 0, 0, 8, 8, 1}; o->dr = o->sr;
+        o->flags = NVN_COPY_FLAGS_MIRROR_Y_BIT;
+        if (bad == 0) g_caps_remove = NVN_GPU_CAP_BLIT_SCALED;
+        if (bad == 1) o->flags |= NVN_COPY_FLAGS_MIRROR_Z_BIT;
+        if (bad == 5) o->sr.depth = o->dr.depth = 2;
+        if (bad == 7) o->sr.width = 0;
+        if (bad == 8) o->sr.xoffset = INT32_MAX;
+        if (bad == 9) o->sr.yoffset = -1;
+        end(&s); submit1(&s); fake_complete(NVN_GPU_DONE_OK);
+        CHECK(g_nbl == 0 && g_nct == 0 && nvn_unimpl_count("tex", "t2t_mirror") == 1);
+        g_caps_remove = 0;
+    }
+    pass_fresh();
+}
 static void t_copy_t2t(void) {
     pass_fresh(); g_nct = 0; g_nbl = 0;
     tex_t a = mk_tex(71, 0, NVN_FORMAT_RGBA8, 64, 32, 3, 0), b = mk_tex(72, 0x8000, NVN_FORMAT_RGBA8, 32, 16, 1, 0), f = mk_tex(73, 0xC000, NVN_FORMAT_R11G11B10F, 32, 16, 1, 0);
@@ -2909,7 +2954,7 @@ static void t_copy_t2t(void) {
     o = put_t2t(&s, &a, &b); o->sr = (NVNcopyRegion){0, 0, 0, 32, 16, 1}; o->dr = (NVNcopyRegion){0, 0, 0, 16, 8, 1}; o->flags = NVN_COPY_FLAGS_LINEAR_FILTER_BIT;   // 缩放：后端的缩放拷贝，线性过滤
     o = put_t2t(&s, &a, &f); o->sr = (NVNcopyRegion){0, 0, 0, 16, 8, 1}; o->dr = o->sr;                                                             // 换格式：同上，最近点
     { tex_t u = mk_tex(74, 0x10000, NVN_FORMAT_R32UI, 32, 16, 1, 0); o = put_t2t(&s, &u, &b); o->sr = (NVNcopyRegion){0, 0, 0, 32, 16, 1}; o->dr = (NVNcopyRegion){0, 0, 0, 16, 8, 1}; }   // 整数格式换格式：没接
-    o = put_t2t(&s, &a, &b); o->sr = (NVNcopyRegion){0, 0, 0, 16, 8, 1}; o->dr = o->sr; o->flags = NVN_COPY_FLAGS_MIRROR_Y_BIT;                       // 镜像：没接
+    o = put_t2t(&s, &a, &b); o->sr = (NVNcopyRegion){0, 0, 0, 16, 8, 1}; o->dr = o->sr; o->flags = NVN_COPY_FLAGS_MIRROR_Z_BIT;                       // Z 镜像：没接
     o = put_t2t(&s, &b, &b); o->sr = (NVNcopyRegion){0, 0, 0, 32, 16, 1}; o->dr = o->sr; o->flags = (int32_t)DM_COPY_RESOLVE;                         // 降采样记录、两边采样数相同：整张拷贝
     { tex_t ms = mk_tex(75, 0, NVN_FORMAT_RGBA8, 32, 16, 1, 0); ms.d.samples = 4; ms.d.target = NVN_TEXTURE_TARGET_2D_MULTISAMPLE;
       o = put_t2t(&s, &ms, &b); o->flags = DM_COPY_RESOLVE; }
@@ -3533,7 +3578,7 @@ int main(int argc, char **argv) {
     t_dispatch_ubop_ro_skip();
     t_compute_image();
     t_compute_sources();
-    t_depth_copy_scaled(); t_front_origin_matrix(); t_copy_t2t();
+    t_depth_copy_scaled(); t_front_origin_matrix(); t_color_copy_mirror(); t_copy_t2t();
     t_draw();
     t_arena697_detail();
     t_logic_op_accounting();

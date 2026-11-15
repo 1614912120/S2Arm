@@ -232,12 +232,16 @@ case "$mode" in
     --tsan) cflags+=(-fsanitize=thread) ;;
     --asan) cflags+=(-fsanitize=address,undefined -fno-omit-frame-pointer) ;;
     --shown-only) cflags+=(-DS2A_C883_TEST=1) ;;
-    ""|--separate-core|--separate-neg-sampler|--gs-only|--gs-compiler|--gs-core|--gs-no-cap|--gs-neg-stage|--gs-neg-flags|--gs-neg-cap) ;;
+    ""|--present-only|--separate-core|--separate-neg-sampler|--gs-only|--gs-compiler|--gs-core|--gs-no-cap|--gs-neg-stage|--gs-neg-flags|--gs-neg-cap) ;;
     *) echo "未知参数：${mode}（可用 --tsan / --asan）" >&2; exit 64 ;;
 esac
 
 echo "lavapipe: $icd"
 echo "validation: $layer"
+if [ "$mode" = "--present-only" ]; then
+    src[0]="$repo/android/tests/vk/t_present_encoding.c"
+    cflags+=(-ffunction-sections -fdata-sections -Wno-unused-function)
+fi
 if [ "$mode" = "--gs-core" ]; then
     src=("$repo/android/tests/vk/t_replay_gs.c" "$repo/graphics/nvn/replay/rp_draw.c" "$repo/graphics/nvn/replay/rp_state.c" "$repo/graphics/nvn/replay/nvn_unimpl.c" "$repo/android/native/gfx_plat/nvk_shader.c"
          "$repo/android/native/nvn/backend_vulkan.c" "$repo/android/native/direct/vk_device.c" "$repo/android/native/direct/gs_path.c" "$repo/android/native/capprobe/capprobe_host.c"
@@ -331,6 +335,20 @@ with open(sys.argv[2], 'w') as f:
     json.dump({'source': 'probe', 'gs_occlusion': 'supported'}, f, separators=(',', ':'))
 PYPROBE
 export S2A_CAPPROBE_RESULT="$out/probe-result.json"
+
+if [ "$mode" = "--present-only" ]; then
+    for order in rgba bgra; do
+    if [ "$order" = bgra ]; then export S2A_TEST_PRESENT_BGRA=1; else unset S2A_TEST_PRESENT_BGRA; fi
+    set +e
+    timeout 60 "$out/t_backend_vk" 2>&1 | tee "$out/present-log"
+    rc=${PIPESTATUS[0]}
+    set -e
+    bad=$(grep -cE 'Validation Error|VUID-|SYNC-HAZARD-' "$out/present-log" || true)
+    [ "$rc" -eq 0 ] && [ "$bad" -eq 0 ] || exit 1
+    done
+    unset S2A_TEST_PRESENT_BGRA
+    exit 0
+fi
 
 if [ "$mode" = "--separate-neg-sampler" ]; then
     set +e
@@ -563,4 +581,10 @@ if [ "$mode" = "--tsan" ]; then
     echo "【绿】C01–C08 + C23/C25/C26/C27/C28/C29/C30/C31/C32/C33/C34/C35/C36-55/C70/C71/C72/C73 + 清屏/复制/深度/纹理三角形：TSan 0 报告（validation 由默认档单独跑）；设备 $(grep '^device:' "$out/log" | head -1)"
 else
     echo "【绿】C01–C08 + C23/C25/C26/C27/C28/C29/C30/C31/C32/C33/C34/C35/C36-55/C70/C71/C72/C73 + 清屏/复制/深度/纹理三角形 + BC1–BC7 逐像素解码：validation 0 条；设备 $(grep '^device:' "$out/log" | head -1)"
+fi
+
+# #1142：默认 vk 套件也验非线性上屏，立即 / 延迟两档均开同步校验。
+if [ -z "$mode" ]; then
+    (unset S2A_TEST_NVK_DQ; bash "$repo/android/tests/vk/run.sh" --present-only)
+    S2A_TEST_NVK_DQ=1 bash "$repo/android/tests/vk/run.sh" --present-only
 fi
