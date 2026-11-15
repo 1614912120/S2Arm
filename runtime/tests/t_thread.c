@@ -14,10 +14,12 @@
 #include <string.h>
 #include <stdatomic.h>
 static char g_cap[65536]; static size_t g_capn; static _Atomic int g_cap_on;
+#ifndef S2A_LOG_OUT_WEAK   // 安卓暂停夹具（runtime/tests/support/run_pause_wait_host.py）把 thread.c 与本文件拼进同一单元、thread.c 先带进了弱定义：那里不跑 ㉙，不再定义
 void s2a_log_out(int fd, const char *p, size_t n) {
     ssize_t w = write(fd, p, n); (void)w;
     if (atomic_load(&g_cap_on) && (strstr(p, "同步调用") || strstr(p, "寄存器 x")) && g_capn + n < sizeof g_cap) { memcpy(g_cap + g_capn, p, n); g_capn += n; g_cap[g_capn] = 0; }
 }
+#endif
 #include <stdatomic.h>
 #include <sys/mman.h>
 #include <sys/wait.h>
