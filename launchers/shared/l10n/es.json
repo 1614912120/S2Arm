@@ -934,8 +934,6 @@
   "welcome.step.keys.done": "Claves listas",
   "welcome.step.games.title": "Añade tus juegos",
   "welcome.step.games.what": "Funcionan archivos NSP, XCI o NUP y carpetas de juegos extraídas.",
-  "sgrade.state.on.patch": "En uso: {0} ({1})",
-  "sgrade.state.on.ported": "En uso: {0}, adaptado de la versión {1}",
   "sgrade.state.on.own": "En uso: pantalla completa de S2Arm (este juego no tiene parche de la comunidad; comprobado por S2Arm)",
   "sgrade.state.on.fps": "En uso: hasta {0} fps",
   "sgrade.state.off_user": "Desactivado",
@@ -951,7 +949,9 @@
   "sgrade.state.mac_only": "Los parches de gráficos son solo para Mac.",
   "sgrade.state.restored": "{0}, desactivado automáticamente la última vez, vuelve a estar activado en esta versión de S2Arm. Se desactivará de nuevo si hay algún problema.",
   "sgrade.upgrade.no.none": "No hay parches en la biblioteca",
-  "sgrade.upgrade.no.version": "Los parches son de otra versión"
+  "sgrade.upgrade.no.version": "Los parches son de otra versión",
+  "sgrade.state.on.adaptive": "En uso: parche de pantalla completa de la comunidad (elegido según la relación de aspecto de tu pantalla)",
+  "sgrade.state.on.fixed": "En uso: parche de pantalla completa de la comunidad (relación de aspecto fija)"
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "Parche de pantalla completa (elegido según la proporción de tu pantalla)",

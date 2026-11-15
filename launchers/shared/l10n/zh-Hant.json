@@ -934,8 +934,6 @@
   "welcome.step.keys.done": "金鑰已就緒",
   "welcome.step.games.title": "新增你的遊戲",
   "welcome.step.games.what": "NSP、XCI、NUP 檔案或解包好的遊戲資料夾都可以。",
-  "sgrade.state.on.patch": "使用中：{0}（{1}）",
-  "sgrade.state.on.ported": "使用中：{0}，從 {1} 版移植到你這份",
   "sgrade.state.on.own": "使用中：S2Arm 通用滿螢幕（這款沒有社群滿螢幕補丁，S2Arm 驗證過能鋪滿）",
   "sgrade.state.on.fps": "使用中：最高 {0} 幀",
   "sgrade.state.off_user": "已關",
@@ -951,7 +949,9 @@
   "sgrade.state.mac_only": "畫面補丁只在 Mac 版裡。",
   "sgrade.state.restored": "上次自動關閉的 {0} 已在新版 S2Arm 裡重新開啟，有問題會再自動關閉。",
   "sgrade.upgrade.no.none": "補丁庫裡沒有",
-  "sgrade.upgrade.no.version": "補丁是別的版本的"
+  "sgrade.upgrade.no.version": "補丁是別的版本的",
+  "sgrade.state.on.adaptive": "使用中：社群滿螢幕補丁（依螢幕比例自動選）",
+  "sgrade.state.on.fixed": "使用中：社群滿螢幕補丁（固定畫幅）"
  },
  "text": {
   "直连": "直連",

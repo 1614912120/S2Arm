@@ -934,8 +934,6 @@
   "welcome.step.keys.done": "キー準備完了",
   "welcome.step.games.title": "ゲームを追加",
   "welcome.step.games.what": "NSP、XCI、NUP ファイル、または展開済みゲームフォルダのいずれも使用できます。",
-  "sgrade.state.on.patch": "使用中：{0}（{1}）",
-  "sgrade.state.on.ported": "使用中：{0}（バージョン {1} から移植）",
   "sgrade.state.on.own": "使用中：S2Arm 汎用フルスクリーン（このゲームのコミュニティパッチはありません。S2Arm で確認済み）",
   "sgrade.state.on.fps": "使用中：最大 {0} fps",
   "sgrade.state.off_user": "オフ",
@@ -951,7 +949,9 @@
   "sgrade.state.mac_only": "画面パッチは Mac 版のみです。",
   "sgrade.state.restored": "前回自動でオフにした {0} を、新しい S2Arm で再びオンにしました。問題があればまた自動でオフにします。",
   "sgrade.upgrade.no.none": "パッチライブラリにありません",
-  "sgrade.upgrade.no.version": "パッチは別のバージョン用です"
+  "sgrade.upgrade.no.version": "パッチは別のバージョン用です",
+  "sgrade.state.on.adaptive": "使用中：コミュニティのフルスクリーンパッチ（画面の縦横比に合わせて自動選択）",
+  "sgrade.state.on.fixed": "使用中：コミュニティのフルスクリーンパッチ（固定の縦横比）"
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "全画面パッチ（画面比率に応じて自動選択）",

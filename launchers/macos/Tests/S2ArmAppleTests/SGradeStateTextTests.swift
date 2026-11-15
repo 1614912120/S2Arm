@@ -16,16 +16,18 @@ final class SGradeStateTextTests: XCTestCase {
     }
 
     func testOnSaysWhichOneIsInUse() {
-        eq(line("widescreen", ["state": "on", "source": "patch", "active": ["name": "21:9 宽屏", "ratio": "21:9"]]), "在用：21:9 宽屏（21:9）")
-        eq(line("widescreen", ["state": "on", "source": "ported", "active": ["name": "21:9 宽屏", "from": "1.0.4"]]), "在用：21:9 宽屏，从 1.0.4 版移植到你这份")
-        eq(line("widescreen", ["state": "on", "source": "own"]), "在用：S2Arm 通用满屏（这款没有社区满屏补丁，S2Arm 验过能铺满）")
-        eq(line("fps", ["state": "on", "target": 120]), "在用：最高 120 帧")
+        // D2R 线 feat/sgrade-state 口径：满屏 active = adaptive / fixed / own；帧率 active = {levels, pick}（"0" = 自动，取最高档）
+        eq(line("widescreen", ["state": "on", "source": "patch", "active": "adaptive"]), "在用：社区满屏补丁（按屏幕比例自动选）")
+        eq(line("widescreen", ["state": "on", "source": "patch", "active": "fixed"]), "在用：社区满屏补丁（固定画幅）")
+        eq(line("widescreen", ["state": "on", "source": "own", "active": "own"]), "在用：S2Arm 通用满屏（这款没有社区满屏补丁，S2Arm 验过能铺满）")
+        eq(line("fps", ["state": "on", "active": ["levels": [60, 120], "pick": "0"]]), "在用：最高 120 帧")
+        eq(line("fps", ["state": "on", "active": ["levels": [60, 120], "pick": "60"]]), "在用：最高 60 帧")
         eq(line("widescreen", ["state": "on", "source": "own"], lang: "en"), "In use: S2Arm full screen (no community patch for this game; checked by S2Arm)")
     }
 
     func testIneffectiveShowsLastRunAsIs() {
         // 作业层原句已写「没生效：…」，不再套一层「开着，但上一局没生效：」
-        eq(line("widescreen", ["state": "ineffective", "lastRun": ["text": "没生效：补丁与这个版本的游戏不配套"]]), "没生效：补丁与这个版本的游戏不配套")
+        eq(line("widescreen", ["state": "ineffective", "lastRun": "没生效：补丁与这个版本的游戏不配套"]), "没生效：补丁与这个版本的游戏不配套")
     }
 
     func testAutoOffSaysWhenAndWhyAndOffersReenable() {
@@ -58,7 +60,7 @@ final class SGradeStateTextTests: XCTestCase {
 
     func testFiveLanguagesHaveEveryStateKey() {
         // 加语言只加叠加文件：每个 sgrade.state.* 在繁中 / 日 / 西 / 法都有译文（缺了会回落英文，这里要求齐）
-        let keys = ["sgrade.state.on.patch", "sgrade.state.on.ported", "sgrade.state.on.own", "sgrade.state.on.fps", "sgrade.state.off_user",
+        let keys = ["sgrade.state.on.adaptive", "sgrade.state.on.fixed", "sgrade.state.on.own", "sgrade.state.on.fps", "sgrade.state.off_user",
                     "sgrade.state.off_auto.crash", "sgrade.state.off_auto.stall", "sgrade.state.reenable", "sgrade.state.version.newer",
                     "sgrade.state.version.older", "sgrade.state.version.port_failed", "sgrade.state.none", "sgrade.state.opted_out",
                     "sgrade.state.pending.ios", "sgrade.state.mac_only", "sgrade.state.restored", "sgrade.upgrade.no.none", "sgrade.upgrade.no.version"]

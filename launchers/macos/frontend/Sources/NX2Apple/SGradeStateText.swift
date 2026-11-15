@@ -5,19 +5,22 @@ import Foundation
 
 struct SGradeCategoryState: Equatable {
     var state = ""            // on / ineffective / off_user / off_auto / version / none / opted_out / pending / mac_only / unknown
-    var source = ""           // 满屏：patch / ported / own / none
-    var activeName = "", ratio = "", portedFrom = ""
-    var target = 0            // 帧率：目标帧率
+    var source = ""           // 满屏：patch / own / none
+    var active = ""           // 满屏：adaptive（按屏幕比例自动选）/ fixed（固定画幅）/ own
+    var target = 0            // 帧率：在用的档（active.pick；"0" = 自动 → 取 levels 最高档）
     var lastRun = ""          // 上一局结果原句（作业层 patch_result，中文原句，界面经 BackendText 翻）
     var autoOffCause = "", autoOffAt: Date? = nil
     var mine = "", available: [String] = [], port = ""
 
     init(_ raw: [String: Any]) {
         state = raw["state"] as? String ?? ""; source = raw["source"] as? String ?? ""
-        let active = raw["active"] as? [String: Any] ?? [:]
-        activeName = active["name"] as? String ?? ""; ratio = active["ratio"] as? String ?? ""; portedFrom = active["from"] as? String ?? ""
-        target = (raw["target"] as? NSNumber)?.intValue ?? 0
-        lastRun = (raw["lastRun"] as? [String: Any])?["text"] as? String ?? ""
+        // D2R 线 feat/sgrade-state 口径：满屏 active 是字符串；帧率 active 是 {levels: [60, 120], pick: "0" | "60" | "120"}；gfx / cheats 是开着的编号列表
+        if let a = raw["active"] as? String { active = a }
+        if let fps = raw["active"] as? [String: Any] {
+            let levels = (fps["levels"] as? [NSNumber] ?? []).map(\.intValue), pick = Int(fps["pick"] as? String ?? "") ?? 0
+            target = pick > 0 ? pick : levels.max() ?? 0
+        }
+        lastRun = raw["lastRun"] as? String ?? (raw["lastRun"] as? [String: Any])?["text"] as? String ?? ""
         let off = raw["autoOff"] as? [String: Any] ?? [:]
         autoOffCause = off["cause"] as? String ?? ""
         autoOffAt = (off["at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
@@ -49,11 +52,8 @@ enum SGradeStateText {
         case "on":
             if cat == "fps", s.target > 0 { return (f("sgrade.state.on.fps", "\(s.target)"), nil) }
             if cat == "widescreen" {
-                switch s.source {
-                case "own": return (t("sgrade.state.on.own"), nil)
-                case "ported": return (f("sgrade.state.on.ported", s.activeName, s.portedFrom.isEmpty ? (s.available.first ?? "") : s.portedFrom), nil)
-                default: return s.activeName.isEmpty ? nil : (f("sgrade.state.on.patch", s.activeName, s.ratio), nil)
-                }
+                if s.source == "own" || s.active == "own" { return (t("sgrade.state.on.own"), nil) }
+                return (t(s.active == "fixed" ? "sgrade.state.on.fixed" : "sgrade.state.on.adaptive"), nil)
             }
             return nil
         case "ineffective": return s.lastRun.isEmpty ? nil : (backend(s.lastRun), nil)   // 作业层原句本身就写「没生效：… / 开着，但上一局…」，不再套一层
