@@ -77,11 +77,21 @@ int main(void) {
             uint64_t left = g_up_keep_bytes; up_flush(); API(nvnQueueFinish)(&queue);
             checks++; if (g_up_cap_flushes - cf0 != 1 || early != 8) { fails++; printf("FAIL 挂 12 块 32 MB 暂存：提前提交 %llu 次、首次在第 %d 次 up_begin（期望 1 次、第 9 次即下标 8）\n", (unsigned long long)(g_up_cap_flushes - cf0), early + 1); }
             checks++; if (left != 4ull * K_BLK) { fails++; printf("FAIL 挂完 12 块批内留 %llu MB，期望 128 MB（256 MB 提交后又挂 4 块）\n", (unsigned long long)(left >> 20)); }
-            // 暂存只被本批上传命令用：上传做完就移出驻留集（驻留集是它们唯一的长期持有者），不等下一次提交的栅栏；一次提交里提前提交的批次靠这个才真回收
-            //   （旧实现走 defer_obj_release 等提交栅栏，回放整帧一次提交，攒到 37 GB）。期望：上传做完 2 秒内 12 块都不在驻留集里
-            int inres = K_N; for (int t = 0; t < 200 && inres; t++) { usleep(10000); inres = 0; pthread_mutex_lock(&g_res_mu); for (int i = 0; i < K_N; i++) { id<MTLBuffer> x = wk[i]; inres += x && [g_res_objects containsObject:x]; } pthread_mutex_unlock(&g_res_mu); }
-            checks++; if (inres) { fails++; printf("FAIL 上传做完 2 秒后 12 块暂存还有 %d 块在驻留集里（期望 0：随上传完成移出，不等提交栅栏）\n", inres); }
-            else puts("✓ 12 块暂存随上传完成移出驻留集（不等提交栅栏）");
+            // 暂存只被本批上传命令用：上传做完就离开这批，不等提交栅栏（旧实现走 defer_obj_release 等提交栅栏，回放整帧一次提交，攒到 37 GB）。
+            //   整块（UP_BLOCK_SIZE）回到暂存池（DM_NVN_UP_POOL_MB，缺省 512 MB）留给下一批，池里的块仍在驻留集；池放不下的移出驻留集。池空闲 5 秒后由 up_pool_trim 整池移出。
+            //   期望：上传做完 2 秒内，不在池里的块都不在驻留集里；12 块 32 MB 共 384 MB 全进池；把池的上次取用时间拨回 0（当作空闲已过 5 秒）后 up_pool_trim，12 块都不在驻留集里
+            int inres = K_N, pooled = 0;
+            for (int t = 0; t < 200 && inres; t++) { usleep(10000); int inpool[K_N]; pooled = 0;
+                os_unfair_lock_lock(&g_up_pool_lk); for (int i = 0; i < K_N; i++) { id<MTLBuffer> x = wk[i]; inpool[i] = x && [g_up_pool containsObject:x]; pooled += inpool[i]; } os_unfair_lock_unlock(&g_up_pool_lk);
+                inres = 0; pthread_mutex_lock(&g_res_mu); for (int i = 0; i < K_N; i++) { id<MTLBuffer> x = wk[i]; inres += x && !inpool[i] && [g_res_objects containsObject:x]; } pthread_mutex_unlock(&g_res_mu); }
+            checks++; if (inres) { fails++; printf("FAIL 上传做完 2 秒后不在暂存池的块还有 %d 块在驻留集里（期望 0：随上传完成移出，不等提交栅栏）\n", inres); }
+            else puts("✓ 暂存随上传完成离开这批：不进池的移出驻留集（不等提交栅栏）");
+            checks++; if (pooled != K_N) { fails++; printf("FAIL 12 块 32 MB 暂存进池 %d 块（期望 12：384 MB 不到池上限 512 MB）\n", pooled); }
+            else puts("✓ 12 块整块暂存回到暂存池，留给下一批");
+            os_unfair_lock_lock(&g_up_pool_lk); g_up_pool_used_ns = 0; os_unfair_lock_unlock(&g_up_pool_lk); up_pool_trim();
+            int left_res = 0; pthread_mutex_lock(&g_res_mu); for (int i = 0; i < K_N; i++) { id<MTLBuffer> x = wk[i]; left_res += x && [g_res_objects containsObject:x]; } pthread_mutex_unlock(&g_res_mu);
+            checks++; if (left_res || g_up_pool_bytes) { fails++; printf("FAIL 池空闲 5 秒后 up_pool_trim：还有 %d 块在驻留集、池里 %llu MB（期望 0、0）\n", left_res, (unsigned long long)(g_up_pool_bytes >> 20)); }
+            else puts("✓ 池空闲 5 秒后 up_pool_trim 整池移出驻留集");
             checks++; if (g_up_keep_bytes != 0) { fails++; printf("FAIL 提交后批内暂存计数 %llu，期望 0\n", (unsigned long long)g_up_keep_bytes); }
             if (g_up_cap_flushes - cf0 == 1 && early == 8 && left == 4ull * K_BLK) puts("✓ 批内暂存封顶：12 块 32 MB 在第 9 次 up_begin 提前提交 1 次，批内留 128 MB，提交后清零");
         }
