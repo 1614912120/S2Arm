@@ -163,8 +163,8 @@ static NvPresentFI *fi_get(CAMetalLayer *layer, NSUInteger cw, NSUInteger ch) {
     if (!f) {
         f = [NvPresentFI new]; f->w = iw; f->h = ih;
         MTLFXFrameInterpolatorDescriptor *d = [dc new];
-        // 实验 DM_PRESENT_FI_MVQ=1：运动矢量 / 深度按 1/4 尺寸交给 MetalFX（颜色与输出仍是游戏画面尺寸；我们的块匹配本来就在 1/4 亮度图上做，原先再铺回全尺寸）
-        static int mvq = -1; if (mvq < 0) { const char *e = getenv("DM_PRESENT_FI_MVQ"); mvq = e && !strcmp(e, "1"); if (mvq) MLOG("present frame interpolation: motion / depth at quarter size (DM_PRESENT_FI_MVQ=1)"); }
+        // 运动矢量 / 深度缺省按 1/4 尺寸交给 MetalFX（DM_PRESENT_FI_MVQ=0 回全尺寸）。11-14 iPhone 实机同包同局对照：超时跳过 10.5% → 1.8%、作业中位 9.64 → 8.95 ms（颜色与输出仍是游戏画面尺寸；我们的块匹配本来就在 1/4 亮度图上做，原先再铺回全尺寸）
+        static int mvq = -1; if (mvq < 0) { const char *e = getenv("DM_PRESENT_FI_MVQ"); mvq = !(e && !strcmp(e, "0")); if (mvq) MLOG("present frame interpolation: motion / depth at quarter size (DM_PRESENT_FI_MVQ=0 for full size)"); }
         int mw = mvq && fi_mv_mode() ? iw / 4 : iw, mh = mvq && fi_mv_mode() ? ih / 4 : ih;
         d.outputWidth = (NSUInteger)iw; d.outputHeight = (NSUInteger)ih; d.inputWidth = (NSUInteger)mw; d.inputHeight = (NSUInteger)mh;
         d.colorTextureFormat = d.outputTextureFormat = MTLPixelFormatBGRA8Unorm; d.depthTextureFormat = MTLPixelFormatR32Float; d.motionTextureFormat = MTLPixelFormatRG16Float;
