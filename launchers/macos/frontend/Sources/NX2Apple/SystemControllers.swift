@@ -33,6 +33,14 @@ final class SystemControllers: ObservableObject {
             })
         }
         refresh()
+        // 启动后稍等再对两次：GameController 的枚举快照在启动早期（窗口还没活跃）可能不全，
+        //   蓝牙手柄的输入描述（physicalInputProfile）也是连上后才就绪——就绪前会被下面的过滤丢掉，之后没有新事件就再也对不上（#934）
+        for delay in [0.5, 2.5] {
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                await MainActor.run { self?.refresh() }
+            }
+        }
     }
 
     /// 单测：直接给一组手柄（不碰 GameController）
@@ -59,7 +67,7 @@ final class SystemControllers: ObservableObject {
         var seen = Set<ObjectIdentifier>()
         return current.compactMap { c in
             guard seen.insert(ObjectIdentifier(c)).inserted else { return nil }
-            guard c.extendedGamepad != nil || !c.physicalInputProfile.buttons.isEmpty else { return nil }
+            guard c.extendedGamepad != nil || !c.physicalInputProfile.buttons.isEmpty || c === connected else { return nil }
             let category = c.productCategory
             guard let family = Self.family(category: category, vendor: c.vendorName,
                                            xbox: c.extendedGamepad is GCXboxGamepad,

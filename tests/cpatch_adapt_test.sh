@@ -233,6 +233,68 @@ t15 = [(c[4], c[2]) for c in (l.split('\t') for l in open(r15 + '/cpatch.tsv', e
 p15 = [tuple(l.split('\t# ')[0].split('\t')) for l in open(r15 + '/cpatch_rows.tsv').read().splitlines() if l.startswith('p\t')]
 ck(f'⑮ 金手指同处几档（含别的文件）并存、后写的在前（实得 表 {t15}、行 {p15}）',
    t15 == [('x2', '0'), ('x3', '1'), ('x1', '-'), ('x5', '2')] and p15 == [('p', 'main', '100', '52800009', '528000a9', '2'), ('p', 'main', '100', '52800009', '52800069', '1'), ('p', 'main', '100', '52800009', '52800049', '0')])
+# ⑯ movz / movk 不相邻（11-14：一款游戏的 21:9 补丁 movz w8 @+0x130、movk w8 @+0x138，中间隔一条原指令，原先认不出、移植不了）
+#    u = 21:9 的单精度位；期望（手算）：识别出一处 movpair @0x130、0x138 也算用掉（剩余 0 字）；间距 20 字节（超出上限 16）不认；
+#    中间 @0x134 又给 w8 赋值（movz w8,#1）不认；移植到新版：新版 0x200 movz w8,#lo(16/9) / 0x204 nop / 0x208 movk w8,#hi(16/9) →
+#    写 0x200 = movz w8,#lo(u)、0x208 = movk w8,#hi(u)（新版间距按新版那一对）
+u16 = struct.unpack('<I', struct.pack('<f', 21 / 9))[0]; r16 = struct.unpack('<I', struct.pack('<f', 16 / 9))[0]
+mz = lambda v, rd=8: (0x52800000 | ((v & 0xFFFF) << 5) | rd).to_bytes(4, 'little')
+mk = lambda v, rd=8: (0x72A00000 | ((v >> 16) << 5) | rd).to_bytes(4, 'little')
+par16, _, left16 = cpatch.aspect_classify([(0x130, mz(u16)), (0x138, mk(u16))], 21 / 9)
+far16 = cpatch.aspect_classify([(0x130, mz(u16)), (0x144, mk(u16))], 21 / 9)[0]
+mid16 = cpatch.aspect_classify([(0x130, mz(u16)), (0x134, mz(1)), (0x138, mk(u16))], 21 / 9)[0]
+im16 = bytearray(0x1000); im16[0x200:0x204] = mz(r16); im16[0x204:0x208] = (0xD503201F).to_bytes(4, 'little'); im16[0x208:0x20C] = mk(r16)
+got16, why16 = cpatch.port_writes([(0x130, mz(u16)), (0x138, mk(u16))], 21 / 9, bytes(im16), 0x800)
+ck(f'⑯ movz / movk 隔几条也认、也移植（实得 识别 {[x[:2] for x in par16]} 剩 {left16}；隔 20 {far16}；中间重赋值 {mid16}；移植 {got16} {why16}）',
+   [x[:2] for x in par16] == [(0x130, 'movpair')] and left16 == 0 and far16 == [] and mid16 == []
+   and sorted(got16 or []) == [(0x200, mz(u16)), (0x208, mk(u16))])
+# ⑰ 先高后低、X 寄存器的 movz / movk（11-14 补丁库体检：12 份先写高半 movz w25,#hi,lsl16 + movk w25,#lo；5 份 mov x1,#lo + movk x1,#hi,lsl16）
+#    期望（手算）：两种都认成 movpair、剩余 0 字；W 与 X 混用（movz w8 + movk x8）不认；移植：新版 0x300 movz w25,#hi(16/9),lsl16 / 0x304 movk w25,#lo(16/9) →
+#    写 0x300 = movz w25,#hi(u),lsl16、0x304 = movk w25,#lo(u)
+mzh = lambda v, rd=25: (0x52A00000 | ((v >> 16) << 5) | rd).to_bytes(4, 'little')
+mkl = lambda v, rd=25: (0x72800000 | ((v & 0xFFFF) << 5) | rd).to_bytes(4, 'little')
+xz = lambda v, rd=1: (0xD2800000 | ((v & 0xFFFF) << 5) | rd).to_bytes(4, 'little')
+xk = lambda v, rd=1: (0xF2A00000 | ((v >> 16) << 5) | rd).to_bytes(4, 'little')
+hl17, _, lhl17 = cpatch.aspect_classify([(0x280, mzh(u16)), (0x288, mkl(u16))], 21 / 9)
+x17, _, lx17 = cpatch.aspect_classify([(0x2A0, xz(u16)), (0x2A4, xk(u16))], 21 / 9)
+mix17 = cpatch.aspect_classify([(0x2C0, mz(u16, 1)), (0x2C4, xk(u16))], 21 / 9)[0]
+im17 = bytearray(0x1000); im17[0x300:0x304] = mzh(r16); im17[0x304:0x308] = mkl(r16)
+got17, why17 = cpatch.port_writes([(0x280, mzh(u16)), (0x284, mkl(u16))], 21 / 9, bytes(im17), 0x800)
+ck(f'⑰ 先高后低 / X 寄存器的 movz / movk 也认、也移植（实得 先高后低 {[x[:2] for x in hl17]} 剩 {lhl17}；X {[x[:2] for x in x17]} 剩 {lx17}；W X 混用 {mix17}；移植 {got17} {why17}）',
+   [x[:2] for x in hl17] == [(0x280, 'movpair')] and lhl17 == 0 and [x[:2] for x in x17] == [(0x2A0, 'movpair')] and lx17 == 0 and mix17 == []
+   and sorted(got17 or []) == [(0x300, mzh(u16)), (0x304, mkl(u16))])
+# ⑱ / ⑲ 只改高半的 movk（11-14 补丁库体检：一类补丁只写 movk w9,#hi,lsl16，低半留程序里 16:9 的 movz w9,#0x8e39；32:9 = 0x4063 + 0x8e39 正好 3.5556）
+#    期望（手算）：识别 —— 只写 movk #0x4015 认成 movk（21:9）；补丁连低半也写了（movz #lo(43:18) + movk #0x4018 = 2.3889）按 A = 2.4 不认（不按高半松容差凑）；
+#    移植 —— 新版 0x400 movk w9,#0x3fe3,lsl16 → 写 0x400 = 补丁那条；合成 —— 同 ⑤ 的程序（0x110 movz w10,#0x8e39 / 0x114 movk w10,#0x3fe3），
+#    四份只改 0x114 的高半 → 与 ⑤ 同表同行：0x110 改读槽 1016（b95fc20a）、0x114 换 nop
+hi = lambda A: struct.unpack('<I', struct.pack('<f', A))[0] >> 16
+mkh = lambda v, rd=9: (0x72A00000 | (v << 5) | rd).to_bytes(4, 'little')
+p18 = cpatch.aspect_classify([(0x500, mkh(0x4015))], 21 / 9)[0]
+u18 = struct.unpack('<I', struct.pack('<f', 43 / 18))[0]
+q18 = cpatch.aspect_classify([(0x500, mz(u18, 9)), (0x504, mkh(u18 >> 16))], 2.4)[0]
+im18 = bytearray(0x1000); im18[0x3FC:0x400] = mz(r16, 9); im18[0x400:0x404] = mkh(0x3FE3)
+got18, why18 = cpatch.port_writes([(0x500, mkh(0x4015))], 21 / 9, bytes(im18), 0x800)
+r18 = T + '/root18'; shutil.copytree(r5, r18, ignore=shutil.ignore_patterns('cpatch*'))
+idx18 = T + '/e18/widescreen'; os.makedirs(idx18); rows18 = ['game\ttitle_id\tpath\ttype\tsource\tlicense\tin_pack\tsha256\taspect\torigin']
+for i, (w, hh) in enumerate([(21, 9), (32, 9), (43, 18), (16, 10)]):
+    body = f'@nsobid-{BID}\n@flag offset_shift 0x100\n// {w}:{hh} Aspect Ratio\n@enabled\n00000114 {mkh(hi(w / hh), 10).hex().upper()}\n@stop\n'
+    os.makedirs(f'{idx18}/f/{i}'); open(f'{idx18}/f/{i}/1.0.4.pchtxt', 'w').write(body)
+    rows18.append(f"\t0100A3501946E000\tf/{i}/1.0.4.pchtxt\tpchtxt\to/r\tMIT\tyes\t\t\to/r/Aspect Ratio/{w}'{hh}/exefs/1.0.4.pchtxt")
+open(idx18 + '/INDEX.tsv', 'w').write('\n'.join(rows18) + '\n'); cpatch.plan(r18, '', [idx18])
+got18t = sorted((c[0], c[2], c[7]) for c in (l.split('\t') for l in open(r18 + '/cpatch.tsv', encoding='utf-8').read().splitlines()[1:]))
+rows18r = {tuple(l.split('\t# ')[0].split('\t')) for l in open(r18 + '/cpatch_rows.tsv').read().splitlines()}
+ck(f'⑱ 只改高半的 movk：认、不误认整对、移植、合成（实得 识别 {p18}；整对 {q18}；移植 {got18} {why18}；表 {got18t}；行多 {sorted(rows18r - want5)} 缺 {sorted(want5 - rows18r)}）',
+   p18 == [(0x500, 'movk', 'a')] and q18 == [] and got18 == [(0x400, mkh(0x4015))]
+   and got18t == [(f'wsauto:{fid5}:n', '1', 'k1016::@a4'), (f'wsauto:{fid5}:w', '0', 'k1016::@a4')] and rows18r == want5)
+r19 = T + '/root19'; shutil.copytree(r5, r19, ignore=shutil.ignore_patterns('cpatch*'))
+idx19 = T + '/e19/widescreen'; os.makedirs(idx19 + '/f/0')
+open(idx19 + '/f/0/1.0.4.pchtxt', 'w').write(f'@nsobid-{BID}\n@flag offset_shift 0x100\n// 32:9 Aspect Ratio\n@enabled\n00000114 {mkh(0x4063, 10).hex().upper()}\n@stop\n')
+open(idx19 + '/INDEX.tsv', 'w').write('game\ttitle_id\tpath\ttype\tsource\tlicense\tin_pack\tsha256\taspect\torigin\n\t0100A3501946E000\tf/0/1.0.4.pchtxt\tpchtxt\to/r\tMIT\tyes\t\t32:9\to/r/x/[32:9]/exefs/1.0.4.pchtxt\n')
+cpatch.plan(r19, '', [idx19])
+t19 = sorted((c[2], c[7]) for c in (l.split('\t') for l in open(r19 + '/cpatch.tsv', encoding='utf-8').read().splitlines()[1:]))
+rows19 = {tuple(l.split('\t# ')[0].split('\t')) for l in open(r19 + '/cpatch_rows.tsv').read().splitlines()}
+ck(f'⑲ 单份只改高半（32:9 只写 movk #0x4063）单份参数化：与 ⑤ 同行（实得 表 {t19}；行多 {sorted(rows19 - want5)} 缺 {sorted(want5 - rows19)}）',
+   t19 == [('0', 'k1016::@a4'), ('1', 'k1016::@a4')] and rows19 == want5)
 sys.exit(bad)
 EOF
 rc=$?; [ $rc = 0 ] && echo "✅ cpatch_adapt_test 全过" || { echo "🔴 cpatch_adapt_test 有不通项"; exit 1; }

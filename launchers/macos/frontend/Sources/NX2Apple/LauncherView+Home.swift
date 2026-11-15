@@ -14,7 +14,7 @@ extension LauncherView {
         VStack(alignment: .leading, spacing: 0) {
             staleBanner
             renewBanner
-            homeControls.padding(.horizontal, 48).padding(.top, size.height < 740 ? 12 : 22).padding(.bottom, 18)
+            homeControls(size: size).padding(.horizontal, 48).padding(.top, size.height < 740 ? 12 : 22).padding(.bottom, 18)
             if homeGames.isEmpty {
                 homeEmptyPreview
             } else {
@@ -84,9 +84,9 @@ extension LauncherView {
         .accessibilityElement(children: .contain).accessibilityIdentifier("home.preview")
     }
 
-    private var homeControls: some View {
+    private func homeControls(size: CGSize) -> some View {
         HStack(spacing: 10) {
-            homeGroups
+            homeGroups(compact: size.width < 1000)
             Spacer(minLength: 16)
             Text("\(homeGames.count) / \(model.games.count)").font(.manrope(11.5)).monospacedDigit()
                 .foregroundStyle(.white.opacity(0.6)).fixedSize().accessibilityIdentifier("home.count").padding(.trailing, 6)
@@ -95,13 +95,10 @@ extension LauncherView {
             }.controllerButtonStyle(ConsoleIconButtonStyle()).disabled(model.busy || model.games.isEmpty)
                 .controllerID("library.sgradeUpgrade")
                 .help(txt("sgrade.upgrade.button")).accessibilityLabel(txt("sgrade.upgrade.button"))
-            Button { showHomeSearch.toggle() } label: {
-                Image(systemName: "magnifyingglass").overlay(alignment: .topTrailing) {
-                    if !home.search.isEmpty { Circle().fill(LauncherPalette.cream).frame(width: 5, height: 5).offset(x: 5, y: -3) }
-                }
-            }.controllerButtonStyle(ConsoleIconButtonStyle()).controllerID("home.search")
-                .help(loc.t("home.search")).accessibilityLabel(loc.t("home.search"))
-                .popover(isPresented: $showHomeSearch, arrowEdge: .bottom) { homeSearchField }
+            HomeSearchControl(isExpanded: $showHomeSearch, text: $home.search,
+                              width: size.width < 1000 ? LauncherControl.width : LauncherTheme.Metrics.navigationWidth) {
+                navigation.editText(value: home.search, label: loc.t("home.search")) { home.search = $0 }
+            }
             Button { home.showFilters.toggle() } label: { Image(systemName: "line.3.horizontal.decrease") }
                 .controllerButtonStyle(ConsoleIconButtonStyle()).controllerID("home.filter")
                 .help(loc.t("home.filter")).accessibilityLabel(loc.t("home.filter"))
@@ -110,24 +107,6 @@ extension LauncherView {
                 .controllerButtonStyle(ConsoleIconButtonStyle()).disabled(model.loading).controllerID("home.refresh")
                 .help(loc.t("s2arm.library.refresh")).accessibilityLabel(loc.t("s2arm.library.refresh"))
         }
-    }
-
-    private var homeSearchField: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField(loc.t("home.search"), text: $home.search).textFieldStyle(.plain).font(.manrope(14))
-                .focused($homeSearchFocused)
-                .onAppear { homeSearchFocused = true }
-                .controllerControl(id: "home.search.field", activate: {
-                    navigation.editText(value: home.search, label: loc.t("home.search")) { home.search = $0 }
-                })
-                .accessibilityIdentifier("home.search.field")
-            if !home.search.isEmpty {
-                Button { home.search = "" } label: { Image(systemName: "xmark.circle.fill") }
-                    .controllerButtonStyle(.plain).help(loc.t("home.clearSearch"))
-                    .accessibilityLabel(loc.t("home.clearSearch")).controllerID("home.search.clear")
-            }
-        }.padding(18).frame(width: 340).preferredColorScheme(.dark)
     }
 
     private func homeCoverStrip(size: CGSize) -> some View {
@@ -164,17 +143,26 @@ extension LauncherView {
         .id(homeGames.map(\.id))
     }
 
-    private var homeGroups: some View {
-        HStack(spacing: 24) {
+    private func homeGroups(compact: Bool) -> some View {
+        HStack(spacing: compact ? 8 : 24) {
             ForEach(HomeGroup.allCases, id: \.self) { group in
                 Button { home.group = group } label: {
-                    Label(loc.t("home.group." + group.rawValue), systemImage: group == .all ? "square.grid.2x2" : group == .recent ? "clock.arrow.circlepath" : "heart")
+                    Group {
+                        if compact {
+                            Image(systemName: group == .all ? "square.grid.2x2" : group == .recent ? "clock.arrow.circlepath" : "heart")
+                                .frame(width: 40, height: 40)
+                        } else {
+                            Label(loc.t("home.group." + group.rawValue), systemImage: group == .all ? "square.grid.2x2" : group == .recent ? "clock.arrow.circlepath" : "heart")
+                                .lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                        }
+                    }
                         .font(.manrope(14, home.group == group ? .bold : .medium))
                         .foregroundStyle(.white.opacity(home.group == group ? 1 : 0.6))
-                        .padding(.vertical, 10)
+                        .padding(.vertical, compact ? 0 : 10)
                         .overlay(alignment: .bottom) { Capsule().fill(.white.opacity(home.group == group ? 0.9 : 0)).frame(height: 2) }
                         .contentShape(Rectangle())
                 }.controllerButtonStyle(.plain).controllerID("home.group." + group.rawValue)
+                    .help(loc.t("home.group." + group.rawValue)).accessibilityLabel(loc.t("home.group." + group.rawValue))
                     .accessibilityAddTraits(home.group == group ? .isSelected : [])
             }
         }
@@ -294,10 +282,12 @@ extension LauncherView {
             case .filter: home.showFilters = true; return true
             case .details: if let game = homeSelected { moreFor = game.id }; return true
             case .search:
+                showHomeSearch = true
                 navigation.focus("home.search")
                 navigation.editText(value: home.search, label: loc.t("home.search")) { home.search = $0 }; return true
             case .back:
-                if !home.search.isEmpty { home.search = "" }
+                if showHomeSearch { showHomeSearch = false; navigation.focus("home.search") }
+                else if !home.search.isEmpty { home.search = "" }
                 else if let game = homeSelected { navigation.focus("card." + game.id) }
                 return true
             default: break

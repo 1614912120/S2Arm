@@ -24,7 +24,7 @@
 | 本目录 | 上游 `frontend/` | 改动 |
 |---|---|---|
 | `Sources/NX2Apple/LauncherView.swift` | 同名 | 只保留库页；状态换成 `S2ArmLauncherModel`（不用 `LauncherStores`）；作业进行中（一局 / 准备 / 装机 / 导入）换成 `JobSessionView`，出包换成 `ExportSessionView`；点某款的「出包」库页换成出包页 `ExportView`；顶栏加「添加游戏」（选文件 / 拖进窗口 → import 作业）与「环境检查」；加装机页、释放空间两个 sheet；去掉 Builds / Settings 页、启动选项 sheet、引擎同步横幅、封面编辑、管理菜单、主机模式与手柄驱动；顶栏显示品牌名（一行大号，与窗口三个按钮同一中线：空的 unified 工具栏把标题栏撑到顶栏高、系统把按钮居中）；顶栏加 Switch 2 Pro 手柄按钮与弹窗（`Switch2ProConnectionPopover`）；顶栏最前加本地玩家按钮与弹窗（`PlayerToolbarButton`，S2Arm 自有 `LocalPlayersView.swift`，#623） |
-| `Sources/NX2Apple/LauncherView+Library.swift` | 同名 | 游戏换成适配层 `GameSummary`（catalog 作业），封面用游戏库 `cover.jpg`（`CoverFill` / `CoverCache`，不取上游 Artwork 体系）；主按钮是「出包」（打开出包页），Mac 版已做好的款旁边加次按钮「开始游戏」（launch 作业），再是「释放空间」圆钮；没有启动选项圆钮（11-07 维护者 删游戏选项）；卡片与主按钮带自己的辅助功能标签（原先被读成图片）；空库页加「添加游戏」；去掉重建、iPhone 重签、管理菜单、Switch 2 徽标、筛选 |
+| `Sources/NX2Apple/LauncherView+Library.swift` | 同名 | 游戏换成适配层 `GameSummary`（catalog 作业），封面用游戏库 `cover.jpg`（`CoverFill` / `CoverCache`，不取上游 Artwork 体系）；主按钮是「出包」（打开出包页），Mac 版已做好的款旁边加次按钮「开始游戏」（launch 作业），再是「释放空间」圆钮；「开始游戏」旁有启动设置圆钮（齿轮，11-09；游戏语言等逐款选项，11-14 维护者确认玩家可选）；卡片与主按钮带自己的辅助功能标签（原先被读成图片）；空库页加「添加游戏」；去掉重建、iPhone 重签、管理菜单、Switch 2 徽标、筛选 |
 | `Sources/NXLauncher/LauncherStyles.swift`、`LauncherDropdown.swift`、`LauncherCard.swift` | 同名 | 按钮/开关登记实际动作与边界；滑块支持键盘、手柄和标准辅助功能；下拉菜单隔离焦点；统一消费 `LauncherTheme.swift` 的尺寸、排版与材质 |
 | `l10n/en.json`、`l10n/zh.json` | 同名 | 我方键 `s2arm.*`、`home.*`；保留上游键，精简说明并去掉说明末尾句号 |
 | `Package.swift` | 同名 | 我方重写：只含取用的文件；上游 app target `NX2Apple` 改成库 target `NX2AppleUI`（路径仍是 `Sources/NX2Apple`），依赖 `S2ArmAppleAdapter`；下限同上游 macOS 13、Swift 5 语言模式 |
@@ -47,6 +47,10 @@ S2Arm 新增（不是上游文件）：`Sources/NX2Apple/S2ArmLauncherModel.swif
 ## 2026-11-14：统一设置主题
 
 设置与工具窗口的主题、组件规范和验证入口见 [DESIGN.md](DESIGN.md)。`Sources/NXLauncher/LauncherTheme.swift` 是 S2Arm 新增文件，同步上游时保留。
+
+## 2026-11-15：首页内联搜索与签名右侧对齐
+
+S2Arm 新增 `Sources/NX2Apple/HomeSearchControl.swift`，搜索胶囊在首页控制栏内动画展开和收起，保留查询并支持清除、键盘焦点和减少动态效果设置，不使用搜索弹出窗口。`LauncherView+Home.swift` 在窄窗口中使用有完整辅助功能名称的图标分组，为搜索保留空间。`InstallModeViews.swift` 的签名子区只保留左侧缩进，右边缘与父选项一致。两项均由 `Tests/NXLauncherTests/SettingsLayoutTests.swift` 的中英文真实窗口回归覆盖，同步上游时保留。
 
 ## 剔除清单
 

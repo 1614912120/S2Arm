@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "contract": "s2a.game-settings.v1",
-  "revision": 6,
+  "revision": 7,
   "languages": ["zh-Hans", "en"],
   "coverage": "对应主线线 11-09 清单 18 行：fps60 / widescreen（满屏；App 级旧开关并入按款，11-13 并入原 widenForce「宽屏强制启用」）/ docked / rumble / rumbleLevel / touchHaptics / ns2ProAdapter / motion（S2APhoneGyro）/ phoneHaptics / hud（S2ADevHUD）/ metalHud / touchOpacity / slideSwitch / input（按键布局、逐键大小透明度配色、固定摇杆灵敏度死区都在虚拟手柄编辑页，iOS 独有，不逐项进表）/ holdLock / patches；另加 Mac 独有 enhance。",
   "note": "游戏设置项的唯一定义：Mac 启动设置页、iOS 游戏内齿轮菜单、iOS 游戏库长按设置都按这张表画，不各写文案和缺省。scope=game 的项存这款游戏文件夹的 launch.json（Mac：游戏文件夹；iOS：Documents/games/<游戏号>/launch.json），scope=app 的全游戏共用、留各端 App 偏好（Mac：数据目录 game-settings.json，同 launch.json 格式）。launch.json 只存玩家明确选过的项，没选的按 default；default 为对象时按平台取，为 \"caps\" 时按这款的能力清单 s2a_caps.tsv。apply：live = 改完立刻生效，restart = 下一局生效。ios_key 是 iOS 旧 UserDefaults 键，只给一次性迁移用，迁完删旧键。",
@@ -94,6 +94,10 @@
     {"id": "pauseUnfocused", "type": "bool", "default": true, "scope": "game", "apply": "restart", "platforms": ["mac"], "group": "other",
      "label": {"zh-Hans": "切到别的窗口时暂停", "en": "Pause when switching away"},
      "note": {"zh-Hans": "游戏支持时，切换窗口会暂停游戏，关闭后可在后台继续运行", "en": "Pauses supported games when you switch windows; turn off to keep playing in the background"}},
+    {"id": "audioLatency", "type": "choice", "default": "standard", "scope": "game", "apply": "restart", "platforms": ["mac"], "group": "other",
+     "options": [{"value": "standard", "frames": 0, "label": {"zh-Hans": "标准", "en": "Standard"}}, {"value": "low", "frames": 128, "label": {"zh-Hans": "低", "en": "Low"}}, {"value": "lowest", "frames": 32, "label": {"zh-Hans": "最低", "en": "Lowest"}}],
+     "label": {"zh-Hans": "声音延迟", "en": "Audio latency"},
+     "note": {"zh-Hans": "降低声音延迟可改善音画同步，但会增加 CPU 占用，出现爆音请改回标准，下次启动生效", "en": "Lower latency improves input-to-sound timing but increases CPU use; choose Standard if audio crackles, with changes applied on the next launch"}},
     {"id": "diagRun", "type": "bool", "default": false, "scope": "game", "apply": "restart", "platforms": ["mac"], "group": "other",
      "label": {"zh-Hans": "诊断局（下一局）", "en": "Diagnostic run (next session)"},
      "note": {"zh-Hans": "仅下一局启用，问题发生后停留至少 3 分钟再导出诊断，运行速度可能降低", "en": "For the next session only, stay at the issue for at least 3 minutes before exporting diagnostics; the game may run slower"}}

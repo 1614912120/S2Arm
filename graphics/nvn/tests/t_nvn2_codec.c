@@ -737,6 +737,21 @@ int main(int argc, char **argv) {
         free(buf);
     }
     ((f_spv)E(SP_DESTROY))(&spev);
+    // ---------- 11-14 进程内重启（D-VHSE）：同步点事件不能沿用上一局挂的读端句柄 ----------
+    //   期望：换局（会话代号 +1）后再建同步点事件，挂到游戏 SystemEventType 上的是新事件的新句柄；上一局那个事件宿主那份引用放掉（refs −1）。
+    //   反证：去掉 sp_create 里的 sp_slots_for_session_locked，换局后拿到的还是上一局的句柄，本项红
+    {
+        uint32_t a = 0; uint8_t ho[0x40];
+        CHECK(((f_spc)E(SP_CREATE))(&a) == 0); ((f_sph)E(SP_HOLDER))(ho, &a);
+        uint32_t h1 = ((fake_sev *)g_sp_sev)->handle; int e1 = (int)h1 - 0x100, r1 = g_ev[e1].refs;
+        ((f_spv)E(SP_DESTROY))(&a);
+        atomic_fetch_add(&g_gen, 1);
+        uint32_t b2 = 0; CHECK(((f_spc)E(SP_CREATE))(&b2) == 0); ((f_sph)E(SP_HOLDER))(ho, &b2);
+        uint32_t h2 = ((fake_sev *)g_sp_sev)->handle;
+        if (h2 == h1 || g_ev[e1].refs != r1 - 1) fprintf(stderr, "换局后同步点事件：句柄 %#x → %#x，上一局事件引用 %d → %d\n", h1, h2, r1, g_ev[e1].refs);
+        CHECK(h2 != h1 && g_ev[e1].refs == r1 - 1);
+        ((f_spv)E(SP_DESTROY))(&b2);
+    }
     printf("✓ t_nvn2_codec：%u 项检查全过\n", checks);
     return 0;
 }

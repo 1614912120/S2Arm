@@ -11,6 +11,72 @@ import S2ArmAppleAdapter
 
 /// Real SwiftUI pages with original, asset-free job responses; never reads the player's library.
 @MainActor final class SettingsLayoutTests: XCTestCase {
+    func testHomeSearchExpandsInsideTheHomeWindowAndKeepsItsQuery() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.runner.catalogGameCount = 21
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let navigation = fixture.model.gamepad
+        navigation.source.controllers = { [] }
+        for language in [Lang.zh, .en] {
+            for width: CGFloat in [800, 1120, 1440] {
+                fixture.model.home.search = ""
+                let page = AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture").frame(width: width, height: 630))
+                let (host, window) = try await render(page, fixture: fixture, language: language)
+                navigation.attach(window)
+                defer { navigation.detach(); window.close() }
+                let initialWindows = Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber))
+                navigation.focus("home.search"); navigation.handle(.confirm)
+                try await Task.sleep(for: .milliseconds(350))
+                let field = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.search.field" }, "搜索框应直接在首页展开")
+                XCTAssertEqual(Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber)), initialWindows, "展开搜索不能创建 popup")
+                XCTAssertTrue(window.convertToScreen(host.bounds).contains(field.frame))
+                for id in ["home.search", "home.filter", "home.refresh", "library.sgradeUpgrade", "home.group.all", "home.group.recent", "home.group.favorites"] {
+                    let control = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == id })
+                    XCTAssertTrue(window.convertToScreen(host.bounds).contains(control.frame), "\(language)/\(width): 展开后控件必须留在窗口内")
+                    XCTAssertLessThanOrEqual(control.frame.height, 44, "\(language)/\(width): 首页控件不能被换行撑高")
+                }
+                fixture.model.home.search = "Original"
+                try await Task.sleep(for: .milliseconds(80))
+                try snapshot(host, "home-search-expanded-\(language.code)-\(Int(width))")
+                navigation.focus("home.search"); navigation.handle(.confirm)
+                try await Task.sleep(for: .milliseconds(350))
+                XCTAssertFalse(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" })
+                XCTAssertEqual(fixture.model.home.search, "Original", "收起搜索保留筛选条件")
+                navigation.focus("home.search"); navigation.handle(.confirm)
+                try await Task.sleep(for: .milliseconds(350))
+                navigation.focus("home.search.clear"); navigation.handle(.confirm)
+                try await Task.sleep(for: .milliseconds(80))
+                XCTAssertEqual(fixture.model.home.search, "")
+                XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" }, "清空后保持展开")
+            }
+        }
+    }
+
+    func testSigningSubcontentSharesTheParentRightEdge() async throws {
+        let previous = UserDefaults.standard.object(forKey: S2ArmLauncherModel.teamCodeKey)
+        UserDefaults.standard.set("fixture-team-id", forKey: S2ArmLauncherModel.teamCodeKey)
+        defer { UserDefaults.standard.set(previous, forKey: S2ArmLauncherModel.teamCodeKey) }
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        for language in [Lang.zh, .en] {
+            for width: CGFloat in [680, 820] {
+                let page = AnyView(ScrollView { InstallModeCard(model: fixture.model).padding(32) }.frame(width: width, height: 700)
+                    .background(LauncherWindowMaterial()).foregroundStyle(LauncherTheme.Colors.text).preferredColorScheme(.dark))
+                let (host, window) = try await render(page, fixture: fixture, language: language)
+                defer { window.close() }
+                let controls = fixture.navigation.controlTargets(in: window)
+                let parent = try XCTUnwrap(controls.first { $0.id == "env.installMode.device" })
+                let identity = try XCTUnwrap(controls.first { $0.id == "export.sign.mode" })
+                let delta = parent.frame.maxX - identity.frame.maxX
+                print("signing-right-edge language=\(language.code) width=\(width) delta=\(delta)")
+                XCTAssertEqual(delta, 0, accuracy: 0.5, "签名子布局右侧应与父选项对齐")
+                try snapshot(host, "signing-right-edge-\(language.code)-\(Int(width))")
+            }
+        }
+    }
+
     func testSheetsFitCommonDisplayBudgets() {
         let displays: [(CGSize, CGSize)] = [
             (CGSize(width: 1440, height: 900), CGSize(width: 820, height: 700)),
@@ -387,6 +453,11 @@ private final class SettingsRunner: JobProcessRunner {
     final class Handle: JobProcessHandle { func terminate() {} }
     private let lock = NSLock()
     private var captured: [[String: Any]] = []
+    private var gameCount = 1
+    var catalogGameCount: Int {
+        get { lock.withLock { gameCount } }
+        set { lock.withLock { gameCount = newValue } }
+    }
     var requests: [[String: Any]] { lock.withLock { captured } }
     func start(executable: URL, arguments: [String], environment: [String: String], onLine: @escaping (Data) -> Void,
                onStderr: @escaping (Data) -> Void, onExit: @escaping (Int32) -> Void) throws -> JobProcessHandle {
@@ -399,8 +470,10 @@ private final class SettingsRunner: JobProcessRunner {
                        "recommend": "使用推荐方案", "original": "使用原版方案"],
                 "en": ["title": "Choose a configuration", "body": "Original layout fixture for long content", "points": (1...24).map { "Original item \($0): a longer configuration description to verify scrolling and keep the actions visible" },
                        "recommend": "Use recommended", "original": "Use original"]]
-            result = ["games": [["id": "fixture", "name": "Original UI fixture", "ready": true, "missing": [],
-                "downstream": ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy]]]]
+            result = ["games": (0..<catalogGameCount).map { index in
+                ["id": index == 0 ? "fixture" : "fixture-\(index)", "name": "Original UI fixture \(index)", "ready": true, "missing": [],
+                 "downstream": ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy]] as [String: Any]
+            }]
         }
         if request["operation"] as? String == "community" {
             var options: [String: Any] = [:]

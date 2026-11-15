@@ -26,7 +26,6 @@ struct InstallModeCard: View {
                 option("device", ix(loc, "install.mode.device"), ix(loc, "install.mode.device_note"), enabled: true)
                 if model.installMode.mode == "device" {
                     identity.padding(.leading, LauncherTheme.Space.large + LauncherTheme.Metrics.icon + LauncherTheme.Space.medium)
-                        .padding(.trailing, LauncherTheme.Space.large)
                 }
                 option("export", ix(loc, "install.mode.export"), ix(loc, "install.mode.export_note"), enabled: true)
             }
@@ -55,7 +54,7 @@ struct InstallModeCard: View {
         }
         .controllerButtonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.5)
         .accessibilityAddTraits(on ? .isSelected : [])
-        .accessibilityIdentifier("env.installMode." + mode)
+        .controllerID("env.installMode." + mode)
     }
 
     /// 一键装时的签名身份：开发者证书一栏照用出包页原来那套（导入 / 换 / 删、体检）；不用证书时 Xcode 团队号与引导项目在这里

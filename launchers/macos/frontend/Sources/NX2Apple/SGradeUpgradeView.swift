@@ -99,7 +99,7 @@ struct SGradeUpgradeBody: View {
                 if yes.contains(where: \.iphone) {
                     Text(x("iphoneNote")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 10) {
-                        Button(x("install")) { upgrade("install") }.controllerButtonStyle(LauncherPrimaryButtonStyle()).controllerID("sgrade.upgrade.install")
+                        Button(x("install")) { upgrade("device") }.controllerButtonStyle(LauncherPrimaryButtonStyle()).controllerID("sgrade.upgrade.install")
                         Button(x("export")) { upgrade("export") }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("sgrade.upgrade.export")
                         Spacer()
                         Button(x("close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
