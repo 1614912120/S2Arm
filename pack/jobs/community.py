@@ -449,6 +449,19 @@ def packed_patches(c, gid):
     return out
 
 
+def verified_patches(c, gid):
+    """我方验过的（表「缺省开」= 1）：补丁编号；定画幅宽屏变体任一份验过算 widescreen:auto；帧率档任一份验过算 fps60。崩溃时排在最后关（cheats.narrow）"""
+    out = set()
+    for r in _rows(layout.image_mac(c, gid, create=False) / "cpatch.tsv"):
+        if (r.get("缺省开") or "") != "1":
+            continue
+        uid = r.get("编号") or ""
+        try: fa = float(r.get("画幅") or 0) if uid.startswith("widescreen:") else 0
+        except ValueError: fa = 0
+        out.add("fps60" if uid.startswith("fps:") else "widescreen:auto" if fa > 0 else uid)
+    return out
+
+
 def describe_game(c, game):
     a, s = available(c, game), selection(c, game["id"])
     for key in ("widescreen", "fps60"):

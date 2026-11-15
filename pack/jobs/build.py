@@ -301,6 +301,8 @@ def launch(c):
                 raise
             if trial:
                 host_update.settle(c, game["id"], host, ok=True)
+            import cheats   # 好好收局：记下这时开着的，下次崩了只关比这多开的（cheats.narrow）
+            cheats.note_good(c, game)
             back = marker.exists()
         finally:
             marker.unlink(missing_ok=True)
