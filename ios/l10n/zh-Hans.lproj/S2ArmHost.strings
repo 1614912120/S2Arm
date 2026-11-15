@@ -456,6 +456,7 @@
 "settings.fps.knownIssue.message" = "此游戏开 60 帧有已知问题，若游戏速度异常请关闭";
 "settings.fps.native" = "本款原生 60 帧";
 "settings.group.dev" = "开发";
+"settings.devEntry" = "开发与诊断";
 "settings.notStarted" = "未启动游戏";
 "settings.restart.message" = "是否立刻重启游戏？未保存的进度会丢失，请确认已在游戏内保存进度。";
 "settings.restart.messageLater" = "保存的设置将在下次启动游戏时生效。";

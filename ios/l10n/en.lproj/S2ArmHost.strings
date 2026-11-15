@@ -456,6 +456,7 @@
 "settings.fps.knownIssue.message" = "60 FPS has known issues in this game. Turn it off if the game runs at the wrong speed.";
 "settings.fps.native" = "Native 60 FPS in this game";
 "settings.group.dev" = "Development";
+"settings.devEntry" = "Developer & diagnostics";
 "settings.notStarted" = "Game not started";
 "settings.restart.message" = "Restart the game now? Unsaved progress will be lost, so make sure you’ve saved in the game.";
 "settings.restart.messageLater" = "Your saved settings take effect the next time you start the game.";

@@ -429,6 +429,7 @@
 "settings.fps.knownIssue.message" = "此遊戲開啟 60 幀有已知問題，如果遊戲速度異常請關閉";
 "settings.fps.native" = "本遊戲原生 60 幀";
 "settings.group.dev" = "開發";
+"settings.devEntry" = "開發與診斷";
 "settings.notStarted" = "遊戲未啟動";
 "settings.restart.message" = "要立即重新啟動遊戲嗎？未儲存的進度會遺失，請確認已在遊戲內儲存進度。";
 "settings.restart.messageLater" = "儲存的設定會在下次啟動遊戲時生效。";

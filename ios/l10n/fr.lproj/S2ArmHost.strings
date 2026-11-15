@@ -451,6 +451,7 @@
 "settings.fps.knownIssue.message" = "Le 60 FPS présente des problèmes connus dans ce jeu. Désactivez-le si le jeu tourne à une vitesse incorrecte.";
 "settings.fps.native" = "60 FPS natif dans ce jeu";
 "settings.group.dev" = "Développement";
+"settings.devEntry" = "Développement et diagnostic";
 "settings.notStarted" = "Jeu non démarré";
 "settings.restart.message" = "Redémarrer le jeu maintenant ? La progression non sauvegardée sera perdue ; assurez-vous d'avoir sauvegardé dans le jeu.";
 "settings.restart.messageLater" = "Les réglages sauvegardés prendront effet au prochain démarrage du jeu.";
