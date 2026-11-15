@@ -463,21 +463,27 @@ double s2a_cpatch_present_aspect(void) {
 static int ws_scan(const char *dir, int need_docked);
 int s2a_cpatch_ws_enabled(const char *dir) { return ws_scan(dir, 0); }
 int s2a_cpatch_ws_needs_docked(const char *dir) { return ws_scan(dir, 1); }
+// need_docked：开着的满屏补丁里有没有「只改主机档渲染宽高」的（定画幅变体 widescreen:、或出包没补齐掌机档的自适应一族 模式 docked）。
+//   有开着的、两档都补齐的自适应一族（模式 both）时，定画幅变体按 fx_select 让位、用不上，不算（11-15 #1152：iPhone 15 Pro 被强制主机档、渲染 2344×1080，
+//   是掌机档的 2.75 倍像素，GPU 受限只有个位数帧；自适应本身带掌机档参数，按玩家选的模式跑就行）
 static int ws_scan(const char *dir, int need_docked) {
     if (!dir || !dir[0]) return 0;
     const char *on = getenv("S2A_CPATCH_ON");
     if (on && !strcmp(on, "none")) return 0;
     char p[1100]; snprintf(p, sizeof p, "%s/cpatch.tsv", dir); FILE *f = fopen(p, "r"); if (!f) return 0;
-    static char line[1 << 16]; int hit = 0;
-    while (!hit && fgets(line, sizeof line, f)) {
+    static char line[1 << 16]; int any = 0, fixed = 0, ad_docked = 0, ad_both = 0;
+    while (fgets(line, sizeof line, f)) {
         char *c[12] = {0}; char *s = line; for (int i = 0; i < 12 && s; i++) { c[i] = s; s = strchr(s, '\t'); if (s) *s++ = 0; }
         if (!c[1]) continue;
-        if (strncmp(line, "widescreen:", 11) && strncmp(line, "wsauto:", 7)) continue;
-        if (need_docked && !strncmp(line, "wsauto:", 7) && !(c[11] && !strncmp(c[11], "docked", 6))) continue;
-        char fam[96]; snprintf(fam, sizeof fam, "%s", line); char *sd = strrchr(fam, ':'); if (!strncmp(line, "wsauto:", 7) && sd) *sd = 0;
-        hit = !on || in_list(on, line) || in_list(on, fam) || (!strncmp(line, "widescreen:", 11) && in_list(on, CP_FX_ALL));
+        int ad = !strncmp(line, "wsauto:", 7);
+        if (strncmp(line, "widescreen:", 11) && !ad) continue;
+        char fam[96]; snprintf(fam, sizeof fam, "%s", line); char *sd = strrchr(fam, ':'); if (ad && sd) *sd = 0;
+        if (!(!on || in_list(on, line) || in_list(on, fam) || (!ad && in_list(on, CP_FX_ALL)))) continue;
+        any = 1;
+        if (!ad) fixed = 1; else if (c[11] && !strncmp(c[11], "docked", 6)) ad_docked = 1; else ad_both = 1;
     }
-    fclose(f); return hit;
+    fclose(f);
+    return need_docked ? ad_docked || (fixed && !ad_both) : any;
 }
 // 60 帧开关（fps.c 起局一次、运行中每次切换调）：帧率类各位一起置开 / 关；它们的数据写入写补丁值 / 写回原值（原值在装载时核过）
 // 补丁优先（11-13 维护者：有 120 帧补丁就盖过我们的 60 帧，有 60 帧补丁就盖过我们自己的 60 帧，满屏同理）：帧率补丁开着、目标高于 60 时，

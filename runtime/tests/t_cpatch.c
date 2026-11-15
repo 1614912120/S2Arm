@@ -13,7 +13,7 @@ void s2a_cpatch_load(module_t *m, const char *dir);
 void s2a_cpatch_load_source(module_t *m, const void *bytes, size_t length);
 void s2a_cpatch_fps_follow(int on); int s2a_cpatch_fps_count(void);
 int s2a_cpatch_cheat(const char *file, const char *name, int on);
-void s2a_cpatch_aspect(double A); double s2a_cpatch_present_aspect(void); int s2a_cpatch_ws_enabled(const char *dir);
+void s2a_cpatch_aspect(double A); double s2a_cpatch_present_aspect(void); int s2a_cpatch_ws_enabled(const char *dir); int s2a_cpatch_ws_needs_docked(const char *dir);
 static int fails, g_source, g_nul;
 #define CHECK(c, ...) do { if (!(c)) { fails++; printf("✗ "); printf(__VA_ARGS__); printf("\n"); } } while (0)
 
@@ -138,8 +138,15 @@ int main(void) {
       close(pp[1]); char buf[4096] = {0}; size_t n = 0; ssize_t r; while ((r = read(pp[0], buf + n, sizeof buf - 1 - n)) > 0) n += (size_t)r; close(pp[0]); waitpid(c, NULL, 0);
       char *res = strstr(buf, "RESULT "); char got[256] = "?"; if (res) { sscanf(res + 7, "%255[^\n]", got); }
       CHECK(!strcmp(got, "400 00 2.2000"), "⑪ 自适应与定画幅变体都开着：期望 400 00 2.2000，实得 %s", got); }
+    { // ⑫ 要不要强制主机档（host_main.c 按它切 S2A_DOCKED，#1152）：手算——全开（自适应一族两档都补齐 + 定画幅变体）→ 0，变体让位、按玩家选的模式跑；
+      //   只开定画幅变体（列表 widescreen:auto）→ 1，变体只改主机档；只开自适应一族 → 0
+      unsetenv("S2A_CPATCH_ON"); int a = s2a_cpatch_ws_needs_docked(dir);
+      setenv("S2A_CPATCH_ON", "widescreen:auto", 1); int b = s2a_cpatch_ws_needs_docked(dir);
+      setenv("S2A_CPATCH_ON", "wsauto:fam", 1); int c3 = s2a_cpatch_ws_needs_docked(dir); unsetenv("S2A_CPATCH_ON");
+      char got[32]; snprintf(got, sizeof got, "%d %d %d", a, b, c3);
+      CHECK(!strcmp(got, "0 1 0"), "⑫ 强制主机档：期望 0 1 0（全开 / 只定画幅 / 只自适应），实得 %s", got); }
     unlink(p); rmdir(dir);
     if (fails) { printf("✗ t_cpatch：%d 项红\n", fails); return 1; }
-    printf("✓ t_cpatch：20 项（目录装载与 APK 内存表各 9 项 + 内存表带 NUL 报红：没选过 = 包里全开 / 只开 A / 全关 / 原值不符不开 / 帧率类跟 60 帧开关 / 金手指逐条开关 / 自适应画幅 / 定画幅变体 / 列表外帧率补丁目标照取 / 自适应开着时定画幅变体让位）\n");
+    printf("✓ t_cpatch：21 项（目录装载与 APK 内存表各 9 项 + 内存表带 NUL 报红：没选过 = 包里全开 / 只开 A / 全关 / 原值不符不开 / 帧率类跟 60 帧开关 / 金手指逐条开关 / 自适应画幅 / 定画幅变体 / 列表外帧率补丁目标照取 / 自适应开着时定画幅变体让位 / 两档齐的自适应在时不强制主机档）\n");
     return 0;
 }
