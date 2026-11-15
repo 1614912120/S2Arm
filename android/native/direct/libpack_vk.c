@@ -467,7 +467,7 @@ static int lp_stage_emit(struct s2a_libpack *lp, const uint8_t key[8], unsigned 
             for (int i = 0; i < nb; i++) {
                 int skipped = 0;
                 if ((int)sb[i] == sup) {
-                    if (!compute && !lp_json_has_binding(top, stage_no, sb[i], &skipped)) {   // _b.json 有 support 行时 lp_emit_bindings 已经出过；计算程序的支撑缓冲走 supportLayout，不另出行
+                    if (!lp_json_has_binding(top, stage_no, sb[i], &skipped)) {   // _b.json 有 support 行时 lp_emit_bindings 已经出过
                         jw_fmt(binds, "%s{\"kind\":\"support\",\"stage\":\"program\",\"set\":0,\"binding\":%u}", *bind_sep ? "," : "", sb[i]);
                         *bind_sep = 1;
                     }
