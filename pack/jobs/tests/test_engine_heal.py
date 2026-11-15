@@ -22,7 +22,7 @@ class EngineHealTests(JobCase):
         super().setUp()
         self.bundle = self.root / "App.app/Contents/Resources/Engine"
         source = [(rel, b"") for rel in ("runtime/include/s2a_native.h", "runtime/rewriter/rewriter.c", "services/nxaot.sh", "pack/nx_unpack/nx_unpack.csproj",
-                                         "graphics/tools/shader_pack.sh", "tools/safe_killpg.sh")]   # core.require_source 认的源码件（空文件即可）
+                                         "tools/safe_killpg.sh")]   # core.require_source 认的源码件（空文件即可）
         for rel, body in ((PLIST, b"<plist>original</plist>"), (EXE, b"\x7fhost"), ("pack/jobs/x.py", b"print(1)\n"), *source):
             (self.bundle / rel).parent.mkdir(parents=True, exist_ok=True)
             (self.bundle / rel).write_bytes(body)
