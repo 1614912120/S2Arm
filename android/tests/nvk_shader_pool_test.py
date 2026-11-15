@@ -180,6 +180,12 @@ def main():
             ('cs-separate-omitted', 'MIX(sep_fact_sig(5));', '(void)0;', 1, 'changed CS separate texture fact recompiles'),
             ('cs-separate-generation-omitted', 'const uint64_t sg = rp_tex_sep_gen[st], rg = rp_tex_reg_gen();',
              'const uint64_t sg = st == 5 ? 0 : rp_tex_sep_gen[st], rg = rp_tex_reg_gen();', 1, 'changed CS separate texture fact recompiles'),
+            # 图形 / 计算共用的快表（#1146）：桶数退回 512，「同一旧桶里的 5 个键共存」必须变红；收尾不释放表，「会话收尾释放」必须变红；
+            # 存项时不分配（表永远建不起来），所有访问都落空，同一条必须变红。
+            ('last-table-512', 'enum { LAST_BITS = 12,', 'enum { LAST_BITS = 9,', 1, 'coexist in the fast table'),
+            ('last-table-kept', 'free(g_last_tab); g_last_tab = NULL;', '(void)g_last_tab;', 1, 'released at session retirement'),
+            ('last-table-never-built', 'if (!g_last_tab && !(g_last_tab = calloc(1, sizeof *g_last_tab))) return;',
+             'if (!g_last_tab) return;', 1, 'coexist in the fast table'),
         ]
         for name, before, after, count, expected in changes:
             assert text.count(before) == count, (name, 'mutation anchor')
