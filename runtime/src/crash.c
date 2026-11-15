@@ -316,6 +316,8 @@ static void reg_objects(ucontext_t *uc) {
 // 11-14 D-G2JB：游戏的 SetHeapSize 因超出宿主地址窗口回了内存不足，它没理会、照样写堆首，崩出 SIGBUS——日志里只见总线错误。
 //   出事地址落在最近一次地址越界的请求里时点名是它，指向起局「自检」行（窗口多大、有没有「提高内存上限」权限）
 int s2a_va_short_last(uint64_t fa, int *num, uint64_t *a, uint64_t *n, uint64_t *count) __attribute__((weak));
+uint64_t s2a_guest_x18_now(void) __attribute__((weak));   // thread.c
+int s2a_phys_unmap_hit(uint64_t fa, uint64_t *a, uint64_t *n, uint64_t *back, uint64_t *ago_ms, uint64_t *total) __attribute__((weak));   // svc_mem.c
 static void fault_region_note(int sig, siginfo_t *si, ucontext_t *uc) {
     if (sig != SIGBUS && sig != SIGSEGV) return;
     uint64_t fa = (uint64_t)(uintptr_t)si->si_addr, esr = uc->uc_mcontext->__es.__esr; const char *rw = (esr >> 6 & 1) ? "写" : "读";
@@ -324,6 +326,14 @@ static void fault_region_note(int sig, siginfo_t *si, ucontext_t *uc) {
           LOG("【红】崩在游戏没要到的地址上：svc %#x 早先要在 %#llx +%#llx 映射，超出宿主占到的地址窗口、回了内存不足（地址越界共 %llu 次），游戏没理会照样访问 %#llx。%s",
               num, (unsigned long long)a, (unsigned long long)n, (unsigned long long)k, (unsigned long long)fa,
               "地址窗口比游戏要的小，看起局「自检」行；手机上缺「提高内存上限」权限时按首启提示重签带权限的包"); }
+    {   // 出事地址是游戏早先自己解除的物理映射（诊断#ff9a04）：命中 = 游戏拿着悬空指针；没命中最近 32 次 = 要么更早解除、要么从没映射 / 被我方弄丢
+        uint64_t a = 0, n = 0, back = 0, ago = 0, total = 0;
+        if (s2a_phys_unmap_hit && s2a_phys_unmap_hit(fa, &a, &n, &back, &ago, &total))
+            LOG("出事地址 %#llx 在游戏自己解除的物理映射段里：倒数第 %llu 次 UnmapPhysicalMemory %#llx +%#llx（%llu ms 前；本局共解除 %llu 次）——游戏拿着已释放内存的指针",
+                (unsigned long long)fa, (unsigned long long)back, (unsigned long long)a, (unsigned long long)n, (unsigned long long)ago, (unsigned long long)total);
+        else if (s2a_phys_unmap_hit) LOG("出事地址 %#llx 不在最近 %llu 次 UnmapPhysicalMemory 的段里（本局共解除 %llu 次）", (unsigned long long)fa, (unsigned long long)(total < 32 ? total : 32), (unsigned long long)total); }
+    // 游戏的 x18 在线程槽里（iOS 不许用 x18，补丁区转接代码从槽里取、用完写回）：补丁区里崩时出事指针常是它（诊断#ff9a04）
+    if (s2a_guest_x18_now) LOG("游戏 x18（线程槽）= %#llx", (unsigned long long)s2a_guest_x18_now());
     vm_address_t r = (vm_address_t)fa; vm_size_t sz = 0; natural_t depth = 0; vm_region_submap_info_data_64_t info; mach_msg_type_number_t cnt;
     for (;;) {
         cnt = VM_REGION_SUBMAP_INFO_COUNT_64;
