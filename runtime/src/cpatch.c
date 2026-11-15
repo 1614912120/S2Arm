@@ -28,7 +28,7 @@ void s2a_cpatch_abort_boot_inputs(void) {
 
 // 帧率补丁逐份（11-13 维护者：60 / 120 都带进去，玩家自己切档）：模块、掩码槽（模块装载完补上）、位、数据写入（可空）、目标帧率（表第 10 列，0 = 取不到）、
 //   allow = 这份能开（安卓只认开关列表里的；iOS 屏蔽的画面类不算）。跟随开关时只开选中档的那几份（fps_pick），其余关位、写回原值
-struct cp_fu { module_t *m; _Atomic uint64_t *slot; uint64_t bits; char *spec; int target, allow; char id[48]; };
+struct cp_fu { module_t *m; _Atomic uint64_t *slot; uint64_t bits; char *spec; int target, allow, def; char id[48], grp[16]; };   // grp：表第 13 列「组」（同一上游补丁的几份文件，pack/cpatch.py fps_group）；def：表「缺省开」（我方验过）
 static struct cp_fu g_fu[256]; static int g_nfu, g_nfud;   // g_nfud：其中带数据写入的份数（上限 64，同原帧率跟随表口径；只改代码的不计）   // 有帧率类补丁的各模块：掩码槽、其中帧率类的位（按需增长，无上限；只在装载时追加）
 // 随包表：fpslocker.json
 // FPSLocker 帧率配置的运行时部分（pack/fpslocker.py 出、与 cpatch.tsv 同目录）：服务层 services/S2A.Services/FpsLocker.cs 经 s2a_cpatch_tables_dir 找到它
@@ -277,7 +277,7 @@ static void cpatch_load_stream(module_t *m, FILE *f) {
             LOG("【红】社区补丁 %s：表行过长，不开", m->name); continue;
         }
         line[strcspn(line, "\r\n")] = 0;
-        char *c[11] = {0}; char *s = line; for (int i = 0; i < 11 && s; i++) { c[i] = s; s = strchr(s, '\t'); if (s) *s++ = 0; }   // 第 10 列目标帧率、第 11 列画幅（pack/cpatch.py，旧表没有）
+        char *c[13] = {0}; char *s = line; for (int i = 0; i < 13 && s; i++) { c[i] = s; s = strchr(s, '\t'); if (s) *s++ = 0; }   // 第 10 列目标帧率、第 11 列画幅、第 13 列组（pack/cpatch.py，旧表没有）
         if (!c[8] || strcmp(c[1], m->name)) continue;
         char *end; long bit = strtol(c[2], &end, 10);
         // 玩家没选过（没有 S2A_CPATCH_ON）= 默认开（11-13 维护者：S 级优化命中的补丁出包时打入并默认开，用户少做选择）；表里「缺省开」列现在只表示我方验过（界面标签）。
@@ -349,8 +349,8 @@ static void cpatch_load_stream(module_t *m, FILE *f) {
                 LOG("【红】社区补丁 %s %s：帧率跟随表容量已满，整份不开", m->name, c[0]); st_put(c[0], "表不认"); continue;
             }
             struct cp_fu *u = &g_fu[g_nfu++]; memset(u, 0, sizeof *u);
-            u->m = m; u->bits = 1ull << bit; u->target = c[9] ? atoi(c[9]) : 0; u->allow = !cp_ios_blocked(c[0]);
-            snprintf(u->id, sizeof u->id, "%s", c[0]);
+            u->m = m; u->bits = 1ull << bit; u->target = c[9] ? atoi(c[9]) : 0; u->allow = !cp_ios_blocked(c[0]); u->def = c[8] && c[8][0] == '1';
+            snprintf(u->id, sizeof u->id, "%s", c[0]); snprintf(u->grp, sizeof u->grp, "%s", c[12] ? c[12] : "");
             if (c[7][0] && !(u->spec = strdup(c[7]))) die("社区帧率补丁数据分配失败");
             if (c[7][0]) g_nfud++;
             atomic_fetch_add(&g_nfps, 1);
@@ -550,29 +550,47 @@ int s2a_cpatch_fps_levels(int *out, int n, int *cur) {
     if (cur) *cur = g_fps_on > 0 ? g_fps_target : fps_pick();
     return k;
 }
+// 选中档里只开一组（11-15 维护者「S 级优化更好用」：一款带了几个不同上游的同档帧率补丁，原先全开——异度之刃1 60 档 60fps Proper / Alter vsync / FPSLocker 三份同开、
+//   银河战士 120 档两个作者的 120FPS 同开；它们是二选一的不同做法，叠开结果说不准）：我方验过（缺省开）的组优先，其余按表里顺序第一组；组内几份（main / sdk）一起开。
+//   旧表没有组列（grp 空）= 照旧全开
+static const char *fps_group_pick(int pick) {
+    const char *first = NULL;
+    for (int i = 0; i < g_nfu; i++) {
+        struct cp_fu *u = &g_fu[i]; if (!u->slot || !u->allow || tgt(u) != pick) continue;
+        if (!u->grp[0]) return NULL;
+        if (u->def) return u->grp;
+        if (!first) first = u->grp;
+    }
+    return first;
+}
+static int fps_chosen(const struct cp_fu *u, int on, int pick, const char *grp) {
+    return on && u->allow && tgt(u) == pick && (!grp || !strcmp(u->grp, grp));
+}
 void s2a_cpatch_fps_follow(int on) {
     g_fps_on = on;
     int pick = on ? fps_pick() : 0;
     g_fps_target = pick;
     fps_link(on && pick > 60);
+    const char *grp = on ? fps_group_pick(pick) : NULL;
     for (int i = 0; i < g_nfu; i++) {   // 先关不选的（写回原值、清位），再开选中的：几档改同一处，顺序不能反
         struct cp_fu *u = &g_fu[i];
-        if (!u->slot || (on && u->allow && tgt(u) == pick)) continue;
+        if (!u->slot || fps_chosen(u, on, pick, grp)) continue;
         atomic_fetch_and(u->slot, ~u->bits);
         if (u->spec && data_writes(u->m, u->spec, 2)) die("社区帧率补丁已准入的数据写入失败");
     }
     for (int i = 0; on && i < g_nfu; i++) {
         struct cp_fu *u = &g_fu[i];
-        if (!u->slot || !u->allow || tgt(u) != pick) continue;
+        if (!u->slot || !fps_chosen(u, on, pick, grp)) continue;
         if (u->spec && data_writes(u->m, u->spec, 1)) die("社区帧率补丁已准入的数据写入失败");
         atomic_fetch_or(u->slot, u->bits);
     }
     if (g_nfu) LOG("社区补丁：帧率类 %d 份，%s", g_nfps, on && pick ? "" : "全关");
     if (g_nfu && on && pick) LOG("社区补丁：帧率档 %d 帧（%s；屏幕最高 %d Hz）", pick, g_fps_want || getenv("S2A_FPS_PICK") ? "玩家选的" : "默认：不超过屏幕刷新率的最高一档", screen_max_hz());
+    if (g_nfu && on && pick && grp) LOG("社区补丁：这一档只开一组（组 %s，同档别的上游补丁不叠开）", grp);
     pthread_mutex_lock(&g_st_lock); int any = 0;
     for (int j = 0; j < g_nst; j++) if (!strncmp(g_st[j].id, "fps:", 4) && strcmp(g_st[j].st, "不配套") && strcmp(g_st[j].st, "表不认")) {
         int lit = 0;
-        for (int i = 0; i < g_nfu; i++) if (!strcmp(g_fu[i].id, g_st[j].id) && on && g_fu[i].allow && tgt(&g_fu[i]) == pick) lit = 1;
+        for (int i = 0; i < g_nfu; i++) if (!strcmp(g_fu[i].id, g_st[j].id) && fps_chosen(&g_fu[i], on, pick, grp)) lit = 1;
         snprintf(g_st[j].st, sizeof g_st[j].st, "%s", lit ? "开" : "关"); if (!lit) g_st[j].eff[0] = 0; any = 1; }
     if (any) st_flush_locked();
     pthread_mutex_unlock(&g_st_lock);
