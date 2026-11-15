@@ -2236,6 +2236,9 @@ static int svc_mem_impl(int num, uint64_t *regs, uint64_t orig) {
         default: { char b[64]; snprintf(b, sizeof b, "GetInfo 信息类型 %#llx 未做", (unsigned long long)id); svc_fail_log(num, 0xF001, b); }
             regs[0] = 0xF001; regs[1] = 0; return 1;   // InvalidEnumValue
         }
+        {   // 每种类型第一次被问时记一行回了什么（诊断：一款 Switch 2 游戏把堆开到池满后第 7 帧分配拿到空，要对照它看到的内存数；GetInfo 每局百余次，只记首次）
+            static _Atomic uint64_t seen; if (id < 64 && !(atomic_fetch_or(&seen, 1ull << id) & (1ull << id)))
+                LOG("GetInfo 首次：类型 %llu 子号 %lld → %#llx（%llu MB）", (unsigned long long)id, (long long)sub, (unsigned long long)v, (unsigned long long)(v >> 20)); }
         regs[0] = 0; regs[1] = v; return 1;
     }
     }
