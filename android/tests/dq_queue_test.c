@@ -16,7 +16,11 @@
 //   C6 录制线程怎么等活（nvk_dq_spin / nvk_dq_poll_us / nvk_dq_wake_kb）：
 //      a 积压不到阈值时清空照样立刻等到；b 积压不到阈值不叫、过线就叫（不清空，过线的那一批也要被做掉）；
 //      c 定时醒会把没人叫的积压取走；d 空闲很久之后退避封顶（再来一条也在毫秒级被取走）；
-//      e 稀疏的生产者下，定时醒 + 按批叫的录制线程 CPU 远低于原来的自旋（同一台机器上两种配置各量一次，比值）。
+//      e 稀疏的生产者下，定时醒 + 按批叫的录制线程 CPU 远低于原来的自旋（同一台机器上两种配置各量一次，比值）；
+//      f 环满：阈值够不着、录制线程睡着，生产者写满环也不死锁（环满的叫醒不受阈值限制）；
+//      g 三条线程同时清空、录制线程睡着、阈值够不着：三条都立刻被叫醒。
+//   C7 等待分布读数（「睡着后第一条记录从发布到被录」和「清空等待」两张直方图，读数行给 p50 / p99 / 最大）：
+//      a 每轮由测试线程量墙钟，读数必须不长于它、贴近它，桶与百分位按规格重算后对照；b 清空等待进直方图；c 读数行与直方图一致且取走清零；d 百分位取整的合成用例。
 //   C1b / C1c 同 C1，但录制线程用定时醒 + 按批叫（C1b 无清空噪声：积压只靠定时醒 / 过线 / 末尾清空取走）。
 // 任何一处卡住由看门狗在 TEST_TIMEOUT_S 秒后以退出码 3 收场（队列死锁不会让 CI 挂着）。
 // 带一个参数时只跑那一组（如 `dq_queue_test C6`），变异负控用它直奔被测的阶段。
@@ -355,6 +359,7 @@ static uint64_t trickle_cpu_ns(int ms) {   // 稀疏的单生产者（每约 20 
     vkEndCommandBuffer(cb_of(1));
     return rec_cpu_ns() - c0;
 }
+static void *drainer_main(void *arg) { const uint64_t t0 = now_ns(); vkEndCommandBuffer(cb_of(1)); *(uint64_t *)arg = now_ns() - t0; return NULL; }   // 清空一次，量它等了多久
 static void run_wait_phase(void) {
     phase("C6 录制线程怎么等活");
     set_dq(1);
@@ -400,6 +405,94 @@ static void run_wait_phase(void) {
     uint64_t cpu_new = trickle_cpu_ns(300);
     CHECK(cpu_spin > 0 && cpu_new * 10 < cpu_spin * 6, "C6e：稀疏生产者 300 毫秒里录制线程 CPU：自旋 %.1f 毫秒、定时醒 + 按批叫 %.1f 毫秒（要求后者不到前者的 60%%）", (double)cpu_spin / 1e6, (double)cpu_new / 1e6);
     printf("  %-38s 稀疏生产者 300 毫秒：录制线程 CPU 自旋 %.1f 毫秒 → 定时醒 + 按批叫 %.1f 毫秒\n", "C6 录制线程怎么等活", (double)cpu_spin / 1e6, (double)cpu_new / 1e6);
+    // f 环满：阈值设到够不着（1 GB > 队列 32 MB），睡着的录制线程只剩「环满」这一条叫醒的路。先写半个环：不叫、一条没做；再写到 1.3 倍环容量：不能死锁，做完的数一条不少
+    set_wait(0, 0, 1 << 20); reset_sinks(); usleep(20000);
+    const int n_half = (int)((uint64_t)dq_RING / 2 / 48), n_full = (int)((uint64_t)dq_RING * 13 / 10 / 48);   // 每条 draw 记录 48 字节
+    uint64_t wk_f = nvn_vk_dbg_dq_stat(DQS_WAKE), w_f = g_dq_w;
+    issue_draws(0, n_half);
+    usleep(30000);
+    ex = atomic_load_explicit(&g_executed[0], memory_order_acquire);
+    CHECK(ex == 0, "C6f：积压 %.0f MB（阈值 1 GB）、没清空、没环满，录制线程却做了 %llu 条", (double)(g_dq_w - w_f) / 1048576.0, (unsigned long long)ex);
+    CHECK(nvn_vk_dbg_dq_stat(DQS_WAKE) == wk_f, "C6f：积压不到阈值也不是环满，生产者却去叫醒了 %llu 次", (unsigned long long)(nvn_vk_dbg_dq_stat(DQS_WAKE) - wk_f));
+    issue_draws(0, n_full - n_half);   // 环写满：这里要靠环满的叫醒才能继续（没有它，生产者永远等不到位置）
+    CHECK(nvn_vk_dbg_dq_stat(DQS_WAKE) > wk_f, "C6f：环写满了，生产者却没有叫醒录制线程");
+    vkEndCommandBuffer(cb_of(1));
+    CHECK(g_cnt[0] == (uint64_t)n_full, "C6f：清空后条数不符：发 %d → 收 %llu", n_full, (unsigned long long)g_cnt[0]);
+    CHECK(g_dq_w - w_f > (uint64_t)dq_RING + (uint64_t)dq_RING / 4, "C6f：写入量 %.1f MB 没超过队列容量，没有真正写满环", (double)(g_dq_w - w_f) / 1048576.0);
+    // g 三条线程同时清空、录制线程睡着、阈值够不着：三条都要被叫醒，不能等满 1 秒的超时
+    set_wait(0, 0, 1 << 20); reset_sinks(); usleep(20000);
+    issue_draws(0, 3);
+    pthread_t dth[3]; uint64_t ddur[3] = {0, 0, 0};
+    for (int i = 0; i < 3; i++) pthread_create(&dth[i], NULL, drainer_main, &ddur[i]);
+    for (int i = 0; i < 3; i++) pthread_join(dth[i], NULL);
+    for (int i = 0; i < 3; i++) CHECK(ddur[i] < 300ull * 1000000ull, "C6g：第 %d 条清空线程等了 %.0f 毫秒（应在毫秒级；等满 1 秒的超时 = 睡着的录制线程没被叫醒）", i, (double)ddur[i] / 1e6);
+    CHECK(g_cnt[0] == 3, "C6g：条数不符：发 3 → 收 %llu", (unsigned long long)g_cnt[0]);
+    printf("  %-38s 环满叫醒：写了 %.1f MB（队列 %d MB）一条不少；三条线程同时清空：最慢 %.0f 微秒\n", "C6f/g 环满与并发清空（睡着 + 阈值够不着）", (double)(g_dq_w - w_f) / 1048576.0, dq_RING >> 20,
+           (double)(ddur[0] > ddur[1] ? (ddur[0] > ddur[2] ? ddur[0] : ddur[2]) : (ddur[1] > ddur[2] ? ddur[1] : ddur[2])) / 1e3);
+    set_wait(200, 0, 0);   // 还原缺省
+}
+
+// ---- C7：等待分布读数（定时醒 / 按批叫以后，一条记录最多等多久要看得见）----
+// 期望不靠被测实现算：每一轮由测试线程自己量「发布 → 做完」的墙钟，读数里记的「睡着后第一条记录从发布到被录」必须不长于它（它还含做完这一条）、而且贴近它；
+// 桶、百分位也由测试自己按规格重算后对照。
+static unsigned c7_bucket(uint64_t ns) { static const uint64_t ub[8] = { 20000, 50000, 100000, 200000, 500000, 1000000, 2000000, 5000000 }; unsigned i = 0; while (i < 8 && ns >= ub[i]) i++; return i; }
+static int u64_cmp(const void *a, const void *b) { uint64_t x = *(const uint64_t *)a, y = *(const uint64_t *)b; return x < y ? -1 : x > y; }
+static uint64_t hist_total(const uint64_t *h) { uint64_t t = 0; for (int i = 0; i < DQH_N; i++) t += __atomic_load_n(&h[i], __ATOMIC_RELAXED); return t; }
+static void run_latency_phase(void) {
+    phase("C7 等待分布读数");
+    set_dq(1);
+    char line[512]; dq_lat_line(line, sizeof line);   // 先取走前面阶段留下的读数
+    // a 睡着后的等活：定时醒（100 微秒起，退避封顶 2 毫秒）、阈值 1 MB（生产者不叫）——一条记录最多等一个定时醒间隔
+    set_wait(0, 100, 1024);
+    enum { N = 40 };
+    uint64_t rec[N], wall[N], hw0[DQH_N]; int got = 0;
+    for (int i = 0; i < DQH_N; i++) hw0[i] = __atomic_load_n(&g_dq_hw[i], __ATOMIC_RELAXED);
+    unsigned want_bucket[DQH_N] = {0};
+    for (int k = 0; k < N; k++) {
+        reset_sinks(); usleep(15000);   // 空闲 15 毫秒：退避早已到封顶，录制线程睡着
+        __atomic_exchange_n(&g_dq_hw_max, 0, __ATOMIC_RELAXED);   // 取走旧的最大值：这一轮只有一个样本，最大值就是它
+        const uint64_t t0 = now_ns();
+        issue_draws(0, 1);
+        while (atomic_load_explicit(&g_executed[0], memory_order_acquire) < 1) { }   // 空转等：量的是墙钟
+        wall[k] = now_ns() - t0;
+        rec[k] = __atomic_exchange_n(&g_dq_hw_max, 0, __ATOMIC_RELAXED);
+        if (rec[k]) { got++; want_bucket[c7_bucket(rec[k])]++; }
+    }
+    CHECK(got >= 36, "C7a：40 轮「空闲后来 1 条」里只有 %d 轮记到了等活延迟（每轮都应有一个样本）", got);
+    uint64_t ge[N], gw[N]; int m = 0, over = 0;   // 只看有样本的轮
+    for (int k = 0; k < N; k++) if (rec[k]) { ge[m] = rec[k]; gw[m] = wall[k] > rec[k] ? wall[k] - rec[k] : 0; if (rec[k] > wall[k] + 1000) over++; m++; }
+    CHECK(over == 0, "C7a：%d 轮记下的等活延迟比自己量的「发布 → 做完」墙钟还长（记错了起点 / 终点）", over);
+    qsort(gw, (size_t)m, sizeof gw[0], u64_cmp);
+    CHECK(m == 0 || gw[m / 2] < 200000ull, "C7a：「发布 → 做完」比记下的等活延迟平均多出 %.0f 微秒（中位）——读数没有贴住真实的等待", m ? (double)gw[m / 2] / 1e3 : 0.0);
+    qsort(ge, (size_t)m, sizeof ge[0], u64_cmp);
+    const uint64_t emax = m ? ge[m - 1] : 0;
+    CHECK(emax < 10ull * 1000000ull, "C7a：定时醒封顶 %d 微秒，一条记录却等了 %.0f 微秒", (int)DQ_POLL_MAX_US, (double)emax / 1e3);
+    CHECK(emax == 0 || nvn_vk_dbg_dq_stat(DQS_TMO_WORK) > 0, "C7a：记录是定时醒取走的，却没有定时醒取走的计数");
+    uint64_t dh[DQH_N]; for (int i = 0; i < DQH_N; i++) dh[i] = __atomic_load_n(&g_dq_hw[i], __ATOMIC_RELAXED) - hw0[i];
+    for (int i = 0; i < DQH_N; i++) CHECK(dh[i] == want_bucket[i], "C7a：直方图第 %d 桶：测试按规格算 %u 个、实现记了 %llu 个", i, want_bucket[i], (unsigned long long)dh[i]);
+    const unsigned pe50 = m ? c7_bucket(ge[(size_t)((m * 50 + 99) / 100 - 1)]) : 0, pe99 = m ? c7_bucket(ge[(size_t)((m * 99 + 99) / 100 - 1)]) : 0;
+    CHECK(dq_hist_pct(dh, (uint64_t)got, 50) == pe50 && dq_hist_pct(dh, (uint64_t)got, 99) == pe99, "C7a：p50 / p99 落桶：测试算 %u / %u，实现给 %u / %u", pe50, pe99, dq_hist_pct(dh, (uint64_t)got, 50), dq_hist_pct(dh, (uint64_t)got, 99));
+    // b 清空等待：回放线程干等的那一段也进直方图（慢记录 100 微秒一条 × 30 条，录制线程睡着、阈值够不着，要靠清空叫醒）
+    set_wait(0, 0, 1024); reset_sinks(); usleep(20000);
+    uint64_t hd0 = hist_total(g_dq_hd); __atomic_exchange_n(&g_dq_hd_max, 0, __ATOMIC_RELAXED);
+    g_slow_ns = 100000;
+    issue_draws(0, 30);
+    vkEndCommandBuffer(cb_of(1));
+    g_slow_ns = 0;
+    const uint64_t dmax = __atomic_load_n(&g_dq_hd_max, __ATOMIC_RELAXED);
+    CHECK(hist_total(g_dq_hd) - hd0 == 1, "C7b：做了 1 次要等的清空，清空等待直方图却多了 %llu 个样本", (unsigned long long)(hist_total(g_dq_hd) - hd0));
+    CHECK(dmax >= 2500000ull && dmax < 500ull * 1000000ull, "C7b：30 条各慢 100 微秒（共 ≥ 3 毫秒）的积压，清空等待的最大值读到 %.0f 微秒", (double)dmax / 1e3);
+    // c 读数行：数字和直方图一致
+    const uint64_t wt = hist_total(g_dq_hw), dt = hist_total(g_dq_hd);
+    dq_lat_line(line, sizeof line);
+    unsigned long long lw = 0, ld = 0; const char *pw = strstr(line, "被录 "), *pd = strstr(line, "清空等待 ");
+    CHECK(pw && pd && sscanf(pw + strlen("被录 "), "%llu", &lw) == 1 && sscanf(pd + strlen("清空等待 "), "%llu", &ld) == 1 && lw == wt && ld == dt && strstr(line, "p99 ") && strstr(line, "最大 "),
+          "C7c：读数行与直方图对不上（直方图 %llu / %llu 个样本）：%s", (unsigned long long)wt, (unsigned long long)dt, line);
+    CHECK(hist_total(g_dq_hw) == 0 && hist_total(g_dq_hd) == 0 && g_dq_hw_max == 0 && g_dq_hd_max == 0, "C7c：读数行没把直方图取走（清零）");
+    // d 百分位的取整：101 个样本、99 个在第 2 桶、2 个在最后一桶——两个已经占 1.98%（> 1%），p99 必须落在最后一桶（向下取整会错落在第 2 桶）
+    { uint64_t h[DQH_N] = {0}; h[2] = 99; h[DQH_N - 1] = 2;
+      CHECK(dq_hist_pct(h, 101, 99) == DQH_N - 1 && dq_hist_pct(h, 101, 50) == 2, "C7d：合成直方图（99 个在 <100 桶、2 个在 ≥5000 桶）：p99 落在第 %u 桶（应为 %d）、p50 落在第 %u 桶（应为 2）", dq_hist_pct(h, 101, 99), DQH_N - 1, dq_hist_pct(h, 101, 50)); }
+    printf("  %-38s 空闲后 1 条记录（定时醒 100 微秒起封顶 %d 微秒）：%d 轮有样本，中位等 %.0f 微秒，最大 %.0f 微秒；清空等待最大 %.0f 微秒\n", "C7 等待分布读数", (int)DQ_POLL_MAX_US, got, m ? (double)ge[m / 2] / 1e3 : 0.0, (double)emax / 1e3, (double)dmax / 1e3);
     set_wait(200, 0, 0);   // 还原缺省
 }
 
@@ -422,6 +515,7 @@ int main(int argc, char **argv) {
     if (WANT("C3")) run_pressure_phase(1200000);
     if (WANT("C4")) run_seq_phase("C4 运行时来回切 nvk_dq", 3, 200000, 0, 1);
     if (WANT("C6")) run_wait_phase();
+    if (WANT("C7")) run_latency_phase();
     if (WANT("C1b")) { set_wait(0, 100, 4); run_seq_phase("C1b 多生产者序列（定时醒 + 按批叫，无清空噪声）", 4, 160000, 0, 0); set_wait(200, 0, 0); }
     if (WANT("C1c")) { set_wait(0, 0, 16); run_seq_phase("C1c 多生产者序列（只按批叫 + 清空噪声）", 4, 160000, 1, 0); set_wait(200, 0, 0); }
     CHECK(atomic_load(&g_red_logs) == 0, "队列自己报过 %d 次红", atomic_load(&g_red_logs));

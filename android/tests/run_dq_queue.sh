@@ -16,6 +16,13 @@
 #     M9 定时醒的退避不封顶                → C6d（空闲很久后再来一条，等了几百毫秒）
 #     M10 不认 nvk_dq_spin（恒自旋 200）    → C6e（稀疏生产者下录制线程 CPU 没降）
 #     M11 按批叫失效（每条都叫）            → C6b（积压不到阈值就被叫醒了）
+#   环满 / 清空的叫醒路径、等待分布读数另有六种变异（C6f / C6g / C7）：
+#     M12 不记睡着期间第一条记录的发布时刻   → C7a（40 轮里记不到样本）
+#     M13 环满不叫醒录制线程                 → C6f（阈值够不着时生产者永远等不到位置，看门狗超时）
+#     M14 清空的两处叫醒都去掉               → C6a / C6g（睡着的录制线程没人叫，清空一直等，看门狗超时）
+#     M15 清空等待不进直方图                 → C7b
+#     M16 等活延迟的起点终点算反             → C7a（记下的比墙钟还长）
+#     M17 百分位向下取整                     → C7d（合成直方图 p99 落错桶）
 set -euo pipefail
 ulimit -c 0 2> /dev/null || true   # 变异用例可能崩溃（M1 常见）：不留 core 文件
 repo=$(cd "$(dirname "$0")/../.." && pwd)
@@ -77,15 +84,17 @@ else
 fi
 
 # ---- 负控：六种变异
-mutate() {   # $1 = 变异名，$2 = 原文，$3 = 改成
+mutate() {   # $1 = 变异名，$2 = 原文，$3 = 改成，（可选）$4 = 第二处原文，$5 = 第二处改成
     mkdir -p "$out/m_$1"
-    python3 - "$inc_src" "$out/m_$1/nvn_vk_dq.inc" "$2" "$3" <<'PYMUT'
+    python3 - "$inc_src" "$out/m_$1/nvn_vk_dq.inc" "${@:2}" <<'PYMUT'
 import pathlib, sys
-src, dst, a, b = sys.argv[1:]
+src, dst, *rest = sys.argv[1:]
 s = pathlib.Path(src).read_text(encoding="utf-8")
-if s.count(a) != 1:
-    raise SystemExit('变异锚点变了（应恰好出现 1 次，实为 %d 次）：%s' % (s.count(a), a))
-pathlib.Path(dst).write_text(s.replace(a, b), encoding="utf-8")
+for a, b in zip(rest[0::2], rest[1::2]):
+    if s.count(a) != 1:
+        raise SystemExit('变异锚点变了（应恰好出现 1 次，实为 %d 次）：%s' % (s.count(a), a))
+    s = s.replace(a, b)
+pathlib.Path(dst).write_text(s, encoding="utf-8")
 PYMUT
 }
 neg() {   # $1 = 变异名，$2 = 日志里必须出现的红（正则），$3 = 第一条红发生时所在阶段（正则），$4 = 1：没有红行但在该阶段崩溃（信号）也算，$5 = 只跑哪一组阶段（传给用例的参数，缺省全跑）
@@ -131,4 +140,19 @@ mutate M10 'const int spin = atomic_load_explicit(&g_dq_spin, memory_order_relax
 neg M10 '【红】C6e：' 'C6' 0 C6
 mutate M11 "$anchor_wake" '(void)wb; (void)rd; dq_wake();   /* M11：按批叫失效，每条都叫 */'
 neg M11 '【红】C6b：' 'C6' 0 C6
-echo "两级回放队列宿主用例：正控全绿，十一种变异都红在预期处"
+# ---- 环满 / 清空的叫醒路径、等待分布读数：六种变异（C6f / C6g / C7）
+mutate M12 'uint64_t z = 0; atomic_compare_exchange_strong_explicit(&g_dq_t0, &z, dq_now_ns(), memory_order_relaxed, memory_order_relaxed);' 'uint64_t z = 0; (void)z;   /* M12：不记发布时刻 */'
+neg M12 '【红】C7a：' 'C7' 0 C7
+anchor_full='while (g_dq_w + need - atomic_load_explicit(&g_dq_rd, memory_order_acquire) > dq_RING) { dq_wake(); sched_yield(); }'
+mutate M13 "$anchor_full" 'while (g_dq_w + need - atomic_load_explicit(&g_dq_rd, memory_order_acquire) > dq_RING) { sched_yield(); }   /* M13：环满不叫醒 */'
+neg M13 '【红】超时' 'C6' 1 C6
+mutate M14 '__atomic_fetch_add(&g_dq_drains, 1, __ATOMIC_RELAXED); dq_wake();' '__atomic_fetch_add(&g_dq_drains, 1, __ATOMIC_RELAXED);   /* M14：清空不叫醒 */' \
+           'while (atomic_load_explicit(&g_dq_rd, memory_order_acquire) < w) { pthread_cond_signal(&g_dq_cv);' 'while (atomic_load_explicit(&g_dq_rd, memory_order_acquire) < w) {   /* M14：等待圈里也不叫 */'
+neg M14 '【红】超时' 'C6' 1 C6
+mutate M15 'dq_hist_add(g_dq_hd, &g_dq_hd_max, ns);' '/* M15：清空等待不进直方图 */'
+neg M15 '【红】C7b：' 'C7' 0 C7
+mutate M16 'dq_hist_add(g_dq_hw, &g_dq_hw_max, dq_now_ns() - t0);' 'dq_hist_add(g_dq_hw, &g_dq_hw_max, dq_now_ns() + t0);   /* M16：起点终点算反 */'
+neg M16 '【红】C7a：' 'C7' 0 C7
+mutate M17 'uint64_t need = (total * pct + 99) / 100, acc = 0;' 'uint64_t need = (total * pct) / 100, acc = 0;   /* M17：百分位向下取整 */'
+neg M17 '【红】C7d：' 'C7' 0 C7
+echo "两级回放队列宿主用例：正控全绿，十七种变异都红在预期处"

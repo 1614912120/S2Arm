@@ -69,6 +69,36 @@ enum { DQS_SLEEP, DQS_TMO, DQS_TMO_WORK, DQS_WAKE, DQS_DRAIN_WAIT, DQS_DRAIN_NS,
 static uint64_t g_dq_st[DQS_N];
 #define DQ_ST(i, v) do { if (atomic_load_explicit(&g_dq_stat, memory_order_relaxed)) __atomic_fetch_add(&g_dq_st[i], (uint64_t)(v), __ATOMIC_RELAXED); } while (0)
 static uint64_t dq_now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec; }
+// 等待分布读数（同样 nvk_gputime 开着才计）：两张直方图——
+//   睡着后的等活：录制线程睡着期间，第一条被发布的记录从发布到它醒来开始录的间隔（叫醒、定时醒、调度的全部等待；录制线程醒着时发布的记录没有「睡」带来的等待，不计）；
+//   清空等待：vk_dq_drain 从进来到队列清空的时长（回放线程在这段时间里干等）。
+// 桶上界（微秒）20 / 50 / 100 / 200 / 500 / 1000 / 2000 / 5000，最后一桶 ≥ 5000；另记最大值（纳秒）。
+enum { DQH_N = 9 };
+static const uint32_t g_dq_hb_us[DQH_N - 1] = { 20, 50, 100, 200, 500, 1000, 2000, 5000 };
+static const char *const g_dq_hb_name[DQH_N] = { "<20", "<50", "<100", "<200", "<500", "<1000", "<2000", "<5000", ">=5000" };
+static uint64_t g_dq_hw[DQH_N], g_dq_hd[DQH_N];   // 睡着后的等活 / 清空等待：各桶次数
+static uint64_t g_dq_hw_max, g_dq_hd_max;         // 对应的最大值（纳秒）
+static _Atomic uint64_t g_dq_t0;                  // 录制线程睡着期间发布的第一条记录的时刻（纳秒，0 = 还没有）；生产者写、录制线程醒来取走
+static void dq_hist_add(uint64_t *h, uint64_t *mx, uint64_t ns) {
+    unsigned i = 0; while (i < DQH_N - 1 && ns >= (uint64_t)g_dq_hb_us[i] * 1000u) i++;
+    __atomic_fetch_add(&h[i], 1, __ATOMIC_RELAXED);
+    uint64_t m = __atomic_load_n(mx, __ATOMIC_RELAXED);
+    while (ns > m && !__atomic_compare_exchange_n(mx, &m, ns, 0, __ATOMIC_RELAXED, __ATOMIC_RELAXED)) {}
+}
+static unsigned dq_hist_pct(const uint64_t *h, uint64_t total, unsigned pct) {   // 第 pct 百分位落在哪个桶（total = 0 时返回 0）
+    uint64_t need = (total * pct + 99) / 100, acc = 0; if (!need) need = 1;
+    for (unsigned i = 0; i < DQH_N; i++) { acc += h[i]; if (acc >= need) return i; }
+    return DQH_N - 1;
+}
+// 读数行：取走（清零）两张直方图，写成一行。backend_vulkan_wsi.inc 每 300 帧调一次
+static DQ_U void dq_lat_line(char *b, size_t n) {
+    uint64_t w[DQH_N], d[DQH_N], wt = 0, dt = 0;
+    for (int i = 0; i < DQH_N; i++) { w[i] = __atomic_exchange_n(&g_dq_hw[i], 0, __ATOMIC_RELAXED); wt += w[i]; d[i] = __atomic_exchange_n(&g_dq_hd[i], 0, __ATOMIC_RELAXED); dt += d[i]; }
+    const uint64_t wm = __atomic_exchange_n(&g_dq_hw_max, 0, __ATOMIC_RELAXED), dm = __atomic_exchange_n(&g_dq_hd_max, 0, __ATOMIC_RELAXED);
+    snprintf(b, n, "两级回放等待分布（近 300 帧，微秒）：录制线程睡着后第一条记录从发布到被录 %llu 次，p50 %s、p99 %s、最大 %.0f；清空等待 %llu 次，p50 %s、p99 %s、最大 %.0f",
+        (unsigned long long)wt, wt ? g_dq_hb_name[dq_hist_pct(w, wt, 50)] : "-", wt ? g_dq_hb_name[dq_hist_pct(w, wt, 99)] : "-", (double)wm / 1000.0,
+        (unsigned long long)dt, dt ? g_dq_hb_name[dq_hist_pct(d, dt, 50)] : "-", dt ? g_dq_hb_name[dq_hist_pct(d, dt, 99)] : "-", (double)dm / 1000.0);
+}
 
 static void dq_wake(void) { if (atomic_load(&g_dq_sleeping)) { DQ_ST(DQS_WAKE, 1); pthread_mutex_lock(&g_dq_mu); pthread_cond_signal(&g_dq_cv); pthread_mutex_unlock(&g_dq_mu); } }
 static void vk_dq_drain(void) {
@@ -87,7 +117,7 @@ static void vk_dq_drain(void) {
                 (unsigned long long)w, (unsigned long long)atomic_load(&g_dq_pub), (unsigned long long)rd, cur, cur < OP_N ? g_dq_names[cur] : "?"); } }
     atomic_fetch_sub(&g_dq_draining, 1); pthread_mutex_unlock(&g_dq_mu);
 done:
-    if (t0) { DQ_ST(DQS_DRAIN_WAIT, 1); DQ_ST(DQS_DRAIN_NS, dq_now_ns() - t0); }
+    if (t0) { const uint64_t ns = dq_now_ns() - t0; DQ_ST(DQS_DRAIN_WAIT, 1); DQ_ST(DQS_DRAIN_NS, ns); dq_hist_add(g_dq_hd, &g_dq_hd_max, ns); }
 }
 static void *dq_rec_begin(uint32_t op, VkCommandBuffer cb, size_t n) {   // room for a record with n bytes after its header
     size_t need = (sizeof(dq_rec_hdr) + n + 15) & ~(size_t)15;   // 16-byte records: the ring's end always has room for a whole header
@@ -108,6 +138,9 @@ static void dq_rec_end(void *payload) {
     atomic_store(&g_dq_pub, w);   // (seq_cst, against the recorder's sleep flag: either it sees this record or this sees it asleep)
     pthread_spin_unlock(&g_dq_pl);
     if (atomic_load(&g_dq_sleeping)) {   // 录制线程醒着就不用叫：它做完手头的会看到这一条
+        if (atomic_load_explicit(&g_dq_stat, memory_order_relaxed) && !atomic_load_explicit(&g_dq_t0, memory_order_relaxed)) {   // 读数：记下睡着期间第一条记录发布的时刻（只在睡着时记，醒着时发布的记录不读时钟）
+            uint64_t z = 0; atomic_compare_exchange_strong_explicit(&g_dq_t0, &z, dq_now_ns(), memory_order_relaxed, memory_order_relaxed);
+        }
         const uint64_t wb = atomic_load_explicit(&g_dq_wake_bytes, memory_order_relaxed), rd = atomic_load_explicit(&g_dq_rd, memory_order_acquire);   // 睡着时 g_dq_rd 不动，读它不会和录制线程抢缓存行
         if (!wb || (w > rd && w - rd >= wb)) dq_wake();   // 按批叫（wb > 0）：积压不够就让它睡着，等定时醒 / 下一次过线 / 清空来叫（w <= rd：别的生产者发布了更靠后的记录、已被取走，这一条也做完了，积压为零）
     }
@@ -226,6 +259,7 @@ static void *dq_recorder_main(void *arg) {
                 int wait_us = 0, tmo = 0;   // wait_us：这一觉的定时醒间隔，每次进睡眠从 nvk_dq_poll_us 起，醒来没活就翻倍
                 pthread_mutex_lock(&g_dq_mu);
                 if (atomic_load(&g_dq_draining)) pthread_cond_broadcast(&g_dq_dcv);
+                atomic_store_explicit(&g_dq_t0, 0, memory_order_relaxed);   // 上一觉遗留的时间戳（生产者在我醒来之后才落下的）作废；下一行的 seq_cst 存储把它排在「睡着」标志之前
                 atomic_store(&g_dq_sleeping, 1); DQ_ST(DQS_SLEEP, 1);
                 while ((pub = atomic_load(&g_dq_pub)) == r) {
                     const int poll_us = atomic_load_explicit(&g_dq_poll_us, memory_order_relaxed);   // 每圈都读：开关变了，dq_tune 叫醒一下，这里就按新的睡
@@ -237,6 +271,7 @@ static void *dq_recorder_main(void *arg) {
                 }
                 if (tmo) DQ_ST(DQS_TMO_WORK, 1);   // 是定时醒取走的活，不是谁叫醒的
                 atomic_store(&g_dq_sleeping, 0); pthread_mutex_unlock(&g_dq_mu);
+                if (atomic_load_explicit(&g_dq_stat, memory_order_relaxed)) { const uint64_t t0 = atomic_exchange_explicit(&g_dq_t0, 0, memory_order_relaxed); if (t0) dq_hist_add(g_dq_hw, &g_dq_hw_max, dq_now_ns() - t0); }   // 读数：睡着后第一条记录等了多久
             }
         }
         while (r != pub) { const dq_rec_hdr *h = (const dq_rec_hdr *)(g_dq_ring + r % dq_RING); atomic_store_explicit(&g_dq_cur_op, h->op, memory_order_relaxed); dq_run(h); r += h->size; atomic_store(&g_dq_rd, r); }   // seq_cst (a plain stlr on arm64): the read position is stored, then g_dq_draining is read, against the drainer's "count it, then read the position"

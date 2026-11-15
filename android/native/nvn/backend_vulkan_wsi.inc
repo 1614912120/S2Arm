@@ -297,7 +297,8 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
           uint64_t s[DQS_N]; for (int i = 0; i < DQS_N; i++) s[i] = __atomic_exchange_n(&g_dq_st[i], 0, __ATOMIC_RELAXED);
           snprintf(b, sizeof b, "两级回放等活读数（每帧，近 300 帧）：录制线程进睡眠 %.1f 次（其中定时醒 %.1f 次、醒来有活 %.1f 次）；生产者真去叫醒 %.1f 次；清空要等 %.1f 次、共 %.0f 微秒",
               s[DQS_SLEEP] / 300.0, s[DQS_TMO] / 300.0, s[DQS_TMO_WORK] / 300.0, s[DQS_WAKE] / 300.0, s[DQS_DRAIN_WAIT] / 300.0, s[DQS_DRAIN_NS] / 300.0 / 1000.0);
-          nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
+          nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b);
+          dq_lat_line(b, sizeof b); nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
         { uint64_t d0 = __atomic_exchange_n(&g_draw_ns[0], 0, __ATOMIC_RELAXED), d1 = __atomic_exchange_n(&g_draw_ns[1], 0, __ATOMIC_RELAXED), d2 = __atomic_exchange_n(&g_draw_ns[2], 0, __ATOMIC_RELAXED);
           snprintf(b, sizeof b, "后端绘制细分（每帧毫秒，近 300 帧）：描述符 %.2f、推常量与状态 %.2f、顶点索引与绘制调用 %.2f", d0 / 300.0 / 1e6, d1 / 300.0 / 1e6, d2 / 300.0 / 1e6);
           nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
