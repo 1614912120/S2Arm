@@ -264,7 +264,7 @@ int nvk_prog_warm_load(void) {
         s.rec.stage_mask = get_u32(e + 32);
         memcpy(s.rec.keys, e + 36, sizeof s.rec.keys);
         s.rec.c1_ok = e[60];
-        s.rec.lp_ok = e[61] & 1u;
+        s.rec.lp_ok = e[61];   // 2 = 按含「存储缓冲不对齐」的规则判可用；旧清单里的 1 当不可用
         memcpy(s.rec.c1, e + 64, sizeof s.rec.c1);
         s.rec.uses = get_u32(e + 60 + 4 + 768);
         s.last_use_ms = get_u64(e + 60 + 4 + 768 + 4);

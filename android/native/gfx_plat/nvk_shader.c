@@ -674,7 +674,8 @@ static int depth_clip_cap(void) {
 }
 static int libpack_state_ok(const struct s2a_compile_graphics_src *g) {
     return (!g->depth_mode || depth_clip_cap()) && !g->y_negate && (!g->alpha_test_compare || !strcmp(g->alpha_test_compare, "Always")) &&
-           !g->alpha_to_coverage_enable && !g->dual_source_blend;
+           !g->alpha_to_coverage_enable && !g->dual_source_blend &&
+           !(g->has_unaligned_ssbo && g->unaligned_ssbo);   // 预编库按 Metal 翻译、存储缓冲一律当对齐：Vulkan 绑定要往下对齐到 minStorageBufferOffsetAlignment，偏差只有现编（读 c0 的偏移）会补
 }
 struct work_snap {
     uint64_t epoch;
@@ -929,7 +930,7 @@ static struct entry *warm_work_run(const struct nvk_prog_rec *rec, int nst) {
     memset(views, 0, sizeof views);
     for (int st = 0; st < nst && st < 3; st++)
         if (rec->c1_ok & (1u << st)) { views[st].c1 = rec->c1[st]; views[st].c1_bytes = NVK_PROG_REC_C1_BYTES; }
-    if (!bytes && libpack_fetch(rec->identity, (const uint8_t (*)[8])rec->keys, nst, NULL, rec->lp_ok, &pc, &bytes, &len)) {
+    if (!bytes && libpack_fetch(rec->identity, (const uint8_t (*)[8])rec->keys, nst, NULL, rec->lp_ok == 2, &pc, &bytes, &len)) {
         struct entry *le = build(bytes, len, views, nst, rec->identity);
         if (le) le->prog.z_raw = 1;
         free(bytes); bytes = NULL; len = 0;
@@ -1211,7 +1212,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
         // 这里原先只记身份（没有源快照，就没有 c1）。后果是：只要某份程序第一次是被「已发布对象命中」记进清单的，
         // 清单里这条就永远 c1_ok=0；下一局预热按它建出来的程序也 c1_ok=0，而 rp_draw 对带 C1 绑定的绘制
         // （火把/粒子等用 BRX 跳表的着色器）直接跳过 → 光消失、画面发黑。程序对象里就有 c1，直接抄过来即可。
-        struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec); memcpy(rec.identity, sha, 32); rec.stage_mask = stages; rec.lp_ok = (uint8_t)libpack_state_ok(&f.gfx);
+        struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec); memcpy(rec.identity, sha, 32); rec.stage_mask = stages; rec.lp_ok = libpack_state_ok(&f.gfx) ? 2 : 0;
         for (int st = 0; st < nst; st++) memcpy(rec.keys[st], id.keys[st], 8);
         rec.c1_ok = (uint8_t)(e->prog.c1_ok & (uint8_t)((1u << nst) - 1u));
         for (int st = 0; st < nst; st++)
@@ -1242,7 +1243,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
         if (win->failed) return -1;
         *out = &win->prog;   // 预建对象的采用计数在 await_inflight 的锁内记（每份一次）
         // 同一处的 c1 记账（原因见上面「已发布」分支）：预建对象里有 c1 就记进清单。
-        { struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec); memcpy(rec.identity, sha, 32); rec.stage_mask = stages; rec.lp_ok = (uint8_t)libpack_state_ok(&f.gfx);
+        { struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec); memcpy(rec.identity, sha, 32); rec.stage_mask = stages; rec.lp_ok = libpack_state_ok(&f.gfx) ? 2 : 0;
           for (int st = 0; st < nst; st++) memcpy(rec.keys[st], id.keys[st], 8);
           rec.c1_ok = (uint8_t)(win->prog.c1_ok & (uint8_t)((1u << nst) - 1u));
           for (int st = 0; st < nst; st++)
@@ -1281,7 +1282,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
     struct nvk_prog_rec rec;
     memset(&rec, 0, sizeof rec);
     memcpy(rec.identity, sha, 32);
-    rec.stage_mask = stages; rec.lp_ok = (uint8_t)libpack_state_ok(&f.gfx);
+    rec.stage_mask = stages; rec.lp_ok = libpack_state_ok(&f.gfx) ? 2 : 0;
     for (int st = 0; st < nst; st++) memcpy(rec.keys[st], id.keys[st], 8);
     struct entry *ne = NULL;
     const uint64_t dg_c0 = atomic_load(&g_n_compiled);
@@ -1481,7 +1482,7 @@ static int resolve_compute_slow(const struct rp_prog **out, const struct s2a_dir
         if (!bytes && cdir && !nvn_plat_flag("no_disk_cache", 0) && s2a_program_cache_load(cdir, rq.identity, &bytes, &len, NULL, why, sizeof why) == 0) atomic_fetch_add_explicit(&g_n_cache, 1, memory_order_relaxed);
         // 出包预编库：口径同图形那条（跨局缓存之后、现编之前；同一句柄、同一张不可用表）。键 = 计算阶段 8 字节控制键 rp_S.skey[5]
         struct entry *lpe = NULL;
-        if (!bytes && libpack_fetch(rq.identity, NULL, 0, rp_S.skey[5], 1, &pc, &bytes, &len)) {
+        if (!bytes && libpack_fetch(rq.identity, NULL, 0, rp_S.skey[5], !unaligned, &pc, &bytes, &len)) {
             lpe = build_compute(bytes, len, &rq.source, rq.identity);
             free(bytes); bytes = NULL; len = 0;
             if (lpe && !lpe->failed) libpack_note_hit();
