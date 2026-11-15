@@ -410,7 +410,7 @@ void rp_pass_end(nvn_gpu_cmd c) {
 
 // 开通道（已开着直接回 1）。0 = 开不了（已记账）：调用方跳过这笔绘制。
 static uint64_t pb_now(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec; }
-#define PB(step) do { uint64_t n_ = pb_now(); rp_perf_add(step, n_ - pb_); pb_ = n_; } while (0)
+#define PB(step) do { if (tm_) { uint64_t n_ = pb_now(); rp_perf_add(step, n_ - pb_); pb_ = n_; } } while (0)
 // 绘制前调（rp_draw 在 rp_pass_begin 之前）：把这一笔要求的像素区域交给下一步开通道；通道已经开着而这一笔超出当前区域，
 // 收通道并按并集重开（重开用 LOAD：上一遍只保存过它自己的区域，区域外内容本来就是原样；带清除负载的通道区域必是整张，走不到这里）。
 void rp_pass_prepare_draw(nvn_gpu_cmd c) {
@@ -438,7 +438,8 @@ int rp_pass_begin(nvn_gpu_cmd c) {
     if (P.rt.n < 0 || P.rt.n > 8) { nvn_unimpl("pass", "no_attachment", NULL); return 0; }
     if (!any_color && !P.rt.depth && !noatt_ok()) { nvn_unimpl("pass", "no_attachment", NULL); return 0; }   // 后端开不了无附件通道（iOS 现在）：这笔跳过
     rp_view_pin_begin();   // 下面取到的视图在本函数结束前不能被轮转放掉
-    uint64_t pb_ = pb_now();   // 四段计时：取附件视图 / 屏障 / 后端开通道 / 记 GPU 写过
+    const int tm_ = rp_tm();   // 分时抽样（#1103）：只在采样帧里计时
+    uint64_t pb_ = tm_ ? pb_now() : 0;   // 四段计时：取附件视图 / 屏障 / 后端开通道 / 记 GPU 写过
     nvn_gpu_pass_desc d; memset(&d, 0, sizeof d);
     int nattached = 0;
     int taken[9], ntake = 0;   // 这个通道吃掉的挂起项（开通道成功后才移出表：开不了要留着下次落地）
