@@ -443,7 +443,7 @@ typedef BOOL (^VPFlag)(void);
     [_gear.contextMenuInteraction updateVisibleMenuWithBlock:^UIMenu *(UIMenu *visible) { S2AVPadView *v = ws; return v ? [v refreshedMenu:visible] : visible; }];
 }
 // S 级优化三项（11-15 维护者定：满屏 / 帧率解锁 / 金手指挪到齿轮菜单一级，金色 S，复用现有开关、不加新开关；三端同一套，
-//   cmdr 定稿「S级三项齿轮页」）。副标题一句写现在用的是什么（sgrade_line.m s2a_sgrade_row_note）；系统菜单的字不能上色，金色落在 S 图标上。
+//   三端界面定稿）。副标题一句写现在用的是什么（sgrade_line.m s2a_sgrade_row_note）；系统菜单的字不能上色，金色落在 S 图标上。
 //   满屏 / 带社区帧率补丁的帧率改动下次起局才生效：点完收菜单、问要不要立即重启；纯补帧当场切（s2a_fi_set_live）
 static NSString *vp_running_gid(void) { const char *g = getenv("S2A_LAUNCH_GAME_ID"); return g && *g ? @(g) : nil; }   // 同 settings.m current_gid：自动关记录按款存
 - (UIMenu *)sgradeSection {
