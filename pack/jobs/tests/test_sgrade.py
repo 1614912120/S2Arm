@@ -71,9 +71,10 @@ class SGradeTests(unittest.TestCase):
         nso(self.t / "lib/0100C/image/mac/exefs", "CCCCCCCCCCCCCCCC")
         self.info["0100C"] = {"sgradeOff": True}
         pats = {"AAAAAAAAAAAAAAAA": {"widescreen": 1, "fps": 2, "gfx": 0, "cheat": 3}, "CCCCCCCCCCCCCCCC": {"widescreen": 1, "fps": 0, "gfx": 0, "cheat": 0}}
-        import rewrite_refresh
-        with patch.object(sgrade, "local_patches", side_effect=lambda c, g, bid: pats.get(bid, {"widescreen": 0, "fps": 0, "gfx": 0, "cheat": 0})), \
-             patch.object(rewrite_refresh, "original_exefs", return_value=None):
+        import patches, rewrite_refresh
+        with patch.object(sgrade, "local_patches", side_effect=lambda c, g, bid, others=None: pats.get(bid, {"widescreen": 0, "fps": 0, "gfx": 0, "cheat": 0})), \
+             patch.object(rewrite_refresh, "original_exefs", return_value=None), \
+             patch.object(patches, "display_version", return_value="1.0.0"), patch.object(patches, "own_widen", return_value=False):
             r = sgrade.scan(self.c)
         got = {x["id"]: (x["program"], x["total"], x["iphone"], x["mac"], x["off"]) for x in r["games"]}
         self.assertEqual(got, {"0100A": ("saved", 6, True, False, False), "0100B": ("saved", 0, True, False, False),

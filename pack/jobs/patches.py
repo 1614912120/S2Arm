@@ -457,8 +457,22 @@ def match(c):
     port_versions = [v for v, cs in sorted(others.items(), key=key) if "widescreen" in cs] if port else []
     if port:
         others = {v: cs - {"widescreen"} for v, cs in others.items() if cs - {"widescreen"}}
-    return dict(build=build, version=version, exact=exact, total=sum(exact.values()), port=port, portVersions=port_versions,
+    return dict(build=build, version=version, exact=exact, total=sum(exact.values()), port=port, portVersions=port_versions, ownWiden=own_widen(c, gid, build),
                 others=[dict(version=v, cats=[k for k in CATS if k in cs]) for v, cs in sorted(others.items(), key=key)])
+
+
+def own_widen(c, gid, build):
+    """这一版在宽屏已验证名单（graphics/widen/tables/verified.tsv，程序号 + main 构建号 + apple）→ 没有社区满屏补丁时用我方通用满屏（维护者 11-15「两者合成一套」）。
+    build = 主程序构建号（前 16 位即可，按前缀对）；没解过包 = False"""
+    if not build:
+        return False
+    try:
+        text = (Path(c.engine) / "graphics/widen/tables/verified.tsv").read_text(encoding="utf-8")
+    except (OSError, AttributeError, TypeError):
+        return False
+    b = build.lower()[:16]
+    return any(f[0].upper() == gid.upper() and f[1].lower().startswith(b) and f[3].lower() == "apple"
+               for f in (l.split("\t") for l in text.splitlines() if l.strip() and not l.startswith("#")) if len(f) >= 4)
 
 
 def display_version(c, game):   # 解包目录删了：退回游戏库记的版本（catalog version，同游戏库卡片）

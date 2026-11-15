@@ -316,9 +316,36 @@ def note_crash(c, game, docs=None):
     d.mkdir(parents=True, exist_ok=True)
     atomic(d / "crashed.json", {"cheats": keys, "patches": patches, "fps": fps, "fullscreen": fs, "at": int(time.time()), "off": True})
     # 记下这次自动关掉的、当时的版本：换了版本（多半修了引起崩溃的毛病）自动重开一次（restore_after_update）
+    remember_auto_off(c, d, off, "crash", where)
+
+
+def remember_auto_off(c, d, off, cause, where=""):
+    """记下自动关掉的（常驻，玩家看过通知也不删）：cheats/auto_off.json {ver, off: [[类, 键]…], where, meta: {"类\t键": {cause, at}}}。
+    版本给 restore_after_update（换版本重开一次）；meta 给 S 级状态（sgrade.state 的 autoOff：原因 crash / stall、时间）。玩家动那个开关、或一键重开时清（forget_auto_off）"""
     ao = read(d / "auto_off.json", None)
-    prev = [x for x in (ao.get("off", []) if isinstance(ao, dict) else []) if tuple(x) not in off]
-    atomic(d / "auto_off.json", {"ver": app_version(c), "off": prev + [list(x) for x in off], "where": where or "unknown"})
+    ao = ao if isinstance(ao, dict) else {}
+    prev = [x for x in ao.get("off", []) if tuple(x) not in off]
+    meta = dict(ao.get("meta") or {})
+    now = int(time.time())
+    for t, k in off:
+        meta[f"{t}\t{k}"] = {"cause": cause, "at": now}
+    d.mkdir(parents=True, exist_ok=True)
+    atomic(d / "auto_off.json", {"ver": app_version(c), "off": prev + [list(x) for x in off], "where": where or ao.get("where") or "unknown", "meta": meta})
+
+
+def forget_auto_off(c, gid, items):
+    """玩家自己动了这几项（重新打开 / 关掉）：从自动关记录里去掉，状态不再显示「自动关的」。items = [(类, 键)]"""
+    d = cheats_dir(c, gid, create=False)
+    ao = read(d / "auto_off.json", None)
+    if not isinstance(ao, dict):
+        return
+    drop = {tuple(x) for x in items}
+    off = [x for x in ao.get("off", []) if tuple(x) not in drop]
+    meta = {k: v for k, v in (ao.get("meta") or {}).items() if tuple(k.split("\t", 1)) not in drop}
+    if off:
+        atomic(d / "auto_off.json", dict(ao, off=off, meta=meta))
+    else:
+        (d / "auto_off.json").unlink(missing_ok=True)
 
 
 def restore_after_update(c, game):
@@ -364,6 +391,7 @@ def note_stall(c, game, docs):
     d = cheats_dir(c, gid)
     r = read(d / "crashed.json", {}) or {}
     atomic(d / "crashed.json", dict(r, fps=True, at=int(time.time()), off=True, cheats=r.get("cheats", []), patches=r.get("patches", [])))
+    remember_auto_off(c, d, [("fps", "fps60")], "stall")
     return True
 
 
