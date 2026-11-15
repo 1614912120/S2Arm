@@ -10,6 +10,10 @@ import unittest
 import unittest.mock
 import os
 os.environ.setdefault("S2A_BANNER_FETCH", "0")   # 作业层测试一律不连商店（library.store_meta）；要测的用例自己打桩
+# 补丁 / 金手指下载站同理（11-14 门禁提速）：每次出包 patches.prepare 都现取云端清单（patches.cloud_manifest），原先单测里每个出包用例都真连网
+#   （经本机代理，每次约 1 秒，test_job_failure_codes 一份就 40 多次；断网 / 代理卡住时按 patches.TIMEOUT 白等）。缺省指一个不存在的本地目录
+#   = 「云端取不到、只用本地」，与门禁机断网时同一条路径；要测下载站的用例（test_patches）自己把 S2A_PATCH_BASE 指到造好的目录
+os.environ.setdefault("S2A_PATCH_BASE", "file:" + os.path.join(tempfile.gettempdir(), "s2a-jobtests-no-patch-site"))
 
 JOBS = Path(__file__).resolve().parents[1]
 ROOT = JOBS.parents[1]

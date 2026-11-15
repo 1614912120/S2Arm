@@ -3065,7 +3065,16 @@ NVN(nvnWindowBuilderSetTextures, void, NVNwindowBuilder *b, int n, NVNtexture *c
     if (n < 0 || n > 4) { LOG("【红】 WindowBuilderSetTextures count %d", n); n = n < 0 ? 0 : 4; }
     WB(b)->ntex = n; for (int i = 0; i < n; i++) WB(b)->tex[i] = t[i];
 }
-NVN(nvnWindowBuilderSetPresentInterval, void, NVNwindowBuilder *b, int v) { WB(b)->interval = v; }
+// 游戏要的交换间隔超出真机上限（nvnDeviceGetInteger MAX_PRESENT_INTERVAL = 5，见上方设备属性表 [0x46]）：当 0（不等垂直同步，出图仍受出图节拍 60 / 120 Hz 封顶）。
+//   11-14 一款游戏的公开帧率补丁把 SetPresentInterval 的参数改成 1000（模拟器补丁，作者按「模拟器关垂直同步、间隔被忽略」写的；Ryujinx 无界模式同样当 0，
+//   compat/patches/0107）：原先照单收下，每次出图等 1000 个垂直同步，画面停在开头几帧、声音照常（iPhone 实机，帧率开关一关就好）。0–5 照旧
+#define NVN_ITV_MAX 5
+static int itv_in(int v) {
+    if (v >= 0 && v <= NVN_ITV_MAX) return v;
+    static int said; if (!said++) LOG("[nvn] 游戏要的交换间隔 %d 超出真机范围 0–%d（多为帧率补丁写的「不等垂直同步」），按 0 处理：不等垂直同步、由出图节拍封顶", v, NVN_ITV_MAX);
+    return 0;
+}
+NVN(nvnWindowBuilderSetPresentInterval, void, NVNwindowBuilder *b, int v) { WB(b)->interval = itv_in(v); }
 NVN(nvnWindowBuilderGetDevice, const NVNdevice *, const NVNwindowBuilder *b) { return ((const win_builder_t *)b)->dev; }
 NVN(nvnWindowBuilderGetNativeWindow, NVNnativeWindow, const NVNwindowBuilder *b) { return ((const win_builder_t *)b)->native; }
 NVN(nvnWindowBuilderGetPresentInterval, int, const NVNwindowBuilder *b) { return ((const win_builder_t *)b)->interval; }
@@ -3100,11 +3109,11 @@ NVN(nvnWindowGetNativeWindow, NVNnativeWindow, const NVNwindow *w) { return ((co
 static volatile int32_t *nat_itv(const win_t *o) { return o->nat && o->native ? (volatile int32_t *)((char *)o->native + NAT_ITV_OFF) : NULL; }
 static void nat_itv_sync(win_t *o) {
     volatile int32_t *p = nat_itv(o); if (!p) return;
-    int v = *p;
-    if (v != o->interval && v >= 0 && v <= 4) { LOG("[nvn] 原生窗口交换间隔被改成 %d（游戏设的 %d；金手指等直接写系统窗口），出图跟它", v, o->interval); o->interval = v; }
+    int v = itv_in(*p);   // 真机范围 0–5（原先只认 0–4，5 合法却被丢）；超界同 itv_in 按 0
+    if (v != o->interval) { LOG("[nvn] 原生窗口交换间隔被改成 %d（游戏设的 %d；金手指等直接写系统窗口），出图跟它", v, o->interval); o->interval = v; }
 }
 NVN(nvnWindowGetPresentInterval, int, const NVNwindow *w) { nat_itv_sync((win_t *)w); return ((const win_t *)w)->interval; }   // 原生窗口被改过（金手指）先读回来，同驱动   // Link's Awakening reads it back every frame
-NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int v) { win_t *o = (win_t *)w; if (o->interval != v) LOG("[nvn] the game sets present interval %d → %d", o->interval, v); o->interval = v; volatile int32_t *p = nat_itv(o); if (p) *p = v; }
+NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int v) { win_t *o = (win_t *)w; v = itv_in(v); if (o->interval != v) LOG("[nvn] the game sets present interval %d → %d", o->interval, v); o->interval = v; volatile int32_t *p = nat_itv(o); if (p) *p = v; }
 // 显示层裁切（nn::vi::SetLayerCrop，说明见 graphics/nvn/host_adapt.m s2a_vi_entry）：上屏取窗口贴图的区域。nvnWindowSetCrop 写的是同一个系统窗口裁切，谁最后写算谁
 static pthread_mutex_t g_vi_mu = PTHREAD_MUTEX_INITIALIZER; static int g_vi_crop[4];
 int32_t h_vi_set_layer_crop(void *layer, int32_t x, int32_t y, int32_t w, int32_t h) {
@@ -3991,7 +4000,16 @@ NVN(nvnBufferFinalize, void, NVNbuffer *buf) {
     ((buf_t *)buf)->magic = 0;
 }
 NVN(nvnBufferSetDebugLabel, void, NVNbuffer *buf, const char *s) { (void)buf; (void)s; }
-NVN(nvnBufferGetAddress, NVNbufferAddress, const NVNbuffer *buf) { return (NVNbufferAddress)(pool_ga(BF(buf)->pool) + BF(buf)->off); }
+// 初始化没成功的缓冲（BufferInitialize 回了 0：池没有存储，11-14 D-MDVK 签名丢了内存上限权限、堆申请失败）：游戏常不看返回值接着用，
+//   对象里没有魔数、池字段是空或残值。Map / GetAddress 原先直接解引用池，宿主自己崩在 h_nvnBufferMap（读 0x8）。认出来报红、回空，让真因（缺存储）留在日志上
+static inline int pool_cpu_none(const pool_t *o);
+static int buf_dead(const NVNbuffer *buf, const char *who) {
+    const buf_t *b = BF(buf);
+    if (b->magic == MAGIC('B', 'U', 'F', 0) && b->pool && (b->pool->mem || pool_cpu_none(b->pool))) return 0;
+    static _Atomic int n; if (atomic_fetch_add(&n, 1) < 8) LOG("【红】 %s：缓冲 %p 没初始化成功或池没有存储（魔数 %#x、池 %p）：回空，不解引用", who, (const void *)buf, b->magic, (const void *)b->pool);
+    return 1;
+}
+NVN(nvnBufferGetAddress, NVNbufferAddress, const NVNbuffer *buf) { if (buf_dead(buf, "nvnBufferGetAddress")) return 0; return (NVNbufferAddress)(pool_ga(BF(buf)->pool) + BF(buf)->off); }
 // CPU 不可访问的池（NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS）：映射给 NULL，同真驱动。宿主内部一律直接用 pool->mem，不经这两个入口。
 //   11-02 EA SPORTS FC 26（01004FF021942000）：引擎算拷贝源 = nvnBufferGetAddress(A) + (CPU 指针 − nvnBufferMap(A))，CPU 不可访问的池它自己把 CPU 指针记 0
 //   （NRO+0x67a84 查池标志位 0），只有 Map 也给 0 时才得回 GPU 地址；原先 Map 照给存储指针，算成「GPU 地址 − CPU 地址」（0x4ddcf80000），回放中止
@@ -4003,7 +4021,7 @@ static void map_none_note(int k, const pool_t *o) {
     uint64_t n = atomic_fetch_add(&g_map_none[k], 1) + 1;
     if (n == 1 || n % 1000 == 0) LOG("[nvn] %s on a pool without CPU access (flags %#x): NULL, as the NVN driver (%llu so far)", k ? "nvnBufferMap" : "nvnMemoryPoolMap", o->flags, (unsigned long long)n);
 }
-NVN(nvnBufferMap, void *, const NVNbuffer *buf) { if (pool_cpu_none(BF(buf)->pool)) { map_none_note(1, BF(buf)->pool); return NULL; } return BF(buf)->pool->mem + BF(buf)->off; }
+NVN(nvnBufferMap, void *, const NVNbuffer *buf) { if (buf_dead(buf, "nvnBufferMap")) return NULL; if (pool_cpu_none(BF(buf)->pool)) { map_none_note(1, BF(buf)->pool); return NULL; } return BF(buf)->pool->mem + BF(buf)->off; }
 NVN(nvnBufferGetSize, size_t, const NVNbuffer *buf) { return (size_t)BF(buf)->size; }
 NVN(nvnBufferGetMemoryPool, NVNmemoryPool *, const NVNbuffer *buf) { return (NVNmemoryPool *)BF(buf)->pool; }
 NVN(nvnBufferGetMemoryOffset, ptrdiff_t, const NVNbuffer *buf) { return (ptrdiff_t)BF(buf)->off; }
