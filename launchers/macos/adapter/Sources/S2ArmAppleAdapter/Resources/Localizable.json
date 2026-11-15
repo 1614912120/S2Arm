@@ -9682,5 +9682,13 @@
  {
   "source": "满屏",
   "en": "Full screen"
+ },
+ {
+  "source": "重新打开 S 级优化",
+  "en": "Turn S-Grade back on"
+ },
+ {
+  "source": "重开哪一项没说清楚。",
+  "en": "It wasn't clear which item to turn back on."
  }
 ]

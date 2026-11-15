@@ -472,8 +472,9 @@ def describe_game(c, game):
     for it in a["graphics"]:
         it["enabled"] = s["enabled"].get(it["id"]) is not False   # 11-13：没选过 = 默认开（S 级优化命中的打入并默认开）
     import cheats   # 金手指（11-12）：同一页「游戏设置 → 金手指」列出与开关
+    import sgrade   # S 级按类状态（满屏来源 / 是否生效 / 自动关 / 版本，pack/jobs/sgrade.py state）
     return dict(gameId=game["id"], version=_version(game), mac=mac_settings(c, game["id"]), cheats=cheats.listing(c, game),
-                crashed=cheats.crashed(c, game), **a)
+                crashed=cheats.crashed(c, game), sgradeState=sgrade.state(c, game), **a)
 
 
 def listing(c):
@@ -514,6 +515,12 @@ def save(c):
     if c.r.get("crashAnswer") is not None:   # 上次开着金手指 / 补丁时异常退出、已当场关掉，玩家看过通知 ack（pack/jobs/cheats.py answer_crash）
         import cheats
         cheats.answer_crash(c, game, c.r["crashAnswer"])
+    # 玩家自己动了帧率 / 满屏 / 补丁 / 金手指开关：这几项不再算「自动关的」（S 级状态 autoOff，pack/jobs/cheats.py forget_auto_off）
+    touched = ([("fps", "fps60")] if "fps60" in want else []) + ([("fs", "fullscreen")] if "widescreen" in want else []) \
+        + [("patch", k) for k in (c.r.get("graphics") or {})] + [("cheat", k) for k in (c.r.get("cheats") or {})]
+    if touched:
+        import cheats
+        cheats.forget_auto_off(c, game["id"].upper(), touched)
     graphics = c.r.get("graphics") or {}
     if not isinstance(graphics, dict):
         raise Failure("社区资源选择格式不对。", code="job_failed")
