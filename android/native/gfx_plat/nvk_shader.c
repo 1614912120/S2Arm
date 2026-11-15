@@ -663,6 +663,13 @@ static struct entry *build(const uint8_t *bytes, size_t len, const struct s2a_so
 // ---- 解析的不可变输入快照（三段式的第一段）----
 // 提交线程只做「读 rp_S 填事实 / 算内容身份 / pin 住源引用」，之后工作函数只吃快照：
 // 预热带（[后台]）与提交线程跑的是同一份 work_run，后台因此永远不读 rp_S、不编码命令、不提交。
+// 出包预编库按一组固定的特化状态翻译（translator/dmsh_xlate：深度不改写 = near 为 0、片元坐标不做 Y 取反、透明测试 Always、
+//   不开 alpha 转覆盖、无双源混合；Metal 那边按入口补深度改写，这里没有）。状态不同时取到的 SPIR-V 与现场编的语义不一致：
+//   11-14 王国之泪深度为 near=-w，用了预编库的图形程序画面整片暗 / 缺。只在状态相符时用（状态都进了程序身份，身份即状态）
+static int libpack_state_ok(const struct s2a_compile_graphics_src *g) {
+    return !g->depth_mode && !g->y_negate && (!g->alpha_test_compare || !strcmp(g->alpha_test_compare, "Always")) &&
+           !g->alpha_to_coverage_enable && !g->dual_source_blend;
+}
 struct work_snap {
     uint64_t epoch;
     uint32_t stages;
@@ -675,6 +682,7 @@ struct work_snap {
     struct s2a_direct_compile_context pc;    // profile_json / closure / profile_hash 指向本结构内的私有副本
     struct s2a_source_entry_view views[3];   // acquire 的 pin；build() 从这里逐字节拷 c1
     int acquired;
+    int lp_ok;                               // libpack_state_ok（快照时按事实算好：工作线程不碰 rp_S）
     char *profile_json, *closure, *profile_hash;
 };
 static void snap_free(struct work_snap *s) {
@@ -693,7 +701,7 @@ static struct work_snap *snap_capture(const struct facts *f, const struct s2a_in
         s->f.tex[i].sampler_type = s->f.tsmp[i];
         s->f.tex[i].format = s->f.tfmt[i];
     }
-    s->stages = stages; s->nst = nst;
+    s->stages = stages; s->nst = nst; s->lp_ok = libpack_state_ok(&s->f.gfx);
     memcpy(s->identity, sha, 32);
     for (int st = 0; st < nst; st++) memcpy(s->keys[st], id->keys[st], 8);
     s->tex_pool_n = id->texture_array_length;
@@ -737,10 +745,10 @@ static struct s2a_libpack *libpack_for_locked(const char *root) {
     return lp;
 }
 // 取一份（图形：keys 是 vs / fs 两阶段键；计算：ckey 非空）。1 = 取到（*bytes 归调用方 free）
-static int libpack_fetch(const uint8_t identity[32], const uint8_t (*gkeys)[8], int nst, const uint8_t *ckey,
+static int libpack_fetch(const uint8_t identity[32], const uint8_t (*gkeys)[8], int nst, const uint8_t *ckey, int state_ok,
                          const struct s2a_direct_compile_context *pc, uint8_t **bytes, size_t *len) {
     const char *root = getenv("S2A_SHADER_REVISION_ROOT");
-    if (!root || (!ckey && nst != 2) || nvn_plat_flag("no_libpack", 0)) return 0;
+    if (!root || (!ckey && (nst != 2 || !state_ok)) || nvn_plat_flag("no_libpack", 0)) return 0;
     char lw[192] = ""; int lrc = S2A_LIBPACK_MISS;
     pthread_mutex_lock(&g_lp_mu);
     if (!g_lp_bad_init) { nvn_hm_init(&g_lp_bad, 32); g_lp_bad_init = 1; }
@@ -808,7 +816,7 @@ static struct entry *work_run(const struct work_snap *s, int background) {
     if (!bytes && cdir && !nvn_plat_flag("no_disk_cache", 0) &&
         s2a_program_cache_load(cdir, s->identity, &bytes, &len, NULL, why, sizeof why) == 0)
         atomic_fetch_add_explicit(&g_n_cache, 1, memory_order_relaxed);
-    if (!bytes && libpack_fetch(s->identity, (const uint8_t (*)[8])s->keys, s->nst, NULL, &s->pc, &bytes, &len)) {
+    if (!bytes && libpack_fetch(s->identity, (const uint8_t (*)[8])s->keys, s->nst, NULL, s->lp_ok, &s->pc, &bytes, &len)) {
         struct entry *le = build(bytes, len, s->views, s->nst, s->identity);
         free(bytes); bytes = NULL; len = 0;
         if (le && !le->failed) { libpack_note_hit(); return le; }
@@ -914,7 +922,7 @@ static struct entry *warm_work_run(const struct nvk_prog_rec *rec, int nst) {
     memset(views, 0, sizeof views);
     for (int st = 0; st < nst && st < 3; st++)
         if (rec->c1_ok & (1u << st)) { views[st].c1 = rec->c1[st]; views[st].c1_bytes = NVK_PROG_REC_C1_BYTES; }
-    if (!bytes && libpack_fetch(rec->identity, (const uint8_t (*)[8])rec->keys, nst, NULL, &pc, &bytes, &len)) {
+    if (!bytes && libpack_fetch(rec->identity, (const uint8_t (*)[8])rec->keys, nst, NULL, rec->lp_ok, &pc, &bytes, &len)) {
         struct entry *le = build(bytes, len, views, nst, rec->identity);
         free(bytes); bytes = NULL; len = 0;
         if (le && !le->failed) { libpack_note_hit(); return le; }
@@ -1195,7 +1203,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
         // 这里原先只记身份（没有源快照，就没有 c1）。后果是：只要某份程序第一次是被「已发布对象命中」记进清单的，
         // 清单里这条就永远 c1_ok=0；下一局预热按它建出来的程序也 c1_ok=0，而 rp_draw 对带 C1 绑定的绘制
         // （火把/粒子等用 BRX 跳表的着色器）直接跳过 → 光消失、画面发黑。程序对象里就有 c1，直接抄过来即可。
-        struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec); memcpy(rec.identity, sha, 32); rec.stage_mask = stages;
+        struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec); memcpy(rec.identity, sha, 32); rec.stage_mask = stages; rec.lp_ok = (uint8_t)libpack_state_ok(&f.gfx);
         for (int st = 0; st < nst; st++) memcpy(rec.keys[st], id.keys[st], 8);
         rec.c1_ok = (uint8_t)(e->prog.c1_ok & (uint8_t)((1u << nst) - 1u));
         for (int st = 0; st < nst; st++)
@@ -1226,7 +1234,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
         if (win->failed) return -1;
         *out = &win->prog;   // 预建对象的采用计数在 await_inflight 的锁内记（每份一次）
         // 同一处的 c1 记账（原因见上面「已发布」分支）：预建对象里有 c1 就记进清单。
-        { struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec); memcpy(rec.identity, sha, 32); rec.stage_mask = stages;
+        { struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec); memcpy(rec.identity, sha, 32); rec.stage_mask = stages; rec.lp_ok = (uint8_t)libpack_state_ok(&f.gfx);
           for (int st = 0; st < nst; st++) memcpy(rec.keys[st], id.keys[st], 8);
           rec.c1_ok = (uint8_t)(win->prog.c1_ok & (uint8_t)((1u << nst) - 1u));
           for (int st = 0; st < nst; st++)
@@ -1265,7 +1273,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
     struct nvk_prog_rec rec;
     memset(&rec, 0, sizeof rec);
     memcpy(rec.identity, sha, 32);
-    rec.stage_mask = stages;
+    rec.stage_mask = stages; rec.lp_ok = (uint8_t)libpack_state_ok(&f.gfx);
     for (int st = 0; st < nst; st++) memcpy(rec.keys[st], id.keys[st], 8);
     struct entry *ne = NULL;
     const uint64_t dg_c0 = atomic_load(&g_n_compiled);
@@ -1465,7 +1473,7 @@ static int resolve_compute_slow(const struct rp_prog **out, const struct s2a_dir
         if (!bytes && cdir && !nvn_plat_flag("no_disk_cache", 0) && s2a_program_cache_load(cdir, rq.identity, &bytes, &len, NULL, why, sizeof why) == 0) atomic_fetch_add_explicit(&g_n_cache, 1, memory_order_relaxed);
         // 出包预编库：口径同图形那条（跨局缓存之后、现编之前；同一句柄、同一张不可用表）。键 = 计算阶段 8 字节控制键 rp_S.skey[5]
         struct entry *lpe = NULL;
-        if (!bytes && libpack_fetch(rq.identity, NULL, 0, rp_S.skey[5], &pc, &bytes, &len)) {
+        if (!bytes && libpack_fetch(rq.identity, NULL, 0, rp_S.skey[5], 1, &pc, &bytes, &len)) {
             lpe = build_compute(bytes, len, &rq.source, rq.identity);
             free(bytes); bytes = NULL; len = 0;
             if (lpe && !lpe->failed) libpack_note_hit();

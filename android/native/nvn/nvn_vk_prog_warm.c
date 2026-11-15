@@ -264,6 +264,7 @@ int nvk_prog_warm_load(void) {
         s.rec.stage_mask = get_u32(e + 32);
         memcpy(s.rec.keys, e + 36, sizeof s.rec.keys);
         s.rec.c1_ok = e[60];
+        s.rec.lp_ok = e[61] & 1u;
         memcpy(s.rec.c1, e + 64, sizeof s.rec.c1);
         s.rec.uses = get_u32(e + 60 + 4 + 768);
         s.last_use_ms = get_u64(e + 60 + 4 + 768 + 4);
@@ -335,7 +336,7 @@ void nvk_prog_warm_note(const struct nvk_prog_rec *rec) {
         struct slot *s = &g.v[at];
         if (s->rec.uses != 0xFFFFFFFFu) s->rec.uses++;
         s->last_use_ms = ts;
-        s->rec.stage_mask = rec->stage_mask;
+        s->rec.stage_mask = rec->stage_mask; s->rec.lp_ok = rec->lp_ok;   // 同身份即同状态：旧清单读来的 0 在这里刷新
         memcpy(s->rec.keys, rec->keys, sizeof s->rec.keys);
         // c1 只在这次快照确实带回来时才覆盖（真实 resolve 有视图；清单加载来的记录没有新视图）。
         for (int st = 0; st < NVK_PROG_REC_STAGES; st++)
@@ -486,7 +487,7 @@ void nvk_prog_warm_save(void) {
             memcpy(p, s->rec.identity, 32); p += 32;
             put_u32(&p, s->rec.stage_mask);
             memcpy(p, s->rec.keys, sizeof s->rec.keys); p += sizeof s->rec.keys;
-            put_u8(&p, s->rec.c1_ok); p += 3;   // 保留
+            put_u8(&p, s->rec.c1_ok); put_u8(&p, s->rec.lp_ok); p += 2;   // 保留
             memcpy(p, s->rec.c1, sizeof s->rec.c1); p += sizeof s->rec.c1;
             put_u32(&p, s->rec.uses);
             put_u64(&p, s->last_use_ms);

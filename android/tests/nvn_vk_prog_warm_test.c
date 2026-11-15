@@ -134,6 +134,29 @@ int main(void) {
     }
 
 
+    // 2a) 预编库可用位 lp_ok：随清单落盘读回；旧清单（保留字节为 0）读作 0；同身份再 note 时按最新值刷新。
+    {
+        dir_reset();
+        struct nvk_prog_rec a = mkrec(1, 3), b = mkrec(2, 3);
+        a.lp_ok = 1; b.lp_ok = 0;
+        nvk_prog_warm_note(&a); nvk_prog_warm_note(&b);
+        nvk_prog_warm_save();
+        nvk_prog_warm_reset();
+        CHECK(load_now() == 2, "two records round-trip for lp_ok");
+        struct nvk_prog_rec g1, g2;
+        CHECK(nvk_prog_warm_take(&g1) == 1 && nvk_prog_warm_take(&g2) == 1, "both lp_ok records are taken");
+        struct nvk_prog_rec *ga = rec_is(&g1, 1) ? &g1 : &g2, *gb = rec_is(&g1, 1) ? &g2 : &g1;
+        CHECK(rec_is(ga, 1) && ga->lp_ok == 1 && rec_is(gb, 2) && gb->lp_ok == 0, "lp_ok round-trips per record (%u, %u)", (unsigned)ga->lp_ok, (unsigned)gb->lp_ok);
+        b.lp_ok = 1; nvk_prog_warm_note(&b);           // 旧清单读来的 0：真实 resolve 再记时刷新
+        nvk_prog_warm_save();
+        nvk_prog_warm_reset();
+        CHECK(load_now() == 2, "records survive the lp_ok refresh");
+        CHECK(nvk_prog_warm_take(&g1) == 1 && nvk_prog_warm_take(&g2) == 1, "refreshed records are taken");
+        gb = rec_is(&g1, 2) ? &g1 : &g2;
+        CHECK(rec_is(gb, 2) && gb->lp_ok == 1, "a later note refreshes lp_ok (got %u)", (unsigned)gb->lp_ok);
+    }
+
+
     // 2b) 无 c1 的 note：真实 draw 命中「已发布」的程序时没有源快照（只有身份与阶段键），这种 note
     //     不得抹掉记录里已有的 c1（预热产品必须与真实解析逐位一致，c1 缺了 rp_draw 会跳过绘制），
     //     uses 照常 ++、keys 照旧保留。
