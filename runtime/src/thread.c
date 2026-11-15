@@ -595,6 +595,7 @@ static int thread_keys_init(void) {
 // TLR+0x1F8 = 当前线程对象指针：SDK 内部临界区从这里取，主线程与宿主借建的线程没人填，给一块零初始化对象（旧库同做法）
 // TLR+0x110 = 当前线程句柄：Horizon 内核建线程时无条件写（主线程起进程时 / svcCreateThread）；Switch 2 SDK 的
 // InternalCriticalSection::IsLockedByCurrentThread 拿它比互斥锁属主，留 0 则没人持的锁读成「本线程持有」直接 abort（火纹 Fortune's Weave）
+uint64_t s2a_guest_x18_now(void) { return (uint64_t)(uintptr_t)pthread_getspecific(g_key18); }   // 本线程游戏 x18 的槽值（crash.c 崩溃现场打，诊断#ff9a04）
 static void guest_thread_init(thr_t *t) {
     pthread_setspecific(g_keygate, (void *)sw_gate);
     pthread_setspecific(g_key18, 0);

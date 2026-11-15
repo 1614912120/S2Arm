@@ -992,6 +992,25 @@ int s2a_va_short_last(uint64_t fa, int *num, uint64_t *a, uint64_t *n, uint64_t 
     if (!n0 || fa < a0 || fa - a0 >= n0) return 0;
     *num = atomic_load(&g_vs_num); *a = a0; *n = n0; *count = atomic_load(&g_va_short); return 1;
 }
+// 最近 32 次 UnmapPhysicalMemory（崩溃现场归因用，诊断#ff9a04：游戏读别名区里当前未映射的一页崩了，那段是游戏自己早先解除的（悬空指针），
+//   还是从没解除过、是我方弄丢的，原先判不了）。只在成功解除后记；崩溃处理里无锁读，读到半新不旧也只是诊断
+#define UNMAP_RING 32
+static struct { _Atomic uint64_t a, n, ms; } g_unmap_ring[UNMAP_RING];
+static _Atomic uint64_t g_unmap_seq;
+static uint64_t mono_ms(void) { struct timespec t; return clock_gettime(CLOCK_MONOTONIC, &t) ? 0 : (uint64_t)t.tv_sec * 1000 + (uint64_t)t.tv_nsec / 1000000; }
+static void unmap_ring_note(uint64_t a, uint64_t n) {
+    uint64_t k = atomic_fetch_add(&g_unmap_seq, 1) % UNMAP_RING;
+    atomic_store(&g_unmap_ring[k].n, 0); atomic_store(&g_unmap_ring[k].a, a); atomic_store(&g_unmap_ring[k].ms, mono_ms()); atomic_store(&g_unmap_ring[k].n, n);
+}
+// fa 落在最近 32 次里哪一次解除的段：命中返回 1（取最近的一次，*back = 倒数第几次、*ago_ms = 多久前），*total = 本局解除总次数
+int s2a_phys_unmap_hit(uint64_t fa, uint64_t *a, uint64_t *n, uint64_t *back, uint64_t *ago_ms, uint64_t *total) {
+    uint64_t seq = atomic_load(&g_unmap_seq), now = mono_ms(); *total = seq;
+    for (uint64_t i = 1; i <= UNMAP_RING && i <= seq; i++) {
+        uint64_t k = (seq - i) % UNMAP_RING, a0 = atomic_load(&g_unmap_ring[k].a), n0 = atomic_load(&g_unmap_ring[k].n);
+        if (n0 && fa >= a0 && fa - a0 < n0) { uint64_t t = atomic_load(&g_unmap_ring[k].ms); *a = a0; *n = n0; *back = i; *ago_ms = now > t ? now - t : 0; return 1; }
+    }
+    return 0;
+}
 static uint64_t va_short(int num, uint64_t a, uint64_t n, const char *region) {
     uint64_t k = atomic_fetch_add(&g_va_short, 1) + 1;
     atomic_store(&g_vs_num, num); atomic_store(&g_vs_a, a); atomic_store(&g_vs_n, n);
@@ -1900,6 +1919,7 @@ static int svc_mem_impl(int num, uint64_t *regs, uint64_t orig) {
         if (rel_hi > we) rel_hi = we;
         if (rel_hi > rel_lo) backing_changed(rel_lo, rel_hi - rel_lo);
 #endif
+        if (num == 0x2D) unmap_ring_note(a, size);
         regs[0] = 0; return 1;
     }
     case 0x07: session_guest_end("游戏调 ExitProcess"); s2a_host_shutdown("游戏调 ExitProcess"); for (;;) pause();
