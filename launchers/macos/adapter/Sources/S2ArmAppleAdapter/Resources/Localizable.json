@@ -9606,5 +9606,17 @@
  {
   "source": "换库失败后，新位置的临时文件夹没删干净，可以手动删除：{0}（{1}）",
   "en": "After the failed move, the temporary folder at the new location wasn't fully removed; you can delete it yourself: {0} ({1})"
+ },
+ {
+  "source": "{0}和手机上的{1}地址空间类型不同，放不进同一个 App。要装这款，先从 iPhone 删掉{2}再装。",
+  "en": "{0} uses a different address space type from {1} on the phone, so they can't go into the same app. To install this game, delete {2} from the iPhone first."
+ },
+ {
+  "source": "这几款游戏地址空间类型不同，放不进同一个 App：{0}；只能留其中一组。",
+  "en": "These games use different address space types and can't go into the same app: {0}. Only one group can stay."
+ },
+ {
+  "source": "这几款和这次导出的游戏地址空间类型不同，放不进同一个 App，这次没带：{0}（要玩它们就单独点它们导出，导出的 S2Arm 会换成只含同一类的游戏）",
+  "en": "These games use a different address space type from the ones in this export, so they can't go into the same app and were left out: {0} (to play them, export them on their own; the exported S2Arm will then contain only games of that type)"
  }
 ]

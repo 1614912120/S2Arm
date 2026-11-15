@@ -186,6 +186,9 @@ run_shared_gpu_contract() {
 run_vulkan_diag() {
   timeout 300 bash graphics/track/tests/vulkan_diag/build_run.sh > "$LOG/vulkan_diag.log" 2>&1
 }
+# 显卡独占锁只罩开真窗口 / 按真实显示时钟判的子项（11-14：原先 tools/gate.sh 给整个钩子套锁，一百多项离屏单测也排同一把，全机一次只能跑一个 graphics 钩子）。
+#   锁 = 全机共用的 Mac 局槽（与 solo、Mac 局同一把）；没给 S2A_PRIVATE_TOOLS（单机 / 本机直跑）照旧不套。用法：gpu_excl <拿齐后时限秒> <命令…>
+gpu_excl() { local lim=$1; shift; [ -n "${S2A_PRIVATE_TOOLS:-}" ] && { bash "$S2A_PRIVATE_TOOLS/mac_slot_frozen.sh" prio "graphics/gate.sh 上屏驻留" "$lim" -- "$@"; return; }; "$@"; }   # 写成 shift 后语句首执行 "$@"：接线扫描按转调函数认，被包的单测仍算接上
 run_present_residency() {
   local out="build/tests/present-residency" widen_build="build/tests/present-residency/deps"
   local widen_target="$widen_build/tests/nvn/widen/S2Arm.Gfx.Widen.dylib"
@@ -193,7 +196,7 @@ run_present_residency() {
   timeout 240 make -s -j1 S2A_CS=0 BUILD="$widen_build" "$widen_target" > "$LOG/present_residency_widen.log" 2>&1
   build_status=$?; redlog $build_status "$LOG/present_residency_widen.log"
   if [ "$build_status" = 0 ]; then
-    timeout 300 env PRESENT_RESIDENCY_BUILD="$PWD/$out" PRESENT_WIDEN_LIB="$widen_lib" \
+    gpu_excl 330 timeout 300 env PRESENT_RESIDENCY_BUILD="$PWD/$out" PRESENT_WIDEN_LIB="$widen_lib" \
       bash graphics/nvn/tests/t_present_residency.sh > "$LOG/present_residency.log" 2>&1
     test_status=$?; redlog $test_status "$LOG/present_residency.log"
   else
@@ -207,13 +210,13 @@ run_present_residency() {
   if [ "$build_status" = 0 ] && need_fps_limit; then
     # 450 秒：核心矩阵 56 个场景按真实显示时钟跑（每个约 3 秒、动态档 4 阶段），10-30 加动态换档场景后整组实测 286–303 秒，
     #   原 300 秒到点 rc=124、已跑完的全 PASS 也判红（11-01 gfx 钩子合入后层红的一项）；按实测 1.5 倍给
-    timeout 450 env FPS_HIGH_REFRESH=0 FPS_WIDEN_LIB="$widen_lib" \
+    gpu_excl 480 timeout 450 env FPS_HIGH_REFRESH=0 FPS_WIDEN_LIB="$widen_lib" \
       bash graphics/nvn/tests/t_fps_limit.sh > "$LOG/fps_limit.log" 2>&1
     fps_status=$?; redlog $fps_status "$LOG/fps_limit.log"
     PRESENT_RESIDENCY_RESULT="$PRESENT_RESIDENCY_RESULT / 帧率上限核心矩阵：$(tail -2 "$LOG/fps_limit.log" | tr '\n' ' ')（退出 ${fps_status}；120 Hz 专项须在支持设备另跑）"
   fi
   if [ "$build_status" = 0 ] && need_present_settings; then
-    timeout 300 env PRESENT_WIDEN_LIB="$widen_lib" bash graphics/nvn/tests/t_present_settings.sh > "$LOG/present_settings.log" 2>&1
+    gpu_excl 330 timeout 300 env PRESENT_WIDEN_LIB="$widen_lib" bash graphics/nvn/tests/t_present_settings.sh > "$LOG/present_settings.log" 2>&1
     settings_status=$?; redlog $settings_status "$LOG/present_settings.log"
     PRESENT_RESIDENCY_RESULT="$PRESENT_RESIDENCY_RESULT / 直连画面设置：$(tail -2 "$LOG/present_settings.log" | tr '\n' ' ')（退出 ${settings_status}）"
   fi
