@@ -388,22 +388,38 @@ static id<MTLComputePipelineState> par_compute_(id<MTLFunction> fn, NSString *ke
 //   thread stood inside a compute pipeline build for over 30 s on the first gameplay frame, and nothing in the log named the shader, because a build is logged only when it
 //   returns). The note fires from a timer while the build still runs; a build that took longer than PAR_SLOW_MS also logs its time when it returns, and whether it built or failed (11-05: a compile the system killed at its 150 MB limit returned nil after 8.4 s and read as built). Nothing else changes.
 enum { PAR_SLOW_MS = 5000 };
-typedef struct { _Atomic int done; char key[96]; char kind[8]; char thread[32]; char fns[160]; uint64_t t0; } ParSlow;
+static int g_par_slow_ms = PAR_SLOW_MS;   // 单测改短
+// #065090：慢编译那一行带上 MSL 摘要（谁的源、行数、哈希、main0 体多长、大计算核拆分 DshOutline 拆没拆，见 msl_note），回落翻译的还把源文件留一份
+//   <键>.slow.metal 在兜底目录（诊断包随 .inflight / .fail 一起带走，ios/diag.m）：发版后同类停帧还在，就能当场判拆分是没覆盖到还是拆了也慢。
+//   调用方在本线程建管线前设 t_par_msl_note / t_par_msl_src（par_slow_begin 同步拷走），建完清空
+static __thread const char *t_par_msl_note, *t_par_msl_src;
+enum { PAR_SLOW_KEEP_MAX = 4 };   // 一局至多留几份源
+static void par_slow_keep_src(const char *src) {
+    static _Atomic int n;
+    size_t L = strlen(src); if (L < 7 || strcmp(src + L - 6, ".metal") || atomic_fetch_add(&n, 1) >= PAR_SLOW_KEEP_MAX) return;
+    NSString *s = @(src), *d = [[s stringByDeletingPathExtension] stringByAppendingString:@".slow.metal"];
+    [NSFileManager.defaultManager removeItemAtPath:d error:nil];
+    NSError *e = nil; BOOL ok = [NSFileManager.defaultManager copyItemAtPath:s toPath:d error:&e];
+    MLOG("%s MSL source %s kept as %s for the diagnostic package%s%s", ok ? "slow pipeline:" : "【红】 slow pipeline:", s.lastPathComponent.UTF8String, d.lastPathComponent.UTF8String, ok ? "" : ": ", ok ? "" : e.localizedDescription.UTF8String);
+}
+typedef struct { _Atomic int done; char key[96]; char kind[8]; char thread[32]; char fns[160]; char note[224]; char src[1024]; uint64_t t0; } ParSlow;
 static ParSlow *par_slow_begin(NSString *key, const char *kind, NSString *fns) {
     ParSlow *w = calloc(1, sizeof *w); if (!w) return NULL;
     snprintf(w->key, sizeof w->key, "%s", key ? key.UTF8String : "-"); snprintf(w->kind, sizeof w->kind, "%s", kind); snprintf(w->fns, sizeof w->fns, "%s", fns ? fns.UTF8String : "-");
+    snprintf(w->note, sizeof w->note, "%s", t_par_msl_note ? t_par_msl_note : "unknown"); snprintf(w->src, sizeof w->src, "%s", t_par_msl_src ? t_par_msl_src : "");
     pthread_getname_np(pthread_self(), w->thread, sizeof w->thread); w->t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     atomic_store(&w->done, 0);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)PAR_SLOW_MS * 1000000), s2a_qos_global(S2A_QOS_IO_BG), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)g_par_slow_ms * 1000000), s2a_qos_global(S2A_QOS_IO_BG), ^{
         if (atomic_exchange(&w->done, 2) == 1) { free(w); return; }   // the build returned first: its end freed nothing and left the memory to this block
-        MLOG("【红】 %s pipeline %s (functions %s) still compiling after %d ms on thread %s", w->kind, w->key, w->fns, PAR_SLOW_MS, w->thread[0] ? w->thread : "?");
+        MLOG("【红】 %s pipeline %s (functions %s) still compiling after %d ms on thread %s; MSL: %s", w->kind, w->key, w->fns, g_par_slow_ms, w->thread[0] ? w->thread : "?", w->note);
+        if (w->src[0]) par_slow_keep_src(w->src);   // 编完先返回就不进这里：只留真慢的
     });
     return w;
 }
 static void par_slow_end(ParSlow *w, int ok) {
     if (!w) return;
     double ms = (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - w->t0) / 1e6;
-    if (ms >= PAR_SLOW_MS) MLOG("%s%s pipeline %s (functions %s) %s after %.0f ms on thread %s", ok ? "" : "【红】 ", w->kind, w->key, w->fns, ok ? "built" : "FAILED", ms, w->thread[0] ? w->thread : "?");
+    if (ms >= g_par_slow_ms) MLOG("%s%s pipeline %s (functions %s) %s after %.0f ms on thread %s", ok ? "" : "【红】 ", w->kind, w->key, w->fns, ok ? "built" : "FAILED", ms, w->thread[0] ? w->thread : "?");
     if (atomic_exchange(&w->done, 1) == 2) free(w);   // the timer already ran: the memory is the end's to free
 }
 // Build a render pipeline through the archive. key = par_rkey(...), nil = not archived (built as before)

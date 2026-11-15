@@ -229,17 +229,39 @@ def note_crash(c, game):
     data = community.load_launch(c, gid)
     # 开着的补丁：11-13 起没选过 = 默认开，所以按包里编进去的、玩家没关过的算（不只是 launch.json 里写了 True 的）
     patches = sorted(it["id"] for it in community.packed_patches(c, gid) if data["patches"].get(it["id"]) is not False)
-    if not (keys or patches):
+    # 帧率补丁（编号 fps:）跟「60 帧」开关走、不在 packed_patches 里：包里有帧率补丁且开关没关 → 一并关掉（iOS 同口径，ios/game_options.m s2a_ios_crash_suspects_for）
+    fps = bool(community.fps_levels(c, gid)) and data["settings"].get("fps60", True) is not False
+    if not (keys or patches or fps):
         return
     known = {it["key"] for it in listing(c, game)["items"]}
     if keys:
         save(c, game, {k: False for k in keys if k in known})
-    if patches:
+    if patches or fps:
         for k in patches:
             data["patches"][k] = False
+        if fps:
+            data["settings"]["fps60"] = False
         atomic(community.launch_path(c, gid), data)
     d.mkdir(parents=True, exist_ok=True)
-    atomic(d / "crashed.json", {"cheats": keys, "patches": patches, "at": int(time.time()), "off": True})
+    atomic(d / "crashed.json", {"cheats": keys, "patches": patches, "fps": fps, "at": int(time.time()), "off": True})
+
+
+# 停帧救场（11-14 维护者）：局内画面停住时社区帧率补丁开着，运行时当场关掉（runtime/src/cpatch.c s2a_cpatch_stall_rescue）并在 S2A_DOCS 下写 cpatch_stall_off。
+#   游戏退出后（正常退出 / 崩溃都调）读到它 → 这款「60 帧 / 帧率」写关、记进 crashed.json（下次开始时同一条通知），删标记。→ True 记了
+def note_stall(c, game, docs):
+    mark = Path(docs) / "cpatch_stall_off"
+    if not mark.is_file():
+        return False
+    mark.unlink(missing_ok=True)
+    gid = game["id"].upper()
+    import community
+    data = community.load_launch(c, gid)
+    data["settings"]["fps60"] = False
+    atomic(community.launch_path(c, gid), data)
+    d = cheats_dir(c, gid)
+    r = read(d / "crashed.json", {}) or {}
+    atomic(d / "crashed.json", dict(r, fps=True, at=int(time.time()), off=True, cheats=r.get("cheats", []), patches=r.get("patches", [])))
+    return True
 
 
 def crashed(c, game):
@@ -247,7 +269,8 @@ def crashed(c, game):
     r = read(cheats_dir(c, game["id"].upper(), create=False) / "crashed.json", {}) or {}
     labels = {it["id"]: it["label"] for it in __import__("community").packed_patches(c, game["id"].upper())} if r.get("patches") else {}
     return [dict(kind="cheat", key=k, name=k.split("/", 1)[-1]) for k in r.get("cheats", [])] + \
-           [dict(kind="patch", key=k, name=labels.get(k, k)) for k in r.get("patches", [])]
+           [dict(kind="patch", key=k, name=labels.get(k, k)) for k in r.get("patches", [])] + \
+           ([dict(kind="fps", key="fps60", name="")] if r.get("fps") else [])
 
 
 def answer_crash(c, game, choice):
