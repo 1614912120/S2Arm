@@ -36,6 +36,7 @@ import S2ArmAppleAdapter
         let a = SGradeScanGame(["id": "0100A", "name": "甲", "program": "none", "total": 0, "patches": ["fps": 2], "iphone": true])
         XCTAssertFalse(a.found); XCTAssertEqual(a.patches["fps"], 2); XCTAssertFalse(a.off)
         XCTAssertTrue(SGradeScanGame(["id": "0100B", "program": "mac"]).found)
+        XCTAssertTrue(SGradeScanGame(["id": "0100C", "program": "mac", "total": 1, "ownWiden": true]).ownWiden, "S2Arm 通用满屏（作业层 total 已算 +1）")
         XCTAssertEqual(SGradeScanGame(["id": "0100B"]).name, "0100B", "没名字用程序号")
     }
 

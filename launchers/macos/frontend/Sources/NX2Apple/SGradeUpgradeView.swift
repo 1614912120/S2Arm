@@ -9,10 +9,11 @@ import NXLauncher
 import S2ArmAppleAdapter
 
 struct SGradeScanGame: Identifiable, Equatable {
-    let id: String, name: String, program: String, total: Int, patches: [String: Int], iphone: Bool, off: Bool
+    let id: String, name: String, program: String, total: Int, patches: [String: Int], iphone: Bool, off: Bool, ownWiden: Bool
     init(_ d: [String: Any]) {
         id = d["id"] as? String ?? ""; name = d["name"] as? String ?? id; program = d["program"] as? String ?? "none"
         total = (d["total"] as? NSNumber)?.intValue ?? 0; iphone = d["iphone"] as? Bool ?? false; off = d["off"] as? Bool ?? false
+        ownWiden = d["ownWiden"] as? Bool ?? false   // S2Arm 通用满屏（作业层 total 已算它 +1，D2R 线）
         patches = (d["patches"] as? [String: Any] ?? [:]).compactMapValues { ($0 as? NSNumber)?.intValue }
     }
     var found: Bool { program != "none" }
@@ -110,7 +111,7 @@ struct SGradeUpgradeBody: View {
 
     private func gains(_ g: SGradeScanGame) -> String {
         var parts: [String] = []
-        if (g.patches["widescreen"] ?? 0) > 0 { parts.append(x("cat.widescreen")) }
+        if (g.patches["widescreen"] ?? 0) > 0 { parts.append(x("cat.widescreen")) } else if g.ownWiden { parts.append(x("cat.ownWiden")) }
         if (g.patches["fps"] ?? 0) > 0 { parts.append(x("cat.fps")) }
         if (g.patches["gfx"] ?? 0) > 0 { parts.append(x("cat.gfx")) }
         if let n = g.patches["cheat"], n > 0 { parts.append(x("cat.cheat").replacingOccurrences(of: "{0}", with: String(n))) }

@@ -951,7 +951,9 @@
   "sgrade.upgrade.no.none": "補丁庫裡沒有",
   "sgrade.upgrade.no.version": "補丁是別的版本的",
   "sgrade.state.on.adaptive": "使用中：社群滿螢幕補丁（依螢幕比例自動選）",
-  "sgrade.state.on.fixed": "使用中：社群滿螢幕補丁（固定畫幅）"
+  "sgrade.state.on.fixed": "使用中：社群滿螢幕補丁（固定畫幅）",
+  "export.sgrade.ownWiden": "滿螢幕：這款沒有社群滿螢幕補丁，使用 S2Arm 通用滿螢幕（S2Arm 驗證過能鋪滿），預設開啟",
+  "sgrade.upgrade.cat.ownWiden": "滿螢幕（S2Arm 通用）"
  },
  "text": {
   "直连": "直連",

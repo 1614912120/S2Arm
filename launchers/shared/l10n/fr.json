@@ -951,7 +951,9 @@
   "sgrade.upgrade.no.none": "Aucun patch dans la bibliothèque",
   "sgrade.upgrade.no.version": "Les patchs sont pour une autre version",
   "sgrade.state.on.adaptive": "Utilisé : patch plein écran communautaire (choisi selon le format de votre écran)",
-  "sgrade.state.on.fixed": "Utilisé : patch plein écran communautaire (format fixe)"
+  "sgrade.state.on.fixed": "Utilisé : patch plein écran communautaire (format fixe)",
+  "export.sgrade.ownWiden": "Plein écran : pas de patch communautaire pour ce jeu, le plein écran S2Arm est donc utilisé (vérifié par S2Arm), activé par défaut",
+  "sgrade.upgrade.cat.ownWiden": "plein écran (S2Arm)"
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "Correctif plein écran (choisi selon votre ratio d'écran)",

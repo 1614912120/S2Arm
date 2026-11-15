@@ -951,7 +951,9 @@
   "sgrade.upgrade.no.none": "No hay parches en la biblioteca",
   "sgrade.upgrade.no.version": "Los parches son de otra versión",
   "sgrade.state.on.adaptive": "En uso: parche de pantalla completa de la comunidad (elegido según la relación de aspecto de tu pantalla)",
-  "sgrade.state.on.fixed": "En uso: parche de pantalla completa de la comunidad (relación de aspecto fija)"
+  "sgrade.state.on.fixed": "En uso: parche de pantalla completa de la comunidad (relación de aspecto fija)",
+  "export.sgrade.ownWiden": "Pantalla completa: este juego no tiene parche de la comunidad, así que se usa la pantalla completa de S2Arm (comprobada por S2Arm), activada por defecto",
+  "sgrade.upgrade.cat.ownWiden": "pantalla completa (S2Arm)"
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "Parche de pantalla completa (elegido según la proporción de tu pantalla)",

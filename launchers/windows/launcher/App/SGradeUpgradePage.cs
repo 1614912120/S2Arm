@@ -88,6 +88,7 @@ public sealed partial class EnvironmentWindow
             int C(string k) => p.ValueKind == JsonValueKind.Object ? N(p, k) : 0;
             var parts = new List<string>();
             if (C("widescreen") > 0) parts.Add(X("cat.widescreen"));
+            else if (Bo(g, "ownWiden")) parts.Add(X("cat.ownWiden"));   // S2Arm 通用满屏（作业层 total 已算它 +1，同 Mac）
             if (C("fps") > 0) parts.Add(X("cat.fps"));
             if (C("gfx") > 0) parts.Add(X("cat.gfx"));
             if (C("cheat") > 0) parts.Add(X("cat.cheat").Replace("{0}", C("cheat").ToString()));

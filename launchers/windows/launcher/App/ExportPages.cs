@@ -509,26 +509,33 @@ public sealed partial class EnvironmentWindow
                 }
             // 满屏跨版本（patches.match port，同 Mac SGradeCard）：这份没有同版本的满屏补丁、别的版本有 → 出包时尝试移植，单列一行
             var port = r.TryGetProperty("port", out var pp) && pp.ValueKind == JsonValueKind.True;
-            if (port)
+            // 没有社区满屏补丁、这一版在宽屏已验证名单：出包用 S2Arm 通用满屏（D2R 线 feat/sgrade-state，jhz 11-15「两者合成一套」；同 Mac SGradeCard）
+            var ownWiden = r.TryGetProperty("ownWiden", out var ow) && ow.ValueKind == JsonValueKind.True;
+            var wsHit = exact.ValueKind == JsonValueKind.Object && exact.TryGetProperty("widescreen", out var wn) && wn.GetInt32() > 0;
+            void WidescreenRow(string text)
             {
-                var pv = r.TryGetProperty("portVersions", out var pvs) && pvs.ValueKind == JsonValueKind.Array ? pvs.EnumerateArray().Select(v => v.GetString() ?? "").Where(v => v.Length > 0).Take(3).ToList() : new List<string>();
                 var prow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 11 };
                 prow.Children.Add(new Border { Width = 26, Height = 26, CornerRadius = new CornerRadius(13), BorderThickness = new Thickness(0.8),
                     Background = Diag((A(SGold, 0.30), 0), (A(SRose, 0.22), 1)), BorderBrush = Diag((A(SGoldHi, 0.6), 0), (A(SRose, 0.45), 1)),
                     Child = new TextBlock { Text = SGradeGlyph.GetValueOrDefault("widescreen", "✓"), FontSize = 12, Foreground = new SolidColorBrush(SGoldHi),
                         HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center } });
-                prow.Children.Add(new TextBlock { Text = T("export.sgrade.port").Replace("{0}", pv.Count > 0 ? string.Join(language == "en" ? ", " : "、", pv) : T("export.sgrade.port.any")),
-                    FontSize = 13.5, FontWeight = FontWeight.Medium, Foreground = Ink, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
+                prow.Children.Add(new TextBlock { Text = text, FontSize = 13.5, FontWeight = FontWeight.Medium, Foreground = Ink, VerticalAlignment = VerticalAlignment.Center, TextWrapping = TextWrapping.Wrap });
                 rows.Children.Insert(0, prow);
             }
+            if (port)
+            {
+                var pv = r.TryGetProperty("portVersions", out var pvs) && pvs.ValueKind == JsonValueKind.Array ? pvs.EnumerateArray().Select(v => v.GetString() ?? "").Where(v => v.Length > 0).Take(3).ToList() : new List<string>();
+                WidescreenRow(T("export.sgrade.port").Replace("{0}", pv.Count > 0 ? string.Join(language == "en" ? ", " : "、", pv) : T("export.sgrade.port.any")));
+            }
+            else if (ownWiden && !wsHit) WidescreenRow(T("export.sgrade.ownWiden"));
             var build = r.TryGetProperty("build", out var b) ? b.GetString() ?? "" : "";
             // 都没有（这个版本没命中、游戏的别的版本也没有）：整张卡不出（11-13 维护者「没匹配就什么都不显示」）
-            if (total == 0 && !port && build.Length > 0 && !(r.TryGetProperty("others", out var oo) && oo.ValueKind == JsonValueKind.Array && oo.GetArrayLength() > 0))
+            if (total == 0 && !port && !ownWiden && build.Length > 0 && !(r.TryGetProperty("others", out var oo) && oo.ValueKind == JsonValueKind.Array && oo.GetArrayLength() > 0))
                 return new Panel { IsVisible = false };
             // 补丁按版本生效（11-14 维护者）：写明对应玩家这份游戏的哪个版本；列出的别的版本不会打入（同 Mac SGradeCard）
             var ver = r.TryGetProperty("version", out var vv) ? vv.GetString() ?? "" : "";
             var mine = ver.Length > 0 ? ver : (build.Length > 16 ? build[..16] : build).ToUpperInvariant();
-            if (total > 0 || port)
+            if (total > 0 || port || ownWiden)
             {
                 lit = true; stack.Children.Add(rows);
                 if (total > 0) stack.Children.Add(Muted(T("export.sgrade.hit.version").Replace("{0}", mine), 12));
