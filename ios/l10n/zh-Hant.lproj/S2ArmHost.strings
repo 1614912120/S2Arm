@@ -262,8 +262,6 @@
 "app.restartToApply" = "重新啟動遊戲後生效";
 "app.widen.once" = "偵測到全螢幕畫面異常，下次啟動時會再嘗試全螢幕。";
 "app.widen.onceHot" = "偵測到全螢幕畫面異常，這次已切回原生畫面比例，下次啟動時會再嘗試全螢幕。";
-"app.widen.persist" = "偵測到全螢幕畫面異常，之後啟動都會使用原生畫面比例。可在設定裡重新開啟全螢幕。";
-"app.widen.persistHot" = "偵測到全螢幕畫面異常，已切回原生畫面比例，之後都會使用原生比例。可在設定裡重新開啟全螢幕。";
 "app.widen.title" = "全螢幕";
 "common.later" = "稍後";
 "common.restartLater" = "稍後自行重新啟動";
@@ -538,3 +536,5 @@
 "sgrade.unavail.fi" = "這台裝置不支援補幀";
 "sgrade.cheats.none" = "這款還沒有金手指 · 可在電腦上匯入";
 "sgrade.cpatch.detail" = "社群修補檔明細";
+"sgrade.state.off_auto.widen_fit" = "已自動關：%1$@ 滿螢幕沒鋪滿或畫面被拉伸";
+"sgrade.notice.fullscreen_off" = "S2Arm 通用滿螢幕這局沒成功，已自動關掉，遊戲照常玩。想再試可以在齒輪選單裡重新打開。";

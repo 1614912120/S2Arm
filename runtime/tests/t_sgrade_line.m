@@ -51,11 +51,15 @@ int main(int argc, char **argv) {
         EQ(R(@"fps", (@{@"state": @"on", @"source": @"patch"}), 120, YES, YES, YES, NULL), @"社区补丁 · 最高 120 帧", "帧率：补丁在用");
         EQ(R(@"fps", (@{@"state": @"off_user", @"source": @"fi"}), 120, YES, NO, YES, NULL), @"补帧：30 帧补到 60 帧", "帧率：有补丁但补丁关着、补帧在跑");
         EQ(R(@"fps", (@{@"source": @"fi"}), 0, NO, NO, YES, NULL), @"补帧：30 帧补到 60 帧（这款没有社区补丁）", "帧率：没补丁用补帧");
-        EQ(R(@"fps", (@{@"source": @"none", @"fi_supported": @NO}), 0, NO, NO, YES, &dis), @"这台设备不支持补帧", "帧率：没补丁且设备不支持补帧");
+        EQ(R(@"fps", (@{@"source": @"none", @"fiSupported": @NO}), 0, NO, NO, YES, &dis), @"这台设备不支持补帧", "帧率：没补丁且设备不支持补帧");
         CK(dis, "帧率：真用不了才置灰");
-        EQ(R(@"fps", (@{@"source": @"none", @"fi_supported": @NO}), 60, YES, NO, YES, &dis), @"社区补丁 · 最高 60 帧", "帧率：关着但有补丁：写开了用补丁");
+        EQ(R(@"fps", (@{@"source": @"none", @"fiSupported": @NO}), 60, YES, NO, YES, &dis), @"社区补丁 · 最高 60 帧", "帧率：关着但有补丁：写开了用补丁");
         CK(!dis, "帧率：有补丁不置灰");
         EQ(R(@"fps", nil, 0, NO, NO, YES, NULL), @"补帧：30 帧补到 60 帧（这款没有社区补丁）", "帧率：作业层没给来源，按本机能补帧写补帧");
+        EQ(R(@"fps", (@{@"state": @"unsupported", @"source": @"fi"}), 0, NO, NO, YES, &dis), @"这台设备不支持补帧", "帧率：作业层判 unsupported");
+        CK(dis, "帧率：unsupported 置灰");
+        EQ(R(@"widescreen", (@{@"state": @"off_auto", @"source": @"own", @"autoOff": @{@"cause": @"widen_fit", @"at": @1794740000}}), 0, NO, NO, YES, NULL),
+           @"已自动关：11-15 满屏没铺满或画面被拉伸", "满屏：手动开的通用满屏局内没铺满，自动关");
         EQ(R(@"fps", nil, 120, YES, YES, YES, NULL), @"社区补丁 · 最高 120 帧", "帧率：没给来源、有补丁且开着写补丁");
         CK(s2a_sgrade_version_cmp(@"1.10", @"1.9") == 1 && s2a_sgrade_version_cmp(@"1.0", @"1.0.0") == 0 && s2a_sgrade_version_cmp(@"1.2", @"1.10") == -1, "版本按段比较");
     }

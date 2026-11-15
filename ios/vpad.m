@@ -47,6 +47,9 @@ void S2A_AudioSetVolume(int percent) __attribute__((weak_import));
 #include "s2a_pad.h"
 #include "s2a_direct_prompt.h"   // 触屏提示的文案（与 launchers/shared/experience.v1.json prompts 逐字一致）
 #include <stdatomic.h>
+#include <dlfcn.h>
+#include <objc/message.h>
+#import <Metal/Metal.h>
 #include <pthread.h>
 #include <sys/stat.h>
 #include "native.h"
@@ -445,6 +448,16 @@ typedef BOOL (^VPFlag)(void);
 // S 级优化三项（11-15 维护者定：满屏 / 帧率解锁 / 金手指挪到齿轮菜单一级，金色 S，复用现有开关、不加新开关；三端同一套，
 //   三端界面定稿）。副标题一句写现在用的是什么（sgrade_line.m s2a_sgrade_row_note）；系统菜单的字不能上色，金色落在 S 图标上。
 //   满屏 / 带社区帧率补丁的帧率改动下次起局才生效：点完收菜单、问要不要立即重启；纯补帧当场切（s2a_fi_set_live）
+// 这台设备能不能补帧：同运行时（graphics/nvn/gfx/nvn/nvn_present_fi.inc）按名字取 MetalFX 补帧描述类问它；底料里的 fiSupported 是出包机的值，不能信
+static BOOL vp_fi_supported(void) {
+    static BOOL ok; static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dlopen("/System/Library/Frameworks/MetalFX.framework/MetalFX", RTLD_LAZY);
+        Class dc = NSClassFromString(@"MTLFXFrameInterpolatorDescriptor"); id dev = MTLCreateSystemDefaultDevice();
+        ok = dc && dev && [dc respondsToSelector:@selector(supportsDevice:)] && ((BOOL (*)(id, SEL, id))objc_msgSend)(dc, @selector(supportsDevice:), dev);
+    });
+    return ok;
+}
 static NSString *vp_running_gid(void) { const char *g = getenv("S2A_LAUNCH_GAME_ID"); return g && *g ? @(g) : nil; }   // 同 settings.m current_gid：自动关记录按款存
 - (UIMenu *)sgradeSection {
     __weak S2AVPadView *ws = self;
@@ -464,12 +477,13 @@ static NSString *vp_running_gid(void) { const char *g = getenv("S2A_LAUNCH_GAME_
     if (blocked) wide.attributes = UIMenuElementAttributesDisabled;
     [rows addObject:wide];
     // 帧率解锁：一个开关取最好的来源（有社区帧率补丁用补丁，没有用补帧，不叠加）；开关显示的是帧率此刻有没有被解锁
-    BOOL fpsOff = NO; NSString *fpsNote = s2a_sgrade_row_note(@"fps", sg[@"fps"], target, fpsPatch, s2a_ios_fps60_on(), YES, when, &fpsOff);
-    UIAction *fps = [self live:@"vp.sg.fps" title:S2AL(@"sgrade.row.fps") note:fpsNote
-                            on:^BOOL{ return (fpsPatch && s2a_ios_fps60_on()) || s2a_ios_fi_on(); } disabled:^BOOL{ return fpsOff; }
-                           run:^{
-        BOOL on = !((fpsPatch && s2a_ios_fps60_on()) || s2a_ios_fi_on());
-        s2a_ios_set_fps60(on); s2a_ios_set_fi(on); if (s2a_fi_set_live) s2a_fi_set_live(on);
+    //   开关只写 S2AFps60（settings.m s2a_ios_fi_on 跟着它：明确关 = 补丁和补帧一起关、回原帧率；没选过 = 补帧照旧开）；补帧当场切，补丁下次起局
+    BOOL fiOk = vp_fi_supported();
+    BOOL fpsOff = NO; NSString *fpsNote = s2a_sgrade_row_note(@"fps", sg[@"fps"], target, fpsPatch, s2a_ios_fps60_on(), fiOk, when, &fpsOff);
+    BOOL (^unlocked)(void) = ^BOOL{ return (fpsPatch && s2a_ios_fps60_on()) || (fiOk && s2a_ios_fi_on()); };
+    UIAction *fps = [self live:@"vp.sg.fps" title:S2AL(@"sgrade.row.fps") note:fpsNote on:unlocked disabled:^BOOL{ return fpsOff; } run:^{
+        BOOL on = !unlocked();
+        s2a_ios_set_fps60(on); if (fiOk && s2a_fi_set_live) s2a_fi_set_live(on);
         if (fpsPatch) [ws afterMenu:^{ [ws sgradeRestartPrompt]; }];   // 补丁要下次起局才换上 / 撤下
     }];
     fps.image = gold; [rows addObject:fps];

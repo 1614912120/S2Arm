@@ -86,11 +86,14 @@ final class SGradeStateTextTests: XCTestCase {
         XCTAssertEqual(row("fps", ["state": "on", "source": "patch", "active": ["levels": [60, 120], "pick": "0"]], hasPatch: true, fpsOn: true)?.0, "社区补丁 · 最高 120 帧")
         XCTAssertEqual(row("fps", ["state": "off_user", "source": "fi", "active": ["levels": [120], "pick": "0"]], hasPatch: true)?.0, "补帧：30 帧补到 60 帧")
         XCTAssertEqual(row("fps", ["source": "fi"])?.0, "补帧：30 帧补到 60 帧（这款没有社区补丁）")
-        let none = row("fps", ["source": "none", "fi_supported": false])
+        let none = row("fps", ["source": "none", "fiSupported": false])
         XCTAssertEqual(none?.0, "这台设备不支持补帧"); XCTAssertEqual(none?.1, true, "没补丁且设备不支持补帧：真用不了才置灰")
-        let patched = row("fps", ["source": "none", "fi_supported": false, "active": ["levels": [60], "pick": "0"]], hasPatch: true)
+        let patched = row("fps", ["source": "none", "fiSupported": false, "active": ["levels": [60], "pick": "0"]], hasPatch: true)
         XCTAssertEqual(patched?.0, "社区补丁 · 最高 60 帧"); XCTAssertEqual(patched?.1, false)
         XCTAssertEqual(row("fps", nil)?.0, "补帧：30 帧补到 60 帧（这款没有社区补丁）")
+        let unsup = row("fps", ["state": "unsupported", "source": "fi"])
+        XCTAssertEqual(unsup?.0, "这台设备不支持补帧"); XCTAssertEqual(unsup?.1, true)
+        XCTAssertEqual(row("widescreen", ["state": "off_auto", "source": "own", "autoOff": ["cause": "widen_fit", "at": 1794740000]])?.0, "已自动关：11-15 满屏没铺满或画面被拉伸")
     }
 
     func testTopRowKeysInEveryLanguage() {

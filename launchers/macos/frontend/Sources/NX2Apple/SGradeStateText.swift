@@ -11,7 +11,7 @@ struct SGradeCategoryState: Equatable {
     var lastRun = ""          // 上一局结果原句（作业层 patch_result，中文原句，界面经 BackendText 翻）
     var autoOffCause = "", autoOffAt: Date? = nil
     var mine = "", available: [String] = [], port = ""
-    var fiSupported: Bool? = nil   // 帧率：设备能不能补帧（作业层 fi_supported；没给 = nil，按能补帧算）
+    var fiSupported: Bool? = nil   // 帧率：设备能不能补帧（作业层 fiSupported，Mac 按 macOS 26 起；没给 = nil，按能补帧算）
 
     init(_ raw: [String: Any]) {
         state = raw["state"] as? String ?? ""; source = raw["source"] as? String ?? ""
@@ -27,7 +27,7 @@ struct SGradeCategoryState: Equatable {
         autoOffAt = (off["at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
         let v = raw["versions"] as? [String: Any] ?? [:]
         mine = v["mine"] as? String ?? ""; available = v["available"] as? [String] ?? []; port = v["port"] as? String ?? ""
-        fiSupported = raw["fi_supported"] as? Bool
+        fiSupported = raw["fiSupported"] as? Bool
     }
 }
 
@@ -68,7 +68,8 @@ enum SGradeStateText {
         case "off_user": return (t("sgrade.state.off_user"), nil)
         case "off_auto":
             let when = s.autoOffAt.map(date) ?? ""
-            return (f(s.autoOffCause == "stall" ? "sgrade.state.off_auto.stall" : "sgrade.state.off_auto.crash", when), key)
+            let cause = s.autoOffCause == "stall" ? "stall" : s.autoOffCause == "widen_fit" ? "widen_fit" : "crash"   // widen_fit：手动开的通用满屏局内没铺满或被拉伸
+            return (f("sgrade.state.off_auto." + cause, when), key)
         case "version":
             // 维护者 11-15 定：写离玩家最近、且比它新的那个版本；全是旧版本写「只有旧版本 X 的」，不劝降级
             guard let p = pick(s.available, mine: s.mine) else { return nil }
@@ -94,6 +95,7 @@ enum SGradeStateText {
             return (t("sgrade.src.fs.own"), false)   // 没有社区满屏补丁的款一律走 S2Arm 通用满屏（不看名单）
         }
         guard cat == "fps" else { return nil }
+        if st.state == "unsupported" { return (t("sgrade.unavail.fi"), true) }   // 没补丁又不能补帧（作业层定）
         let fi = st.fiSupported ?? true
         var src = st.source
         if src.isEmpty { src = hasFpsPatch && fpsOn ? "patch" : fi ? "fi" : "none" }

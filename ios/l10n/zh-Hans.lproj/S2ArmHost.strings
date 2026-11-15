@@ -291,8 +291,6 @@
 "app.restartToApply" = "重启游戏后生效";
 "app.widen.once" = "检测到满屏画面异常，下次启动会再试满屏。";
 "app.widen.onceHot" = "检测到满屏画面异常，本次已切回原生画面比例，下次启动会再试满屏。";
-"app.widen.persist" = "检测到满屏画面异常，之后启动都会用原生画面比例。可在设置里重新打开满屏。";
-"app.widen.persistHot" = "检测到满屏画面异常，已切回原生画面比例，之后都用原生比例。可在设置里重新打开满屏。";
 "app.widen.title" = "满屏";
 "common.later" = "稍后";
 "common.restartLater" = "稍后自行重启";
@@ -538,3 +536,5 @@
 "sgrade.unavail.fi" = "这台设备不支持补帧";
 "sgrade.cheats.none" = "这款还没有金手指 · 可在电脑上导入";
 "sgrade.cpatch.detail" = "社区补丁明细";
+"sgrade.state.off_auto.widen_fit" = "已自动关：%1$@ 满屏没铺满或画面被拉伸";
+"sgrade.notice.fullscreen_off" = "S2Arm 通用满屏这局没成功，已自动关掉，游戏照常玩。想再试可以在齿轮菜单里重新打开。";

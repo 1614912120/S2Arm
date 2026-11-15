@@ -938,6 +938,7 @@
   "sgrade.state.off_user": "已關",
   "sgrade.state.off_auto.crash": "已自動關閉：{0} 遊戲當機時它開著",
   "sgrade.state.off_auto.stall": "已自動關閉：{0} 畫面停住時它開著",
+  "sgrade.state.off_auto.widen_fit": "已自動關：{0} 滿螢幕沒鋪滿或畫面被拉伸",
   "sgrade.state.reenable": "重新開啟",
   "sgrade.state.version.newer": "補丁庫裡是 {0} 版的，你這份是 {1}。把遊戲更新到 {0} 後重新出包就能用。",
   "sgrade.state.version.older": "補丁只有舊版本 {0} 的，你這個版本暫時沒有。",

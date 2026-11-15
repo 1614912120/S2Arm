@@ -14,6 +14,6 @@ NSString *s2a_sgrade_line(NSString *cat, NSDictionary *s, NSString *catName, NSI
 // 齿轮菜单一级三行的副标题（11-15 维护者定：满屏 / 帧率解锁 / 金手指挪到一级；副标题只写「现在用的是什么」一句）。
 //   自动关 / 没生效 / 没打入等状态照 s2a_sgrade_line；其余按来源写：满屏 patch（自适应 / 定画幅）或 S2Arm 通用满屏；
 //   帧率 patch「最高 n 帧」或补帧（这款有没有社区补丁两种写法）。*disabled 置真 = 这一行真用不了（没补丁且设备不支持补帧）。
-//   hasFpsPatch = 这款有社区帧率补丁；fpsPatchOn = 帧率开关开着；fiSupported = 设备能补帧。作业层给了 fps.source / fi_supported 就以它为准
+//   hasFpsPatch = 这款有社区帧率补丁；fpsPatchOn = 帧率开关开着；fiSupported = 设备能补帧（机上判，底料里是出包机的值不能信）。作业层给了 fps.source 就以它为准；fps.state = unsupported 置灰
 NSString *s2a_sgrade_row_note(NSString *cat, NSDictionary *s, NSInteger fpsTarget, BOOL hasFpsPatch, BOOL fpsPatchOn, BOOL fiSupported,
                               NSString *(^date)(NSDate *when), BOOL *disabled);

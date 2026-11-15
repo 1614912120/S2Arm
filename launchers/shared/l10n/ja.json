@@ -938,6 +938,7 @@
   "sgrade.state.off_user": "オフ",
   "sgrade.state.off_auto.crash": "自動でオフにしました：{0} にゲームがクラッシュしたときオンでした",
   "sgrade.state.off_auto.stall": "自動でオフにしました：{0} に画面が止まったときオンでした",
+  "sgrade.state.off_auto.widen_fit": "自動でオフにしました：{0} にフルスクリーンが画面いっぱいにならないか、画面が引き伸ばされました",
   "sgrade.state.reenable": "もう一度オンにする",
   "sgrade.state.version.newer": "パッチライブラリにあるのはバージョン {0} 用で、お使いのものは {1} です。ゲームを {0} に更新して書き出し直すと使えます。",
   "sgrade.state.version.older": "パッチは古いバージョン {0} 用しかなく、お使いのバージョン用はまだありません。",

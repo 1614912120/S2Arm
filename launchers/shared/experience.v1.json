@@ -1555,6 +1555,7 @@
       {"id": "sgrade.state.off_user", "zh-Hans": "已关", "en": "Off"},
       {"id": "sgrade.state.off_auto.crash", "zh-Hans": "已自动关：{0} 游戏崩溃时它开着", "en": "Turned off automatically: it was on when the game crashed on {0}"},
       {"id": "sgrade.state.off_auto.stall", "zh-Hans": "已自动关：{0} 画面停住时它开着", "en": "Turned off automatically: it was on when the picture froze on {0}"},
+      {"id": "sgrade.state.off_auto.widen_fit", "zh-Hans": "已自动关：{0} 满屏没铺满或画面被拉伸", "en": "Turned off automatically: on {0} full screen didn't fill the screen or stretched the picture"},
       {"id": "sgrade.state.reenable", "zh-Hans": "重新打开", "en": "Turn back on"},
       {"id": "sgrade.state.version.newer", "zh-Hans": "补丁库里是 {0} 版的，你这份是 {1}。把游戏更新到 {0} 后重新出包就能用。", "en": "The patch library has it for version {0}; yours is {1}. Update the game to {0} and export again to use it."},
       {"id": "sgrade.state.version.older", "zh-Hans": "补丁只有旧版本 {0} 的，你这个版本暂时没有。", "en": "Patches only exist for the older version {0}; there's none for your version yet."},

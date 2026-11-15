@@ -938,6 +938,7 @@
   "sgrade.state.off_user": "Desactivado",
   "sgrade.state.off_auto.crash": "Desactivado automáticamente: estaba activado cuando el juego se cerró de golpe el {0}",
   "sgrade.state.off_auto.stall": "Desactivado automáticamente: estaba activado cuando la imagen se congeló el {0}",
+  "sgrade.state.off_auto.widen_fit": "Desactivado automáticamente: el {0} la pantalla completa no llenó la pantalla o estiró la imagen",
   "sgrade.state.reenable": "Volver a activar",
   "sgrade.state.version.newer": "La biblioteca de parches lo tiene para la versión {0}; la tuya es {1}. Actualiza el juego a {0} y vuelve a exportarlo para usarlo.",
   "sgrade.state.version.older": "Solo hay parches para la versión anterior {0}; para tu versión todavía no hay.",

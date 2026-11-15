@@ -291,8 +291,6 @@
 "app.restartToApply" = "Restart the game to apply";
 "app.widen.once" = "Full-screen display problems were detected. Full screen will be tried again next launch.";
 "app.widen.onceHot" = "Full-screen display problems were detected, so the native aspect ratio is used this time. Full screen will be tried again next launch.";
-"app.widen.persist" = "Full-screen display problems were detected, so the game will start in its native aspect ratio from now on. You can turn full screen back on in Settings.";
-"app.widen.persistHot" = "Full-screen display problems were detected, so the game switched back to its native aspect ratio and will keep using it. You can turn full screen back on in Settings.";
 "app.widen.title" = "Full screen";
 "common.later" = "Later";
 "common.restartLater" = "Restart later";
@@ -538,3 +536,5 @@
 "sgrade.unavail.fi" = "This device doesn't support frame generation";
 "sgrade.cheats.none" = "No cheats for this game yet · you can import them on your computer";
 "sgrade.cpatch.detail" = "Community patch details";
+"sgrade.state.off_auto.widen_fit" = "Turned off automatically: on %1$@ full screen didn't fill the screen or stretched the picture";
+"sgrade.notice.fullscreen_off" = "S2Arm full screen didn't work this time, so it was turned off and the game runs as usual. You can turn it back on from the gear menu to try again.";

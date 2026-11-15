@@ -31,7 +31,9 @@ NSString *s2a_sgrade_line(NSString *cat, NSDictionary *s, NSString *catName, NSI
         NSDictionary *off = [s[@"autoOff"] isKindOfClass:NSDictionary.class] ? s[@"autoOff"] : nil;
         NSNumber *at = [off[@"at"] isKindOfClass:NSNumber.class] ? off[@"at"] : nil;
         NSString *when = at.doubleValue > 0 ? date([NSDate dateWithTimeIntervalSince1970:at.doubleValue]) : @"";
-        return [NSString stringWithFormat:([str(off[@"cause"]) isEqual:@"stall"] ? S2AL(@"sgrade.state.off_auto.stall") : S2AL(@"sgrade.state.off_auto.crash")), when];
+        NSString *cause = str(off[@"cause"]);   // crash 游戏崩溃 / stall 画面停住 / widen_fit 手动开的通用满屏局内没铺满或被拉伸
+        return [NSString stringWithFormat:([cause isEqual:@"stall"] ? S2AL(@"sgrade.state.off_auto.stall") : [cause isEqual:@"widen_fit"] ? S2AL(@"sgrade.state.off_auto.widen_fit")
+                                           : S2AL(@"sgrade.state.off_auto.crash")), when];
     }
     if ([state isEqual:@"version"]) {
         // 维护者 11-15 定：写离玩家最近、且比它新的那个版本；全是旧版本写「只有旧版本 X 的」，不劝降级
@@ -71,7 +73,8 @@ NSString *s2a_sgrade_row_note(NSString *cat, NSDictionary *s, NSInteger fpsTarge
     if ([cat isEqual:@"fps"]) {
         // 一个开关取最好的来源（作业层 fps.source：patch / fi / none；没这个字段时按本机：补丁开关开着且有补丁 = patch，否则能补帧 = fi）
         NSString *src = str(st[@"source"]);
-        id fs = st[@"fi_supported"]; BOOL fi = [fs isKindOfClass:NSNumber.class] ? [fs boolValue] : fiSupported;
+        id fs = st[@"fiSupported"]; BOOL fi = [fs isKindOfClass:NSNumber.class] ? [fs boolValue] : fiSupported;
+        if ([state isEqual:@"unsupported"]) { if (disabled) *disabled = YES; return S2AL(@"sgrade.unavail.fi"); }   // 没补丁又不能补帧（作业层定）
         if (!src.length) src = hasFpsPatch && fpsPatchOn ? @"patch" : fi ? @"fi" : @"none";
         NSString *patchLine = fpsTarget > 0 ? [NSString stringWithFormat:S2AL(@"sgrade.src.fps.patch"), [@(fpsTarget) stringValue]] : nil;
         NSString *fiLine = hasFpsPatch ? S2AL(@"sgrade.src.fps.fi") : S2AL(@"sgrade.src.fps.fi.nopatch");

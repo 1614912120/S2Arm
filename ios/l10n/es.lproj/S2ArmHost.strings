@@ -286,8 +286,6 @@
 "app.restartToApply" = "Reinicia el juego para aplicar";
 "app.widen.once" = "Se detectaron problemas con la pantalla completa. Se volverá a intentar en el próximo inicio.";
 "app.widen.onceHot" = "Se detectaron problemas con la pantalla completa, por lo que esta vez se usa la relación de aspecto nativa. Se volverá a intentar en el próximo inicio.";
-"app.widen.persist" = "Se detectaron problemas con la pantalla completa, por lo que el juego se iniciará con su relación de aspecto nativa de ahora en adelante. Puedes volver a activar la pantalla completa en Ajustes.";
-"app.widen.persistHot" = "Se detectaron problemas con la pantalla completa, por lo que el juego volvió a su relación de aspecto nativa y la seguirá usando. Puedes volver a activar la pantalla completa en Ajustes.";
 "app.widen.title" = "Pantalla completa";
 "common.later" = "Más tarde";
 "common.restartLater" = "Reiniciar más tarde";
@@ -532,3 +530,5 @@
 "sgrade.unavail.fi" = "Este dispositivo no admite la generación de fotogramas";
 "sgrade.cheats.none" = "Este juego aún no tiene trucos · puedes importarlos en tu ordenador";
 "sgrade.cpatch.detail" = "Detalles de los parches de la comunidad";
+"sgrade.state.off_auto.widen_fit" = "Desactivado automáticamente: el %1$@ la pantalla completa no llenó la pantalla o estiró la imagen";
+"sgrade.notice.fullscreen_off" = "La pantalla completa de S2Arm no funcionó esta vez, así que se desactivó y el juego sigue con normalidad. Puedes volver a activarla desde el menú del engranaje para intentarlo de nuevo.";
