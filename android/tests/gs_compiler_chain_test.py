@@ -69,3 +69,5 @@ cc = ['cc','-std=c11','-Wall','-Wextra','-Werror','-I'+str(root/'android/native'
 subprocess.run(cc + [str(root/'android/tests/gs_result_extract.c'),str(root/'android/native/nvn/nvn_vk_program_result.c'),str(root/'android/native/direct/jv.c'),str(root/'android/native/direct/json.c'),'-o',str(out/'parse')], check=True)
 subprocess.run([str(out/'parse'),str(out/'compiled/program.json'),str(out)], check=True)
 print('PASS: original Maxwell -> production v2 request -> real compiler -> production result parser (synthetic enabled profile; no Vulkan draw)')
+
+subprocess.run([sys.executable,str(root/'android/tests/nvk_shader_pool_test.py'),'--execute-reuse',str(out/'profile.json'),closure,str(source_dir),str(out/'compiled/program.json')], check=True)

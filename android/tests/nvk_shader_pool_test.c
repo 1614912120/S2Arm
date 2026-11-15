@@ -28,7 +28,8 @@ static int checks, failures, compiler_calls, diag_enabled, diag_lines, diag_quer
 static unsigned fake_array_count;
 static int separate_fixture;
 static int fake_gs_success, fake_gs_result_mode, gs_loads[6], fake_geometry_enabled = 1;
-static int fake_cs_success, cs_loads;   // 1：编译器替身对计算请求回一份合法的计算程序（走「编成功之后进快路」的正向路径）
+static int fake_gs_fact_deps, fact_reuse_disabled;
+static int fake_cs_success, cs_loads;
 int g_s2a_logfd = 2;
 static const char *fake_compile_error;
 static const char *fake_compile_file;
@@ -46,6 +47,7 @@ static uint8_t gs_keys[6][8], gs_stages[6], gs_keys_ok;
 void nvn_plat_safepoint(void) {}
 int nvn_plat_flag(const char *name, int dflt) {
     if (!strcmp(name, "nvk_texpool_log")) { diag_queries++; return diag_enabled; }
+    if (!strcmp(name, "nvk_shader_fact_cache") && fact_reuse_disabled) return 0;
     return dflt;
 }
 void nvn_plat_log(int level, const char *cls, const char *text) {
@@ -127,12 +129,20 @@ static int32_t fake_compile(uint64_t session, uint64_t gen, s2a_direct_bytes req
         int32_t rc = emit(sink, payload); free(bytes); return rc;
     }
     if (fake_gs_success) {
-        char result[1024];
+        char result[1536];
         const char *extra = fake_gs_result_mode == 1 ? "" :
             fake_gs_result_mode == 2 ? ",{\"stage\":\"gs\",\"spirv\":\"AwIjBwABAwAAAAAAAQAAAAAAAAA=\"},{\"stage\":\"gs\",\"spirv\":\"AwIjBwABAwAAAAAAAQAAAAAAAAA=\"}" :
             fake_gs_result_mode == 3 ? ",{\"stage\":\"gs\",\"spirv\":\"AwIjBwABAwAAAAAAAQAAAAAAAAA=\"},{\"stage\":\"tcs\",\"spirv\":\"AwIjBwABAwAAAAAAAQAAAAAAAAA=\"}" :
             ",{\"stage\":\"gs\",\"spirv\":\"AwIjBwABAwAAAAAAAQAAAAAAAAA=\"}";
-        int n = snprintf(result, sizeof result, "{\"schema\":\"s2a-direct-program-v1\",\"content\":{\"stages\":[{\"stage\":\"vs\",\"spirv\":\"AwIjBwABAwAAAAAAAQAAAAAAAAA=\"},{\"stage\":\"fs\",\"spirv\":\"AwIjBwABAwAAAAAAAQAAAAAAAAA=\"}%s],\"bindings\":[]}}", extra);
+        char depbuf[768] = "";
+        const char *source = fake_gs_fact_deps == 2 ? "texture-fact:zz:8:-1" :
+            fake_gs_fact_deps == 3 ? "texture-fact:vs:71:-1" :
+            fake_gs_fact_deps == 4 ? "texture-fact:vs:8:99" :
+            fake_gs_fact_deps == 5 ? "future-texture-state" : "texture-fact:vs:8:-1";
+        if (fake_gs_fact_deps) snprintf(depbuf, sizeof depbuf,
+            ",\"contract\":\"s2a-direct-program-content-v1\",\"dependencies\":[{\"source\":\"code:sha256:synthetic\",\"method\":\"GetCode\"},{\"source\":\"%s\",\"method\":\"QuerySamplerType\"},{\"source\":\"texture-fact:fs:10:2\",\"method\":\"QueryTextureCoordNormalized\"},{\"source\":\"code:sha256:synthetic#cbUse\",\"method\":\"QueryConstantBufferUse\",\"arguments\":\"stage=vs\"}]", source);
+        const char *deps = depbuf;
+        int n = snprintf(result, sizeof result, "{\"schema\":\"s2a-direct-program-v1\",\"content\":{\"stages\":[{\"stage\":\"vs\",\"spirv\":\"AwIjBwABAwAAAAAAAQAAAAAAAAA=\"},{\"stage\":\"fs\",\"spirv\":\"AwIjBwABAwAAAAAAAQAAAAAAAAA=\"}%s],\"bindings\":[]%s}}", extra, deps);
         CHECK(n > 0 && (size_t)n < sizeof result, "GS result fixture fits");
         s2a_direct_bytes payload = {(const uint8_t *)result, (uint64_t)n};
         return emit(sink, payload);
@@ -436,13 +446,25 @@ static int emit_real_request(const char *profile_path, const char *closure, cons
     for (unsigned st = 0; st < 3; st++) { gs_stages[st] = (uint8_t)st; memcpy(gs_keys[st], keys[st], 8); }
     gs_keys_ok = 7; p_bind_program_id bind = {&gs_program, gs_program.serial, 0x1f, 0};
     if (!rp_state_op(OP_BIND_PROGRAM, &bind, sizeof bind + 8)) return 1;
-    bind_pools(tbuf ? 100 : 7);
-    if (tbuf) { separate_fixture = 3; bind_separate(1, 0, 1, 77); }
-    if (tbuf == 2) { fake_compile_file = output; fake_gs_success = 1; nvn_unimpl_reset(); memset(gs_loads, 0, sizeof gs_loads); }
+    bind_pools(tbuf && tbuf != 3 ? 100 : 7);
+    if (tbuf && tbuf != 3) { separate_fixture = 3; bind_separate(1, 0, 1, 77); }
+    if (tbuf == 2 || tbuf == 3) { fake_compile_file = output; fake_gs_success = 1; nvn_unimpl_reset(); memset(gs_loads, 0, sizeof gs_loads); }
     else capture_output = output;
     compiler_calls = 0;
     struct rp_shader_req q = {0}; q.prim = 0; q.rt_count = 1; q.rt_format[0] = NVN_FORMAT_RGBA8;
     const struct rp_prog *prog = NULL; int rc = rp_shader_resolve(&q, &prog);
+    if (tbuf == 3) {
+        CHECK(!rc && prog && compiler_calls == 1, "real compiler result loads for dependency reuse");
+        const struct rp_prog *first = prog;
+        rp_S.tex[0][0] = 99;
+        CHECK(!rp_shader_resolve(&q, &prog) && prog == first && compiler_calls == 1,
+              "real compiler dependency trace permits unused texture reuse");
+        rp_S.ubo[0][15].size = 16;
+        CHECK(!rp_shader_resolve(&q, &prog) && prog == first && compiler_calls == 1,
+              "real compiler without QueryConstantBufferUse reuses unqueried UBO mask");
+        fprintf(stderr, "real compiler dependency reuse: checks=%d failures=%d\n", checks, failures);
+        return failures != 0;
+    }
     if (tbuf == 2) {
         int rejected = rc == -1 && !prog && compiler_calls == 1 &&
             nvn_unimpl_count("shader", "texture_buffer_replay_unsupported") == 1 && gs_loads[1] == 0;
@@ -485,6 +507,83 @@ static int emit_compute_request(const char *profile_path, const char *closure, c
     return !(rc == -1 && compiler_calls == 1 && failures == 0);
 }
 
+static void graphics_fact_reuse_test(void) {
+    rp_shader_reset(); s2a_source_clear(); rp_state_reset(); nvn_unimpl_reset();
+    uint8_t keys[3][8]; for (unsigned st = 0; st < 3; st++) gs_source(st, 0, keys[st]);
+    memset(&gs_program, 0, sizeof gs_program); gs_program.magic = MAGIC('P','R','O','G');
+    gs_program.serial = 900; gs_program.nstage = 3;
+    memset(gs_stages, 0xff, sizeof gs_stages); memset(gs_keys, 0, sizeof gs_keys);
+    for (unsigned st = 0; st < 3; st++) { gs_stages[st] = (uint8_t)st; memcpy(gs_keys[st], keys[st], 8); }
+    gs_keys_ok = 7; p_bind_program_id bind = {&gs_program, gs_program.serial, 0x1f, 0};
+    CHECK(rp_state_op(OP_BIND_PROGRAM, &bind, sizeof bind + 8), "fact reuse program binds");
+    bind_pools(100); fake_gs_success = fake_gs_fact_deps = 1; separate_fixture = 1; fake_reg_changes = 0;
+    struct rp_shader_req q = {0}; q.prim = 4; const struct rp_prog *p = NULL;
+    compiler_calls = 0; CHECK(!rp_shader_resolve(&q, &p) && p && compiler_calls == 1, "fact reuse initial real producer resolves");
+    const struct rp_prog *first = p;
+    rp_S.tex[0][2] = 77;
+    CHECK(!rp_shader_resolve(&q, &p) && p == first && compiler_calls == 1, "unqueried combined texture reuses compiled program");
+    rp_S.tex[1][2] = 77;
+    CHECK(!rp_shader_resolve(&q, &p) && p == first && compiler_calls == 1, "other stage unqueried combined texture reuses program");
+    rp_S.tex[0][0] = 77;
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 2, "queried texture format changes recompile");
+    rp_S.tex[1][1] = 77;
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 3, "queried c2 fallback texture changes recompile");
+    rp_S.ubo[0][15].size = 16;
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 4, "active UBO change still recompiles under fact reuse");
+    rp_S.ubo[1][15].size = 16;
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 4, "unqueried active-stage UBO mask reuses program");
+    q.rt_count = 1; q.rt_format[0] = NVN_FORMAT_RGBA8;
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 4, "attachment count alone does not split shader identity");
+    q.rt_format[0] = NVN_FORMAT_R32UI;
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 5, "changed compiler output numeric type recompiles");
+    for (int mode = 0; mode <= 5; mode++) if (mode != 1) {
+        rp_shader_reset(); fake_gs_fact_deps = mode; compiler_calls = 0; rp_S.tex[0][3] = 0;
+        CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 1, "unsupported dependency fixture resolves");
+        rp_S.tex[0][3] = 77;
+        CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 2, "unsupported dependency metadata preserves exact identity: mode=%d", mode);
+    }
+    rp_shader_reset(); fake_gs_fact_deps = 1; fact_reuse_disabled = 1; compiler_calls = 0;
+    rp_S.tex[0][3] = 0;
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 1, "disabled reuse initial compile");
+    rp_S.tex[0][3] = 77;
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 2, "runtime opt-out restores exact identity");
+    fact_reuse_disabled = 0;
+    fake_gs_success = fake_gs_fact_deps = 0; separate_fixture = 0; fake_reg_changes = 1;
+    rp_shader_reset(); rp_state_reset();
+}
+
+/* The compiler request contains only stages in this graphics program. Inactive
+ * UBO state (including compute) must not create new graphics identities. */
+static void graphics_active_ubo_test(void) {
+    for (unsigned nst = 1; nst <= 3; nst++) {
+        rp_shader_reset(); s2a_source_clear(); rp_state_reset(); nvn_unimpl_reset();
+        uint8_t keys[3][8]; for (unsigned st = 0; st < nst; st++) gs_source(st, 0, keys[st]);
+        memset(&gs_program, 0, sizeof gs_program); gs_program.magic = MAGIC('P','R','O','G');
+        gs_program.serial = 800 + nst; gs_program.nstage = nst;
+        memset(gs_stages, 0xff, sizeof gs_stages); memset(gs_keys, 0, sizeof gs_keys);
+        for (unsigned st = 0; st < nst; st++) { gs_stages[st] = (uint8_t)st; memcpy(gs_keys[st], keys[st], 8); }
+        gs_keys_ok = (1u << nst) - 1;
+        p_bind_program_id bind = {&gs_program, gs_program.serial, 0x1f, 0};
+        CHECK(rp_state_op(OP_BIND_PROGRAM, &bind, sizeof bind + 8), "active UBO graphics fixture binds");
+        bind_pools(7); compiler_calls = 0;
+        struct rp_shader_req q = {0}; q.prim = 4; const struct rp_prog *p = NULL;
+        rp_shader_resolve(&q, &p); CHECK(compiler_calls == 1, "initial graphics compiler attempt");
+        for (unsigned st = nst; st < 6; st++) {
+            rp_S.ubo[st][15].size = 16;
+            rp_shader_resolve(&q, &p);
+            CHECK(compiler_calls == 1, "inactive stage UBO keeps graphics identity: stages=%u changed=%u calls=%d", nst, st, compiler_calls);
+        }
+        for (unsigned st = 0; st < nst; st++) {
+            int before = compiler_calls; rp_S.ubo[st][15].size = 16;
+            rp_shader_resolve(&q, &p);
+            CHECK(compiler_calls == before + 1, "active high UBO changes identity: stages=%u changed=%u", nst, st);
+            char expected[64]; snprintf(expected, sizeof expected, "\"constantBufferUse\":%u", 1u << 18);
+            CHECK(strstr(captured, expected), "active cbuf18 reaches real request");
+        }
+    }
+    rp_shader_reset(); rp_state_reset();
+}
+
 int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--legacy-bytes")) {
         // A baseline-vs-change comparison of the actual legacy REQUEST and canonical bytes.
@@ -502,11 +601,15 @@ int main(int argc, char **argv) {
         for (size_t i = 0; i < n; i++) printf("%02x", bytes[i]);
         putchar('\n'); return 0;
     }
+    if (argc == 6 && !strcmp(argv[1], "--execute-reuse"))
+        return emit_real_request(argv[2], argv[3], argv[4], argv[5], 3);
     if (argc == 6 && (!strcmp(argv[1], "--emit-real") || !strcmp(argv[1], "--emit-real-tbuf") || !strcmp(argv[1], "--execute-tbuf")))
         return emit_real_request(argv[2], argv[3], argv[4], argv[5], !strcmp(argv[1], "--execute-tbuf") ? 2 : !strcmp(argv[1], "--emit-real-tbuf"));
     if (argc == 6 && (!strcmp(argv[1], "--emit-compute-tbuf") || !strcmp(argv[1], "--execute-compute-tbuf")))
         return emit_compute_request(argv[2], argv[3], argv[4], argv[5], !strcmp(argv[1], "--execute-compute-tbuf"));
     if (argc != 1) return 2;
+    graphics_fact_reuse_test();
+    graphics_active_ubo_test();
     unsetenv("S2A_SHADER_REVISION_ROOT"); unsetenv("S2A_DIRECT_CACHE_DIR"); rp_state_reset(); source();
     for (int cs = 0; cs < 2; cs++) {
         run_case(cs, 0, 0, "texture_pool_missing");
