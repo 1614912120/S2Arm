@@ -130,6 +130,7 @@ LibraryJobCases.Run(Check);
 LibraryFolderCases.Run(Check);
 MetalFolderCases.Run(Check);
 LauncherLanguageCases.Run(Check);
+SGradeVersionsCases.Run(Check);
 PackCases.Run(Check);
 BatchCases.Run(Check);
 ExportStreamCases.Run(Check);

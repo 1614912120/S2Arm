@@ -40,6 +40,12 @@ enum SGradeStateText {
         return 0
     }
 
+    /// 版本不同时写哪个版本（总指挥 11-15 定）：离玩家最近、且比它新的；全是旧的取最新的旧版本。→ (版本, 是否比玩家新)；没有 = nil
+    static func pick(_ available: [String], mine: String) -> (version: String, newer: Bool)? {
+        if let v = available.filter({ compare($0, mine) > 0 }).sorted(by: { compare($0, $1) < 0 }).first { return (v, true) }
+        return available.sorted { compare($0, $1) < 0 }.last.map { ($0, false) }
+    }
+
     /// 一类的那一句。cat = widescreen / fps / gfx；catName = 这一类给玩家看的名字（export.sgrade.cat.*）；t = 取文案；date = 日期写法；
     ///   backend = 作业层中文原句译成界面语言。→ (那一句, 「重新打开」要传的 key；nil = 不给按钮)；没有可说的 = nil
     static func line(cat: String, catName: String, _ s: SGradeCategoryState, t: (String) -> String,
@@ -63,11 +69,8 @@ enum SGradeStateText {
             return (f(s.autoOffCause == "stall" ? "sgrade.state.off_auto.stall" : "sgrade.state.off_auto.crash", when), key)
         case "version":
             // 总指挥 11-15 定：写离玩家最近、且比它新的那个版本；全是旧版本写「只有旧版本 X 的」，不劝降级
-            let newer = s.available.filter { compare($0, s.mine) > 0 }.sorted { compare($0, $1) < 0 }
-            var text: String
-            if let v = newer.first { text = f("sgrade.state.version.newer", v, s.mine) }
-            else if let v = s.available.sorted(by: { compare($0, $1) < 0 }).last { text = f("sgrade.state.version.older", v) }
-            else { return nil }
+            guard let p = pick(s.available, mine: s.mine) else { return nil }
+            var text = p.newer ? f("sgrade.state.version.newer", p.version, s.mine) : f("sgrade.state.version.older", p.version)
             if cat == "widescreen", s.port == "failed" { text += t("sgrade.state.version.port_failed") }
             return (text, nil)
         case "none": return (f("sgrade.state.none", catName), nil)

@@ -841,7 +841,6 @@
   "sgrade.upgrade.scanning": "正在查詢遊戲庫裡各款遊戲的原始程式…",
   "sgrade.upgrade.found": "找到了 {0} 款遊戲的原始程式。",
   "sgrade.upgrade.yes": "可以升級到 S 級優化",
-  "sgrade.upgrade.no": "沒有對應補丁",
   "sgrade.upgrade.off": "出包時選了不打入，不升級",
   "sgrade.upgrade.missing": "沒找到原始程式，需要重新出包覆蓋更新",
   "sgrade.upgrade.none": "以下游戲均不支援 S 級優化。",
@@ -953,7 +952,9 @@
   "sgrade.state.on.adaptive": "使用中：社群滿螢幕補丁（依螢幕比例自動選）",
   "sgrade.state.on.fixed": "使用中：社群滿螢幕補丁（固定畫幅）",
   "export.sgrade.ownWiden": "滿螢幕：這款沒有社群滿螢幕補丁，使用 S2Arm 通用滿螢幕（S2Arm 驗證過能鋪滿），預設開啟",
-  "sgrade.upgrade.cat.ownWiden": "滿螢幕（S2Arm 通用）"
+  "sgrade.upgrade.cat.ownWiden": "滿螢幕（S2Arm 通用）",
+  "sgrade.upgrade.version.mine": "（你這份是 {0}）",
+  "sgrade.upgrade.cat.cheatPlain": "金手指"
  },
  "text": {
   "直连": "直連",

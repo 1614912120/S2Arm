@@ -10,10 +10,14 @@ import S2ArmAppleAdapter
 
 struct SGradeScanGame: Identifiable, Equatable {
     let id: String, name: String, program: String, total: Int, patches: [String: Int], iphone: Bool, off: Bool, ownWiden: Bool
+    /// 这款的显示版本与补丁库里「别的版本」按类的版本号（作业层 versions，只收这一版没有的类；D2R 线 feat/sgrade-state）
+    let mine: String, available: [String: [String]]
     init(_ d: [String: Any]) {
         id = d["id"] as? String ?? ""; name = d["name"] as? String ?? id; program = d["program"] as? String ?? "none"
         total = (d["total"] as? NSNumber)?.intValue ?? 0; iphone = d["iphone"] as? Bool ?? false; off = d["off"] as? Bool ?? false
         ownWiden = d["ownWiden"] as? Bool ?? false   // S2Arm 通用满屏（作业层 total 已算它 +1，D2R 线）
+        let v = d["versions"] as? [String: Any] ?? [:]
+        mine = v["mine"] as? String ?? ""; available = (v["available"] as? [String: Any] ?? [:]).compactMapValues { $0 as? [String] }.filter { !$0.value.isEmpty }
         patches = (d["patches"] as? [String: Any] ?? [:]).compactMapValues { ($0 as? NSNumber)?.intValue }
     }
     var found: Bool { program != "none" }
@@ -74,20 +78,24 @@ struct SGradeUpgradeBody: View {
             okRow
         } else if let games {
             let found = games.filter(\.found)
-            let yes = found.filter { $0.total > 0 && !$0.off }, no = found.filter { $0.total == 0 }, off = found.filter { $0.total > 0 && $0.off }
+            let yes = found.filter { $0.total > 0 && !$0.off }, off = found.filter { $0.total > 0 && $0.off }
+            // 没有对应补丁拆两组（定稿表）：补丁库里有别的版本的 → 写版本号；一类都没有 → 补丁库里没有
+            let noVer = found.filter { $0.total == 0 && !$0.available.isEmpty }, no = found.filter { $0.total == 0 && $0.available.isEmpty }
             let missing = games.filter { !$0.found }
             if found.isEmpty {
                 Text(x("nothing")).font(.manrope(14)).fixedSize(horizontal: false, vertical: true)
                 okRow
             } else if yes.isEmpty {
                 if !no.isEmpty { Text(x("none")).font(.manrope(14)); list(no.map { ($0.name, "") }) }
+                if !noVer.isEmpty { group(x("no.version"), noVer.map { ($0.name, versions($0)) }) }
                 if !off.isEmpty { group(x("off"), off.map { ($0.name, "") }) }
                 okRow
             } else {
                 Text(x("found").replacingOccurrences(of: "{0}", with: String(found.count))).font(.manrope(14, .medium))
                 let groups = VStack(alignment: .leading, spacing: 14) {
                     group(x("yes"), yes.map { ($0.name, gains($0)) }, gold: true)
-                    if !no.isEmpty { group(x("no"), no.map { ($0.name, "") }) }
+                    if !noVer.isEmpty { group(x("no.version"), noVer.map { ($0.name, versions($0)) }) }
+                    if !no.isEmpty { group(x("no.none"), no.map { ($0.name, "") }) }
                     if !off.isEmpty { group(x("off"), off.map { ($0.name, "") }) }
                     if !missing.isEmpty { group(x("missing"), missing.map { ($0.name, "") }) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
@@ -107,6 +115,16 @@ struct SGradeUpgradeBody: View {
         } else {
             HStack(spacing: 8) { ProgressView().controlSize(.small); Text(x("scanning")).font(.manrope(13)).foregroundStyle(.secondary) }
         }
+    }
+
+    /// 补丁是别的版本的：每类写哪个版本（规则同设置页 SGradeStateText.pick），末尾标玩家这份的版本
+    func versionsText(_ g: SGradeScanGame) -> String { versions(g) }   // 单测核这一行
+    private func versions(_ g: SGradeScanGame) -> String {
+        let parts = ["widescreen", "fps", "gfx", "cheat"].compactMap { c -> String? in
+            guard let v = g.available[c], let p = SGradeStateText.pick(v, mine: g.mine) else { return nil }
+            return x(c == "cheat" ? "cat.cheatPlain" : "cat." + c) + " " + p.version
+        }
+        return parts.joined(separator: zh ? "、" : ", ") + (g.mine.isEmpty ? "" : x("version.mine").replacingOccurrences(of: "{0}", with: g.mine))
     }
 
     private func gains(_ g: SGradeScanGame) -> String {

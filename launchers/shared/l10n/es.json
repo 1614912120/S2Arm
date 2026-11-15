@@ -841,7 +841,6 @@
   "sgrade.upgrade.scanning": "Buscando el programa original de cada juego en tu biblioteca…",
   "sgrade.upgrade.found": "Juegos con programa original encontrado: {0}",
   "sgrade.upgrade.yes": "Se puede mejorar a grado S",
-  "sgrade.upgrade.no": "Sin parches coincidentes",
   "sgrade.upgrade.off": "Desactivado al compilar; no se actualiza",
   "sgrade.upgrade.missing": "Programa original no encontrado; compila este juego de nuevo para actualizarlo",
   "sgrade.upgrade.none": "Ninguno de estos juegos admite mejoras de grado S.",
@@ -953,7 +952,9 @@
   "sgrade.state.on.adaptive": "En uso: parche de pantalla completa de la comunidad (elegido según la relación de aspecto de tu pantalla)",
   "sgrade.state.on.fixed": "En uso: parche de pantalla completa de la comunidad (relación de aspecto fija)",
   "export.sgrade.ownWiden": "Pantalla completa: este juego no tiene parche de la comunidad, así que se usa la pantalla completa de S2Arm (comprobada por S2Arm), activada por defecto",
-  "sgrade.upgrade.cat.ownWiden": "pantalla completa (S2Arm)"
+  "sgrade.upgrade.cat.ownWiden": "pantalla completa (S2Arm)",
+  "sgrade.upgrade.version.mine": " (la tuya: {0})",
+  "sgrade.upgrade.cat.cheatPlain": "trucos"
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "Parche de pantalla completa (elegido según la proporción de tu pantalla)",
