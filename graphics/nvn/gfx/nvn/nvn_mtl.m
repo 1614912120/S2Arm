@@ -2638,7 +2638,7 @@ void nvn_be_drain(void) { if (mtl_gpu_halted()) { MLOG("GPU 安全停中：后�
 
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[195];   // RED_ONCE keys 0..194 (194: #798 a texel buffer's aligned lead view could not be made, tbl_view; 193: a texture outside any memory pool with an unmapped storage tail, #b5a081; 188–192: internal resolution — 188 a draw / dispatch still held scaled image-slot storages after the retry limit, rs_pre_draw / rs_pre_images; 189 a storage past the device texture limit, rs_rescale / tex_widen; 190 a CPU readback of an enlarged storage not scaled back linearly, nvn_be_read_texels; 191 an image-slot storage that could not go back to its own size; 192 a screenshot of the enlarged window texture not scaled back; 187: a multisample count the GPU does not support, stepped down, mtl_samples_supported (#903); 186: a packaged texture's storage runs past the end of its memory pool, pkg_upload_ (#819); 183 / 184 / 185: an incompatible Metal texture format view fell back to the base format in rt_view_fmt / attach / clear_tex; 182: a block-compressed texture whose GPU writer resolved to its own Metal format, bcal_copy; 181: a texture view whose target and layer range Metal cannot express (#199), tex_by_id; 179 / 180: a pass's own depth attachment sampled in it could not be copied / viewed (#387); 178: a slot read on-chip by the first draw of a pass was not opened loaded; 177: a compute dispatch's binding ended the shared encoder again on the retry; 175 / 176: a block-compressed texture's GPU-written bytes not taken: no host texture of the uncompressed writer / no staging buffer, bcal_sync; 174: a converted vertex attribute stream address in no memory pool, vconv_bind; 172 / 173: a pool table for handles traced to no slot could not be allocated / grown, pool_tab_new / pool_tab_put_n; 171: a first-invocation store skipped, dispatch; 170: an sRGB / linear view not made again on its upgraded parent, tex_upgrade; 169: unused since 11-07 (a not-loaded color attachment written: g_noload_wrong, first 8 lines); 167 / 168: a storage buffer address the pools do not hold, slot / handle in a uniform buffer; 166: a texture turning packaged whose old host texture has another shape, its GPU-written texels not carried over, carry_gpu) (162: a vertex buffer address the pools do not hold, bind_vbufs) (160 / 161 / 163–165: tensor-core network stand-in, nvn_tensor.inc; 147–159 left for the NVN2 task / mesh branch) (143–146: NVN2 DLSS → MetalFX, nvn_dlss.inc) (139–142: folded linear textures: tex_linear, se_want, se_bind, copies / clears into one) (137 / 138: a GL texture an NVN texture is built from has no usable storage / no matching NVN format) (136: a draw's binding ended its pass twice) (134 / 135: alpha test / multisampling off the fragment shader cannot take); same-pass feedback snapshot too large 127, native image atomics use 128/129, same-pass feedback view narrowing 133
+static int g_red_once[194];   // RED_ONCE keys 0..193 (193: a texture outside any memory pool with an unmapped storage tail, #b5a081; 188–192: internal resolution — 188 a draw / dispatch still held scaled image-slot storages after the retry limit, rs_pre_draw / rs_pre_images; 189 a storage past the device texture limit, rs_rescale / tex_widen; 190 a CPU readback of an enlarged storage not scaled back linearly, nvn_be_read_texels; 191 an image-slot storage that could not go back to its own size; 192 a screenshot of the enlarged window texture not scaled back; 187: a multisample count the GPU does not support, stepped down, mtl_samples_supported (#903); 186: a packaged texture's storage runs past the end of its memory pool, pkg_upload_ (#819); 183 / 184 / 185: an incompatible Metal texture format view fell back to the base format in rt_view_fmt / attach / clear_tex; 182: a block-compressed texture whose GPU writer resolved to its own Metal format, bcal_copy; 181: a texture view whose target and layer range Metal cannot express (#199), tex_by_id; 179 / 180: a pass's own depth attachment sampled in it could not be copied / viewed (#387); 178: a slot read on-chip by the first draw of a pass was not opened loaded; 177: a compute dispatch's binding ended the shared encoder again on the retry; 175 / 176: a block-compressed texture's GPU-written bytes not taken: no host texture of the uncompressed writer / no staging buffer, bcal_sync; 174: a converted vertex attribute stream address in no memory pool, vconv_bind; 172 / 173: a pool table for handles traced to no slot could not be allocated / grown, pool_tab_new / pool_tab_put_n; 171: a first-invocation store skipped, dispatch; 170: an sRGB / linear view not made again on its upgraded parent, tex_upgrade; 169: unused since 11-07 (a not-loaded color attachment written: g_noload_wrong, first 8 lines); 167 / 168: a storage buffer address the pools do not hold, slot / handle in a uniform buffer; 166: a texture turning packaged whose old host texture has another shape, its GPU-written texels not carried over, carry_gpu) (162: a vertex buffer address the pools do not hold, bind_vbufs) (160 / 161 / 163–165: tensor-core network stand-in, nvn_tensor.inc; 147–159 left for the NVN2 task / mesh branch) (143–146: NVN2 DLSS → MetalFX, nvn_dlss.inc) (139–142: folded linear textures: tex_linear, se_want, se_bind, copies / clears into one) (137 / 138: a GL texture an NVN texture is built from has no usable storage / no matching NVN format) (136: a draw's binding ended its pass twice) (134 / 135: alpha test / multisampling off the fragment shader cannot take); same-pass feedback snapshot too large 127, native image atomics use 128/129, same-pass feedback view narrowing 133
 // The key must be a constant inside the table: a key past the end wrote into the statics next to it (11-05: nvn_tensor.inc used 160 / 161 with 147 slots)
 #define RED_ONCE(k, ...) do { _Static_assert((k) >= 0 && (k) < (int)(sizeof g_red_once / sizeof g_red_once[0]), "RED_ONCE key outside g_red_once"); if (!g_red_once[k]++) MLOG("【红】 " __VA_ARGS__); } while (0)
 // NVN vertex streams 0–15 → Metal vertex buffer slots: 0–13 go to 16–29 (30 is the constant fallback buffer), 14 and 15 to 14 and 15. Metal has only the 31 slots 0–30; translated shaders use only buffer(0) (the argument buffer),
@@ -6996,35 +6996,6 @@ static id<MTLTexture> tbuf_bind_aligned(int tid, id<MTLTexture> t, uint64_t *rid
     if (!g_tb1_miss++) MLOG("【红】 texture buffer at an unaligned pool offset (%lu, alignment %lu, texture ID %d) has no aligned copy: bound in place, it reads from the offset rounded down", (unsigned long)t.bufferOffset, (unsigned long)linear_align(t.pixelFormat), tid);
     return t;
 }
-// #798 偏移表（gal_spvx.c spv_tbias，nvn_refl.h TBLEAD）：着色器给这个纹素缓冲配了前导项时，视图从向下取整到线性贴图对齐的边界开、多出 lead 个元素（lead = 低于对齐的那段字节 ÷ 元素字节数），
-//   着色器取数下标加 lead、取宽度减 lead，原地读池里的字节（同一次提交里 GPU 先写的也看得见，不拷贝、不拆遍）。对齐的偏移 lead = 0、照旧原地视图。
-//   视图按（缓冲、偏移、格式、元素数）缓存 64 个，换掉的随提交释放。Caller holds g_rmu
-static struct { __unsafe_unretained id<MTLBuffer> buf; NSUInteger off, n; MTLPixelFormat pf; __strong id<MTLTexture> v; uint64_t rid; } g_tbl_v[64]; static int g_tbl_next; static uint64_t g_tbl_made;
-static id<MTLTexture> tbl_view(int tid, id<MTLTexture> t, uint32_t *lead, uint64_t *rid) {
-    *lead = 0;
-    if (!t || t.textureType != MTLTextureTypeTextureBuffer || !t.buffer || tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) return t;
-    NSUInteger al = linear_align(t.pixelFormat), r = t.bufferOffset % al; int bw, bh, bpb = nvn_fmt_bpb(g_treg[tid].t.d.format, &bw, &bh);
-    if (!r || bpb <= 0 || r % (NSUInteger)bpb) return t;
-    for (int i = 0; i < 64; i++) if (g_tbl_v[i].v && g_tbl_v[i].buf == t.buffer && g_tbl_v[i].off == t.bufferOffset && g_tbl_v[i].pf == t.pixelFormat && g_tbl_v[i].n == t.width) {
-        *lead = (uint32_t)(r / (NSUInteger)bpb); *rid = g_tbl_v[i].rid; return g_tbl_v[i].v; }
-    NSUInteger n = t.width + r / (NSUInteger)bpb, row = (n * (NSUInteger)bpb + al - 1) / al * al;
-    MTLTextureDescriptor *d = [MTLTextureDescriptor textureBufferDescriptorWithPixelFormat:t.pixelFormat width:n resourceOptions:t.buffer.resourceOptions usage:t.usage];
-    id<MTLTexture> v = [t.buffer newTextureWithDescriptor:d offset:t.bufferOffset - r bytesPerRow:row];
-    if (!v) { RED_ONCE(194, "cannot create the aligned lead view of texel buffer ser=%llu (%lu + %lu elements at pool offset %lu)", (unsigned long long)g_treg[tid].t.serial, (unsigned long)t.width, (unsigned long)(r / (NSUInteger)bpb), (unsigned long)(t.bufferOffset - r)); return t; }
-    int k = g_tbl_next++ % 64; if (g_tbl_v[k].v) defer_obj_release(g_tbl_v[k].v);
-    g_tbl_v[k].buf = t.buffer; g_tbl_v[k].off = t.bufferOffset; g_tbl_v[k].pf = t.pixelFormat; g_tbl_v[k].n = t.width; g_tbl_v[k].v = v; g_tbl_v[k].rid = v.gpuResourceID._impl;
-    if (!g_tbl_made++) MLOG("texel buffer at an unaligned pool offset (%lu, alignment %lu): viewed from %lu with %lu lead elements, the shader moves its reads by them (texture ID %d; first case)",
-        (unsigned long)t.bufferOffset, (unsigned long)al, (unsigned long)(t.bufferOffset - r), (unsigned long)(r / (NSUInteger)bpb), tid);
-    *lead = (uint32_t)(r / (NSUInteger)bpb); *rid = g_tbl_v[k].rid; return v;
-}
-static uint32_t tbl_lead_of(NvShader *sh, int stage, const nvn_rbind *b);   // 前导项所属纹素缓冲此刻的前导数（定义在 tba_prepare 前）
-// 前导数的常量表：uint[i] = i（i < 256），前导项的参数块指针指向第 lead 格；建一次、常驻
-static id<MTLBuffer> g_tbl_tab;
-static uint64_t tbl_tab_gpu(void) {
-    if (!g_tbl_tab) { uint32_t v[256]; for (int i = 0; i < 256; i++) v[i] = (uint32_t)i;
-        g_tbl_tab = [g_dev newBufferWithBytes:v length:sizeof v options:MTLResourceStorageModeShared]; if (g_tbl_tab) res_add(g_tbl_tab); }
-    return g_tbl_tab ? g_tbl_tab.gpuAddress : 0;
-}
 static id<MTLTexture> tbuf_as_2d(int tid, id<MTLTexture> t, int exact, uint64_t *rid) {
     if (tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) return nil;
     const tex_t *tt = &g_treg[tid].t; uint64_t ser = tt->serial;
@@ -10570,8 +10541,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
         if (b->kind == NVN_RB_GEOMETRY) { slots[aid] = g_geo_bind[reg]; continue; }
         if (b->kind == NVN_RB_UVX) { slots[aid] = uvx_fill(sh, nvn_stage); continue; }   // S2Arm widen 16:9 sampling remap (see uvx_fill)
         if (b->kind == NVN_RB_LB) { slots[aid] = lb_fill(sh, nvn_stage); continue; }   // S2Arm #800 sampler LOD bias in the shader (see lb_fill)
-        if (b->kind == NVN_RB_UBOLEN) { ul_aid = aid; p65_ul = 1; continue; }
-        if (b->kind == NVN_RB_TBLEAD) { uint64_t tab = tbl_tab_gpu(); slots[aid] = tab ? tab + 4ull * tbl_lead_of(sh, nvn_stage, b) : 0; if (g_tbl_tab) USE(g_tbl_tab, MTLResourceUsageRead); continue; }   // #798 (see tbl_view)   // #1204 T1 uniform bounds table: filled after the loop, once the CBUF branch knows what each pointer has behind it
+        if (b->kind == NVN_RB_UBOLEN) { ul_aid = aid; p65_ul = 1; continue; }   // #1204 T1 uniform bounds table: filled after the loop, once the CBUF branch knows what each pointer has behind it
         if (b->kind == NVN_RB_SBSZ) { slots[aid] = len_fill(sh, nvn_stage, b->kind, NULL); continue; }   // #1204 T1 bounds tables (see len_fill)
         if (b->kind == NVN_RB_CBUF) {
             const p_bind_buf *u = reg < 16 ? &S.ubo[nvn_stage][reg] : NULL;
@@ -10643,7 +10613,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             if (tv) p20_check(sh, nvn_stage, b, tid, tv);   // audit #1534 P1-20 probe: declared type / class against the texture as registered (before any fitting below)
             if (!t && tid >= 0 && b->kind == NVN_RB_TEX && (b->dtt == (uint8_t)MTLTextureTypeTextureBuffer || (b->f1d && b->dtt == (uint8_t)MTLTextureType2D)))   // buffer textures of an expanded format: expanded copy, as 2D rows for wrapped 1D fetches (see tbuf_expand)
                 t = tbuf_expand(tid, b->dtt != (uint8_t)MTLTextureTypeTextureBuffer ? (b->f1d == 2 ? 2 : 1) : 0, &trid);
-            if (t && b->dtt == (uint8_t)MTLTextureTypeTextureBuffer) { if (b->tbl) { uint32_t ld; t = tbl_view(tid, t, &ld, &trid); } else t = tbuf_bind_aligned(tid, t, &trid); }   // below the linear-texture alignment (#798): the lead view the shader moves its reads over, else its aligned GPU copy
+            if (t && b->dtt == (uint8_t)MTLTextureTypeTextureBuffer) t = tbuf_bind_aligned(tid, t, &trid);   // below the linear-texture alignment: its aligned GPU copy (#798)
             // A folded linear texture (tex_linear) holds its texels at other places: only the variant that reads it as folded may see it (se_want sets g_fold_sh); main0 reads 0 there
             if (t && g_fold_any && fold_tex_tid(b, nvn_stage) >= 0 && (nvn_stage < 0 || nvn_stage > 5 || g_fold_sh[nvn_stage] != sh)) t = nil;
             __unsafe_unretained id<MTLTexture> size_view = t;
@@ -10712,7 +10682,6 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             if (bl) PD("B %llu st%d tbuf reg%d tid=%d %s ser=%llu fmt=%#x n=%u mem=%p", g_stat_pass, nvn_stage, reg, tid, t ? "real" : "dummy", t && tid < g_ntreg ? g_treg[tid].t.serial : 0ull,
                        tid < g_ntreg ? g_treg[tid].t.d.format : 0, tid < g_ntreg ? g_treg[tid].t.d.width : 0, tid < g_ntreg ? (void *)g_treg[tid].t.mem : NULL);
             if (!t) t = tbuf_expand(tid, 0, &trid);   // buffer textures of an expanded format: expanded copy (see tbuf_expand)
-            else if (b->tbl) { uint32_t ld; t = tbl_view(tid, t, &ld, &trid); }   // #798 the shader moves its reads by the lead (see tbl_view)
             else t = tbuf_bind_aligned(tid, t, &trid);   // below the linear-texture alignment: its aligned GPU copy (#798)
             if (!t) { t = dummy_tbuf(b->dpf); trid = g_dummy_tbuf_rid[b->dpf & 3]; }
             slots[aid] = trid;
@@ -11049,23 +11018,12 @@ static int tba_copy(int tid, int exact) {   // exact < 0: read as a texture buff
         (unsigned long)t.bufferOffset, tid, (unsigned long)len, (unsigned long long)g_tba_copies);
     return 1;
 }
-// 前导项 b 所属纹素缓冲此刻的前导数：照绑定那一支同样取纹理、同样经 tbl_view（缓存同一个视图），两边算出的必定一致。超出常量表（≥ 256 个元素的前导，对齐不会这么大）按 0
-static uint32_t tbl_lead_of(NvShader *sh, int stage, const nvn_rbind *b) {
-    if (!b->tbl || b->tbl > sh->rf.nb || stage < 0 || stage > 5) return 0;
-    const nvn_rbind *tb = &sh->rf.b[b->tbl - 1];
-    int tid = tb->kind == NVN_RB_TBUFU ? ubo_tex_id(ubo_packed(stage, tb)) : (int)(tex_slot_h(S.tex[stage], S.img[stage], tb->reg) & 0xfffff);
-    void *tv = NULL; uint64_t r = tex_fast_rid(tid, &tv); (void)r; __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
-    if (!t || t.textureType != MTLTextureTypeTextureBuffer) return 0;
-    uint32_t ld = 0; uint64_t vr = 0; (void)tbl_view(tid, t, &ld, &vr);
-    return ld < 256 ? ld : 0;
-}
 // Before a draw / dispatch: every buffer texture the stages read as 2D rows (wrapped 1D fetch) gets its GPU copy if it needs one (tba_copy). sh / stage: the program's stages (draw)
 //   or the compute shader (dispatch, stage 5)
 static void tba_prepare(NvShader *x0, NvShader *x1, NvShader *x2, NvShader *x3, NvShader *x4, int compute) {
     NvShader *sh[5] = {x0, x1, x2, x3, x4}; int made = 0;
     for (int k = 0; k < 5; k++) { NvShader *x = sh[k]; if (!x) continue; int stage = compute ? 5 : k;
         for (int i = 0; i < x->rf.nb; i++) { const nvn_rbind *b = &x->rf.b[i];
-            if (b->tbl && b->kind != NVN_RB_TBLEAD) continue;   // #798 read through the lead view (tbl_view): no copy
             if (b->kind == NVN_RB_TBUF || b->kind == NVN_RB_TBUFU || (b->kind == NVN_RB_TEX && (MTLTextureType)b->dtt == MTLTextureTypeTextureBuffer)) {   // read as a texture buffer (#798)
                 made |= tba_copy(b->kind == NVN_RB_TBUFU ? ubo_tex_id(ubo_packed(stage, b)) : (int)(tex_slot_h(S.tex[stage], S.img[stage], b->reg) & 0xfffff), -1); continue; }
             if (b->kind == NVN_RB_TEXD && (MTLTextureType)b->dtt == MTLTextureTypeTextureBuffer) {   // a dynamic handle array of texture buffers: each element as the binding resolves it
@@ -14512,7 +14470,7 @@ static int disp_ranges(NvShader *cs, int indirect, disp_rng *o) {
     if (!cs || indirect || !disp_range_on()) return 0;
     for (int i = 0; i < cs->rf.nb; i++) { const nvn_rbind *b = &cs->rf.b[i];
         switch (b->kind) {
-            case NVN_RB_SUPPORT: case NVN_RB_C1: case NVN_RB_UBOLEN: case NVN_RB_TBLEAD: case NVN_RB_SBSZ: case NVN_RB_SAMP: case NVN_RB_SAMPT: case NVN_RB_TEX: case NVN_RB_PUSH: case NVN_RB_LB: case NVN_RB_DRV0: case NVN_RB_DRV2: break;   // 宿主自己的表、采样器、只读贴图（贴图的写都走图像或拷贝，那些一律记成全部写过）
+            case NVN_RB_SUPPORT: case NVN_RB_C1: case NVN_RB_UBOLEN: case NVN_RB_SBSZ: case NVN_RB_SAMP: case NVN_RB_SAMPT: case NVN_RB_TEX: case NVN_RB_PUSH: case NVN_RB_LB: case NVN_RB_DRV0: case NVN_RB_DRV2: break;   // 宿主自己的表、采样器、只读贴图（贴图的写都走图像或拷贝，那些一律记成全部写过）
             case NVN_RB_CBUF: case NVN_RB_UBOP: case NVN_RB_SBUFP: {
                 if (b->reg >= 16) return 0;
                 const p_bind_buf *u = b->kind == NVN_RB_SBUFP ? &S.ssbo[5][b->reg] : &S.ubo[5][b->reg];
