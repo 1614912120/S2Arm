@@ -937,6 +937,29 @@ Java_org_s2arm_android_NativeBridge_configureFrameLogDir(JNIEnv *env, jclass, js
     return ::setenv("S2A_FRAME_LOG_DIR", value.c_str(), 1) == 0 ? 0 : errno;
 }
 
+// 外挂 Vulkan 驱动目录（direct_session.c 的 custom_driver_open 读）：内部目录用于复制与 dlopen，
+// 外部私有目录用于 adb push（selected.txt 与驱动文件）。没选驱动时两边都不碰。
+static std::string g_gpu_driver_files_dir, g_gpu_driver_external_dir;
+extern "C" const char *s2a_android_gpu_driver_files_dir(void) { return g_gpu_driver_files_dir.c_str(); }
+extern "C" const char *s2a_android_gpu_driver_external_dir(void) { return g_gpu_driver_external_dir.c_str(); }
+// 隔离探针（direct_session.c）：诊断 / 非 game 构建里没有这个符号。
+extern "C" int s2a_android_vk_probe_driver(void) __attribute__((weak));
+
+extern "C" JNIEXPORT jint JNICALL
+Java_org_s2arm_android_NativeBridge_configureGpuDriver(JNIEnv *env, jclass, jstring files_dir, jstring external_dir) {
+    std::string files = jstring_or(env, files_dir, "");
+    std::string external = jstring_or(env, external_dir, "");
+    if (files.empty() || files[0] != '/') return EINVAL;
+    if (!external.empty() && external[0] != '/') return EINVAL;
+    g_gpu_driver_files_dir = files;
+    g_gpu_driver_external_dir = external;
+    fprintf(stderr, "[vk-direct] 驱动目录配置：files=%s external=%s\n",
+            files.c_str(), external.empty() ? "(空)" : external.c_str());
+    // 隔离探针（direct_session.c）：有选择时只打开驱动并枚举设备，不改渲染路径。
+    if (s2a_android_vk_probe_driver) s2a_android_vk_probe_driver();
+    return 0;
+}
+
 // 拆线程：宿主创建前设 S2A_ANDROID_THREADED_RENDERER（0|1|auto，外壳每次游戏启动都显式设）；
 // AndroidVulkanRuntime.CreateRenderer 读它决定是否给 GAL 套 ThreadedRenderer（GPU 模拟 / Vulkan 录制提交分两条线程），
 // auto = 按本游戏上局记录决定。别的值 EINVAL，不按关处理。
