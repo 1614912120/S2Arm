@@ -3448,10 +3448,21 @@ static void page_span(const tex_t *t, size_t k, const uint8_t **lo, size_t *n) {
 }
 static uint32_t page_count(const tex_t *t) { uintptr_t pg = nvn_dirty_page_size(), a = (uintptr_t)t->mem; uint64_t n = tex_rd_size(t); return n ? (uint32_t)(((a + n - 1) & ~(pg - 1)) - (a & ~(pg - 1))) / (uint32_t)pg + 1 : 0; }
 // 存储 [mem, mem + size) 逐宿主页哈希进 h[0..n)（后台首次上传哈希用，#956）：size 由调用方给（tex_rd_size，已截到池尾），这里不再看池
-static void ph_hash_pages(const uint8_t *mem, uint64_t size, uint32_t n, uint64_t *h) {
+// 后台线程上读（#b5a081，v0.4.0 回归：Mac 3 / 6 局 SIGBUS）：客体页此刻可能不可访问（GPU 改过没回写、等缺页处理代读的页），游戏线程上
+//   读会进缺页处理代读，ph_queue 的 GCD 线程没有代读用的别名槽、缺页处理接不住，进程直接崩（0.3.10 在提交线程上哈希，没有这条路）。
+//   所以逐页用 vm_read_overwrite 读进暂存页再算（读不了回错，不碰缺页）：返回 0 = 有页读不了，调用方按「这段时间被写过」作废这份哈希（PH_BAD）
+static int ph_hash_pages(const uint8_t *mem, uint64_t size, uint32_t n, uint64_t *h) {
     tex_t pt = {0}; pt.mem = (uint8_t *)mem; pt.L.size = size;   // page_span reads only these two (no pool: tex_rd_size returns size as given)
-    for (uint32_t k = 0; k < n; k++) { const uint8_t *lo; size_t m; page_span(&pt, k, &lo, &m); h[k] = span_hash(host_rd(lo), m); }
+    static uint8_t page[1 << 14]; if (nvn_dirty_page_size() > sizeof page) return 0;   // 只在 ph_queue（串行）上调：一份暂存页够
+    for (uint32_t k = 0; k < n; k++) {
+        const uint8_t *lo; size_t m; page_span(&pt, k, &lo, &m);
+        vm_size_t got = 0;
+        if (m && (vm_read_overwrite(mach_task_self(), (vm_address_t)host_rd(lo), m, (vm_address_t)page, &got) != KERN_SUCCESS || got != m)) return 0;
+        h[k] = span_hash(page, m);
+    }
+    return 1;
 }
+int nvn_be_test_ph_hash(const void *mem, uint64_t size, uint32_t n, uint64_t *h) { return ph_hash_pages(mem, size, n, h); }   // 单测：t_nvn_ph_hash
 static unsigned tex_layers(const tex_t *t) { return (t->d.target == 4 || t->d.target == 9) ? t->d.depth : t->d.target == 8 ? 6 : t->d.target == 3 ? t->d.height : 1; }   // as pkg_upload_ (a cube array's depth counts layer-faces)
 // Block-linear storage (Tegra X1): each layer holds its levels one after another; a level is rows of blocks, a block 2^tileH GOBs tall and one GOB (64 bytes x 8 rows of format blocks) wide,
 // laid out GOB column after GOB column. So a byte range of one block row is a run of GOB columns: a texel rectangle. fn gets (level, layer, x, y, w, h) in texels for every rectangle [lo, hi)
@@ -3577,9 +3588,10 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
                 // 长度用 tex_rd_size（截到池尾，#819）：后台块里没有池，按 L.size 全长读会读进池后没映射的内存，iPad 上 SIGBUS（与写保护、页数同一个长度）
                 const uint8_t *mem = t->mem; uint64_t size = tex_rd_size(t), st = *stamp; const void *span = nvn_dirty_span(mem, size);
                 dispatch_async(ph_queue(), ^{
-                    ph_hash_pages(mem, size, n, h);
+                    int ok = ph_hash_pages(mem, size, n, h);
+                    if (!ok) { static _Atomic uint64_t nb; uint64_t k = atomic_fetch_add(&nb, 1) + 1; if (k <= 4 || !(k & (k - 1))) MLOG("first-upload hash: a page of %p +%llu was not readable from the background queue (GPU-written or waiting for the fault handler); the hash is dropped and the next check re-uploads the whole texture (%llu in all)", (const void *)mem, (unsigned long long)size, (unsigned long long)k); }
                     atomic_thread_fence(memory_order_seq_cst);   // the bytes read above, then the generations: a write the hash saw has its page's generation raised before it
-                    atomic_store_explicit(ph_state(h, n), nvn_dirty_since_span(span, mem, size, st) ? PH_BAD : PH_OK, memory_order_release);
+                    atomic_store_explicit(ph_state(h, n), !ok || nvn_dirty_since_span(span, mem, size, st) ? PH_BAD : PH_OK, memory_order_release);
                 });
                 *ph = h; *nph = n;
             } else if (h) { for (uint32_t k = 0; k < n; k++) { const uint8_t *lo; size_t m; page_span(t, k, &lo, &m); h[k] = span_hash(host_rd(lo), m); }
