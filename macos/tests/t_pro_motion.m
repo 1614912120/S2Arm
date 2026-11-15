@@ -10,7 +10,9 @@
 static uint64_t test_us = 1000000;
 static unsigned writes, opens;
 static unsigned support_queries;
-static int output_pid[128], output_dev[128], output_cmd[128], output_arg[128];
+static int output_pid[128], output_dev[128], output_cmd[128], output_arg[128], output_packet[128];
+static void (*write_observer)(IOHIDDeviceRef);
+static unsigned references[5], retains, releases;
 static IOHIDReportCallback callbacks[5]; static void *contexts[5];
 static IOHIDDeviceRef dev(int n) { return (IOHIDDeviceRef)(uintptr_t)n; }
 static int index_of(IOHIDDeviceRef d) { return (int)(uintptr_t)d; }
@@ -31,9 +33,12 @@ static IOReturn open_device(IOHIDDeviceRef d, IOOptionBits options) { opens++; r
 static IOReturn close_device(IOHIDDeviceRef d, IOOptionBits options) { return kIOReturnSuccess; }
 static void register_input(IOHIDDeviceRef d, uint8_t *p, CFIndex n, IOHIDReportCallback cb, void *context) { callbacks[index_of(d)] = cb; contexts[index_of(d)] = context; }
 static IOReturn output(IOHIDDeviceRef d, IOHIDReportType type, CFIndex id, const uint8_t *p, CFIndex n) {
-    assert(writes < 128); output_dev[writes] = index_of(d); output_pid[writes] = pid_of(d); output_cmd[writes] = n > 10 ? p[10] : -1; output_arg[writes] = n > 11 ? p[11] : -1; writes++;
+    assert(writes < 128); output_dev[writes] = index_of(d); output_pid[writes] = pid_of(d); output_cmd[writes] = n > 10 ? p[10] : -1; output_arg[writes] = n > 11 ? p[11] : -1; output_packet[writes] = n > 1 ? p[1] : -1; writes++;
+    if (write_observer) write_observer(d);
     return kIOReturnSuccess;
 }
+__attribute__((unused)) static CFTypeRef retain_value(CFTypeRef value) { references[index_of((IOHIDDeviceRef)value)]++; retains++; return value; }
+__attribute__((unused)) static void release_value(CFTypeRef value) { unsigned *n=&references[index_of((IOHIDDeviceRef)value)]; assert(*n); (*n)--; releases++; }
 static uint64_t clock_ticks(void) { mach_timebase_info_data_t tb; mach_timebase_info(&tb); return test_us * 1000 * tb.denom / tb.numer; }
 @interface TestGCBackend : NSObject
 + (BOOL)supportsHIDDevice:(IOHIDDeviceRef)device;
@@ -46,10 +51,14 @@ static uint64_t clock_ticks(void) { mach_timebase_info_data_t tb; mach_timebase_
 #define IOHIDDeviceClose close_device
 #define IOHIDDeviceRegisterInputReportCallback register_input
 #define IOHIDDeviceSetReport output
+#define CFRetain retain_value
+#define CFRelease release_value
 #define mach_absolute_time clock_ticks
 #define GCController TestGCBackend
 #include "../joycon_imu.m"
 #undef GCController
+#undef CFRetain
+#undef CFRelease
 #include "../motion_power.h"
 
 @interface TestSensor : NSObject
@@ -82,6 +91,26 @@ static void feed(IOHIDDeviceRef d) {
 }
 static unsigned checks, failed;
 #define CHECK(c, text) do { checks++; if (!(c)) { failed++; printf("FAIL %s\n", text); } else printf("PASS %s\n", text); } while (0)
+static unsigned unlocked_writes, locked_writes, reader_calls, retained_writes;
+static int write_hook_mode;
+static void inspect_attach_write(IOHIDDeviceRef device) {
+    // The fake synchronous transport must be able to acquire the sampling lock.
+    // Never block on the broken implementation: report a failure instead.
+    if (pthread_mutex_trylock(&g_mu)) { locked_writes++; return; }
+    pthread_mutex_unlock(&g_mu); unlocked_writes++;
+    s2a_pad_motion l={0},r={0}; uint32_t buttons; int32_t sticks[4]; int side; uint8_t raw[S2A_JC1_RAW];
+    s2a_joycon_imu_read(&l,&r); reader_calls++;
+    s2a_joycon_imu_read_id("fixture-left",&l); reader_calls++;
+    s2a_joycon_pad_read_id("fixture-left",&buttons,sticks,&side,NULL); reader_calls++;
+    s2a_joycon_pad_raw_id("fixture-left",raw); reader_calls++;
+    if (references[index_of(device)]) retained_writes++;
+    int mode=write_hook_mode;
+    if (!mode) return;
+    write_observer=NULL; write_hook_mode=0;
+    if (mode==1 || mode==2) detach_device(device);
+    if (mode==2) attach_device(device);   // same pointer / slot, different attachment
+    if (mode==3) atomic_store(&g_want,0);
+}
 int main(void) { @autoreleasepool {
     g_started = 1;   // Never enumerate/open real controllers in this test.
     attach_device(dev(2)); CHECK(opens == 0, "vendor interface lacking Nintendo report IDs is not opened");
@@ -155,5 +184,43 @@ int main(void) { @autoreleasepool {
     const uint8_t short_item[]={0x85}, bad_pop[]={0xb4}; uint8_t deep[33]; memset(deep,0xa4,sizeof deep);
     CHECK(nintendo_reports(NULL,0)==-1 && nintendo_reports(short_item,sizeof short_item)==-1 && nintendo_reports(bad_pop,sizeof bad_pop)==-1 && nintendo_reports(deep,sizeof deep)==-1,
           "unknown / truncated / excessive descriptor state is not falsely classified unsupported");
+
+    // #1092 review: connection-time synchronous output must not hold the lock
+    // used by game-thread motion/button readers, or reuse a retired attachment.
+    detach_device(dev(1)); detach_device(dev(3)); detach_device(dev(4));
+    atomic_store(&g_want,1); atomic_store(&g_pad_want,0);
+    before=writes; write_observer=inspect_attach_write; attach_device(dev(3)); write_observer=NULL;
+    CHECK(unlocked_writes==2 && locked_writes==0 && reader_calls==8,
+          "attachment output leaves all four production readers outside the transport wait");
+    CHECK(retained_writes==2 && retains>0 && retains==releases && !references[3],
+          "each unlocked attachment output retains its target only until the write returns");
+    CHECK(writes==before+2 && output_cmd[before]==0x40 && output_arg[before]==1 && output_cmd[before+1]==3 && output_arg[before+1]==0x30 &&
+          output_packet[before+1]==((output_packet[before]+1)&15),
+          "unlocked attachment preserves legacy command bytes and packet sequence");
+
+    detach_device(dev(3)); before=writes; write_hook_mode=1; write_observer=inspect_attach_write;
+    attach_device(dev(3)); write_observer=NULL;
+    CHECK(writes==before+1 && s2a_joycon_list(list,16)==0 && !references[3],
+          "detach during first attachment write cancels the remaining command");
+
+    detach_device(dev(3)); before=writes; write_hook_mode=2; write_observer=inspect_attach_write;
+    attach_device(dev(3)); write_observer=NULL;
+    CHECK(writes==before+3 && output_cmd[before]==0x40 && output_cmd[before+1]==0x40 && output_cmd[before+2]==3 &&
+          (g_dev[0].pkt&15)==((output_packet[before+2]+1)&15) && !references[3],
+          "same-device slot reuse cannot consume or send the retired attachment's next command");
+
+    detach_device(dev(3)); before=writes; write_hook_mode=3; write_observer=inspect_attach_write;
+    attach_device(dev(3)); write_observer=NULL;
+    CHECK(writes==before+1,"motion demand ending during attachment cancels the pending full-report request");
+
+    detach_device(dev(3)); atomic_store(&g_want,0); atomic_store(&g_pad_want,1); before=writes; unlocked_writes=0; locked_writes=0;
+    write_hook_mode=0; write_observer=inspect_attach_write; attach_device(dev(3)); write_observer=NULL;
+    CHECK(writes==before+1 && output_cmd[before]==3 && output_arg[before]==0x30 && unlocked_writes==1 && !locked_writes,
+          "button-only attachment also writes outside the sampling lock");
+
+    detach_device(dev(3)); atomic_store(&g_pad_want,0); atomic_store(&g_want,1); before=writes; attach_device(dev(1));
+    CHECK(writes==before && retains==releases && !references[1] && !references[3],
+          "attachment snapshots preserve the passive Pro backend and balance all target references");
+    detach_device(dev(1)); atomic_store(&g_want,0);
     printf("pro_motion: %u checks, %u failures\n",checks,failed); return failed ? 1 : 0;
 } }

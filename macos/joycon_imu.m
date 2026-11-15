@@ -20,6 +20,7 @@ typedef struct {
     int slot;                 // JC_L / JC_R：这只是左只还是右只 / Pro
     int product_id;
     int gc_motion_control;     // cached backend choice for framework-recognized Pro, not an ownership assertion
+    uint64_t generation;       // g_mu: distinguish reattachment even if the device pointer is reused
     char id[64];              // 设备 id（序列号 = 蓝牙地址；启动器 Gen1HIDWatcher.deviceID 同一套），跨进程认同一只
     s2a_pad_motion sample;
     int known;
@@ -40,6 +41,7 @@ static _Atomic int g_want;
 static _Atomic int g_pad_want;   // D2：要按设备读按键（开着就让手柄出标准全报告 0x30，体感关着也一样）
 static int g_started;
 static uint8_t g_pkt_global;
+static uint64_t g_attachment_generation;   // g_mu; not reset when a slot is cleared
 
 static int16_t rd16(const uint8_t *p) { return (int16_t)(p[0] | (p[1] << 8)); }
 
@@ -51,18 +53,41 @@ static uint64_t now_us(void) {
     return mach_absolute_time() * g_timebase.numer / (g_timebase.denom * 1000ull);
 }
 
-static void send_sub(jc_dev *d, uint8_t cmd, uint8_t arg) {
-    if (!d->device) return;
-    if ((cmd == 0x40 || cmd == 0x03) && d->gc_motion_control) return;
-    uint8_t report[0x40];
-    memset(report, 0, sizeof report);
+// g_mu: reserve the packet counter and copy the whole command before unlocking.
+static int prepare_sub_locked(jc_dev *d, uint8_t cmd, uint8_t arg, uint8_t report[0x40]) {
+    if (!d->device) return 0;
+    if ((cmd == 0x40 || cmd == 0x03) && d->gc_motion_control) return 0;
+    memset(report, 0, 0x40);
     report[0] = 0x01;                         // OutputType.subcommand
     report[1] = (d->pkt++ & 0x0f);
     report[2] = 0x00; report[3] = 0x01; report[4] = 0x00; report[5] = 0x40;   // rumble neutral
     report[6] = 0x00; report[7] = 0x01; report[8] = 0x00; report[9] = 0x40;
     report[10] = cmd;
     report[11] = arg;
-    IOHIDDeviceSetReport(d->device, kIOHIDReportTypeOutput, 0x01, report, sizeof report);
+    return 1;
+}
+
+static void send_sub(jc_dev *d, uint8_t cmd, uint8_t arg) {   // existing callers hold g_mu
+    uint8_t report[0x40];
+    if (prepare_sub_locked(d, cmd, arg, report))
+        IOHIDDeviceSetReport(d->device, kIOHIDReportTypeOutput, 0x01, report, sizeof report);
+}
+
+// Connection-time enable / full-report requests must not block sample readers.
+static void send_attach_sub(jc_dev *d, IOHIDDeviceRef device, uint64_t generation, uint8_t cmd, uint8_t arg) {
+    uint8_t report[0x40];
+    IOHIDDeviceRef target = NULL;
+    pthread_mutex_lock(&g_mu);
+    int want = atomic_load(&g_want), pad_want = atomic_load(&g_pad_want);
+    int requested = cmd == 0x40 ? want : want || pad_want;
+    if (d->device == device && d->generation == generation && requested && prepare_sub_locked(d, cmd, arg, report))
+        target = (IOHIDDeviceRef)CFRetain(device);
+    pthread_mutex_unlock(&g_mu);
+    if (!target) return;
+    // A concurrent detach may make this write fail, but cannot redirect it to a
+    // reused slot. Revalidate the attachment and demand before each next command.
+    IOHIDDeviceSetReport(target, kIOHIDReportTypeOutput, 0x01, report, sizeof report);
+    CFRelease(target);
 }
 
 // Joy-Con 报告里的加速度 / 角速度 → 近似 NS2 原始坐标（g、度/秒）。
@@ -207,6 +232,7 @@ static void attach_device(IOHIDDeviceRef device) {
     d->device = device;
     d->product_id = pid;
     d->gc_motion_control = gc_motion_control;
+    d->generation = ++g_attachment_generation;
     d->slot = slot;
     s2a_joycon_device_id(device, d->id);
     d->pkt = g_pkt_global++;
@@ -218,15 +244,16 @@ static void attach_device(IOHIDDeviceRef device) {
         return;
     }
     IOHIDDeviceRegisterInputReportCallback(device, d->report_buf, 0x200, report_cb, d);
-    int want = atomic_load(&g_want);
-    if (!want && atomic_load(&g_pad_want)) send_sub(d, 0x03, 0x30);   // D2：只要按键也要全报告
+    int want = atomic_load(&g_want), pad_want = atomic_load(&g_pad_want);
+    uint64_t generation = d->generation;
+    pthread_mutex_unlock(&g_mu);
+    if (!want && pad_want) send_attach_sub(d, device, generation, 0x03, 0x30);   // D2：只要按键也要全报告
     if (want) {
-        send_sub(d, 0x40, 1);     // enable IMU
-        send_sub(d, 0x03, 0x30);  // standard full
+        send_attach_sub(d, device, generation, 0x40, 1);     // enable IMU
+        send_attach_sub(d, device, generation, 0x03, 0x30);  // standard full
         fprintf(stderr, "[输入] Joy-Con HID 六轴：已接通 %s（shared）\n",
                 pid == JC_PID_L ? "L" : (pid == JC_PID_PRO ? "Pro" : "R"));
     }
-    pthread_mutex_unlock(&g_mu);
 }
 
 static void detach_device(IOHIDDeviceRef device) {
