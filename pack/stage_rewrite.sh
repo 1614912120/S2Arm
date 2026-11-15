@@ -36,8 +36,10 @@ EN=(); while read -r f; do [ -n "$f" ] && EN+=("$f"); done < <(S2A_WIDEN_DIR="${
 PID=$("$PY" -c 'import struct,sys; d=open(sys.argv[1],"rb").read(); a=struct.unpack_from("<I",d,0x70)[0]; assert d[a:a+4]==b"ACI0"; print("%016X" % struct.unpack_from("<Q",d,a+0x10)[0])' "$CUR/exefs/main.npdm") || { echo "【红】$G 读不出 main.npdm 的程序号"; exit 1; }
 VT="${S2A_WIDEN_DIR:-$R/graphics/widen/tables}/verified.tsv"; VR=$([ -f "$VT" ] && awk -F'\t' -v p="$PID" -v b="$BID" '!/^#/ && toupper($1) == p && tolower($2) == b && tolower($4) == "apple" { print; exit }' "$VT")   # F7：表加平台列，苹果路线只取 apple 行——安卓行不进苹果产物根，apple 行也放不开安卓（安卓标记由 pack/stage_caps.sh 写）
 # 名单与依赖一致（11-05 维护者）：已验证名单里的款必须在仓库里有它依赖的宽屏表（第二层启用表 / 第三层整套表，repo_table_dir 按构建号找）；
-#   缺了就不算已验证、按满屏关出包，写一行【黄】（01007EF00011E000：表按款名起、包名对不上，启用 0 点退整套放宽 → SIGBUS）
-[ -n "$VR" ] && [ ${#EN[@]} -eq 0 ] && { echo "【黄】$G 在宽屏已验证名单（${PID} ${BID}）但仓库没有它依赖的宽屏表（graphics/widen/tables/*_${BID}），不算已验证、按满屏关出包"; VR=; }
+#   缺了就不算已验证、按满屏关出包，写一行【黄】（01007EF00011E000：表按款名起、包名对不上，启用 0 点退整套放宽 → SIGBUS）。
+#   例外：第三列来源是 census 的行（11-02 普查：没有启用表、走第三层整套放宽验过），本来就不依赖表，照常算已验证。
+#   当年那次 SIGBUS 的根因是满屏量测直接读虚拟池贴图内存（11-05 已根修），不是整套放宽本身
+[ -n "$VR" ] && [ ${#EN[@]} -eq 0 ] && [ "$(printf '%s' "$VR" | cut -f3)" != census ] && { echo "【黄】$G 在宽屏已验证名单（${PID} ${BID}）但仓库没有它依赖的宽屏表（graphics/widen/tables/*_${BID}），不算已验证、按满屏关出包"; VR=; }
 # 同身份的仓库表和最近 30 局真实日志只提高已知下限（不读现行根上一次出的表：采集结果回灌自己会让旧值永不退场）。先采集再判缓存；坏表不可退成无表。
 # 帧率表（10-26，体系提升方案 D）：仓库 runtime/fps/<main 构建号前 16 位>.tsv 有就拷进产物根作 fps.tsv（runtime/src/fps.c 装载后读），按「文件名 + 内容」进键；没有 = 原生帧率
 FT="$R/runtime/fps/${BID:0:16}.tsv"; [ -f "${FT}" ] || FT=

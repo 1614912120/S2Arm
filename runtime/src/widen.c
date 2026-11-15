@@ -149,11 +149,16 @@ static int widen_verified(void) {
     if (ws_yield()) return 0;
     const char *e = getenv("S2A_WIDEN_VERIFIED"); if (e) return !strcmp(e, "1");
     if (!widen_setting_on()) return 0;
-    // 11-15（v0.4.0，维护者定）：我方通用满屏缺省不用，只用社区宽屏补丁（上面 ws_yield 那支由补丁铺满）；能力清单 widen 1 / 已验证标记都只在旧口径（S2A_CAPS_OWN=1）认。
-    //   出包侧 tools/caps_policy.py patch_only 11-13 起已写 0，这里是运行时同一个开关：老导出的包清单仍写 widen 1，原先照旧铺满（同 fps60，caps.c）
+    // 11-15 维护者「两者合成一套」：没有社区满屏补丁（上面 ws_yield 那支由补丁铺满）、本包在宽屏已验证名单（产物根 widen_verified.tsv）→ 我方通用满屏开。
+    //   v0.4.0 起这里只在旧口径（S2A_CAPS_OWN=1）认，合成一套只改了出包侧能力清单（tools/caps_policy.py patch_only），运行时这道闸没放，
+    //   名单里的款都按 16:9 跑（11-15 v0.4.2 候选实测：清单写开、日志「我方通用满屏不用」）。苹果端现在要两样都在：已验证标记 + 清单没写 0；
+    //   安卓仍按旧口径（合成一套没涉及安卓）
+#if defined(__ANDROID__)
     if (!s2a_caps_own()) return 0;
+#endif
     // 包内能力清单（runtime/src/caps.c：1 = 开、0 = 发布包能力卡未验按 16:9）：在用户设置之后、名单之前（审计 #854 F-caps-beats-settings）
-    const char *c = getenv("S2A_WIDEN_CAPS"); if (c) return !strcmp(c, "1");
+    const char *c = getenv("S2A_WIDEN_CAPS"); if (c && strcmp(c, "1")) return 0;
+    if (c && s2a_caps_own()) return 1;
 #if defined(__ANDROID__)
     if (g_android_source) return g_android_policy[4] != NULL;
 #endif
@@ -166,9 +171,12 @@ static const char *widen_src(void) {
     if (ws_yield()) return "开着社区宽屏补丁（补丁优先）";
     const char *e = getenv("S2A_WIDEN_VERIFIED"); if (e) return !strcmp(e, "1") ? "S2A_WIDEN_VERIFIED=1 覆盖" : "S2A_WIDEN_VERIFIED=0 覆盖";
     if (!widen_setting_on()) return "设置里宽屏关";
-    if (!s2a_caps_own()) return "我方通用满屏不用（只用社区宽屏补丁；S2A_CAPS_OWN=1 才按能力清单 / 已验证名单）";
-    const char *c = getenv("S2A_WIDEN_CAPS"); if (c) return !strcmp(c, "1") ? "包内能力清单开（发布缺省开，未必验证过）" : "包内能力清单关";
-    return "已验证名单（graphics/widen/tables/verified.tsv）";
+#if defined(__ANDROID__)
+    if (!s2a_caps_own()) return "我方通用满屏不用（安卓只用社区宽屏补丁；S2A_CAPS_OWN=1 才按能力清单 / 已验证名单）";
+#endif
+    const char *c = getenv("S2A_WIDEN_CAPS"); if (c && strcmp(c, "1")) return "包内能力清单关";
+    if (c && s2a_caps_own()) return "包内能力清单开（旧口径 S2A_CAPS_OWN=1，未必验证过）";
+    return "已验证名单（graphics/widen/tables/verified.tsv；没有社区满屏补丁时用我方通用满屏）";
 }
 // 名单门（屏幕宽 / 屏幕高共用）：要放（宽 > 1920 或高 > 1080）时看本款在不在宽屏已验证名单。返回 1 = 放，0 = 不放（16:9 原比例加黑边），-1 = 还没装载、不知道
 static int widen_gate(const char *what, int v) {
