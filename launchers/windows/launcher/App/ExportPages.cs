@@ -509,7 +509,7 @@ public sealed partial class EnvironmentWindow
                 }
             // 满屏跨版本（patches.match port，同 Mac SGradeCard）：这份没有同版本的满屏补丁、别的版本有 → 出包时尝试移植，单列一行
             var port = r.TryGetProperty("port", out var pp) && pp.ValueKind == JsonValueKind.True;
-            // 没有社区满屏补丁、这一版在宽屏已验证名单：出包用 S2Arm 通用满屏（D2R 线 feat/sgrade-state，jhz 11-15「两者合成一套」；同 Mac SGradeCard）
+            // 没有社区满屏补丁、这一版在宽屏已验证名单：出包用 S2Arm 通用满屏（作业层 feat/sgrade-state，维护者 11-15「两者合成一套」；同 Mac SGradeCard）
             var ownWiden = r.TryGetProperty("ownWiden", out var ow) && ow.ValueKind == JsonValueKind.True;
             var wsHit = exact.ValueKind == JsonValueKind.Object && exact.TryGetProperty("widescreen", out var wn) && wn.GetInt32() > 0;
             void WidescreenRow(string text)

@@ -4,7 +4,7 @@ import XCTest
 @testable import NX2AppleUI
 import S2ArmAppleAdapter
 
-// S 级每类状态 → 给玩家看的那一句（cmdr/S级状态与文案_三端对照_体验梳理线_1115.md 定稿）。期望按文案表的模板手写，不跑被测函数推导。
+// S 级每类状态 → 给玩家看的那一句（三端状态与文案对照定稿）。期望按文案表的模板手写，不跑被测函数推导。
 final class SGradeStateTextTests: XCTestCase {
     private func line(_ cat: String, _ raw: [String: Any], lang: String = "zh-Hans") -> (String, String?)? {
         let catName = BackendText.launcherText("export.sgrade.cat." + cat, language: lang)
@@ -16,7 +16,7 @@ final class SGradeStateTextTests: XCTestCase {
     }
 
     func testOnSaysWhichOneIsInUse() {
-        // D2R 线 feat/sgrade-state 口径：满屏 active = adaptive / fixed / own；帧率 active = {levels, pick}（"0" = 自动，取最高档）
+        // 作业层 feat/sgrade-state 口径：满屏 active = adaptive / fixed / own；帧率 active = {levels, pick}（"0" = 自动，取最高档）
         eq(line("widescreen", ["state": "on", "source": "patch", "active": "adaptive"]), "在用：社区满屏补丁（按屏幕比例自动选）")
         eq(line("widescreen", ["state": "on", "source": "patch", "active": "fixed"]), "在用：社区满屏补丁（固定画幅）")
         eq(line("widescreen", ["state": "on", "source": "own", "active": "own"]), "在用：S2Arm 通用满屏（这款没有社区满屏补丁，S2Arm 验过能铺满）")
@@ -37,7 +37,7 @@ final class SGradeStateTextTests: XCTestCase {
     }
 
     func testVersionPicksNearestNewerElseSaysOnlyOlder() {
-        // 总指挥 11-15：写离玩家最近、且比它新的；全是旧的写「只有旧版本 X 的」，不劝降级
+        // 维护者 11-15：写离玩家最近、且比它新的；全是旧的写「只有旧版本 X 的」，不劝降级
         eq(line("fps", ["state": "version", "versions": ["mine": "1.0.2", "available": ["1.0.0", "1.1.0", "1.0.4"]]]),
            "补丁库里是 1.0.4 版的，你这份是 1.0.2。把游戏更新到 1.0.4 后重新出包就能用。")
         eq(line("fps", ["state": "version", "versions": ["mine": "1.3.0", "available": ["1.0.0", "1.2.0"]]]), "补丁只有旧版本 1.2.0 的，你这个版本暂时没有。")

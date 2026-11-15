@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 S2Arm contributors
-// iPhone 设置页 S 级状态句（ios/sgrade_line.m）：文案取真的 zh-Hans 字符串表（mk 把 zh-Hans.lproj 拷在可执行文件旁，S2AL 经主 bundle 读到），期望按定稿模板手写（cmdr/S级状态与文案_三端对照_体验梳理线_1115.md），
+// iPhone 设置页 S 级状态句（ios/sgrade_line.m）：文案取真的 zh-Hans 字符串表（mk 把 zh-Hans.lproj 拷在可执行文件旁，S2AL 经主 bundle 读到），期望按定稿模板手写（三端状态与文案对照定稿），
 //   与 Mac SGradeStateTextTests 同一组输入同一句
 #import <Foundation/Foundation.h>
 #import "../../ios/sgrade_line.h"

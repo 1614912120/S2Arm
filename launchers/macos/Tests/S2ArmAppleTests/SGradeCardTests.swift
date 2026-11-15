@@ -49,7 +49,7 @@ import XCTest
         XCTAssertGreaterThan(h, 0); XCTAssertGreaterThan(h, o, "命中态应比只命中别的版本更亮（金色像素 \(h) 对 \(o)）"); XCTAssertGreaterThan(o, 0); XCTAssertGreaterThan(l, 0)
     }
 
-    // S2Arm 通用满屏（D2R 线 feat/sgrade-state ownWiden，jhz 11-15「两者合成一套」）：没有社区补丁、只有我方满屏的款卡片也点亮、写满屏来源
+    // S2Arm 通用满屏（作业层 feat/sgrade-state ownWiden，维护者 11-15「两者合成一套」）：没有社区补丁、只有我方满屏的款卡片也点亮、写满屏来源
     func testOwnWidenLightsCard() throws {
         XCTAssertTrue(PatchMatch(["build": "aa11bb22cc33dd44", "ownWiden": true]).ownWiden)
         XCTAssertFalse(PatchMatch(["build": "aa11bb22cc33dd44"]).ownWiden)

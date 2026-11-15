@@ -79,7 +79,7 @@ extension S2ArmLauncherModel {
         return (all.0, all.1, all.2, all.3)
     }
 
-    /// 同上，另带 S 级每类状态（作业层 sgradeState：widescreen / fps / gfx，D2R 线；没出这个字段 = 空，界面不画状态句）
+    /// 同上，另带 S 级每类状态（作业层 sgradeState：widescreen / fps / gfx，作业层；没出这个字段 = 空，界面不画状态句）
     func launchSettingsFull(_ gameID: String, change: [String: Any]? = nil, patches: [String: Bool]? = nil, cheats: [String: Bool]? = nil,
                             cheatsImport: [String]? = nil) async throws -> ([String: LaunchOption], [LaunchPatch], [LaunchCheat], String, [String: SGradeCategoryState]) {
         var extra: [String: Any] = [:]
@@ -98,7 +98,7 @@ extension S2ArmLauncherModel {
         return (mac, gfx, (ch["items"] as? [[String: Any]] ?? []).compactMap(LaunchCheat.init), ch["reason"] as? String ?? "", sg)
     }
 
-    /// 一键重开（作业 sgradeReenable，D2R 线）：key = fullscreen / fps / 补丁编号 / 金手指键；清掉自动关记录、开关设回开
+    /// 一键重开（作业 sgradeReenable）：key = fullscreen / fps / 补丁编号 / 金手指键；清掉自动关记录、开关设回开
     func sgradeReenable(_ gameID: String, key: String) async throws {
         _ = try await saveJob("sgradeReenable", gameID: gameID, extra: ["key": key])
     }
@@ -199,7 +199,7 @@ struct LaunchSettingsSheet: View {
         switch item.type {
         case "patches": return !patches.isEmpty
         case "page", "cheats": return true
-        // 满屏 / 60 帧：没补丁原先整行藏起来；有状态句（没有补丁 / 版本不同 / 没打入…）就照样出一行灰字说为什么（总指挥 11-15：不隐藏）
+        // 满屏 / 60 帧：没补丁原先整行藏起来；有状态句（没有补丁 / 版本不同 / 没打入…）就照样出一行灰字说为什么（维护者 11-15：不隐藏）
         default: return options[item.id].map { !$0.hidden || stateLine(item.id) != nil } ?? false
         }
     }

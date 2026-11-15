@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 S2Arm contributors
 // S 级优化每一类此刻的那一句（iPhone 设置页；同 Mac launchers/macos/frontend/Sources/NX2Apple/SGradeStateText.swift、
-//   cmdr/S级状态与文案_三端对照_体验梳理线_1115.md 定稿）。纯 Foundation，宿主单测 runtime/tests/t_sgrade_line.m 直接调
+//   三端状态与文案对照定稿）。纯 Foundation，宿主单测 runtime/tests/t_sgrade_line.m 直接调
 #pragma once
 #import <Foundation/Foundation.h>
 

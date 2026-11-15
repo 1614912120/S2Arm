@@ -40,7 +40,7 @@ import S2ArmAppleAdapter
         XCTAssertEqual(SGradeScanGame(["id": "0100B"]).name, "0100B", "没名字用程序号")
     }
 
-    // 没有对应补丁拆两组（定稿表，D2R 线 sgradeScan versions）：有别的版本的 → 每类写哪个版本（离玩家最近且更新的；全旧取最新的旧版本）+ 你这份是 X；都没有 → 补丁库里没有
+    // 没有对应补丁拆两组（定稿表，作业层 sgradeScan versions）：有别的版本的 → 每类写哪个版本（离玩家最近且更新的；全旧取最新的旧版本）+ 你这份是 X；都没有 → 补丁库里没有
     func testNoPatchSplitsIntoNoneAndOtherVersion() throws {
         let other = SGradeScanGame(["id": "B", "name": "乙", "program": "saved", "total": 0, "patches": [:], "iphone": true,
                                     "versions": ["mine": "1.0.0", "available": ["widescreen": ["1.2.0"], "fps": ["1.2.0", "1.3.0"]]]])

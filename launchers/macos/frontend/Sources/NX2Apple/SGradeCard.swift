@@ -15,7 +15,7 @@ struct PatchMatch: Equatable {
     var port = false                // 满屏跨版本：这份没有同版本的满屏补丁，出包时尝试把别的版本的移植过来（patches.match）
     var portVersions: [String] = []
     var others: [(version: String, cats: [String])] = []
-    var ownWiden = false            // 没有社区满屏补丁、这一版在宽屏已验证名单：出包用 S2Arm 通用满屏（D2R 线 feat/sgrade-state，jhz 11-15「两者合成一套」）
+    var ownWiden = false            // 没有社区满屏补丁、这一版在宽屏已验证名单：出包用 S2Arm 通用满屏（作业层 feat/sgrade-state，维护者 11-15「两者合成一套」）
     static func == (a: PatchMatch, b: PatchMatch) -> Bool { a.ownWiden == b.ownWiden && a.build == b.build && a.exact == b.exact && a.port == b.port && a.others.map(\.version) == b.others.map(\.version) }
     init() {}
     init(_ raw: [String: Any]) {

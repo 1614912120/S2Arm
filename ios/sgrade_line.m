@@ -34,7 +34,7 @@ NSString *s2a_sgrade_line(NSString *cat, NSDictionary *s, NSString *catName, NSI
         return [NSString stringWithFormat:([str(off[@"cause"]) isEqual:@"stall"] ? S2AL(@"sgrade.state.off_auto.stall") : S2AL(@"sgrade.state.off_auto.crash")), when];
     }
     if ([state isEqual:@"version"]) {
-        // 总指挥 11-15 定：写离玩家最近、且比它新的那个版本；全是旧版本写「只有旧版本 X 的」，不劝降级
+        // 维护者 11-15 定：写离玩家最近、且比它新的那个版本；全是旧版本写「只有旧版本 X 的」，不劝降级
         NSDictionary *v = [s[@"versions"] isKindOfClass:NSDictionary.class] ? s[@"versions"] : @{};
         NSString *mine = str(v[@"mine"]); NSMutableArray<NSString *> *all = [NSMutableArray array];
         for (id x in [v[@"available"] isKindOfClass:NSArray.class] ? v[@"available"] : @[]) if ([x isKindOfClass:NSString.class]) [all addObject:x];

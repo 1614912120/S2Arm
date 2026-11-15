@@ -10,12 +10,12 @@ import S2ArmAppleAdapter
 
 struct SGradeScanGame: Identifiable, Equatable {
     let id: String, name: String, program: String, total: Int, patches: [String: Int], iphone: Bool, off: Bool, ownWiden: Bool
-    /// 这款的显示版本与补丁库里「别的版本」按类的版本号（作业层 versions，只收这一版没有的类；D2R 线 feat/sgrade-state）
+    /// 这款的显示版本与补丁库里「别的版本」按类的版本号（作业层 versions，只收这一版没有的类；作业层 feat/sgrade-state）
     let mine: String, available: [String: [String]]
     init(_ d: [String: Any]) {
         id = d["id"] as? String ?? ""; name = d["name"] as? String ?? id; program = d["program"] as? String ?? "none"
         total = (d["total"] as? NSNumber)?.intValue ?? 0; iphone = d["iphone"] as? Bool ?? false; off = d["off"] as? Bool ?? false
-        ownWiden = d["ownWiden"] as? Bool ?? false   // S2Arm 通用满屏（作业层 total 已算它 +1，D2R 线）
+        ownWiden = d["ownWiden"] as? Bool ?? false   // S2Arm 通用满屏（作业层 total 已算它 +1）
         let v = d["versions"] as? [String: Any] ?? [:]
         mine = v["mine"] as? String ?? ""; available = (v["available"] as? [String: Any] ?? [:]).compactMapValues { $0 as? [String] }.filter { !$0.value.isEmpty }
         patches = (d["patches"] as? [String: Any] ?? [:]).compactMapValues { ($0 as? NSNumber)?.intValue }

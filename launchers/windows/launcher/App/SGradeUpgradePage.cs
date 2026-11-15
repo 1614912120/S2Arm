@@ -79,7 +79,7 @@ public sealed partial class EnvironmentWindow
         var all = scan.TryGetProperty("games", out var gs) && gs.ValueKind == JsonValueKind.Array ? gs.EnumerateArray().ToList() : [];
         var found = all.Where(g => S(g, "program") is { Length: > 0 } p && p != "none").ToList();
         var yes = found.Where(g => N(g, "total") > 0 && !Bo(g, "off")).ToList();
-        // 没有对应补丁拆两组（定稿表，同 Mac）：补丁库里有别的版本的 → 写版本号；一类都没有 → 补丁库里没有（作业层 versions，D2R 线）
+        // 没有对应补丁拆两组（定稿表，同 Mac）：补丁库里有别的版本的 → 写版本号；一类都没有 → 补丁库里没有（作业层 versions）
         Dictionary<string, List<string>> Avail(JsonElement g) =>
             g.TryGetProperty("versions", out var vs) && vs.ValueKind == JsonValueKind.Object && vs.TryGetProperty("available", out var av) && av.ValueKind == JsonValueKind.Object
                 ? av.EnumerateObject().Where(p => p.Value.ValueKind == JsonValueKind.Array)

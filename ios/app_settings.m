@@ -329,7 +329,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
             pTitle = S2AL(@"settings.fps.patchTitle");
             pNote = target > 0 ? [NSString stringWithFormat:S2AL(@"settings.fps.patchNote"), (long)target] : S2AL(@"settings.patchNote");
         } else if ([key isEqualToString:@"S2AWidescreen"] && wsP) pNote = S2AL(@"settings.fullscreen.patchNote");
-        // S 级状态句（三端同一句，cmdr/S级状态与文案_三端对照_体验梳理线_1115.md）：在用哪一份 / 已自动关（何时、为什么；打开开关就是重新打开）/
+        // S 级状态句（三端同一句，三端状态与文案对照定稿）：在用哪一份 / 已自动关（何时、为什么；打开开关就是重新打开）/
         //   版本不对写版本号 / 补丁库里没有 / 出包时没打入；没有可说的（pending 以外的未知）照旧上面那句
         if ([key isEqualToString:@"S2AFps60"] || [key isEqualToString:@"S2AWidescreen"]) {
             BOOL ws = [key isEqualToString:@"S2AWidescreen"]; NSString *cat = ws ? @"widescreen" : @"fps";

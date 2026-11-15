@@ -1,5 +1,5 @@
-// S2Arm（不是上游文件）：S 级优化每一类（满屏 / 帧率 / 画面）此刻是什么状态、给玩家看哪一句（cmdr/S级状态与文案_三端对照_体验梳理线_1115.md 定稿）。
-//   数据来自作业层 describe_game 的 sgradeState（D2R 线，pack/jobs/community.py）；同一状态在设置、出包页、升级页说同一句（文案键 sgrade.state.*）。
+// S2Arm（不是上游文件）：S 级优化每一类（满屏 / 帧率 / 画面）此刻是什么状态、给玩家看哪一句（三端状态与文案对照定稿）。
+//   数据来自作业层 describe_game 的 sgradeState（作业层，pack/jobs/community.py）；同一状态在设置、出包页、升级页说同一句（文案键 sgrade.state.*）。
 //   纯函数：输入一类的状态字典，输出那一句 + 要不要给「重新打开」（作业 sgradeReenable 的 key）。没有 sgradeState（作业层还没出这个字段）= 不画
 import Foundation
 
@@ -14,7 +14,7 @@ struct SGradeCategoryState: Equatable {
 
     init(_ raw: [String: Any]) {
         state = raw["state"] as? String ?? ""; source = raw["source"] as? String ?? ""
-        // D2R 线 feat/sgrade-state 口径：满屏 active 是字符串；帧率 active 是 {levels: [60, 120], pick: "0" | "60" | "120"}；gfx / cheats 是开着的编号列表
+        // 作业层 feat/sgrade-state 口径：满屏 active 是字符串；帧率 active 是 {levels: [60, 120], pick: "0" | "60" | "120"}；gfx / cheats 是开着的编号列表
         if let a = raw["active"] as? String { active = a }
         if let fps = raw["active"] as? [String: Any] {
             let levels = (fps["levels"] as? [NSNumber] ?? []).map(\.intValue), pick = Int(fps["pick"] as? String ?? "") ?? 0
@@ -40,7 +40,7 @@ enum SGradeStateText {
         return 0
     }
 
-    /// 版本不同时写哪个版本（总指挥 11-15 定）：离玩家最近、且比它新的；全是旧的取最新的旧版本。→ (版本, 是否比玩家新)；没有 = nil
+    /// 版本不同时写哪个版本（维护者 11-15 定）：离玩家最近、且比它新的；全是旧的取最新的旧版本。→ (版本, 是否比玩家新)；没有 = nil
     static func pick(_ available: [String], mine: String) -> (version: String, newer: Bool)? {
         if let v = available.filter({ compare($0, mine) > 0 }).sorted(by: { compare($0, $1) < 0 }).first { return (v, true) }
         return available.sorted { compare($0, $1) < 0 }.last.map { ($0, false) }
@@ -68,7 +68,7 @@ enum SGradeStateText {
             let when = s.autoOffAt.map(date) ?? ""
             return (f(s.autoOffCause == "stall" ? "sgrade.state.off_auto.stall" : "sgrade.state.off_auto.crash", when), key)
         case "version":
-            // 总指挥 11-15 定：写离玩家最近、且比它新的那个版本；全是旧版本写「只有旧版本 X 的」，不劝降级
+            // 维护者 11-15 定：写离玩家最近、且比它新的那个版本；全是旧版本写「只有旧版本 X 的」，不劝降级
             guard let p = pick(s.available, mine: s.mine) else { return nil }
             var text = p.newer ? f("sgrade.state.version.newer", p.version, s.mine) : f("sgrade.state.version.older", p.version)
             if cat == "widescreen", s.port == "failed" { text += t("sgrade.state.version.port_failed") }

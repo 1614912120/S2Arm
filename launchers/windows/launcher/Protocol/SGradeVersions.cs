@@ -2,7 +2,7 @@
 // Copyright 2026 S2Arm contributors
 namespace S2Arm.Launcher.Protocol;
 
-/// <summary>S 级「补丁是别的版本的」写哪个版本（总指挥 11-15 定，同 Mac SGradeStateText.pick）：离玩家最近、且比它新的；全是旧的取最新的旧版本。版本号按段比（1.10 &gt; 1.9）</summary>
+/// <summary>S 级「补丁是别的版本的」写哪个版本（维护者 11-15 定，同 Mac SGradeStateText.pick）：离玩家最近、且比它新的；全是旧的取最新的旧版本。版本号按段比（1.10 &gt; 1.9）</summary>
 public static class SGradeVersions
 {
     public static int Compare(string a, string b)

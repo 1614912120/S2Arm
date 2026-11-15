@@ -2,7 +2,7 @@
 // Copyright 2026 S2Arm contributors
 using S2Arm.Launcher.Protocol;
 
-// S 级升级页「补丁是别的版本的」写哪个版本（总指挥 11-15）：期望按规则手写。
+// S 级升级页「补丁是别的版本的」写哪个版本（维护者 11-15）：期望按规则手写。
 public static class SGradeVersionsCases
 {
     public static void Run(Action<bool, string> check)
