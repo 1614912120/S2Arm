@@ -128,7 +128,7 @@ import S2ArmAppleAdapter
             let device = str("device")
             if device == nil, model.installMode.mode != "export" { return .bad(Self.deviceRequired) }
             model.install(g, teamId: str("teamId"), device: device, acceptDropped: a["acceptDropped"] as? Bool ?? false,
-                          accept: Set(["acceptNoBackup", "acceptStale"].filter { a[$0] as? Bool == true }), ask: false); return .ok()
+                          accept: Self.acceptFlags(a).subtracting(["acceptDropped"]), ask: false); return .ok()
         case ("POST", "/signingProject"):
             model.openSigningProject(); return .ok()
         case ("POST", "/update-phone"):   // 更新 iPhone 上的 S2Arm（v0.3.0）：同库页右上角按钮；有要重新出包的款没给 acceptStale → 409 列出它们
@@ -144,7 +144,7 @@ import S2ArmAppleAdapter
             }
             model.updatePhone(acceptStale: accept, repack: a["repack"] as? Bool == true ? u.stale.map(\.id) : [], language: "zh-Hans",
                               device: (a["device"] as? String).flatMap { $0.isEmpty ? nil : $0 },   // 同 /install：连着多台时指定哪台
-                              acceptDropped: a["acceptDropped"] as? Bool ?? false, accept: Set(["acceptNoBackup"].filter { a[$0] as? Bool == true }), ask: false)   // 同 /install：会挤掉别的电脑装的款时原样失败，带 acceptDropped 再发
+                              acceptDropped: a["acceptDropped"] as? Bool ?? false, accept: Self.acceptFlags(a).subtracting(["acceptDropped", "acceptStale"]), ask: false)   // 同 /install：会挤掉别的电脑装的款时原样失败，带 acceptDropped 再发
             return .object(["ok": true, "stale": stale])
         case ("POST", "/restore-iphone"):
             guard let g = game() else { return .bad("没有这个 gameId") }
@@ -156,7 +156,7 @@ import S2ArmAppleAdapter
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
             guard let device = str("device") else { return .bad(Self.deviceRequired) }
-            model.removeFromPhone(g, ask: false, device: device, accept: Set(["acceptDropped", "acceptNoBackup"].filter { a[$0] as? Bool == true })); return .ok()
+            model.removeFromPhone(g, ask: false, device: device, accept: Self.acceptFlags(a)); return .ok()
         case ("POST", "/customize"):
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
@@ -283,6 +283,9 @@ import S2ArmAppleAdapter
 
     /// 自描述：AI 先 GET /help 就知道能做什么（s2armctl help 打的就是这张表）。
     /// 往设备上装 / 删 / 装回不带 device：拒绝（作业层也拒），告诉怎么查设备号
+    /// 请求里所有为真的 accept* 字段（玩家已同意的确认参数）原样交给作业层，不在控制口按名字挑（11-15：/install 原先只转两个，漏了 acceptLowSpace，
+    ///   AI 收到 device_space_low 替玩家确认也续不上）。认不认这个确认由作业层的失败码决定
+    static func acceptFlags(_ a: [String: Any]) -> Set<String> { Set(a.compactMap { k, v in k.hasPrefix("accept") && (v as? Bool) == true ? k : nil }) }
     static let deviceRequired = "缺 device：说明装到哪台（s2armctl targets 列出连着的设备、设备名和设备号），不替你挑"
 
     static let endpoints: [[String: String]] = [

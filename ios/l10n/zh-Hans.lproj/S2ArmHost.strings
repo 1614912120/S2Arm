@@ -516,3 +516,17 @@
 "vpad.screenLock.note" = "外接显示器时用，点三下恢复";
 "vpad.screenLock.hint" = "如需关闭手机黑屏，请连续点击3次屏幕";
 "vpad.screenLock.unlock" = "恢复手机屏幕";
+"sgrade.state.on.adaptive" = "在用：社区满屏补丁（按屏幕比例自动选）";
+"sgrade.state.on.fixed" = "在用：社区满屏补丁（固定画幅）";
+"sgrade.state.on.own" = "在用：S2Arm 通用满屏（这款没有社区满屏补丁，S2Arm 验过能铺满）";
+"sgrade.state.on.fps" = "在用：最高 %1$@ 帧";
+"sgrade.state.off_user" = "已关";
+"sgrade.state.off_auto.crash" = "已自动关：%1$@ 游戏崩溃时它开着";
+"sgrade.state.off_auto.stall" = "已自动关：%1$@ 画面停住时它开着";
+"sgrade.state.version.newer" = "补丁库里是 %1$@ 版的，你这份是 %2$@。把游戏更新到 %1$@ 后重新出包就能用。";
+"sgrade.state.version.older" = "补丁只有旧版本 %1$@ 的，你这个版本暂时没有。";
+"sgrade.state.version.port_failed" = "已试过移植到你这份，没成功。";
+"sgrade.state.none" = "补丁库里还没有这款游戏的%1$@补丁。";
+"sgrade.state.opted_out" = "没打入：出包时取消了「出包时打入」。重新出包时勾上就有。";
+"sgrade.state.pending.ios" = "电脑上有可用的新补丁：在电脑的 S2Arm 点「S 级优化升级」装进来。";
+"sgrade.state.mac_only" = "画面补丁只在 Mac 版里。";

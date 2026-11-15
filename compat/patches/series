@@ -600,3 +600,5 @@
 20261114-2043-ro-nro-keep-unpacked.patch
 20261114-2315-aud-late-probe.patch
 20261115-0732-game-volume.patch
+20261115-1312-biquad-nonfinite-restart.patch
+20261115-1312-audio-diag-peak-nan.patch

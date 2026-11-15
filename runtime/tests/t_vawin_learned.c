@@ -60,6 +60,10 @@ int main(void) {
         CHECK(s2a_window_span_crash(6 * MB) == 0 && s2a_window_span_seen(1) == 13649 * MB, "⑨ 本局 2138 MB 不比记录大：不动");
         CHECK(s2a_window_host_below(64 * GB, s2a_window_span_seen(1)) == 45 * GB, "⑨ 下一局空洞 64 GiB：宿主 45 GiB（原先 3 GiB）");
         unlink(q); char t[64]; snprintf(t, sizeof t, "%s.tmp", q); CHECK(access(t, F_OK) != 0, "⑨ 不留临时文件"); }
+    {   // ⑩ 旧记录不小于空洞（旧版把窗口外远端映射算进跨度，某机记成 73086 MB、空洞 49152 MB）：当作没有、允许覆盖；空洞未知（0）不判
+        extern int s2a_window_span_rec_ok(uint64_t, uint64_t);
+        CHECK(!s2a_window_span_rec_ok(73086 * MB, 49152 * MB) && !s2a_window_span_rec_ok(76030 * MB, 65536 * MB), "⑩ 记录 ≥ 空洞：不算数");
+        CHECK(s2a_window_span_rec_ok(16408 * MB, 49152 * MB) && !s2a_window_span_rec_ok(0, 49152 * MB) && s2a_window_span_rec_ok(73086 * MB, 0), "⑩ 空洞内的算数、0 不算、空洞未知不判"); }
     printf("%s t_vawin_learned：%d 处不符\n", bad ? "✗" : "✓", bad);
     return bad ? 1 : 0;
 }

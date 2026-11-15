@@ -43,6 +43,24 @@ import S2ArmAppleAdapter
         XCTAssertEqual(runner.requests.last?["cheatsImport"] as? [String], ["/tmp/a.txt"])
     }
 
+    /// S 级每类状态（作业层 sgradeState，定稿表）：模型按类读出状态 / 自动关原因与时间 / 版本；「重新打开」走 sgradeReenable、带 key
+    func testSgradeStateAndReenable() async throws {
+        runner.sgrade = ["widescreen": ["state": "off_auto", "autoOff": ["cause": "crash", "at": 1794740000]],
+                         "fps": ["state": "version", "versions": ["mine": "1.0.2", "available": ["1.0.4"]]]]
+        let full = try await model.launchSettingsFull(gid)
+        XCTAssertEqual(full.4["widescreen"]?.state, "off_auto")
+        XCTAssertEqual(full.4["widescreen"]?.autoOffCause, "crash")
+        XCTAssertEqual(full.4["widescreen"]?.autoOffAt, Date(timeIntervalSince1970: 1794740000))
+        XCTAssertEqual([full.4["fps"]?.mine, full.4["fps"]?.available.first], ["1.0.2", "1.0.4"])
+        runner.sgrade = [:]
+        let empty = try await model.launchSettingsFull(gid).4
+        XCTAssertTrue(empty.isEmpty, "作业层没出 sgradeState：空，界面不画状态句")
+
+        try await model.sgradeReenable(gid, key: "fullscreen")
+        XCTAssertEqual(runner.requests.last?["operation"] as? String, "sgradeReenable")
+        XCTAssertEqual(runner.requests.last?["key"] as? String, "fullscreen")
+    }
+
     /// 上次开着某几条时异常退出（11-13 维护者改定：不问）：作业层已关掉；开始游戏照常开局，同时通知关了什么、回 crashAnswer=ack 清记录
     func testCrashNoticeDoesNotBlockPlay() async throws {
         runner.crashed = ["Infinite Health", "One Hit Kill"]
@@ -60,6 +78,7 @@ private final class CheatsRunner: JobProcessRunner {
     final class Handle: JobProcessHandle { func terminate() {} }
     var requests: [[String: Any]] = []
     var crashed: [String] = []
+    var sgrade: [String: Any] = [:]
 
     func start(executable: URL, arguments: [String], environment: [String: String],
                onLine: @escaping (Data) -> Void, onStderr: @escaping (Data) -> Void,
@@ -75,7 +94,8 @@ private final class CheatsRunner: JobProcessRunner {
                  "from": "player", "repo": "", "author": "", "license": "", "status": ""]]]
             let event: [String: Any] = ["schema": 1, "taskId": request["taskId"]!, "type": "result", "state": "succeeded",
                                         "result": ["mac": [:], "graphics": [], "cheats": cheats,
-                                                   "crashed": crashed.map { ["kind": "cheat", "key": "f.txt/" + $0, "name": $0] }], "message": ""]
+                                                   "crashed": crashed.map { ["kind": "cheat", "key": "f.txt/" + $0, "name": $0] },
+                                                   "sgradeState": sgrade], "message": ""]
             onLine(try! JSONSerialization.data(withJSONObject: event))
             onExit(0)
         }

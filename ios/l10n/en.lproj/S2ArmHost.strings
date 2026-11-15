@@ -516,3 +516,17 @@
 "vpad.screenLock.note" = "For external displays. Tap 3 times to restore.";
 "vpad.screenLock.hint" = "To restore the phone screen, tap 3 times in succession";
 "vpad.screenLock.unlock" = "Restore phone screen";
+"sgrade.state.on.adaptive" = "In use: community full screen patch (picked for your screen's aspect ratio)";
+"sgrade.state.on.fixed" = "In use: community full screen patch (fixed aspect ratio)";
+"sgrade.state.on.own" = "In use: S2Arm full screen (no community patch for this game; checked by S2Arm)";
+"sgrade.state.on.fps" = "In use: up to %1$@ fps";
+"sgrade.state.off_user" = "Off";
+"sgrade.state.off_auto.crash" = "Turned off automatically: it was on when the game crashed on %1$@";
+"sgrade.state.off_auto.stall" = "Turned off automatically: it was on when the picture froze on %1$@";
+"sgrade.state.version.newer" = "The patch library has it for version %1$@; yours is %2$@. Update the game to %1$@ and export again to use it.";
+"sgrade.state.version.older" = "Patches only exist for the older version %1$@; there's none for your version yet.";
+"sgrade.state.version.port_failed" = "We tried adapting it to your version, but it didn't work.";
+"sgrade.state.none" = "The patch library has no %1$@ patch for this game yet.";
+"sgrade.state.opted_out" = "Not added: \"Add when building\" was off at export. Turn it on and export again.";
+"sgrade.state.pending.ios" = "New patches are available: open S2Arm on your computer and choose \"S-grade upgrade\".";
+"sgrade.state.mac_only" = "Graphics patches are Mac-only.";

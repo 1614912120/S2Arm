@@ -325,6 +325,10 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
     VkPhysicalDevice4444FormatsFeaturesEXT f4444 = {0};
     f4444.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT;
     const int has_4444 = has_device_extension(out->physical, "VK_EXT_4444_formats");
+    // 出包预编库的顶点着色器不改写深度（near = 0 口径）；near = -w 的游戏靠管线把裁剪深度设成 [-1, 1] 得到同一结果
+    VkPhysicalDeviceDepthClipControlFeaturesEXT dcc = {0};
+    dcc.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT;
+    const int has_dcc = has_device_extension(out->physical, "VK_EXT_depth_clip_control");
     VkPhysicalDeviceCustomBorderColorFeaturesEXT border = {0};
     border.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT;
     {
@@ -333,6 +337,7 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
         draw_parameters.pNext = &timeline;
         timeline.pNext = &index_u8;
         index_u8.pNext = has_4444 ? &f4444 : NULL;
+        if (has_dcc) { dcc.pNext = index_u8.pNext; index_u8.pNext = &dcc; }
         query.pNext = &draw_parameters;
         if (out->has_swapchain_maintenance1) {
             maintenance.pNext = &draw_parameters;
@@ -347,6 +352,7 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
         out->timeline_semaphore_enabled = timeline.timelineSemaphore == VK_TRUE;
         out->shader_draw_parameters_enabled = draw_parameters.shaderDrawParameters == VK_TRUE;
         out->formats_4444_enabled = has_4444 && f4444.formatA4B4G4R4 == VK_TRUE;
+        out->depth_clip_control_enabled = has_dcc && dcc.depthClipControl == VK_TRUE;
         index_u8.pNext = NULL;   // 查询链拆掉；建设备的链在下面按启用情况重接
     }
     // C2 顶点 SPIR-V 声明 DrawParameters（gl_VertexIndex / gl_InstanceIndex）；没有该特征不能合法消费模块。
@@ -354,7 +360,7 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
         return fail(why, why_size, "required feature missing: shaderDrawParameters");
 
     // 容量 = 所有可选扩展同时启用时的项数（swapchain / maintenance1 / 校准 / index_type_uint8 / display_timing / host import /
-    // AHB + queue_family_foreign / indirect count / 4444 / 实例除数 / 镜像夹取 / 自定义边框色，校准 KHR / EXT 二选一 = 13），留余量。
+    // AHB + queue_family_foreign / indirect count / 4444 / 实例除数 / 镜像夹取 / 自定义边框色 / 深度裁剪控制，校准 KHR / EXT 二选一 = 14），留余量。
     const char *device_ext[16];
     uint32_t device_ext_count = 0;
     if (out->has_swapchain) device_ext[device_ext_count++] = "VK_KHR_swapchain";
@@ -447,6 +453,7 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
     out->sampler_mirror_clamp_enabled = has_device_extension(out->physical, "VK_KHR_sampler_mirror_clamp_to_edge");
     if (out->sampler_mirror_clamp_enabled) device_ext[device_ext_count++] = "VK_KHR_sampler_mirror_clamp_to_edge";
     if (out->formats_4444_enabled) device_ext[device_ext_count++] = "VK_EXT_4444_formats";
+    if (out->depth_clip_control_enabled) device_ext[device_ext_count++] = "VK_EXT_depth_clip_control";
     // #976：NVN 的任意边框色。要 customBorderColors 特性；customBorderColorWithoutFormat 按设备如实开（没有时后端建这种采样器报 UNSUPPORTED）。
     out->custom_border_enabled = border.customBorderColors == VK_TRUE;
     out->custom_border_without_format = out->custom_border_enabled && border.customBorderColorWithoutFormat == VK_TRUE;
@@ -524,6 +531,13 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
         VkBaseOutStructure *tail = (VkBaseOutStructure *)device_info.pNext;
         while (tail->pNext) tail = tail->pNext;
         tail->pNext = (VkBaseOutStructure *)&f4444;
+    }
+    if (out->depth_clip_control_enabled) {   // 同样接在链尾（查询时它挂在 index_u8 后面，这里重接）
+        dcc.depthClipControl = VK_TRUE;
+        dcc.pNext = NULL;
+        VkBaseOutStructure *tail = (VkBaseOutStructure *)device_info.pNext;
+        while (tail->pNext) tail = tail->pNext;
+        tail->pNext = (VkBaseOutStructure *)&dcc;
     }
     if (out->custom_border_enabled) {
         border.customBorderColors = VK_TRUE;

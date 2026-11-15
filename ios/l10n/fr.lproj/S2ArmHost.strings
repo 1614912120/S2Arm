@@ -510,3 +510,17 @@
 "vpad.screenLock.note" = "Pour les écrans externes. Appuyez 3 fois pour restaurer.";
 "vpad.screenLock.hint" = "Pour restaurer l'écran du téléphone, appuyez 3 fois de suite sur l'écran";
 "vpad.screenLock.unlock" = "Restaurer l'écran du téléphone";
+"sgrade.state.on.adaptive" = "Utilisé : patch plein écran communautaire (choisi selon le format de votre écran)";
+"sgrade.state.on.fixed" = "Utilisé : patch plein écran communautaire (format fixe)";
+"sgrade.state.on.own" = "Utilisé : plein écran S2Arm (pas de patch communautaire pour ce jeu ; vérifié par S2Arm)";
+"sgrade.state.on.fps" = "Utilisé : jusqu’à %1$@ i/s";
+"sgrade.state.off_user" = "Désactivé";
+"sgrade.state.off_auto.crash" = "Désactivé automatiquement : il était activé lorsque le jeu a planté le %1$@";
+"sgrade.state.off_auto.stall" = "Désactivé automatiquement : il était activé lorsque l’image s’est figée le %1$@";
+"sgrade.state.version.newer" = "La bibliothèque de patchs le propose pour la version %1$@ ; la vôtre est la %2$@. Mettez le jeu à jour en %1$@ puis exportez-le à nouveau pour l’utiliser.";
+"sgrade.state.version.older" = "Il n’existe des patchs que pour l’ancienne version %1$@ ; rien encore pour votre version.";
+"sgrade.state.version.port_failed" = "Nous avons essayé de l’adapter à votre version, sans succès.";
+"sgrade.state.none" = "La bibliothèque de patchs n’a pas encore de patch %1$@ pour ce jeu.";
+"sgrade.state.opted_out" = "Non ajouté : « Ajouter à la compilation » était désactivé lors de l’export. Activez-le et exportez à nouveau.";
+"sgrade.state.pending.ios" = "De nouveaux patchs sont disponibles : ouvrez S2Arm sur votre ordinateur et choisissez « Mise à niveau classe S ».";
+"sgrade.state.mac_only" = "Les patchs graphiques sont réservés à la version Mac.";

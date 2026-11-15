@@ -337,13 +337,15 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
               s[DQS_SLEEP] / 300.0, s[DQS_TMO] / 300.0, s[DQS_TMO_WORK] / 300.0, s[DQS_WAKE] / 300.0, s[DQS_DRAIN_WAIT] / 300.0, s[DQS_DRAIN_NS] / 300.0 / 1000.0);
           nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b);
           dq_lat_line(b, sizeof b); nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
-        { uint64_t d0 = __atomic_exchange_n(&g_draw_ns[0], 0, __ATOMIC_RELAXED), d1 = __atomic_exchange_n(&g_draw_ns[1], 0, __ATOMIC_RELAXED), d2 = __atomic_exchange_n(&g_draw_ns[2], 0, __ATOMIC_RELAXED);
+        { static uint64_t l_draw[3];   // 这个读者上次读到的累加器值（不清零共享累加器，见 diag_delta：每 5 秒的逐笔读数也读它们）
+          uint64_t d0 = diag_delta(&g_draw_ns[0], &l_draw[0]), d1 = diag_delta(&g_draw_ns[1], &l_draw[1]), d2 = diag_delta(&g_draw_ns[2], &l_draw[2]);
           snprintf(b, sizeof b, "后端绘制细分（每帧毫秒，近 300 帧）：描述符 %.2f、推常量与状态 %.2f、顶点索引与绘制调用 %.2f", d0 / 300.0 / 1e6, d1 / 300.0 / 1e6, d2 / 300.0 / 1e6);
           nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
-        { uint64_t v4[4], nwt = __atomic_exchange_n(&g_desc_nw, 0, __ATOMIC_RELAXED), nst = __atomic_exchange_n(&g_desc_sets, 0, __ATOMIC_RELAXED);
-          for (int i = 0; i < 4; i++) v4[i] = __atomic_exchange_n(&g_desc_ns[i], 0, __ATOMIC_RELAXED);
+        { static uint64_t l_nw, l_sets, l_hit, l_ns[4];
+          uint64_t v4[4], nwt = diag_delta(&g_desc_nw, &l_nw), nst = diag_delta(&g_desc_sets, &l_sets);
+          for (int i = 0; i < 4; i++) v4[i] = diag_delta(&g_desc_ns[i], &l_ns[i]);
           snprintf(b, sizeof b, "描述符细分（每帧毫秒，近 300 帧）：分配 %.2f、构造写入项 %.2f、写入 %.2f、绑定 %.2f；每帧重写 %.0f 组（其中备忘命中 %.0f 组）、写 %.0f 条描述符",
-              v4[0] / 300.0 / 1e6, v4[1] / 300.0 / 1e6, v4[2] / 300.0 / 1e6, v4[3] / 300.0 / 1e6, nst / 300.0, __atomic_exchange_n(&g_desc_hit, 0, __ATOMIC_RELAXED) / 300.0, nwt / 300.0);
+              v4[0] / 300.0 / 1e6, v4[1] / 300.0 / 1e6, v4[2] / 300.0 / 1e6, v4[3] / 300.0 / 1e6, nst / 300.0, diag_delta(&g_desc_hit, &l_hit) / 300.0, nwt / 300.0);
           nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
         { static const char *const nm[8] = {"建图", "要显存并绑定", "默认视图", "帧缓冲", "附件视图", "拆视图", "从帧缓冲表里摘", "拆贴图"}; int o = snprintf(b, sizeof b, "建拆细分（每帧毫秒 / 次，近 300 帧）：");
           for (int i = 0; i < 8 && o < (int)sizeof b - 40; i++) o += snprintf(b + o, sizeof b - (size_t)o, "%s%s %.2f / %.1f", i ? "、" : "", nm[i], __atomic_exchange_n(&g_life_ns[i], 0, __ATOMIC_RELAXED) / 300.0 / 1e6, __atomic_exchange_n(&g_life_n[i], 0, __ATOMIC_RELAXED) / 300.0);
@@ -358,8 +360,9 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
           nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
         { uint64_t dn = __atomic_exchange_n(&g_dv_n, 0, __ATOMIC_RELAXED), dt = __atomic_exchange_n(&g_dv_ns[0], 0, __ATOMIC_RELAXED), dl = __atomic_exchange_n(&g_dv_ns[1], 0, __ATOMIC_RELAXED);
           uint64_t gn = __atomic_exchange_n(&g_gmu_n, 0, __ATOMIC_RELAXED), gw = __atomic_exchange_n(&g_gmu_wait_n, 0, __ATOMIC_RELAXED), gwn = __atomic_exchange_n(&g_gmu_wait_ns, 0, __ATOMIC_RELAXED);
-          snprintf(b, sizeof b, "视图销毁与锁（每帧，近 300 帧）：销毁 %.1f 个、共 %.2f 毫秒（其中摘链 %.3f 毫秒）；回放线程取 g_mu %.0f 次、被占着要等的 %.1f 次、共等 %.2f 毫秒；开关 nvk_ulist=%d nvk_fbdrop=%d",
-              dn / 300.0, dt / 300.0 / 1e6, dl / 300.0 / 1e6, gn / 300.0, gw / 300.0, gwn / 300.0 / 1e6, view_ulist_on(), fbdrop_mode());
+          uint64_t rn = __atomic_exchange_n(&g_ref_n, 0, __ATOMIC_RELAXED), rh = __atomic_exchange_n(&g_ref_hit, 0, __ATOMIC_RELAXED);
+          snprintf(b, sizeof b, "视图销毁与锁（每帧，近 300 帧）：销毁 %.1f 个、共 %.2f 毫秒（其中摘链 %.3f 毫秒）；回放线程取 g_mu %.0f 次、被占着要等的 %.1f 次、共等 %.2f 毫秒；引用句柄 %.0f 次、其中备忘命中 %.0f 次；开关 nvk_ulist=%d nvk_fbdrop=%d",
+              dn / 300.0, dt / 300.0 / 1e6, dl / 300.0 / 1e6, gn / 300.0, gw / 300.0, gwn / 300.0 / 1e6, rn / 300.0, rh / 300.0, view_ulist_on(), fbdrop_mode());
           nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
         // 后端现存对象（显存涨在哪）。悬着 = 上层已放、还被引用着没销毁
         { uint64_t nt = 0, ntd = 0, tb = 0, tdb = 0, nb = 0, nbd = 0, bb = 0, nvw = 0, nq = 0;

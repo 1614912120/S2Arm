@@ -9324,6 +9324,10 @@
   "en": "No game in this batch has a platform selected"
  },
  {
+  "source": "不认识的出包平台：{0}（只支持 {1}）",
+  "en": "Unknown build platform: {0} (supported: {1})"
+ },
+ {
   "source": "这一批里没有 {0}",
   "en": "{0} isn't in this batch"
  },
