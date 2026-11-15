@@ -399,6 +399,43 @@ static int lp_spv_bindings(const uint8_t *spv, size_t n, uint32_t *out, int cap,
         }
     return 0;
 }
+// 片元输出映射（同现编结果 info.fragmentOutputMap：每个颜色目标 4 位，第 c 分量 = 位 4×location + c）：按 .spv 的 Output 变量推。
+//   缺了这一项消费端按全 1（不屏蔽）处理，着色器没写的颜色目标也会被写入未定义值（延迟渲染的 G 缓冲被冲掉，王国之泪整屏发暗）。
+//   0 = 推出；-1 = 读不懂（数组输出、location ≥ 8、没 Location 的非内建输出等），调用方不出这一项
+int s2a_libpack_spv_frag_outputs(const uint8_t *spv, size_t n, uint32_t *map) {
+    const uint32_t *w = (const uint32_t *)spv; size_t nw = n / 4;
+    if (nw < 5 || !w[3] || w[3] > (1u << 22)) return -1;
+    uint32_t bound = w[3];
+    // 每个 id：低 8 位 location+1（0 = 没有）、8..15 位 component、位 16 = 内建；类型表：分量数（0 = 不是可用的标量 / 向量）
+    uint32_t *dec = calloc(bound, sizeof *dec), *ncomp = calloc(bound, sizeof *ncomp), *ptr_to = calloc(bound, sizeof *ptr_to);
+    int rc = -1; uint32_t m = 0;
+    if (!dec || !ncomp || !ptr_to) goto out;
+    for (size_t i = 5; i < nw; ) {
+        uint32_t op = w[i] & 0xffff, wc = w[i] >> 16;
+        if (!wc || i + wc > nw) goto out;
+        if (op == 71 && wc >= 3 && w[i + 1] < bound) {                       // OpDecorate
+            uint32_t id = w[i + 1], d = w[i + 2];
+            if (d == 30 && wc >= 4) { if (w[i + 3] >= 255) goto out; dec[id] = (dec[id] & ~0xffu) | (w[i + 3] + 1); }   // Location
+            else if (d == 31 && wc >= 4) { if (w[i + 3] > 3) goto out; dec[id] = (dec[id] & ~0xff00u) | (w[i + 3] << 8); }   // Component
+            else if (d == 11) dec[id] |= 1u << 16;                                // BuiltIn
+        } else if ((op == 21 || op == 22) && wc >= 2 && w[i + 1] < bound) ncomp[w[i + 1]] = 1;   // OpTypeInt / OpTypeFloat
+        else if (op == 23 && wc >= 4 && w[i + 1] < bound && w[i + 2] < bound && ncomp[w[i + 2]] == 1 && w[i + 3] <= 4) ncomp[w[i + 1]] = w[i + 3];   // OpTypeVector
+        else if (op == 32 && wc >= 4 && w[i + 1] < bound) ptr_to[w[i + 1]] = w[i + 2] == 3 ? w[i + 3] + 1 : 0;   // OpTypePointer Output → 指向类型 +1
+        else if (op == 59 && wc >= 4 && w[i + 3] == 3) {                     // OpVariable … Output
+            uint32_t ty = w[i + 1], id = w[i + 2];
+            if (ty >= bound || id >= bound || !ptr_to[ty]) goto out;
+            if (dec[id] >> 16 & 1) { i += wc; continue; }                        // 内建（FragDepth / SampleMask）不占颜色目标
+            uint32_t loc = dec[id] & 0xff, comp = dec[id] >> 8 & 0xff, val = ptr_to[ty] - 1, k = val < bound ? ncomp[val] : 0;
+            if (!loc || loc - 1 >= 8 || !k || comp + k > 4) goto out;
+            m |= ((1u << k) - 1u) << (4 * (loc - 1) + comp);
+        }
+        i += wc;
+    }
+    *map = m; rc = 0;
+out:
+    free(dec); free(ncomp); free(ptr_to);
+    return rc;
+}
 // _b.json 里某个参数号的绑定是不是 v1 有意不出行的种类（Metal 专用宿主表 / 采样器半边）
 static int lp_json_has_binding(struct s2a_jv top, int stage_no, uint32_t binding, int *skipped_kind) {
     struct s2a_jv arr; *skipped_kind = 0;
@@ -487,8 +524,11 @@ static int lp_stage_emit(struct s2a_libpack *lp, const uint8_t key[8], unsigned 
         }
         jw_fmt(stages, "%s{\"stage\":\"%s\",\"spirv\":\"", *stage_mask ? "," : "", v1_stage);
         jw_b64(stages, spv, sn);
-        if (mask) jw_fmt(stages, "\",\"attributeReadMask\":%u}", mask);
-        else jw_str(stages, "\"}");
+        jw_str(stages, "\"");
+        if (mask) jw_fmt(stages, ",\"attributeReadMask\":%u", mask);
+        uint32_t fom = 0;
+        if (!strcmp(v1_stage, "fs") && !s2a_libpack_spv_frag_outputs(spv, sn, &fom)) jw_fmt(stages, ",\"info\":{\"fragmentOutputMap\":%u}", fom);
+        jw_str(stages, "}");
         *stage_mask |= 1u << nvn;
         out = 0;
     }
