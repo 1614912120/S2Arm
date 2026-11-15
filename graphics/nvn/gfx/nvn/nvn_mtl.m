@@ -835,18 +835,35 @@ static void nvn_be_pool_add_body(const void *mem, uint64_t size) {
     mtl_init(); g_reg_gen++;
     uintptr_t pg = (uintptr_t)getpagesize(), lo = (uintptr_t)mem, hi = lo + size;
     int view = 0; uintptr_t a = lo & ~(pg - 1), b = (hi + pg - 1) & ~(pg - 1), ha = pool_host(a, b, &view);
-    void (^unview)(void *, NSUInteger) = view ? ^(void *p, NSUInteger n) { vm_deallocate(mach_task_self(), (vm_address_t)p, n); } : nil;   // a view of a split shadow goes with its buffer (pool_host)
+    // 一个 MTLBuffer 不能长过设备的 maxBufferLength（#1196：7.3 GB iPad 4.66 GB 的池、6 GB iPhone 3.5 GB 的池，newBufferWithBytesNoCopy 回 nil、重试也没用、开局退出）。
+    //   超了就按块登记：每块 ≤ 上限（向下取页）、相邻两块重叠一半，各自一个零拷贝 buffer、一条 pool_ent（同 key）。块的起点越晚终点越晚，
+    //   pool_find「起点 ≤ 地址的最后一条」就是能装下它的终点最远的那块：池里不超过半块的资源总能整个落进某一块；更大又跨块的照旧找不到、按不在池里报红（不静默错绑）。
+    //   S2A_POOL_MAXLEN_MB（单测 / 复现）把上限压小
+    uint64_t total = (uint64_t)(b - a), lim = (uint64_t)g_dev.maxBufferLength;
+    { static uint64_t forced = ~0ull; if (forced == ~0ull) { const char *e = getenv("S2A_POOL_MAXLEN_MB"); forced = e && *e ? strtoull(e, NULL, 10) << 20 : 0; } if (forced && forced < lim) lim = forced; }
+    lim &= ~(uint64_t)(pg - 1);
+    uint64_t L = total <= lim || lim < 2 * (uint64_t)pg ? total : lim, stride = L == total ? total : (L / 2) & ~(uint64_t)(pg - 1);
+    int nchunk = L == total ? 1 : (int)((total - L + stride - 1) / stride) + 1;
+    // 远端影子的视图（pool_host 拆块时另建的）整段一次放：最后一块的 buffer 释放时才放
+    _Atomic int *vleft = NULL; if (view && nchunk > 1) { vleft = malloc(sizeof *vleft); if (vleft) atomic_init(vleft, nchunk); }
+    uintptr_t vbase = ha; NSUInteger vlen = (NSUInteger)total;
+    void (^unview)(void *, NSUInteger) = !view ? nil : nchunk == 1 ? ^(void *p, NSUInteger n) { vm_deallocate(mach_task_self(), (vm_address_t)p, n); }
+        : ^(void *p, NSUInteger n) { (void)p; (void)n; if (!vleft || atomic_fetch_sub(vleft, 1) == 1) { vm_deallocate(mach_task_self(), (vm_address_t)vbase, vlen); free(vleft); } };
     if (ha != a) MLOG("memory pool %p+%#llx is in the far alias region: zero-copy buffer over its shadow %#lx", mem, (unsigned long long)size, (unsigned long)ha);
-    id<MTLBuffer> buf = [g_dev newBufferWithBytesNoCopy:(void *)ha length:b - a options:MTLResourceStorageModeShared deallocator:unview];
+    if (nchunk > 1) MLOG("memory pool %p+%#llx is longer than one Metal buffer may be on this device (%llu MB): registered as %d overlapping chunks of %llu MB, %llu MB apart",
+                         mem, (unsigned long long)size, (unsigned long long)(lim >> 20), nchunk, (unsigned long long)(L >> 20), (unsigned long long)(stride >> 20));
+    for (int ck = 0; ck < nchunk; ck++) {
+    uint64_t off = (uint64_t)ck * stride, cl = total - off < L ? total - off : L; uintptr_t ca = a + (uintptr_t)off, cha = ha + (uintptr_t)off;
+    id<MTLBuffer> buf = [g_dev newBufferWithBytesNoCopy:(void *)cha length:cl options:MTLResourceStorageModeShared deallocator:unview];
     // Pokémon Legends: Z-A: twice on the Mac a small pool's buffer was refused although its pages were one read-write VM region, both times while another heavy job (a shader compile,
     // a second game instance) took the machine's memory; every run on an idle machine created all of them. Wiring the pages may fail under memory pressure: retry for up to about 2 s
     for (int t = 0; !buf && t < 12; t++) {
         usleep(10000u << (t < 4 ? t : 4));
-        buf = [g_dev newBufferWithBytesNoCopy:(void *)ha length:b - a options:MTLResourceStorageModeShared deallocator:unview];
+        buf = [g_dev newBufferWithBytesNoCopy:(void *)cha length:cl options:MTLResourceStorageModeShared deallocator:unview];
         if (buf) MLOG("【红】 memory pool %p+%#llx: the zero-copy buffer was refused, created at retry %d", mem, (unsigned long long)size, t + 1);
     }
     if (!buf) {   // say what the pages looked like: every VM region over the range, with its protection (an unmapped page in the range is the usual cause)
-        for (vm_address_t r = ha; r < ha + (b - a); ) {
+        for (vm_address_t r = cha; r < cha + cl; ) {
             vm_size_t rs = 0; vm_region_basic_info_data_64_t vi; mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t obj = MACH_PORT_NULL;
             if (vm_region_64(mach_task_self(), &r, &rs, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&vi, &cnt, &obj) != KERN_SUCCESS) { MLOG("【红】   no VM region at or after %#llx", (unsigned long long)r); break; }
             MLOG("【红】   VM region %#llx+%#llx protection %d (max %d)", (unsigned long long)r, (unsigned long long)rs, vi.protection, vi.max_protection);
@@ -854,22 +871,23 @@ static void nvn_be_pool_add_body(const void *mem, uint64_t size) {
         }
         // 11-14 #63639b（D-RCQD，6 GB iPhone、一款应用内存池 9216 MB 的游戏、文件后备开）：3.5 GB 的池建不出，日志没有设备上限，判不了是超了单个 buffer 的长度上限
         //   还是页钉不住。把设备的上限、推荐工作集、物理内存、这段是否文件后备记清楚，再按超没超上限给一句原因
-        { uint64_t maxlen = (uint64_t)g_dev.maxBufferLength, ws = (uint64_t)g_dev.recommendedMaxWorkingSetSize, phys = (uint64_t)NSProcessInfo.processInfo.physicalMemory, len = (uint64_t)(b - a);
-          int file = s2a_guest_in_file((uint64_t)ha, len);
+        { uint64_t maxlen = (uint64_t)g_dev.maxBufferLength, ws = (uint64_t)g_dev.recommendedMaxWorkingSetSize, phys = (uint64_t)NSProcessInfo.processInfo.physicalMemory, len = (uint64_t)cl;
+          int file = s2a_guest_in_file((uint64_t)cha, len);
           MLOG("【红】 memory pool %p+%#llx: device max buffer length %llu MB, recommended working set %llu MB, physical memory %llu MB; this pool %llu MB, guest-file backed %d → %s",
                mem, (unsigned long long)size, (unsigned long long)(maxlen >> 20), (unsigned long long)(ws >> 20), (unsigned long long)(phys >> 20), (unsigned long long)(len >> 20), file,
                len > maxlen ? "longer than one Metal buffer may be on this device" : "within the buffer limit: its pages could not be wired (memory)"); }
-        MDIE("memory pool %p+%#llx: failed to create the zero-copy buffer over %#lx..%#lx", mem, (unsigned long long)size, (unsigned long)ha, (unsigned long)(ha + (b - a)));
+        MDIE("memory pool %p+%#llx: failed to create the zero-copy buffer over %#lx..%#lx", mem, (unsigned long long)size, (unsigned long)cha, (unsigned long)(cha + cl));
     }
     pthread_mutex_lock(&g_mu);
     if (g_npool == g_cap) { int c = g_cap ? g_cap * 2 : 64;
         if (!GROW(g_pools, (size_t)c * sizeof *g_pools, "memory pool table")) { pthread_mutex_unlock(&g_mu); MLOG("【红】 memory pool %p+%#llx not registered: its addresses resolve to nothing (draws using it are skipped)", mem, (unsigned long long)size); return; }
         g_cap = c; }
     g_plast = -1; atomic_fetch_add(&g_pool_gen, 1);   // the last hit and the per-thread caches are invalid (pool_find, pc_get)
-    g_pools[g_npool++] = (pool_ent){lo, hi, a, buf, buf.gpuAddress, mem, 0, ha}; pidx_added();   // not in the residency set yet: put in the first time it is addressed (pool_res)
+    g_pools[g_npool++] = (pool_ent){lo > ca ? lo : ca, hi < ca + cl ? hi : ca + cl, ca, buf, buf.gpuAddress, mem, 0, cha}; pidx_added();   // not in the residency set yet: put in the first time it is addressed (pool_res)
     g_pool_adds++;
     [g_keep addObject:buf];
     pthread_mutex_unlock(&g_mu);
+    }
 }
 
 static dispatch_queue_t ph_queue(void);   // first-upload page hashes (see NvPkg ph)
@@ -886,7 +904,7 @@ static void nvn_be_pool_del_body(const void *mem) {
             if (!g_dead_pools) g_dead_pools = [NSHashTable weakObjectsHashTable];
             gslot_put(i);
             [g_dead_pools addObject:b]; pidx_removing(i); g_pools[i] = g_pools[--g_npool]; if (i < g_npool && g_pools[i].gslot) g_gslot_pool[g_pools[i].gslot - 1] = i;   // the moved pool's bit follows it
-            g_plast = -1; atomic_fetch_add(&g_pool_gen, 1); break; }
+            g_plast = -1; atomic_fetch_add(&g_pool_gen, 1); i--; }   // 不 break：一个池可能登记成几块（#1196，同 key），换到 i 的那条再看一遍
     pthread_mutex_unlock(&g_mu);
 }
 
