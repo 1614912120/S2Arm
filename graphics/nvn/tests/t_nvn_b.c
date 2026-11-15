@@ -120,6 +120,10 @@ int main(int argc, char **argv) {
         memcpy(&v, nat + 0xf14, 4); CHECK(NATIVE, v == 2);
         API(nvnWindowSetPresentInterval)(&c.value, 3); memcpy(&v, nat + 0xf14, 4); CHECK(NATIVE, v == 3);
         memcpy(nat + 0xf14, &(int32_t){1}, 4); CHECK(NATIVE, API(nvnWindowGetPresentInterval)(&c.value) == 1);
+        // 外部写原生窗口：5 是真机上限、照收（原先只认 0–4 被丢）；超界（1000）按 0。期望手写
+        memcpy(nat + 0xf14, &(int32_t){5}, 4); CHECK(NATIVE, API(nvnWindowGetPresentInterval)(&c.value) == 5);
+        memcpy(nat + 0xf14, &(int32_t){1000}, 4); CHECK(NATIVE, API(nvnWindowGetPresentInterval)(&c.value) == 0);
+        memcpy(nat + 0xf14, &(int32_t){1}, 4); CHECK(NATIVE, API(nvnWindowGetPresentInterval)(&c.value) == 1);
         API(nvnWindowBuilderSetNativeWindow)(&b.value, raw);
         if (!API(nvnWindowInitialize)(&d.value, &b.value)) return 2;
         memcpy(&v, raw + 0xf14, 4); CHECK(NATIVE, v == 1); CHECK(NATIVE, API(nvnWindowGetPresentInterval)(&d.value) == 2);
