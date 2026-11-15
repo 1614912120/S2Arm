@@ -14,7 +14,7 @@ extension LauncherView {
         VStack(alignment: .leading, spacing: 0) {
             staleBanner
             renewBanner
-            homeControls(size: size).padding(.horizontal, 48).padding(.top, size.height < 740 ? 12 : 22).padding(.bottom, 18)
+            homeControls(size: size).padding(.horizontal, LauncherTheme.Metrics.libraryInset).padding(.top, size.height < 740 ? 12 : 22).padding(.bottom, 18)
             if homeGames.isEmpty {
                 homeEmptyPreview
             } else {
@@ -103,6 +103,7 @@ extension LauncherView {
                 .controllerButtonStyle(ConsoleIconButtonStyle()).disabled(model.loading).controllerID("home.refresh")
                 .help(loc.t("s2arm.library.refresh")).accessibilityLabel(loc.t("s2arm.library.refresh"))
         }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: showHomeSearch)
     }
 
     private func homeCoverStrip(size: CGSize) -> some View {
@@ -113,7 +114,7 @@ extension LauncherView {
                     ForEach(homeGames) { game in
                         homeCard(game, side: side).id("card." + game.id)
                     }
-                }.padding(.horizontal, 48).padding(.top, 6).padding(.bottom, 20)
+                }.padding(.horizontal, LauncherTheme.Metrics.libraryInset).padding(.top, 6).padding(.bottom, 20)
             }
             .frame(height: side * 1.36 + 36, alignment: .top)
             .accessibilityIdentifier("home.covers")

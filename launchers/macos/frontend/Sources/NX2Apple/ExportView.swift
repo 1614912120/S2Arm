@@ -36,8 +36,7 @@ struct ExportView: View {
                     Text(BackendText.launcherText("batch.hint", language: loc.lang == .zh ? "zh-Hans" : "en")).font(.manrope(12.5)).foregroundStyle(.secondary)
                     platforms
                 }
-                .padding(.horizontal, 40).padding(.top, 22).padding(.bottom, 40)
-                .frame(maxWidth: 900)
+                .padding(.horizontal, LauncherTheme.Metrics.libraryInset).padding(.top, 22).padding(.bottom, 40)
                 .frame(maxWidth: .infinity)
             }
             Divider().opacity(0.3)
@@ -303,8 +302,7 @@ struct ExportView: View {
             .accessibilityLabel(count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"))
             .accessibilityIdentifier("export.start")
         }
-        .padding(.horizontal, 40).padding(.vertical, 16)
-        .frame(maxWidth: 900)
+        .padding(.horizontal, LauncherTheme.Metrics.libraryInset).padding(.vertical, 16)
         .frame(maxWidth: .infinity)
     }
 }

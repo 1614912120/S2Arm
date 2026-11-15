@@ -40,6 +40,7 @@ package enum LauncherTheme {
         package static let switchWidth: CGFloat = 40
         package static let switchHeight: CGFloat = 24
         package static let navigationWidth: CGFloat = 300
+        package static let libraryInset: CGFloat = 48
         package static let actionMinWidth: CGFloat = 80
         package static let icon: CGFloat = 18
     }

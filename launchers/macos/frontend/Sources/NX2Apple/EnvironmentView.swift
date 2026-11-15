@@ -79,11 +79,6 @@ struct EnvironmentView: View {
                     }
                     InstallModeCard(model: model)   // 装到 iPhone 的方式（v0.3.0：签名 / 安装入口收在这一处）
                     let failing = model.checks.filter { !$0.ok }
-                    if !failing.isEmpty || model.environmentError != nil {
-                        CopyReportButton(model: model, gameID: nil, operations: nil,
-                                         fallback: (["S2Arm 环境检查未通过", ProcessInfo.processInfo.operatingSystemVersionString, model.environmentError ?? ""] + failing.map { "\($0.name)：\($0.message)" }).joined(separator: "\n"))
-                        ReportHint()
-                    }
                     ForEach(ordered(failing), id: \.self) { group in
                         let items = failing.filter { groupOf($0) == group }
                         CardGroup(groupName(group)) {

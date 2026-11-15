@@ -5,12 +5,86 @@ import SwiftUI
 import XCTest
 import NXCore
 import NXModel
-import NXLauncher
+@testable import NXLauncher
 import S2ArmAppleAdapter
 @testable import NX2AppleUI
 
 /// Real SwiftUI pages with original, asset-free job responses; never reads the player's library.
 @MainActor final class SettingsLayoutTests: XCTestCase {
+    func testHomeSearchDismissesOutsideClicksAndFocusLossWithoutClearingTheQuery() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        let state = SearchControlState()
+        let (host, window) = try await render(AnyView(SearchControlPreview(state: state)), fixture: fixture, language: .zh)
+        defer { window.close() }
+        window.makeKeyAndOrderFront(nil)
+        let navigation = fixture.navigation
+        navigation.source.controllers = { [] }
+        navigation.attach(window)
+        defer { navigation.detach() }
+        navigation.focus("home.search"); navigation.handle(.confirm)
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertTrue(state.expanded)
+        XCTAssertTrue(window.firstResponder is NSTextView, "展开后应聚焦原生输入框")
+        state.query = "Original"
+        try await Task.sleep(for: .milliseconds(80))
+        let clear = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.search.clear" })
+        let clearFrame = window.convertFromScreen(clear.frame)
+        try click(CGPoint(x: clearFrame.midX, y: clearFrame.midY), in: window)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(state.expanded, "点击胶囊内的清空按钮不能收起")
+        XCTAssertEqual(state.query, "")
+        state.query = "Original"
+        let outside = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "search-test.outside" })
+        let outsideFrame = window.convertFromScreen(outside.frame)
+        try click(CGPoint(x: outsideFrame.midX, y: outsideFrame.midY), in: window)
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertFalse(state.expanded, "点击搜索框外应自动收起")
+        XCTAssertEqual(state.outsideClicks, 1, "收起搜索不能吞掉外部按钮的点击")
+        XCTAssertEqual(state.query, "Original", "自动收起应保留查询")
+        state.expanded = true
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertTrue(window.makeFirstResponder(nil))
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertFalse(state.expanded, "键盘焦点移出搜索框后应自动收起")
+        XCTAssertEqual(state.query, "Original")
+        state.expanded = true
+        try await Task.sleep(for: .milliseconds(350))
+        try click(CGPoint(x: 20, y: 20), in: window)
+        try await Task.sleep(for: .milliseconds(350))
+        XCTAssertFalse(state.expanded, "点击非焦点控件的空白处也应收起")
+        try snapshot(host, "home-search-dismissed")
+    }
+
+    func testCollapsedSearchIconDoesNotChangeWhenTheQueryIsNonempty() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        let state = SearchControlState()
+        let (host, window) = try await render(AnyView(SearchControlPreview(state: state)), fixture: fixture, language: .zh)
+        defer { window.close() }
+        let target = try XCTUnwrap(fixture.navigation.controlTargets(in: window).first { $0.id == "home.search" })
+        let rect = host.convert(window.convertFromScreen(target.frame), from: nil)
+        func pixels() throws -> Data {
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: rect))
+            host.cacheDisplay(in: rect, to: bitmap)
+            return try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+        }
+        let empty = try pixels()
+        state.query = "Original"
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(try pixels(), empty, "收起时查询非空不能在放大镜上添加圆点")
+        try snapshot(host, "home-search-query-without-badge")
+    }
+
+    private func click(_ point: CGPoint, in window: NSWindow) throws {
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try XCTUnwrap(NSEvent.mouseEvent(with: type, location: point, modifierFlags: [],
+                timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
+                context: nil, eventNumber: 0, clickCount: 1, pressure: 1))
+            NSApp.sendEvent(event)
+        }
+    }
+
     func testHomeSearchExpandsInsideTheHomeWindowAndKeepsItsQuery() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
@@ -209,6 +283,86 @@ import S2ArmAppleAdapter
                 XCTAssertTrue(bounds.contains(action.frame))
             }
             try snapshot(host, "upgrade-short-\(language.code)")
+        }
+    }
+
+    func testUpgradeRowsAndConfirmationUseConsistentAlignment() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        let games = [
+            SGradeScanGame(["id": "alpha", "name": "Original Alpha", "program": "original", "total": 4,
+                            "patches": ["widescreen": 1, "fps": 1, "gfx": 1, "cheat": 1]]),
+            SGradeScanGame(["id": "beta", "name": "Original Beta", "program": "original", "total": 3,
+                            "patches": ["widescreen": 1, "fps": 1, "gfx": 1]])
+        ]
+        for language in [Lang.zh, .en] {
+            let code = language == .zh ? "zh-Hans" : "en"
+            let page = AnyView(SGradeUpgradeBody(games: games, failure: nil, zh: language == .zh, busy: false,
+                x: { BackendText.launcherText("sgrade.upgrade." + $0, language: code) }, upgrade: { _ in }, close: {}))
+            let (host, window) = try await render(page, fixture: fixture, language: language)
+            defer { window.close() }
+            let bounds = window.convertToScreen(host.bounds)
+            let actions = fixture.navigation.controlTargets(in: window)
+            XCTAssertEqual(actions.count, 1)
+            let button = try XCTUnwrap(actions.first)
+            print("upgrade-footer \(language.code): bottom=\(button.frame.minY - bounds.minY), right=\(bounds.maxX - button.frame.maxX)")
+            XCTAssertEqual(button.frame.minY - bounds.minY, 16, accuracy: 1, "升级弹窗应使用与设置页一致的 16 pt 底边距")
+            XCTAssertEqual(bounds.maxX - button.frame.maxX, 32, accuracy: 1)
+            let document = try XCTUnwrap(scrollViews(in: host).first?.documentView)
+            let bitmap = try XCTUnwrap(document.bitmapImageRepForCachingDisplay(in: document.bounds))
+            document.cacheDisplay(in: document.bounds, to: bitmap)
+            // Only the two gray descriptions occupy the right half; the title and names are on the left.
+            var rows: [(firstY: Int, lastY: Int, minX: Int)] = []
+            for y in 0..<bitmap.pixelsHigh {
+                var first: Int?
+                for x in (bitmap.pixelsWide / 2)..<bitmap.pixelsWide {
+                    if let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB),
+                       min(color.redComponent, color.greenComponent, color.blueComponent) > 0.4 {
+                        first = x; break
+                    }
+                }
+                if let first {
+                    if let last = rows.last, y - last.lastY <= 4 {
+                        rows[rows.count - 1] = (last.firstY, y, min(last.minX, first))
+                    } else { rows.append((y, y, first)) }
+                }
+            }
+            rows = rows.filter { $0.lastY - $0.firstY >= 4 } // Ignore the thin row separator.
+            XCTAssertEqual(rows.count, 2, "应能从实际渲染结果中找到两行优化说明")
+            if rows.count == 2 {
+                print("upgrade-description-left \(language.code): \(rows.map(\.minX))")
+                XCTAssertEqual(rows[0].minX, rows[1].minX, accuracy: 2, "右侧说明文字应共用左边界")
+            }
+            try snapshot(host, "upgrade-aligned-\(language.code)")
+        }
+    }
+
+    func testExportPageSharesTheHomeHorizontalInsets() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let game = try XCTUnwrap(fixture.model.games.first)
+        for language in [Lang.zh, .en] {
+            for width: CGFloat in [800, 1120, 1440] {
+                let padFocus = PadFocus()
+                let page = AnyView(ExportView(model: fixture.model, covers: CoverCache(), game: game, install: {})
+                    .environmentObject(padFocus).padScope("main", padFocus)
+                    .background(LauncherWindowMaterial()).foregroundStyle(LauncherTheme.Colors.text).preferredColorScheme(.dark)
+                    .frame(width: width, height: 630))
+                let (host, window) = try await render(page, fixture: fixture, language: language)
+                defer { window.close() }
+                let bounds = window.convertToScreen(host.bounds)
+                let targets = fixture.navigation.controlTargets(in: window)
+                let back = try XCTUnwrap(targets.max { $0.frame.midY < $1.frame.midY })
+                let start = try XCTUnwrap(padFocus.frames["main"]?.first { $0.id == "export.start" })
+                print("export-insets \(language.code)/\(width): left=\(back.frame.minX - bounds.minX), right=\(width - start.frame.maxX)")
+                XCTAssertEqual(back.frame.minX - bounds.minX, 48, accuracy: 1, "出包内容应与游戏库的 48 pt 内边距对齐")
+                XCTAssertEqual(width - start.frame.maxX, 48, accuracy: 1, "底栏操作应与内容右边缘对齐")
+                XCTAssertTrue(bounds.contains(back.frame))
+                XCTAssertTrue(CGRect(x: 0, y: 0, width: width, height: 630).contains(start.frame))
+                try snapshot(host, "export-full-width-\(language.code)-\(Int(width))")
+            }
         }
     }
 
@@ -469,6 +623,25 @@ import S2ArmAppleAdapter
         host.cacheDisplay(in: host.bounds, to: bitmap)
         try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
             .write(to: URL(fileURLWithPath: output).appendingPathComponent(name + ".png"))
+    }
+}
+
+@MainActor private final class SearchControlState: ObservableObject {
+    @Published var expanded = false
+    @Published var query = ""
+    var outsideClicks = 0
+}
+
+private struct SearchControlPreview: View {
+    @ObservedObject var state: SearchControlState
+    var body: some View {
+        HStack {
+            Spacer()
+            Button("Outside") { state.outsideClicks += 1 }
+                .controllerButtonStyle(.plain).controllerID("search-test.outside")
+            HomeSearchControl(isExpanded: $state.expanded, text: $state.query, width: 300, edit: {})
+        }
+        .padding(30).frame(width: 600, height: 120).background(Color.black)
     }
 }
 

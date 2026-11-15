@@ -57,6 +57,11 @@ class ReportButton(unittest.TestCase):
         self.assertEqual(adds[-1], "reportBtn")
         self.assertIn('SetAutomationId(reportBtn, "top.report")', bar); self.assertIn('T("report.button")', bar)
 
+    def test_settings_does_not_duplicate_the_global_report_entry(self):
+        settings = read(MAC / "EnvironmentView.swift")
+        self.assertFalse("CopyReportButton(" in settings, "设置页应复用顶栏报修入口")
+        self.assertFalse("ReportHint()" in settings, "设置页不应重复显示报修说明")
+
 
 if __name__ == "__main__":
     unittest.main()
