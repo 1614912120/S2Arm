@@ -390,5 +390,5 @@ public sealed partial class EnvironmentWindow
     }
 
     private string LibraryFailed(string folder, string reason) =>
-        T("welcome.sheet.libraryFailed").Replace("{0}", folder).Replace("{1}", reason.Length > 0 ? reason : T("library.failed"));
+        T("welcome.sheet.libraryFailed").Replace("{0}", folder).Replace("{1}", reason.Length > 0 ? B(reason) : T("library.failed"));   // 作业层原句按界面语言翻
 }

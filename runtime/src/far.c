@@ -63,7 +63,7 @@ void s2a_far_set(uint64_t lo, uint64_t hi, uint64_t sh_lo, uint64_t sh_hi) {
 #if TARGET_OS_OSX
     const char *le = getenv("S2A_FAR_LINEAR");
     if (!le || strcmp(le, "0")) {
-        void *p = mmap(NULL, hi - lo, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+        void *p = mmap(NULL, hi - lo, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, S2A_VMTAG_FD(S2A_VMTAG_FAR), 0);
         if (p != MAP_FAILED && !((uint64_t)(uintptr_t)p & (CHUNK - 1))) g_lin = (uint64_t)(uintptr_t)p;
         else if (p != MAP_FAILED) {   // 内核给的不按 2 MiB 对齐：多占 2 MiB 再对齐（影子块与游戏块同对齐，块内偏移一致）
             munmap(p, hi - lo); p = mmap(NULL, hi - lo + CHUNK, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
@@ -149,7 +149,7 @@ int s2a_far_map(uint64_t a, uint64_t n) {
         uint64_t at = g_sh_hi - g_sh_used - k * CHUNK, he = s2a_mem_heap_end();
         if (g_sh_used + k * CHUNK <= g_sh_hi - g_sh_lo && at >= he) g_sh_used += k * CHUNK;
         else {
-            void *p = s2a_guest_map_any(k * CHUNK); if (p == MAP_FAILED) p = mmap(NULL, k * CHUNK, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);   // 客体内存文件后备时影子块也走文件（vawin.c）
+            void *p = s2a_guest_map_any(k * CHUNK); if (p == MAP_FAILED) p = mmap(NULL, k * CHUNK, PROT_NONE, MAP_PRIVATE | MAP_ANON, S2A_VMTAG_FD(S2A_VMTAG_FAR), 0);   // 客体内存文件后备时影子块也走文件（vawin.c）
             if (p == MAP_FAILED) { int e0 = errno; runs_undo(rv, rm); free(rv); pthread_mutex_unlock(&g_mu); LOG("【红】远端：影子区与堆撞上且宿主地址也占不到（堆顶 %#llx，堆区影子 %llu MB、堆区外 %llu MB，本次要 %llu MB，errno=%d）", (unsigned long long)he, (unsigned long long)(g_sh_used >> 20), (unsigned long long)(g_ov_used >> 20), (unsigned long long)(k * CHUNK >> 20), e0); return -1; }
             if (!g_ov_used) LOG("远端：堆区影子余量用完（堆顶 %#llx，堆区影子 %llu MB），影子块改从宿主任意空闲地址分", (unsigned long long)he, (unsigned long long)(g_sh_used >> 20));
             at = (uint64_t)(uintptr_t)p; g_ov_used += k * CHUNK; ov = 1;
@@ -279,7 +279,7 @@ static uint8_t *pair_slot(const uint8_t *p1, const uint8_t *p2) {
     for (k = 0; k < NXS; k++, i = (i + 1) % NXS) { uintptr_t z = 0, cur = atomic_load(&g_xs[i].tid);
         if (cur == tid || (!cur && atomic_compare_exchange_strong(&g_xs[i].tid, &z, tid)) || z == tid) break; }
     if (k == NXS) return NULL;
-    if (!g_xs[i].p) { void *m = mmap(NULL, 2 * FPG, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0); if (m == MAP_FAILED) return NULL; g_xs[i].p = m; }
+    if (!g_xs[i].p) { void *m = mmap(NULL, 2 * FPG, PROT_NONE, MAP_PRIVATE | MAP_ANON, S2A_VMTAG_FD(S2A_VMTAG_FAR), 0); if (m == MAP_FAILED) return NULL; g_xs[i].p = m; }
     for (int j = 0; j < 2; j++) {
         vm_address_t a = (vm_address_t)(g_xs[i].p + j * FPG); vm_prot_t cur, max;
         if (vm_remap(mach_task_self(), &a, FPG, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)(j ? p2 : p1), FALSE, &cur, &max, VM_INHERIT_NONE) != KERN_SUCCESS

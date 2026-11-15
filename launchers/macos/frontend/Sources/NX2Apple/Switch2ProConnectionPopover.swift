@@ -53,14 +53,14 @@ struct Switch2ProConnectionPopover: View {
 
     var connectionSections: [ControllerConnectionSection] {
         var sections: [ControllerConnectionSection] = []
+        let names = systems.pads.map(\.name) + systems.fallback
         // 只有系统手柄在线时，未建立的 Switch 通道留在独立入口里，不给同一设备再画一张失败卡片。
-        if showSwitchOptions || systems.pads.isEmpty || !controller.allDevices.isEmpty || [.connected, .inUse].contains(controller.status) {
-            sections.append(.init(source: .switchRelay, title: controller.switchTitle(lang: lang), status: controller.status))
+        if showSwitchOptions || names.isEmpty || !controller.allDevices.isEmpty || [.connected, .inUse].contains(controller.status) {
+            sections.append(.init(source: .switchRelay, title: controller.switch2Title(lang: lang), status: controller.status))
         }
-        let pads = systems.pads
-        if !pads.isEmpty {
+        if !names.isEmpty {
             sections.append(.init(source: .system,
-                title: pads.count == 1 ? pads[0].name : t("bluetoothCount").replacingOccurrences(of: "{0}", with: "\(pads.count)"), status: .connected))
+                title: names.count == 1 ? names[0] : t("bluetoothCount").replacingOccurrences(of: "{0}", with: "\(names.count)"), status: .connected))
         }
         return sections
     }
@@ -86,6 +86,7 @@ struct Switch2ProConnectionPopover: View {
                             .help(NS2LauncherController.statusText(status, lang: lang))
                     }
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .accessibilityElement(children: .combine)
             .accessibilityIdentifier("controller.status")
@@ -113,14 +114,15 @@ struct Switch2ProConnectionPopover: View {
 
             // 系统手柄（#520 UI 稿 system.html）：一块——图、标题（一只写系统给的名字，太长一行截断、悬停看全名；多只写数量）、已连接、「打开蓝牙设置」
             if let connection = sections.first(where: { $0.source == .system }) {
-                let pads = systems.pads
-                let family = Set(pads.map(\.family)).count == 1 ? pads[0].family : .other   // 多只同一类用那一类的图，混着用通用手柄图
+                let names = systems.pads.map(\.name) + systems.fallback
+                let families = systems.pads.map(\.family) + systems.fallback.map { _ in SystemControllers.Family.nintendoPro }
+                let family = Set(families).count == 1 ? families[0] : .other   // 多只同一类用那一类的图，混着用通用手柄图
                 PanelSection(separated: sections.contains(where: { $0.source == .switchRelay })) {
                     HStack(spacing: 12) {
                         ControllerIcon(glyph: ControllerIcon.system(family)).frame(width: 48, height: 36)
                         LauncherHeadingLine {
                             Text(connection.title).font(.manrope(22, .bold)).lineLimit(1).truncationMode(.tail)   // 蓝牙手柄名字太长照截断（缩字太小），悬停看全名
-                                .help(pads.map(\.name).joined(separator: "\n"))
+                                .help(names.joined(separator: "\n"))
                         } subtitle: {
                             HStack(alignment: .firstTextBaseline, spacing: 8) {
                                 Circle().fill(Color(nsColor: NS2LauncherController.dotColor(connection.status))).frame(width: 9, height: 9)

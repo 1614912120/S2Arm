@@ -83,6 +83,8 @@
 "crash.off.body" = "La última vez el juego se cerró con %@ activado, así que esta vez está desactivado. Puedes volver a activarlo en Ajustes.";
 "crash.off.prompt" = "La última vez el juego se cerró con %@ activado, así que esta vez está desactivado. Puedes volver a activarlo en Ajustes.\n\nEnviarnos el diagnóstico nos ayuda a solucionarlo. El paquete contiene solo registros de ejecución, sin partidas guardadas, claves ni archivos del juego.";
 "crash.off.title" = "Se desactivó lo que estaba activado cuando el juego se cerró";
+"crash.restored.title" = "Se volvió a activar lo que se desactivó tras el último cierre inesperado";
+"crash.restored.body" = "%@ se desactivó cuando el juego se cerró; esta versión de S2Arm lo vuelve a activar. Si vuelve a cerrarse, se desactivará de nuevo.";
 "sgrade.title" = "Mejoras de grado S";
 "sgrade.note" = "Si un parche es incompatible y hace que el juego se cierre, se desactiva automáticamente la próxima vez que inicies, para que puedas seguir jugando.";
 "sgrade.counts" = "%ld activados · %ld en total";
@@ -219,6 +221,8 @@
 "vpad.menu.ns2pro" = "Activar Switch 2 Pro Controller";
 "vpad.menu.pad" = "Mandos y movimiento";
 "vpad.menu.rumble" = "Vibración";
+"vpad.menu.volume" = "Sonido";
+"vpad.volume.mute" = "Silenciar";
 "vpad.menu.rumble.note" = "Compartida por el motor del teléfono y los mandos; elegir un nivel reproduce un ejemplo";
 "vpad.menu.saves" = "Gestionar partidas guardadas";
 "vpad.menu.stickFixed.note" = "Desactivado = el stick se centra donde tocas";
@@ -436,6 +440,7 @@
 "save.restored" = "Partida guardada restaurada. Puedes iniciar el juego para comprobar tu progreso. Se conservó una copia previa a la restauración (no se crea si no había partida guardada antes).";
 "save.serviceInvalid" = "El servicio de partidas guardadas no devolvió un resultado válido. Cierra y vuelve a abrir la app; se conservan los datos existentes.";
 "save.start" = "Iniciar juego";
+"save.leave" = "Salir (la próxima vez se abre directamente el juego)";
 "save.status.hasSave" = "Tu partida guardada actual se puede exportar. Al importar, primero se comprueban la versión del juego, la propiedad de la cuenta y la integridad del archivo, y luego se solicita confirmación para restaurar.";
 "save.status.noSave" = "Aún no hay partida guardada para exportar. Puedes importar una copia de seguridad o iniciar el juego para crear una partida guardada.";
 "save.tempCleanupFailed" = "No se pudo eliminar una copia temporal, por lo que sigue ocupando espacio. En Archivos, elimina la copia temporal llamada «%@» dentro de la app.";
@@ -451,6 +456,7 @@
 "settings.fps.knownIssue.message" = "60 FPS tiene problemas conocidos en este juego. Desactívalo si el juego funciona a una velocidad incorrecta.";
 "settings.fps.native" = "60 FPS nativos en este juego";
 "settings.group.dev" = "Desarrollo";
+"settings.devEntry" = "Desarrollo y diagnóstico";
 "settings.notStarted" = "Juego no iniciado";
 "settings.restart.message" = "¿Reiniciar el juego ahora? Se perderá el progreso sin guardar, así que asegúrate de haber guardado en el juego.";
 "settings.restart.messageLater" = "Los ajustes guardados surtirán efecto la próxima vez que inicies el juego.";
@@ -504,3 +510,17 @@
 "vpad.screenLock.note" = "Para pantallas externas. Toca 3 veces para restaurar.";
 "vpad.screenLock.hint" = "Para restaurar la pantalla del teléfono, toca 3 veces seguidas";
 "vpad.screenLock.unlock" = "Restaurar pantalla del teléfono";
+"sgrade.state.on.adaptive" = "En uso: parche de pantalla completa de la comunidad (elegido según la relación de aspecto de tu pantalla)";
+"sgrade.state.on.fixed" = "En uso: parche de pantalla completa de la comunidad (relación de aspecto fija)";
+"sgrade.state.on.own" = "En uso: pantalla completa de S2Arm (este juego no tiene parche de la comunidad; comprobado por S2Arm)";
+"sgrade.state.on.fps" = "En uso: hasta %1$@ fps";
+"sgrade.state.off_user" = "Desactivado";
+"sgrade.state.off_auto.crash" = "Desactivado automáticamente: estaba activado cuando el juego se cerró de golpe el %1$@";
+"sgrade.state.off_auto.stall" = "Desactivado automáticamente: estaba activado cuando la imagen se congeló el %1$@";
+"sgrade.state.version.newer" = "La biblioteca de parches lo tiene para la versión %1$@; la tuya es %2$@. Actualiza el juego a %1$@ y vuelve a exportarlo para usarlo.";
+"sgrade.state.version.older" = "Solo hay parches para la versión anterior %1$@; para tu versión todavía no hay.";
+"sgrade.state.version.port_failed" = "Intentamos adaptarlo a tu versión, pero no funcionó.";
+"sgrade.state.none" = "La biblioteca de parches aún no tiene parche de %1$@ para este juego.";
+"sgrade.state.opted_out" = "No añadido: «Añadir al compilar» estaba desactivado al exportar. Actívalo y vuelve a exportar.";
+"sgrade.state.pending.ios" = "Hay parches nuevos: abre S2Arm en tu ordenador y elige «Mejora a grado S».";
+"sgrade.state.mac_only" = "Los parches de gráficos son solo para Mac.";

@@ -103,7 +103,10 @@ K=$(printf '%s backend=%s%s%s%s%s' "$K" "$RK" "$CK" "$PK" "$([ -n "${FT}" ] && p
 # RomFS 遍历经 graphics/nvn/tools/romfs_list.py（仓库里唯一的 RomFS 遍历，walk 同 os.walk）
 # NRR 登记表（*.nrr）同样按内容进键：nro_to_nso.py 按它到 romfs 其余文件（一款第一方格斗游戏 data.arc）里找藏着的 NRO。那些大文件本身不进键（17.6 GB 每次判跳过都重算不可取）：
 #   收进的 NRO 只认 NRR 登记的 SHA-256，内容由登记表定死；只有「NRR 不变、归档里换了位置 / 删了」才会让表里来源列或有无变而键不变。
-IK=$("$PY" - "$CUR" "$R" <<'INPUT_KEY'
+# 运行时留下的 NRO（S2A_NRO_KEPT_DIR，启动器给游戏库 games/<号>/nro_kept/；#8be819 游戏自有加密归档里的 NRO，宿主 LoadNro 缺表时存下游戏解开的那份）：
+#   nro_to_nso.py 第三来源，*.nro 按文件名 + 内容进键（新留下一份 = 要重改写）。没设 / 目录不在 = 无，键与原先相同
+KEPT=${S2A_NRO_KEPT_DIR:-}; [ -n "$KEPT" ] && [ -d "$KEPT" ] || KEPT=
+IK=$("$PY" - "$CUR" "$R" "$KEPT" <<'INPUT_KEY'
 import hashlib, os, sys
 from pathlib import Path
 root = Path(sys.argv[1])
@@ -126,6 +129,10 @@ for path in sorted(paths, key=lambda p: os.fsencode(p.relative_to(root).as_posix
     digest.update(len(relative).to_bytes(8, 'little'))
     digest.update(relative)
     digest.update(content.digest())
+if sys.argv[3]:
+    for path in sorted(Path(sys.argv[3]).glob('*.nro'), key=lambda p: os.fsencode(p.name)):
+        content = hashlib.sha256(path.read_bytes()).digest()
+        digest.update(b'kept\0' + len(path.name).to_bytes(8, 'little') + os.fsencode(path.name) + content)
 print(digest.hexdigest())
 INPUT_KEY
 ) || { echo "【红】$G 读不出改写输入内容指纹" >&2; exit 1; }
@@ -146,7 +153,7 @@ t0=$SECONDS; n=0
 #   转成 NSO 放 nroexe/、与 exefs 模块一样改写（模块名 nro0…），运行时 ro LoadNro 按 NRO 文件 SHA-256 查 nro_modules.tsv 映射改写好的映像（runtime/src/loader.c s2a_nro_map）。
 #   零配置：romfs 任意深度的 *.nro；有 .nrr 登记表时还收藏在 romfs 其余文件里（原样 / zstd 帧）、哈希登记过的 NRO（11-03 一款第一方格斗游戏 data.arc）；没有 NRO 不出表。nroexe/ 是中间产物，改写完删
 rm -f "$W/nro_modules.tsv"; rm -rf "$W/nroexe"
-"$PY" "$R/runtime/rewriter/nro_to_nso.py" "$W/romfs" "$W/nroexe" > "$W/nro_to_nso.log" 2>&1 || { echo "【红】$G 转 romfs 里的 NRO 失败（$(tail -1 "$W/nro_to_nso.log")）"; root_abort "$G" "$TAG"; exit 1; }
+"$PY" "$R/runtime/rewriter/nro_to_nso.py" "$W/romfs" "$W/nroexe" ${KEPT:+"$KEPT"} > "$W/nro_to_nso.log" 2>&1 || { echo "【红】$G 转 romfs 里的 NRO 失败（$(tail -1 "$W/nro_to_nso.log")）"; root_abort "$G" "$TAG"; exit 1; }
 [ ! -f "$W/nroexe/nro_modules.tsv" ] || mv "$W/nroexe/nro_modules.tsv" "$W/nro_modules.tsv" || { root_abort "$G" "$TAG"; exit 1; }
 "$PY" "$R/graphics/widen/scan/wide_scan.py" "$W/exefs" --tsv "$W/widen_sites.tsv" > "$W/widen_scan.log" 2>&1 || { echo "【红】$G 宽屏候选扫描失败（$(tail -1 "$W/widen_scan.log")）"; root_abort "$G" "$TAG"; exit 1; }
 for t in ${EN[@]+"${EN[@]}"}; do cp "$t" "$W/" || { root_abort "$G" "$TAG"; exit 1; }; done

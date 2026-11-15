@@ -7,6 +7,15 @@
     <string name="native_unavailable">The native host could not start. See the S2Arm log for details.</string>
     <string name="capability_status" translatable="false">%1$s\n%2$s</string>
     <string name="import_game">Import game package…</string>
+    <string name="in_place_game">Use a game folder in place…</string>
+    <string name="in_place_access_title">All files access needed</string>
+    <string name="in_place_access_text">Using a game in place reads its files straight from your phone\'s storage instead of copying them into the app, which saves as much space as the game takes. In the system settings that open next, turn on \"Allow access to manage all files\" for this app, then come back and tap \"Use a game folder in place…\" again to pick the game folder.</string>
+    <string name="in_place_access_open">Open settings</string>
+    <string name="in_place_not_local">The picked location is not a folder on this phone (a cloud drive, for example), so it can\'t be used in place. Pick a game folder on the phone\'s storage or SD card.</string>
+    <string name="player_err_all_files">The app has no \"All files access\", so it can\'t read the game files in place.</string>
+    <string name="player_err_all_files_next">Turn on \"Allow access to manage all files\" for this app in the system settings, then try again.</string>
+    <string name="player_err_in_place">The game files used in place were moved, deleted or changed.</string>
+    <string name="player_err_in_place_next">Put the game folder back as it was (or copy it from your computer again), then tap \"Use a game folder in place…\" in the library to register it again.</string>
     <string name="import_progress">Importing game: %1$d / %2$d MiB</string>
     <string name="fps_overlay_show">Show FPS (successful frame submissions)</string>
     <string name="fps_overlay_description">Successful game frame submissions per second; not the screen refresh rate</string>

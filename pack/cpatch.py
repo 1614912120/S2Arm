@@ -1679,16 +1679,27 @@ def plan(root, default_on, index_dirs):
         # 目标帧率（第 10 列，11-13 维护者「补丁优先：有 120 帧补丁就盖过我们的 60 帧」）：帧率类写补丁目标（索引 target_fps / 名字里的「<数> fps」），
         #   宿主按它定出图上限（runtime/src/cpatch.c：> 60 开 120 Hz 出图）；别的类与认不出的写空
         # 画幅（第 11 列）：宽屏类写补丁画幅（宽 ÷ 高，aspect_of），宿主在开着的几份里按当前屏幕比例只开最近的一份、上屏按它铺满（runtime/src/cpatch.c）；认不出的写空（照旧单独开关）
-        f.write('编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\n')
+        f.write('编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\t组\n')
         for uid, mod, bit, u, dw in table:
             tf = (u.get('meta') or {}).get('fps') if uid.startswith('fps:') else None
             ta = (u.get('meta') or {}).get('aspect') if uid.startswith('widescreen:') else None
             # 第 12 列模式（自适应满屏，11-13）：both = 主机 / 掌机两档渲染尺寸都按画幅（出包补齐了另一档）；docked = 只有主机档（宿主切主机模式）；空 = 不涉渲染尺寸
             md = ('both' if '@y4/' in dw else 'docked') if uid.startswith('wsauto:') and '@x4' in dw else ''
-            f.write('\t'.join([uid, mod, str(bit), u['cat'], re.sub(r'[\t\n]', ' ', u['name']), u['license'], u['path'], dw, '1' if uid in on else '0', str(tf) if tf else '', f'{ta:.4f}' if ta else '', md]) + '\n')
+            f.write('\t'.join([uid, mod, str(bit), u['cat'], re.sub(r'[\t\n]', ' ', u['name']), u['license'], u['path'], dw, '1' if uid in on else '0', str(tf) if tf else '', f'{ta:.4f}' if ta else '', md,
+                               fps_group(u) if uid.startswith('fps:') else '']) + '\n')
     with open(os.path.join(root, 'cpatch_plan.log'), 'a') as f: f.write('\n'.join(log) + '\n')
     print(f'社区补丁 {len(units)} 份匹配，进包 {len(table)} 份', file=sys.stderr)
     return 0
+
+
+def fps_group(u):
+    """第 13 列「组」（11-15，帧率补丁互斥）：同一个上游补丁的几份文件（如 main / sdk 各一份、同一压缩包里）是一组，要一起开；不同上游补丁是二选一。
+    按上游原路径（INDEX origin：仓库/路径[/包内路径]）去掉文件名、去掉末尾 exefs 目录取组，短哈希。运行时每档只开一组（runtime/src/cpatch.c fps_follow）"""
+    o = (u.get('origin') or u.get('path') or '').replace('\\', '/')
+    d = o.rsplit('/', 1)[0] if '/' in o else ''
+    while d.lower().endswith('/exefs') or d.lower() == 'exefs':
+        d = d[:-len('exefs')].rstrip('/')
+    return hashlib.sha1(d.encode('utf-8')).hexdigest()[:8]
 
 
 def prune(root):

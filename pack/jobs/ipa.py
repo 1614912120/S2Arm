@@ -191,6 +191,8 @@ def win_oneclick(c, oneclick, extraction, fonts, out, events, log, env, line, so
         return
     ipa, pack = Path(res["ipa"]), Path(res["pack"])
     kuan = ipa.stem
+    if not ipa.is_file() and re.search(r"[\\/]S2A[\\/]j[\\/]", str(ipa), re.I):   # 回报的还是短路径入口（子进程退出时已拆）：报明确原因，不报 WinError 3（诊断#0e3bd5）
+        raise Failure(f"出包已完成，但回报的 ipa 路径还在临时短路径入口下、入口已随出包进程退出拆掉，拷不到：{ipa}。请把这条报错和诊断一起发给我们。")
     shutil.copy2(ipa, out / (kuan + ".ipa"))
     c.run([os.sys.executable, c.engine / "pack/oneclick/deliver_pack.py", pack, out / (kuan + "资源包")], log, env)
     with open(events, "a", encoding="utf-8") as f:   # 末条 result 指向交付件（ipa.build 只认 out 下的包）
@@ -263,6 +265,7 @@ def _build(c):
         extraction = ensure_extract(c, game, selected_packages(game), env, logs)
         import patches   # 金手指 / 社区补丁（11-12）：解包后按真构建号查库，交改写阶段（同 build.prepare）
         patches.prepare(c, game, extraction, env, target="ios")   # iPhone 包不带画面类补丁（patches.fetch）
+        env["S2A_NRO_KEPT_DIR"] = str(layout.nro_kept(c, gid))   # 运行时留下的 NRO（#8be819；装 iPhone 前从机上拉回，install.pull_kept_nros）
         try:   # 原始程序存一份到这款游戏文件夹（v0.4.0）：以后补丁库更新，「S 级优化升级」只读它、不用回原件（pack/jobs/sgrade.py）
             import sgrade
             sgrade.save_program(c, gid, Path(extraction) / "exefs")
@@ -364,6 +367,8 @@ def _build(c):
     pack_dir = out / (ipa.stem + "资源包")   # 同 pack/oneclick/oneclick.sh 的交付布局
     patches.record(c, gid, "ios", product_root(c, gid))   # 补丁打入结果（打上 / 没打上，完成页列；deliver 之前产物根还在，11-14）
     deliver(c, gid, product_root(c, gid), pack_dir, ipa)
+    import sgrade   # iPhone 设置页的 S 级状态底料（版本对照 / 满屏来源 / 出包时选不打入；手机上没有补丁库，开关与自动关由手机本机算）
+    sgrade.write_kit_state(c, gid, layout.ios_kit(c, gid))
     prune_unless_follow_up(c, gid)
     cache_result = trim(c.work_root, current_gid=gid, **compiler_policy)
     from cache_retention import engine_installed_at, prune_tool_keys

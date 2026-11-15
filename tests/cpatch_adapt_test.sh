@@ -295,6 +295,10 @@ t19 = sorted((c[2], c[7]) for c in (l.split('\t') for l in open(r19 + '/cpatch.t
 rows19 = {tuple(l.split('\t# ')[0].split('\t')) for l in open(r19 + '/cpatch_rows.tsv').read().splitlines()}
 ck(f'⑲ 单份只改高半（32:9 只写 movk #0x4063）单份参数化：与 ⑤ 同行（实得 表 {t19}；行多 {sorted(rows19 - want5)} 缺 {sorted(want5 - rows19)}）',
    t19 == [('0', 'k1016::@a4'), ('1', 'k1016::@a4')] and rows19 == want5)
+# ⑳ 帧率补丁组（第 13 列，11-15）：同一上游补丁的 main / sdk 两份（同包同 exefs 目录）一组；另一个上游补丁另一组。期望手写
+g = lambda o: cpatch.fps_group({'origin': o})
+ga, gb, gc = g('t/r/Game/120FPS.rar/exefs/2.1.0.pchtxt'), g('t/r/Game/120FPS.rar/exefs/2.1.0v2.pchtxt'), g('f/x/Game/120fps/exefs/2.1.0.pchtxt')
+ck(f'⑳ 帧率补丁组：同包 main / sdk 同组、别的上游另组、8 位（{ga} {gb} {gc}）', ga == gb != gc and len(ga) == 8)
 sys.exit(bad)
 EOF
 rc=$?; [ $rc = 0 ] && echo "✅ cpatch_adapt_test 全过" || { echo "🔴 cpatch_adapt_test 有不通项"; exit 1; }

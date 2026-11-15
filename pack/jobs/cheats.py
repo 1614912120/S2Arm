@@ -258,12 +258,43 @@ def note_good(c, game):
     atomic(d / "good.json", {"on": [list(x) for x in on], "at": int(time.time())})
 
 
-def note_crash(c, game):
+def crash_where(docs):
+    """运行时崩溃处理写的落点（runtime/src/crash.c crash_where_note）：game / patch / host；没有 = ''。读完删（一次崩溃只认一次）"""
+    if not docs:
+        return ""
+    p = Path(docs) / "crash_where"
+    try:
+        w = p.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    p.unlink(missing_ok=True)
+    return w if w in ("game", "patch", "host") else ""
+
+
+def app_version(c):
+    """启动器引擎版本（engine.json version；开发树没有 = ''）：自动关时记下，换了版本自动重开一次（restore_after_update）"""
+    try:
+        return str(json.loads((Path(c.engine) / "engine.json").read_text(encoding="utf-8")).get("version") or "")
+    except (OSError, ValueError, AttributeError, TypeError):
+        return ""
+
+
+# 宿主自己崩（11-15 维护者「优化 S 级优化，不是撤」）：落点两头都在宿主代码 = 多半是 S2Arm 的毛病，不是补丁 / 金手指（D-RRES / D-AZFR：宿主贴图上传
+#   SIGBUS 把自适应满屏关了）。第一次不关、只记下这组开关（host_crash.json）；同一组开关再崩（落点不论）才照常关。落点是游戏 / 补丁区、或没有落点（被杀 / 老运行时）照常关
+def note_crash(c, game, docs=None):
     gid = game["id"].upper()
     on, verified, data = _on_now(c, game)
     if not on:
         return
     d = cheats_dir(c, gid, create=False)
+    where = crash_where(docs)
+    tags = sorted(list(x) for x in on)
+    hc = read(d / "host_crash.json", None)
+    if where == "host" and not (isinstance(hc, dict) and hc.get("on") == tags):
+        d.mkdir(parents=True, exist_ok=True)
+        atomic(d / "host_crash.json", {"on": tags, "at": int(time.time())})
+        return
+    (d / "host_crash.json").unlink(missing_ok=True)
     g = read(d / "good.json", None)
     off = narrow(on, {tuple(x) for x in g.get("on", [])} if isinstance(g, dict) else None, verified)
     keys = [k for t, k in off if t == "cheat"]
@@ -284,6 +315,65 @@ def note_crash(c, game):
         atomic(community.launch_path(c, gid), data)
     d.mkdir(parents=True, exist_ok=True)
     atomic(d / "crashed.json", {"cheats": keys, "patches": patches, "fps": fps, "fullscreen": fs, "at": int(time.time()), "off": True})
+    # 记下这次自动关掉的、当时的版本：换了版本（多半修了引起崩溃的毛病）自动重开一次（restore_after_update）
+    remember_auto_off(c, d, off, "crash", where)
+
+
+def remember_auto_off(c, d, off, cause, where=""):
+    """记下自动关掉的（常驻，玩家看过通知也不删）：cheats/auto_off.json {ver, off: [[类, 键]…], where, meta: {"类\t键": {cause, at}}}。
+    版本给 restore_after_update（换版本重开一次）；meta 给 S 级状态（sgrade.state 的 autoOff：原因 crash / stall、时间）。玩家动那个开关、或一键重开时清（forget_auto_off）"""
+    ao = read(d / "auto_off.json", None)
+    ao = ao if isinstance(ao, dict) else {}
+    prev = [x for x in ao.get("off", []) if tuple(x) not in off]
+    meta = dict(ao.get("meta") or {})
+    now = int(time.time())
+    for t, k in off:
+        meta[f"{t}\t{k}"] = {"cause": cause, "at": now}
+    d.mkdir(parents=True, exist_ok=True)
+    atomic(d / "auto_off.json", {"ver": app_version(c), "off": prev + [list(x) for x in off], "where": where or ao.get("where") or "unknown", "meta": meta})
+
+
+def forget_auto_off(c, gid, items):
+    """玩家自己动了这几项（重新打开 / 关掉）：从自动关记录里去掉，状态不再显示「自动关的」。items = [(类, 键)]"""
+    d = cheats_dir(c, gid, create=False)
+    ao = read(d / "auto_off.json", None)
+    if not isinstance(ao, dict):
+        return
+    drop = {tuple(x) for x in items}
+    off = [x for x in ao.get("off", []) if tuple(x) not in drop]
+    meta = {k: v for k, v in (ao.get("meta") or {}).items() if tuple(k.split("\t", 1)) not in drop}
+    if off:
+        atomic(d / "auto_off.json", dict(ao, off=off, meta=meta))
+    else:
+        (d / "auto_off.json").unlink(missing_ok=True)
+
+
+def restore_after_update(c, game):
+    """起局前（build.py launch）调：上次崩溃自动关掉的，换了启动器版本就重开一次（只开当时关的、现在仍关着的），记录删掉。→ 重开的 [(类, 键)]"""
+    gid = game["id"].upper()
+    d = cheats_dir(c, gid, create=False)
+    ao = read(d / "auto_off.json", None)
+    ver = app_version(c)
+    if not isinstance(ao, dict) or not ver or not ao.get("ver") or ao.get("ver") == ver:
+        return []
+    import community
+    data = community.load_launch(c, gid)
+    back, keys = [], []
+    for t, k in (tuple(x) for x in ao.get("off", [])):
+        if t == "cheat":
+            keys.append(k); back.append((t, k))
+        elif t == "patch" and data["patches"].get(k) is False:
+            data["patches"].pop(k); back.append((t, k))
+        elif t == "fps" and data["settings"].get("fps60") is False:
+            data["settings"].pop("fps60"); back.append((t, k))
+        elif t == "fs" and data["settings"].get("widescreen") is False:
+            data["settings"].pop("widescreen"); back.append((t, k))
+    if keys:
+        known = {it["key"] for it in listing(c, game)["items"]}
+        save(c, game, {k: True for k in keys if k in known})
+    atomic(community.launch_path(c, gid), data)
+    (d / "auto_off.json").unlink(missing_ok=True)
+    return back
 
 
 # 停帧救场（11-14 维护者）：局内画面停住时社区帧率补丁开着，运行时当场关掉（runtime/src/cpatch.c s2a_cpatch_stall_rescue）并在 S2A_DOCS 下写 cpatch_stall_off。
@@ -301,6 +391,7 @@ def note_stall(c, game, docs):
     d = cheats_dir(c, gid)
     r = read(d / "crashed.json", {}) or {}
     atomic(d / "crashed.json", dict(r, fps=True, at=int(time.time()), off=True, cheats=r.get("cheats", []), patches=r.get("patches", [])))
+    remember_auto_off(c, d, [("fps", "fps60")], "stall")
     return True
 
 

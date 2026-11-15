@@ -83,6 +83,8 @@
 "crash.off.body" = "Le jeu a quitté la dernière fois avec %@ activé, donc c'est désactivé cette fois. Vous pouvez le réactiver dans Réglages.";
 "crash.off.prompt" = "Le jeu a quitté la dernière fois avec %@ activé, donc c'est désactivé cette fois. Vous pouvez le réactiver dans Réglages.\n\nNous envoyer le diagnostic nous aide à corriger le problème. Le paquet contient uniquement des journaux d'exécution — pas de sauvegardes, clés ou fichiers de jeu.";
 "crash.off.title" = "Les réglages actifs lors du dernier plantage ont été désactivés";
+"crash.restored.title" = "Les réglages désactivés après le dernier plantage ont été réactivés";
+"crash.restored.body" = "%@ avait été désactivé après le plantage du jeu ; cette version de S2Arm le réactive. En cas de nouveau plantage, il sera de nouveau désactivé.";
 "sgrade.title" = "Améliorations de rang S";
 "sgrade.note" = "Si un correctif est incompatible et fait planter le jeu, il est désactivé automatiquement au prochain lancement pour que vous puissiez continuer à jouer.";
 "sgrade.counts" = "%ld activés · %ld au total";
@@ -219,6 +221,8 @@
 "vpad.menu.ns2pro" = "Activer la manette Switch 2 Pro";
 "vpad.menu.pad" = "Manettes & Mouvement";
 "vpad.menu.rumble" = "Vibration";
+"vpad.menu.volume" = "Son";
+"vpad.volume.mute" = "Muet";
 "vpad.menu.rumble.note" = "Partagé par le moteur du téléphone et les manettes ; sélectionner un niveau joue un échantillon";
 "vpad.menu.saves" = "Gérer les sauvegardes";
 "vpad.menu.stickFixed.note" = "Désactivé = le stick se centre là où votre doigt se pose";
@@ -436,6 +440,7 @@
 "save.restored" = "Sauvegarde restaurée. Vous pouvez démarrer le jeu pour vérifier votre progression. Une sauvegarde préalable à la restauration a été conservée (aucune n'est créée s'il n'y avait pas de sauvegarde avant).";
 "save.serviceInvalid" = "Le service de sauvegarde n'a pas renvoyé de résultat valide. Fermez puis rouvrez l'app ; vos données existantes sont conservées.";
 "save.start" = "Démarrer le jeu";
+"save.leave" = "Quitter (le jeu s’ouvrira directement la prochaine fois)";
 "save.status.hasSave" = "Votre sauvegarde actuelle peut être exportée. L'import vérifie d'abord la version du jeu, la propriété du compte et l'intégrité des fichiers, puis vous demande de confirmer la restauration.";
 "save.status.noSave" = "Aucune sauvegarde à exporter pour l'instant. Vous pouvez importer une sauvegarde ou démarrer le jeu pour en créer une.";
 "save.tempCleanupFailed" = "Une copie temporaire n'a pas pu être supprimée et occupe toujours de l'espace. Dans Fichiers, supprimez la copie temporaire nommée « %@ » dans l'app.";
@@ -451,6 +456,7 @@
 "settings.fps.knownIssue.message" = "Le 60 FPS présente des problèmes connus dans ce jeu. Désactivez-le si le jeu tourne à une vitesse incorrecte.";
 "settings.fps.native" = "60 FPS natif dans ce jeu";
 "settings.group.dev" = "Développement";
+"settings.devEntry" = "Développement et diagnostic";
 "settings.notStarted" = "Jeu non démarré";
 "settings.restart.message" = "Redémarrer le jeu maintenant ? La progression non sauvegardée sera perdue ; assurez-vous d'avoir sauvegardé dans le jeu.";
 "settings.restart.messageLater" = "Les réglages sauvegardés prendront effet au prochain démarrage du jeu.";
@@ -504,3 +510,17 @@
 "vpad.screenLock.note" = "Pour les écrans externes. Appuyez 3 fois pour restaurer.";
 "vpad.screenLock.hint" = "Pour restaurer l'écran du téléphone, appuyez 3 fois de suite sur l'écran";
 "vpad.screenLock.unlock" = "Restaurer l'écran du téléphone";
+"sgrade.state.on.adaptive" = "Utilisé : patch plein écran communautaire (choisi selon le format de votre écran)";
+"sgrade.state.on.fixed" = "Utilisé : patch plein écran communautaire (format fixe)";
+"sgrade.state.on.own" = "Utilisé : plein écran S2Arm (pas de patch communautaire pour ce jeu ; vérifié par S2Arm)";
+"sgrade.state.on.fps" = "Utilisé : jusqu’à %1$@ i/s";
+"sgrade.state.off_user" = "Désactivé";
+"sgrade.state.off_auto.crash" = "Désactivé automatiquement : il était activé lorsque le jeu a planté le %1$@";
+"sgrade.state.off_auto.stall" = "Désactivé automatiquement : il était activé lorsque l’image s’est figée le %1$@";
+"sgrade.state.version.newer" = "La bibliothèque de patchs le propose pour la version %1$@ ; la vôtre est la %2$@. Mettez le jeu à jour en %1$@ puis exportez-le à nouveau pour l’utiliser.";
+"sgrade.state.version.older" = "Il n’existe des patchs que pour l’ancienne version %1$@ ; rien encore pour votre version.";
+"sgrade.state.version.port_failed" = "Nous avons essayé de l’adapter à votre version, sans succès.";
+"sgrade.state.none" = "La bibliothèque de patchs n’a pas encore de patch %1$@ pour ce jeu.";
+"sgrade.state.opted_out" = "Non ajouté : « Ajouter à la compilation » était désactivé lors de l’export. Activez-le et exportez à nouveau.";
+"sgrade.state.pending.ios" = "De nouveaux patchs sont disponibles : ouvrez S2Arm sur votre ordinateur et choisissez « Mise à niveau classe S ».";
+"sgrade.state.mac_only" = "Les patchs graphiques sont réservés à la version Mac.";

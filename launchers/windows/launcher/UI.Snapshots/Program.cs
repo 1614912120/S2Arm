@@ -161,7 +161,8 @@ SaveP("win_01_export_select", () => Navigate(pack, "build"));
 foreach (var (name, json) in new[] {
     ("win_01b_export_sgrade_hit", "{\"build\":\"d95ec48ffe269b6e\",\"exact\":{\"widescreen\":1,\"fps\":1,\"cheat\":12},\"others\":[]}"),
     ("win_01c_export_sgrade_others", "{\"build\":\"aa11bb22cc33dd44\",\"exact\":{},\"others\":[{\"version\":\"1.1.0\",\"cats\":[\"fps\",\"widescreen\"]},{\"version\":\"1.0.0\",\"cats\":[\"cheat\"]}]}"),
-    ("win_01d_export_sgrade_none", "{\"build\":\"aa11bb22cc33dd44\",\"exact\":{},\"others\":[]}") })
+    ("win_01d_export_sgrade_none", "{\"build\":\"aa11bb22cc33dd44\",\"exact\":{},\"others\":[]}"),
+    ("win_01e_export_sgrade_ownwiden", "{\"build\":\"aa11bb22cc33dd44\",\"exact\":{\"cheat\":3},\"others\":[],\"ownWiden\":true}") })
 {
     SaveP(name, () => { Navigate(pack, "build"); SetW(pack, "sgradeFor", MockGame(false).Id); SetW(pack, "sgradeFailed", false);
         SetW(pack, "sgrade", (JsonElement?)JsonDocument.Parse(json).RootElement); Navigate(pack, "build"); });
@@ -233,6 +234,11 @@ TrackField("Started", DateTime.UtcNow.AddSeconds(-47)); TrackField("Ended", (Dat
 TrackField("PackBytes", (long?)0L); TrackField("PackFiles", (int?)0); TrackField("Version", "0.3.0");
 SetW(pack, "updateState", "succeeded");
 SaveP("win_21_phone_update_done", () => Navigate(pack, "phoneupdate"));
+// 导出模式完成（#1132）：3 款里 2 款沿用上次导出，只新写了丙 → 路径下点名「.img 只要拷这次新写的：丙.img」
+TrackField("ExportFolder", @"D:\S2Arm Games\S2Arm 自签导出"); TrackField("ExportGames", 3); TrackField("ExportBytes", (long?)9_800_000_000L);
+TrackField("ExportFresh", new List<string> { "丙.img" }); TrackField("ExportReused", 2);
+SaveP("win_21b_export_done_copy_only_new", () => Navigate(pack, "phoneupdate"));
+TrackField("ExportFolder", ""); TrackField("ExportGames", 0); TrackField("ExportBytes", (long?)null); TrackField("ExportFresh", new List<string>()); TrackField("ExportReused", 0);
 // 失败示例用真正做不下去的情况（签名失败）；认得出的风险走 drop 态让玩家确认，不当失败（维护者 11-11）
 TrackField("Suggestion", "在 Impactor 里重新登录你的 Apple ID，再点一次。");
 SetW(pack, "updateMessage", "签名没成功：Impactor 里的 Apple ID 登录已过期。");
@@ -344,6 +350,11 @@ SetW(pack, "catalog", new LibraryCatalog([atDefault, elsewhere], true, "密钥�
 SetW(pack, "librarySummary", "library.completed"); SetW(pack, "libraryDiagnostics", "");
 pack.Height = 2100;   // 设置页最长：装机方式 + 环境检查 + 运行路径都要在一张图里
 SaveP("tidy_02_settings", () => Navigate(pack, "settings"));
+// 换游戏库没换成（D-3P26）：失败原因常驻在设置页游戏库一行下面（作业层原句按界面语言翻）
+SetW(pack, "libraryFailure", (string)pack.GetType().GetMethod("LibraryFailed", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+    .Invoke(pack, [@"C:\Program Files\S2Arm\games", "游戏库不能放在 S2Arm 启动器自己的文件夹里，也不能包含它（升级时这个文件夹会整个替换，库会被一起删掉）：换一个文件夹。"])!);
+SaveP("tidy_03_settings_library_failed", () => Navigate(pack, "settings"));
+SetW(pack, "libraryFailure", "");
 // S 级优化（v0.4.0，同 Mac）：封面左上角金色 S、游戏库「S 级优化升级」入口、升级页三态（有可升级 / 都没找到原始程序 / 查找中）
 pack.Height = 1100;
 SetW(pack, "catalog", new LibraryCatalog([atDefault with { SGrade = true }, elsewhere], true, "密钥已就绪"));

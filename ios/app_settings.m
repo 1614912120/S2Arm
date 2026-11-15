@@ -1,4 +1,8 @@
 #import "sgrade_style.h"
+#import "sgrade_line.h"
+NSDictionary *s2a_ios_sgrade_state(NSString *gid);   // ios/game_options.m：S 级按类状态（同作业层 sgradeState）
+// 正在跑的这款（同 settings.m current_gid）：自动关记录按款存，传 nil 会读到 App 级那份
+static NSString *sgrade_running_gid(void) { const char *g = getenv("S2A_LAUNCH_GAME_ID"); return g && *g ? @(g) : nil; }
 #import "vpad_cheats.h"
 void s2a_ios_sgrade_counts(NSString *gid, NSInteger *cheatOn, NSInteger *cheatAll, NSInteger *patchOn, NSInteger *patchAll);   // ios/game_options.m
 #import "app_settings.h"
@@ -80,7 +84,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     NSInteger g = self.groups[section].integerValue;
-    if (g == 8) return nil;   // S 级优化：金色头（viewForHeaderInSection）
+    if (g == 8 || g == 10) return nil;   // S 级优化：金色头（viewForHeaderInSection）；10：开发与诊断入口一行，不要组头
     if (g == 6) return S2AL(@"play.group");
     if (g == 7) return S2AL(@"settings.group.language");
     return g == 2 ? nil : S2AL(@"cpatch.group.gfx");   // 2：开发者页，标题在导航栏
@@ -94,6 +98,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
             return note ? [NSString stringWithFormat:@"%@\n%@", note, S2AL(@"settings.footer.language")] : S2AL(@"settings.footer.language");
         }
         case 0: return S2AL(@"settings.footer.graphics");
+        case 10: return nil;
         default: return S2AL(@"settings.footer.dev");   // 2：开发者页
     }
 }
@@ -117,6 +122,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
     UIVisualEffectView *_material;
     UIStackView *_columns;
     S2ASettingsPane *_left, *_right;
+    NSLayoutConstraint *_maxWidth;   // 单栏 620 居中；宽屏双栏放宽到 1240（#1160）
     BOOL _restarting;
 }
 - (instancetype)init {
@@ -140,14 +146,16 @@ static UILabel *textLabel(UIFontTextStyle style) {
     _columns = [[UIStackView alloc] initWithArrangedSubviews:@[_left.view, _right.view]];
     _columns.axis = UILayoutConstraintAxisHorizontal; _columns.distribution = UIStackViewDistributionFillEqually;
     _columns.translatesAutoresizingMaskIntoConstraints = NO; [self.view addSubview:_columns];
-    // 11-14 重做（维护者「太丑、好多功能冗余」）：单栏，最宽 620 居中，横屏也不拆两栏；右栏只当「开发者」页用（见 openDeveloper）
+    // 11-14 重做（维护者「太丑、好多功能冗余」）：主页面只留四组；窄屏单栏最宽 620 居中，iPad 横屏等宽屏分两栏（#1160，见 updateColumns）
     _right.view.hidden = YES;
+    _columns.spacing = 0;
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
     NSLayoutConstraint *fill = [_columns.widthAnchor constraintEqualToAnchor:safe.widthAnchor]; fill.priority = UILayoutPriorityDefaultHigh;
     [NSLayoutConstraint activateConstraints:@[
-        [_columns.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor], [_columns.widthAnchor constraintLessThanOrEqualToConstant:620], fill,
+        [_columns.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor], (_maxWidth = [_columns.widthAnchor constraintLessThanOrEqualToConstant:620]), fill,
         [_columns.topAnchor constraintEqualToAnchor:safe.topAnchor], [_columns.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor]]];
-    // 标题长按 1.5 秒进「开发者」页（诊断局、触屏诊断、打开时导出、两个开发浮层：玩家用不到，不放在主页面）
+    // 标题长按 1.5 秒进「开发者」页（诊断局、触屏诊断、打开时导出、两个开发浮层：玩家用不到，不放在主页面）；
+    //   列表末尾另有看得见的一行「开发与诊断」（组 10，#1160：帮忙复测的玩家找不到长按入口）
     UILabel *titleLabel = [UILabel new]; titleLabel.text = self.title; titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
     titleLabel.userInteractionEnabled = YES; titleLabel.accessibilityIdentifier = @"settings.title";
     UILongPressGestureRecognizer *dev = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(developerPress:)]; dev.minimumPressDuration = 1.5;
@@ -180,9 +188,14 @@ static UILabel *textLabel(UIFontTextStyle style) {
     // 11-14 重做：设置页只放低频、改了要重启的——屏幕（6）/ 画面（0）/ S 级优化（8）/ 语言（7）。
     //   局内随手调、当场生效的（布局、摇杆、震动、手柄与体感、性能浮层、存档、切换游戏、故障报修）都在齿轮菜单（vpad.m），这里不再重复一份；
     //   开发项（组 2）在标题长按进的「开发者」页
-    NSArray *groups = @[@6, @0, @8, @7];
-    if (![_left.groups isEqual:groups]) {
-        _left.groups = groups; _right.groups = @[@2];
+    //   宽屏（安全区宽 ≥ 900 点、不是辅助功能大字号）分两栏（#1160，同 0.3.9 自适应）：左 屏幕 / 画面，右 S 级优化 / 语言 / 开发与诊断入口；
+    //   iPhone 横屏扣掉安全区不到 900 点，仍单栏
+    BOOL wide = self.view.safeAreaLayoutGuide.layoutFrame.size.width >= 900 && !UIContentSizeCategoryIsAccessibilityCategory(self.traitCollection.preferredContentSizeCategory);
+    NSArray *groups = wide ? @[@6, @0] : @[@6, @0, @8, @7, @10];
+    NSArray *right = wide ? @[@8, @7, @10] : @[];
+    _maxWidth.constant = wide ? 1240 : 620;
+    if (![_left.groups isEqual:groups] || ![_right.groups isEqual:right]) {
+        _left.groups = groups; _right.groups = right; _right.view.hidden = !wide;
         // 转屏切换分组后必须直接失效旧行；refresh 先取 visibleCells 会让 UITableView 用旧 section 查询新数组，越界退出。
         [_left.tableView reloadData]; [_right.tableView reloadData];
     }
@@ -316,6 +329,14 @@ static UILabel *textLabel(UIFontTextStyle style) {
             pTitle = S2AL(@"settings.fps.patchTitle");
             pNote = target > 0 ? [NSString stringWithFormat:S2AL(@"settings.fps.patchNote"), (long)target] : S2AL(@"settings.patchNote");
         } else if ([key isEqualToString:@"S2AWidescreen"] && wsP) pNote = S2AL(@"settings.fullscreen.patchNote");
+        // S 级状态句（三端同一句，三端状态与文案对照定稿）：在用哪一份 / 已自动关（何时、为什么；打开开关就是重新打开）/
+        //   版本不对写版本号 / 补丁库里没有 / 出包时没打入；没有可说的（pending 以外的未知）照旧上面那句
+        if ([key isEqualToString:@"S2AFps60"] || [key isEqualToString:@"S2AWidescreen"]) {
+            BOOL ws = [key isEqualToString:@"S2AWidescreen"]; NSString *cat = ws ? @"widescreen" : @"fps";
+            NSString *line = s2a_sgrade_line(cat, s2a_ios_sgrade_state(sgrade_running_gid())[cat], ws ? S2AL(@"cpatch.group.widescreen") : S2AL(@"cpatch.group.fps"), target,
+                ^NSString *(NSDate *when) { return [NSDateFormatter localizedStringFromDate:when dateStyle:NSDateFormatterShortStyle timeStyle:NSDateFormatterNoStyle]; });
+            if (line) pNote = line;
+        }
         if (pNote) {
             UITableViewCell *sub = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
             sub.textLabel.text = pTitle ?: cell.textLabel.text; sub.textLabel.font = cell.textLabel.font; sub.textLabel.adjustsFontForContentSizeCategory = YES;
@@ -374,6 +395,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
     if (group == 7) return 2;   // 界面语言、游戏语言
     if (group == 8) return 1 + (_patchGroups.count > 0);   // S 级优化：社区补丁（这款有才列）+ 金手指
     if (group == 2) return 5;   // 开发者页：打开时导出 / 诊断局 / 触屏诊断 / S2Arm 浮层 / Metal 浮层
+    if (group == 10) return 1;   // 主页面末尾「开发与诊断」入口（#1160）
     return group == 0 ? (NSInteger)[self graphicsRows].count : 0;
 }
 // 画面组的行（11-13 维护者撤掉我方 60 帧与通用满屏，只用社区补丁）：画质四项 → 满屏（这款有宽屏补丁才列）→ 帧率（有帧率补丁才列）→ 运行模式；
@@ -396,6 +418,13 @@ static UILabel *textLabel(UIFontTextStyle style) {
 }
 - (UITableViewCell *)cellForGroup:(NSInteger)group row:(NSInteger)row {
     __weak S2ASettingsController *weakSelf = self;
+    if (group == 10) {   // 「开发与诊断 ›」：灰字一行，平时不抢眼，要复测的玩家找得到（#1160）
+        UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
+        UIListContentConfiguration *c = cell.defaultContentConfiguration; c.text = S2AL(@"settings.devEntry");
+        c.textProperties.color = UIColor.secondaryLabelColor; c.textProperties.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+        cell.contentConfiguration = c; cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.accessibilityIdentifier = @"settings.devEntry"; return cell;
+    }
     if (group == 6) {
         BOOL split=row==0;
         NSString *key=split?S2APlaySplitKey:S2APlayOrientationKey;
@@ -479,6 +508,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
     return [self toggleCell:dev[MIN(MAX(row, 0), 4)]];
 }
 - (void)selectGroup:(NSInteger)group row:(NSInteger)row {
+    if (group == 10) { [self openDeveloper]; return; }
     if (group == 8 && !(_patchGroups.count > 0 && row == 0)) {
         UIViewController *cheats = s2a_cheats_controller(YES);
         NSMutableArray *bar = [NSMutableArray array];   // 右上：设置页自己的关闭键 + 金手指的「导入」

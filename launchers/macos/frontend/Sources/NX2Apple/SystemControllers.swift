@@ -16,14 +16,21 @@ final class SystemControllers: ObservableObject {
     @Published private(set) var pads: [Pad] = []
     /// 按设备看到的一代 Joy-Con（D2：几套都分得开，Gen1HIDWatcher）
     @Published private(set) var gen1: [PlayerAssignment.Gen1Device] = []
+    /// 接着的 HID 手柄名（HIDFallbackPads）；面板列 fallback（GameController 认不出、宿主按 HID 兜底读的，#1151）
+    @Published private(set) var hidNames: [String] = []
+    var fallback: [String] { HIDFallbackPads.listed(hid: hidNames, system: pads.map(\.name)) }
     private var observers: [NSObjectProtocol] = []
     private var gen1Watcher: Gen1HIDWatcher?
+    private var hidWatcher: HIDFallbackPads?
 
     init(observe: Bool = true) {
         guard observe else { return }
         let watcher = Gen1HIDWatcher()
         watcher.observe { [weak self] devices in Task { @MainActor in self?.gen1 = devices } }
         gen1Watcher = watcher
+        let hid = HIDFallbackPads()
+        hid.observe { [weak self] names in Task { @MainActor in self?.hidNames = names } }
+        hidWatcher = hid
         let center = NotificationCenter.default
         for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect, NSApplication.didBecomeActiveNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
@@ -44,7 +51,7 @@ final class SystemControllers: ObservableObject {
     }
 
     /// 单测：直接给一组手柄（不碰 GameController）
-    init(pads: [Pad], gen1: [PlayerAssignment.Gen1Device] = []) { self.pads = pads; self.gen1 = gen1 }
+    init(pads: [Pad], gen1: [PlayerAssignment.Gen1Device] = [], hidNames: [String] = []) { self.pads = pads; self.gen1 = gen1; self.hidNames = hidNames }
 
     deinit {
         for observer in observers { NotificationCenter.default.removeObserver(observer) }

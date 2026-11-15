@@ -249,8 +249,9 @@ void nvn_gpu_bind(nvn_gpu_cmd c, nvn_gpu_stage st, const nvn_gpu_binding *b, uin
     if (!g_pass_open) g_bind_outside++;
     int i = (int)st; g_bind_calls[i]++; g_nfb[i] = n; memcpy(g_fb[i], b, (n < 16 ? n : 16) * sizeof *b); }
 void nvn_gpu_draw(nvn_gpu_cmd c, const nvn_gpu_draw_args *a) { (void)c; g_gdraws++; g_last_da = *a; if (!g_pass_open) g_draw_outside++; }
+static uint32_t g_caps_remove;
 static uint32_t g_caps_extra;   // 用例临时打开的能力位（如间接计数多绘）
-void nvn_gpu_caps_get(nvn_gpu_caps *out) { memset(out, 0, sizeof *out); out->min_ubo_align = 64; out->caps = NVN_GPU_CAP_BLIT_SCALED | g_caps_extra; }
+void nvn_gpu_caps_get(nvn_gpu_caps *out) { memset(out, 0, sizeof *out); out->min_ubo_align = 64; out->caps = (NVN_GPU_CAP_BLIT_SCALED | g_caps_extra) & ~g_caps_remove; }
 static int g_arena697_fail;
 nvn_gpu_rc nvn_gpu_arena_alloc(nvn_gpu_cmd c, uint64_t bytes, uint32_t align, nvn_gpu_slice *out, nvn_gpu_err *err) { (void)c; (void)err;
     if(g_arena697_fail) { memset(out,0,sizeof *out);memset(err,0,sizeof *err);
@@ -440,13 +441,16 @@ static void res_fresh(void);   // 定义在本文件后面
 static view_t vk_layer(int i) { view_t v; memset(&v, 0, sizeof v); v.set_layers = 1; v.min_layer = (uint16_t)i; v.nlayers = 1; return v; }   // 同一份存储上的第 i 种视图记录（替身不校验层号）
 static void t_view_pin(void) {
     res_fresh();
+    // 本用例要放掉成千上万个视图、又要查 first 有没有被放掉：「视图放掉」记录表（g_released_id，8192 条、整个程序不清）
+    //   跑到这里已被前面的用例用掉一大半，记满后 first 被放掉也记不进去。同 t_view_storage_sweep：用例内从空表记起，结束时恢复
+    const int saved_nrel = g_nrel; g_nrel = 0;
     // 视图表是 128 组 x 8 路（按存储、视图记录散列）：窗口里取 3000 种不同的（存储，视图记录），平均每组 23 个——first 那一组的 8 格必然被本轮钉满、
-    // 多出来的走溢出表；窗口结束后再取 3000 个，first 那一格必然被换掉。数量由表的形状推出，不依赖具体散列到哪一组。
+    // 多出来的走溢出表。窗口结束后 first 那一格要能被换掉（见下面的循环：插到它被放掉为止）。
     // 表按存储认视图：不同序号共用一份存储（同池同偏移同描述）时是同一项，所以这里在一份存储上取不同的视图记录来凑不同的项。
-    enum { N = 6000, NWIN = 3000 };
-    static view_t vp[N];
+    enum { NWIN = 3000 };
+    static view_t vp[NWIN];
     tex_t tp = mk_tex(3000, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&tp);
-    for (int i = 0; i < N; i++) vp[i] = vk_layer(i);
+    for (int i = 0; i < NWIN; i++) vp[i] = vk_layer(i);
     nvn_gpu_view first = NULL;
     int first_id = 0;
     rp_view_pin_begin();
@@ -456,7 +460,10 @@ static void t_view_pin(void) {
     for (int i = 1; i < NWIN; i++) (void)rp_view_for(&tp, &vp[i], &g_fake_cmd);   // 每组都被挤满：钉住时不能放掉 first
     CHECK(first && !was_view_released(first_id));                                  // 修前：轮转把 first 放掉 → 红
     rp_view_pin_end();
-    for (int i = NWIN; i < N; i++) (void)rp_view_for(&tp, &vp[i], &g_fake_cmd);
+    // 窗口结束后它可以被淘汰。淘汰哪一路取全局插入计数 % 8（rp_res.c rp_view_for），不是逐组轮转：first 那一组之后进几次插入、
+    //   每次轮到哪一路随存储编号（全局累加）与散列而变，固定再插 3000 个时约 5% 的布局一次都轮不到 first（11-15 前面多一个用例就红）。
+    //   所以一直插不同的视图记录，直到 first 被放掉；上限 60000 次（first 那组约进 470 次插入，轮不到的概率 (7/8)^470，可以不计）
+    for (int i = NWIN; i < NWIN + 60000 && first && !was_view_released(first_id); i++) { view_t w = vk_layer(i); (void)rp_view_for(&tp, &w, &g_fake_cmd); }
     CHECK(first && was_view_released(first_id));                                   // 窗口结束：它可以被淘汰
     res_fresh();
     // 一帧里轮着用 300 个目标（真机一款 3D 游戏每帧一百多个通道）：第二遍取到的必须是第一遍那些视图，一个都不重建。
@@ -469,6 +476,7 @@ static void t_view_pin(void) {
       if (rebuilt > M / 20) fprintf(stderr, "视图表：300 个目标取第二遍，重建了 %d 个（期望 ≤ %d）\n", rebuilt, M / 20);
       CHECK(rebuilt <= M / 20); }
     res_fresh();   // 本用例建的存储不留给后面的用例（它们按 live 计数做断言）
+    g_nrel = saved_nrel;
 }
 
 
@@ -1381,6 +1389,18 @@ static void t_decl_view(void) {
     CHECK(rp_view_by_id_decl(11, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 1, &g_fake_cmd, NULL) == z);
     CHECK(rp_view_by_id_decl(-1, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 1, &g_fake_cmd, NULL) == z);
     CHECK(g_tex_creates == creates + 1 && g_nup == 6 && g_red_lines == red);
+    // #1147 空槽：单槽取池容量内一个没登记的号（句柄 0 → tex_base + 0 落在驱动保留区、TexturePoolInitialize 不写）→ 绑同一张声明类型零贴图、
+    //   不跳整笔、不报红，只记信息计数；号越过池容量、负号、池容量未知（没登记池）仍取不到 → 调用方照旧报 texture_slot_unresolved
+    nvn_be_set_tex_pool_n(64);
+    uint64_t ez0 = rp_empty_slot_zero_count();
+    CHECK(rp_view_by_id_decl(40, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 0, &g_fake_cmd, NULL) == z);
+    CHECK(rp_view_by_id_decl(41, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 0, &g_fake_cmd, NULL) == z);
+    CHECK(rp_empty_slot_zero_count() == ez0 + 2 && g_tex_creates == creates + 1 && g_red_lines == red);
+    CHECK(rp_view_by_id_decl(64, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 0, &g_fake_cmd, NULL) == NULL);
+    CHECK(rp_view_by_id_decl(-1, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 0, &g_fake_cmd, NULL) == NULL);
+    nvn_be_set_tex_pool_n(0);
+    CHECK(rp_view_by_id_decl(40, NVN_TEXTURE_TARGET_CUBEMAP + 1, 1, 0, &g_fake_cmd, NULL) == NULL);
+    CHECK(rp_empty_slot_zero_count() == ez0 + 2);
     // 不能桥接的不同维度组合（#936）：记账，绑声明类型的零贴图（同 iOS / Ryujinx），不把原视图交下去。
     nvn_gpu_view original = rp_view_by_id(11, &g_fake_cmd, NULL);
     creates = g_tex_creates;
@@ -2886,6 +2906,50 @@ static void t_front_origin_matrix(void) {
     }
     nvn_be_set_origin_lower_left(1); s2a_nvn_rast_flip = 1; pass_fresh();
 }
+// 源反向端点的期望由矩形两端手算，不调用后端转换。
+static void t_color_copy_mirror(void) {
+    for (int axes = 1; axes <= 3; axes++) for (int variant = 0; variant < 4; variant++) {
+        pass_fresh(); g_nbl = g_nct = 0;
+        tex_t a = mk_tex(300, 0, variant >= 2 ? NVN_FORMAT_R11G11B10F : NVN_FORMAT_RGBA8, 64, 32, 3, 0);
+        tex_t b = mk_tex(301, 0x10000, NVN_FORMAT_RGBA8, 64, 32, 3, 0);
+        a.d.target = b.d.target = NVN_TEXTURE_TARGET_2D_ARRAY; a.d.depth = b.d.depth = 4;
+        nvn_tex_layout(&a.d, &a.L); nvn_tex_layout(&b.d, &b.L);
+        stream s = {0}; p_copy_t2t *o = put_t2t(&s, &a, &b);
+        o->has_sv = o->has_dv = 1; o->sv.set_levels = o->dv.set_levels = 1; o->sv.base_level = o->dv.base_level = 1;
+        o->sv.set_layers = o->dv.set_layers = 1; o->sv.min_layer = o->dv.min_layer = 1;
+        o->sr = (NVNcopyRegion){4, 2, 1, 8, 4, 1}; o->dr = (NVNcopyRegion){2, 3, 1, variant & 1 ? 4 : 8, 4, 1};
+        o->flags = (axes & 1 ? NVN_COPY_FLAGS_MIRROR_X_BIT : 0) | (axes & 2 ? NVN_COPY_FLAGS_MIRROR_Y_BIT : 0) |
+            (variant == 1 ? NVN_COPY_FLAGS_LINEAR_FILTER_BIT : 0); end(&s);
+        submit1(&s); fake_complete(NVN_GPU_DONE_OK);
+        CHECK(g_nbl == 1 && g_nct == 0 && nvn_unimpl_kinds() == 0);
+        if (g_nbl) {
+            CHECK(g_bl[0].sr.xoffset == (axes & 1 ? 12 : 4) && g_bl[0].sr.width == (axes & 1 ? -8 : 8));
+            CHECK(g_bl[0].sr.yoffset == (axes & 2 ? 6 : 2) && g_bl[0].sr.height == (axes & 2 ? -4 : 4));
+            CHECK(g_bl[0].sr.zoffset == 0 && g_bl[0].sr.depth == 1 && g_bl[0].dr.xoffset == 2 && g_bl[0].dr.yoffset == 3);
+            CHECK(g_bl[0].dr.width == (variant & 1 ? 4 : 8) && g_bl[0].linear == (variant == 1));
+            CHECK(nvn_be_tex_gpu_owned(301) == 1 && nvn_be_tex_gpu_owned(300) == 0);
+        }
+    }
+    for (int bad = 0; bad < 11; bad++) {
+        pass_fresh(); g_nbl = g_nct = 0;
+        tex_t a = mk_tex(302, 0, bad == 2 ? NVN_FORMAT_DEPTH24_STENCIL8 : bad == 3 ? NVN_FORMAT_R32UI : NVN_FORMAT_RGBA8, 16, 16, 1, 0), b = a;
+        b.serial = bad == 10 ? a.serial : 303;
+        if (bad == 4) a.d.target = b.d.target = NVN_TEXTURE_TARGET_3D;
+        if (bad == 6) a.d.samples = b.d.samples = 4;
+        stream s = {0}; p_copy_t2t *o = put_t2t(&s, &a, &b); o->sr = (NVNcopyRegion){0, 0, 0, 8, 8, 1}; o->dr = o->sr;
+        o->flags = NVN_COPY_FLAGS_MIRROR_Y_BIT;
+        if (bad == 0) g_caps_remove = NVN_GPU_CAP_BLIT_SCALED;
+        if (bad == 1) o->flags |= NVN_COPY_FLAGS_MIRROR_Z_BIT;
+        if (bad == 5) o->sr.depth = o->dr.depth = 2;
+        if (bad == 7) o->sr.width = 0;
+        if (bad == 8) o->sr.xoffset = INT32_MAX;
+        if (bad == 9) o->sr.yoffset = -1;
+        end(&s); submit1(&s); fake_complete(NVN_GPU_DONE_OK);
+        CHECK(g_nbl == 0 && g_nct == 0 && nvn_unimpl_count("tex", "t2t_mirror") == 1);
+        g_caps_remove = 0;
+    }
+    pass_fresh();
+}
 static void t_copy_t2t(void) {
     pass_fresh(); g_nct = 0; g_nbl = 0;
     tex_t a = mk_tex(71, 0, NVN_FORMAT_RGBA8, 64, 32, 3, 0), b = mk_tex(72, 0x8000, NVN_FORMAT_RGBA8, 32, 16, 1, 0), f = mk_tex(73, 0xC000, NVN_FORMAT_R11G11B10F, 32, 16, 1, 0);
@@ -2897,7 +2961,7 @@ static void t_copy_t2t(void) {
     o = put_t2t(&s, &a, &b); o->sr = (NVNcopyRegion){0, 0, 0, 32, 16, 1}; o->dr = (NVNcopyRegion){0, 0, 0, 16, 8, 1}; o->flags = NVN_COPY_FLAGS_LINEAR_FILTER_BIT;   // 缩放：后端的缩放拷贝，线性过滤
     o = put_t2t(&s, &a, &f); o->sr = (NVNcopyRegion){0, 0, 0, 16, 8, 1}; o->dr = o->sr;                                                             // 换格式：同上，最近点
     { tex_t u = mk_tex(74, 0x10000, NVN_FORMAT_R32UI, 32, 16, 1, 0); o = put_t2t(&s, &u, &b); o->sr = (NVNcopyRegion){0, 0, 0, 32, 16, 1}; o->dr = (NVNcopyRegion){0, 0, 0, 16, 8, 1}; }   // 整数格式换格式：没接
-    o = put_t2t(&s, &a, &b); o->sr = (NVNcopyRegion){0, 0, 0, 16, 8, 1}; o->dr = o->sr; o->flags = NVN_COPY_FLAGS_MIRROR_Y_BIT;                       // 镜像：没接
+    o = put_t2t(&s, &a, &b); o->sr = (NVNcopyRegion){0, 0, 0, 16, 8, 1}; o->dr = o->sr; o->flags = NVN_COPY_FLAGS_MIRROR_Z_BIT;                       // Z 镜像：没接
     o = put_t2t(&s, &b, &b); o->sr = (NVNcopyRegion){0, 0, 0, 32, 16, 1}; o->dr = o->sr; o->flags = (int32_t)DM_COPY_RESOLVE;                         // 降采样记录、两边采样数相同：整张拷贝
     { tex_t ms = mk_tex(75, 0, NVN_FORMAT_RGBA8, 32, 16, 1, 0); ms.d.samples = 4; ms.d.target = NVN_TEXTURE_TARGET_2D_MULTISAMPLE;
       o = put_t2t(&s, &ms, &b); o->flags = DM_COPY_RESOLVE; }
@@ -3407,6 +3471,33 @@ static void t_separate_sampler(void) {
     nvn_be_tex_release(&t); pass_fresh();
 }
 
+// 句柄在用户常量缓冲里的贴图（NVN_RB_TEXU，iOS nvn_mtl.m ubo_packed 语义）：纹理字在常量槽 2 +0x10（= 7），同一句柄的另一半是
+//   常量槽 3 +0x8 的采样器号字（sid，左移 20 = 3 << 20）→ 打包句柄 7 | 3 << 20：纹理号 7（4x4 那张）、采样器号 3（ws = 5）。
+//   游戏改了常量缓冲里的纹理字（= 8，2x2 那张），下一笔就读到新的：句柄在编码这一刻从游戏内存读
+static void t_ubo_texture(void) {
+    pass_fresh(); g_resolve_rc = 0; g_gdraws = 0; nvn_unimpl_reset();
+    memset(g_pmem, 0, sizeof g_pmem); nvn_be_pool_add(g_pmem, sizeof g_pmem);
+    const uint64_t base = (uint64_t)(uintptr_t)g_pmem;
+    stream s = {0}; q_env(&s);
+    tex_t t7 = mk_tex(7040, 0x4000, NVN_FORMAT_RGBA8, 4, 4, 1, 0), t8 = mk_tex(7041, 0x8000, NVN_FORMAT_RGBA8, 2, 2, 1, 0);
+    samp_par sp = {0}; sp.ws = 5; nvn_be_reg_tex(7, &t7, NULL); nvn_be_reg_tex(8, &t8, NULL); nvn_be_reg_samp(3, &sp);
+    uint32_t tw = 7, sw = 3; memcpy(g_pmem + PG + 0x10, &tw, 4); memcpy(g_pmem + 2 * PG + 0x8, &sw, 4);
+    g_fprog.nent[1] = 1; nvn_gpu_layout_ent *e = &g_fprog.ent[1][0];
+    e->cls = NVN_GPU_RES_TEX_SAMP; e->src_kind = NVN_RB_TEXU; e->src_reg = 2; e->src_off = 0x10; e->src_reg2 = 0; e->count = 1;
+    g_fprog.nusrc = 1;
+    g_fprog.usrc[0] = (struct rp_usrc){ .tex = { .reg = 2, .off = 0x10, .pair = 1, .pair_reg = 3, .pair_off = 0x8, .pair_sid = 1 },
+                                        .samp_kind = NVN_RB_SAMPU, .samp = { .reg = 3, .off = 0x8, .sid = 1, .pair = 1, .pair_reg = 2, .pair_off = 0x10 } };
+    p_bind_buf *ub = put(&s, OP_BIND_UBO, sizeof *ub); ub->stage = 1; ub->index = 2; ub->addr = base + PG; ub->size = 64;
+    ub = put(&s, OP_BIND_UBO, sizeof *ub); ub->stage = 1; ub->index = 3; ub->addr = base + 2 * PG; ub->size = 64;
+    q_draw(&s); end(&s); submit1(&s); fake_complete(NVN_GPU_DONE_OK);
+    CHECK(g_gdraws == 1 && g_fb[1][0].u.ts.view && g_fb[1][0].u.ts.view->of->d.d.width == 4 && g_fb[1][0].u.ts.samp && g_fb[1][0].u.ts.samp->x == 5);
+    tw = 8; memcpy(g_pmem + PG + 0x10, &tw, 4);
+    stream again = {0}; q_draw(&again); end(&again); submit1(&again); fake_complete(NVN_GPU_DONE_OK);
+    CHECK(g_gdraws == 2 && g_fb[1][0].u.ts.view && g_fb[1][0].u.ts.view->of->d.d.width == 2 && g_fb[1][0].u.ts.samp && g_fb[1][0].u.ts.samp->x == 5);
+    CHECK(nvn_unimpl_kinds() == 0);
+    nvn_be_tex_release(&t7); nvn_be_tex_release(&t8); pass_fresh();
+}
+
 // Registered views must obey the same encode-window lifetime as cached attachment
 // views and samplers, including re-registration and nested windows.
 static void t_registered_view_pin(void) {
@@ -3521,7 +3612,7 @@ int main(int argc, char **argv) {
     t_dispatch_ubop_ro_skip();
     t_compute_image();
     t_compute_sources();
-    t_depth_copy_scaled(); t_front_origin_matrix(); t_copy_t2t();
+    t_depth_copy_scaled(); t_front_origin_matrix(); t_color_copy_mirror(); t_copy_t2t();
     t_draw();
     t_arena697_detail();
     t_logic_op_accounting();
@@ -3529,6 +3620,7 @@ int main(int argc, char **argv) {
     t_gs_bind(); t_storage_null_binding(); t_storage_sync_before_pass(); t_stage_dropped_clears_binds();
     t_decl_sampling();
     t_separate_sampler();
+    t_ubo_texture();
     t_present();
     t_view_pin();
     t_view_storage_key();

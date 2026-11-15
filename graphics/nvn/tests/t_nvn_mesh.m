@@ -12,6 +12,7 @@
 //   ⑧ 程序没有网格着色器：跳过、报红 1 行（不当普通绘制画）
 //   ⑨ 着色器映射表的阶段名（翻译侧 shader_map.tsv 第 3 列写 task / mesh）经 prog_get 的 stage_of 落到宿主阶段 3 / 4（nvn2_stage_host：NVN 阶段 6 / 7 放曲面两阶段的位置），
 //      shader_get 按该阶段载入的是 object / mesh 着色器（11-06 时之笛日志每局 20–30 行「shader … (task|mesh) failed to load」：stage_of 不认这两个名字回 -1，库里明明有）
+//   ⑫ #1208 GPU 挂死隔离收网格管线：第一次画出进本提交嫌疑；隔离后同一对跳过、报红、写进隔离表
 //   ⑩ GPU 没有对象 / 网格管线（g_mesh_ok = 0，MTLGPUFamilyMetal3 以下）：跳过并计数、报红 1 行、不画（不当普通绘制画）
 // 校验层（mk 另跑 MTL_DEBUG_LAYER=1 两套后端）：全部项照过、不中止。负对照（11-11 手工）：改前 pso_desc 给网格管线设 vertexFunction = 网格函数，校验层两套后端都 abort rc=134（setVertexFunction 断言）
 // 负对照（11-05 手工做，见坑记录）：把 mtk_encode 写进 29 号槽的起始号换成 0 → ④ 0x07、⑤ 0x0f、⑥ 0x07，三项红
@@ -75,7 +76,9 @@ int main(void) {
     @autoreleasepool {
         const char *libdir = getenv("T_MESH_LIB"); REQUIRE(libdir);   // mk 编好的 <键>_b.metallib 所在目录；json 由本测写
         setenv("DM_PRESENT_LINK", "0", 1);
-        char pso_user[] = "/tmp/t_nvn_mesh_pso_user_XXXXXX"; int pfd = mkstemp(pso_user); REQUIRE(pfd >= 0); close(pfd); setenv("DM_PSO_USER", pso_user, 1);   // ④c：本测记下的网格管线行
+        // 本测自己的目录：pso_user.tsv 旁边还有 GPU 挂死隔离表 gpu_quarantine.tsv（⑫ 写它；放共用 /tmp 会被下一局 / 别的单测读到）
+        char pdir[] = "/tmp/t_nvn_mesh_XXXXXX"; REQUIRE(mkdtemp(pdir)); char pso_user[sizeof pdir + 16]; snprintf(pso_user, sizeof pso_user, "%s/pso_user.tsv", pdir);
+        { int pfd = open(pso_user, O_CREAT | O_WRONLY, 0644); REQUIRE(pfd >= 0); close(pfd); } setenv("DM_PSO_USER", pso_user, 1);   // ④c：本测记下的网格管线行
         mtl_init(); g_msl_dir = @(libdir);
         printf("后端 Metal %d，录制 %s\n", g_m3 ? 3 : 4, rec_on() ? "开" : "关");
         NSString *dir = @(libdir);
@@ -251,6 +254,31 @@ int main(void) {
         cols = frame_columns();
         VERIFY(cols == 0 && g_mtk_skip == s0 + 2 && g_mtk_n == n0 && red_lines(o, @"no object / mesh pipelines") == 1,
                "⑩ GPU 无网格管线：两笔都跳过（+%llu）、报红 1 行、不画（列掩码 %#x；stderr：%s）", (unsigned long long)(g_mtk_skip - s0), cols, o.UTF8String);
+
+        // ⑫ #1208 GPU 挂死隔离收网格管线：一条网格管线（网格 3333… + 新片元 cccc…）第一次画出 → 进本提交的嫌疑（quar_take 里有「3333333333333333\tcccccccccccccccc」，
+        //   格式同普通管线的 quar_name：两键各前 16 字）；这批嫌疑报错隔离后，同一对的网格绘制跳过、不画、报红 1 行点名隔离，并写进隔离表（以后的局也跳过）。
+        //   反证：改前 mtk_pso 不调 quar_built / quar_has —— 嫌疑里没有它（GPU 在这次提交挂死时什么都不隔离，下一局挂在同一处），隔离后照画列 0..3
+        { NvShader *fs5 = [NvShader new]; fs5->stage = 1; strlcpy(fs5->key, "cccccccccccccccc_b", sizeof fs5->key); fs5->ventry = @"main0";
+          NSError *e = nil; id<MTLLibrary> l = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nfragment float4 main0() { return float4(1); }\n" options:nil error:&e]; REQUIRE(l); fs5->fn = [l newFunctionWithName:@"main0"]; REQUIRE(fs5->fn);
+          NvProg *direct5 = [NvProg new]; direct5->sh[1] = fs5; direct5->sh[4] = md;
+          static prog_t gp12; memset(&gp12, 0, sizeof gp12); gp12.magic = MAGIC('P', 'R', 'O', 'G'); gp12.serial = nvn_new_serial(); serial_put(gp12.serial, direct5);
+          NSString *pair = @"3333333333333333\tcccccccccccccccc";
+          frame_begin(); (void)quar_take(); S.prog = &gp12;
+          p_draw d12 = {.prim = DM_PRIM_MESH_TASKS, .first = 0, .count = 4, .instances = 1};
+          __block int w12 = 0; o = capture(^{ mesh_draw(&d12, &w12); });
+          NSArray<NSString *> *sus = quar_take();   // 提交前取：frame_columns 的提交会自己取走
+          cols = frame_columns();
+          VERIFY(cols == 0x0f && [sus containsObject:pair] && [o containsString:@"first drawn"],
+                 "⑫ 网格管线第一次画出：画出列 0..3、进本提交的 GPU 出错嫌疑、打 first drawn（列掩码 %#x，嫌疑 %s；stderr：%s）", cols, [sus componentsJoinedByString:@" | "].UTF8String, o.UTF8String);
+          quar_fault(sus, [NSError errorWithDomain:@"t" code:1 userInfo:nil]);
+          frame_begin(); uint64_t q0 = g_mtk_quar_skip; S.prog = &gp12;
+          o = capture(^{ draw(&d12, NULL); draw(&d12, NULL); });
+          cols = frame_columns();
+          NSString *qf = [NSString stringWithContentsOfFile:[@(pdir) stringByAppendingPathComponent:@"gpu_quarantine.tsv"] encoding:NSUTF8StringEncoding error:nil] ?: @"";
+          VERIFY(quar_has(md, fs5) && cols == 0 && g_mtk_quar_skip == q0 + 2 && red_lines(o, @"quarantine") == 2 && [qf containsString:pair],
+                 "⑫ 隔离后同一对网格绘制两笔都跳过（+%llu）、不画（列掩码 %#x）、每笔报红 1 行（全局前 4 笔）、写进隔离表（%s；stderr：%s）",
+                 (unsigned long long)(g_mtk_quar_skip - q0), cols, [qf containsString:pair] ? "有" : "无", o.UTF8String);
+          unlink([[@(pdir) stringByAppendingPathComponent:@"gpu_quarantine.tsv"] fileSystemRepresentation]); rmdir(pdir); }
     }
     if (failures) { printf("✗ t_nvn_mesh：%u 项里 %u 项不符\n", checks, failures); return 1; }   // 原生门禁按「✓ t_ / ✗ t_」逐组判
     printf("✓ t_nvn_mesh：%u 项全过（任务 / 网格绘制：约定字段载入、上限报红、无顶点阶段的程序、直接 / 有任务 / GPU 写参数的间接 / 零工作量画出的列与手算一致、缺网格着色器报红、映射表阶段名 task / mesh 载入、无网格管线的 GPU 跳过报红）\n", checks); return 0;

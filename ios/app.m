@@ -599,7 +599,17 @@ void s2a_ios_qprompt(int kind, int secs) {   // 文案 维护者 11-02 定：「
     });
 }
 // 资源导入期间不让系统自动锁屏（锁屏后 App 被挂起、解包停住）；任意线程可调
-void s2a_ios_keep_awake(int on) { dispatch_async(dispatch_get_main_queue(), ^{ UIApplication.sharedApplication.idleTimerDisabled = on ? YES : NO; }); }
+// 保持亮屏按原因记（#1199）：1 = 游戏库后台解开资源包，2 = 游戏画面在前台。任一原因在就不自动锁屏，都没了才交还系统。
+//   原先只有解包一个原因、开关直接写，玩的时候没人开（过场 / 接外接屏时 iPhone 照样自动锁）；两个原因各管各的，解包结束不会把游戏中的亮屏关掉。
+//   App 退到后台时系统本来就不因它亮着；切回游戏它还在、接着生效。主机和原生手游的做法，不另设开关
+static int g_awake_mask;
+static void s2a_ios_awake_set(int bit, int on) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        g_awake_mask = on ? (g_awake_mask | bit) : (g_awake_mask & ~bit);
+        UIApplication.sharedApplication.idleTimerDisabled = g_awake_mask != 0;
+    });
+}
+void s2a_ios_keep_awake(int on) { s2a_ios_awake_set(1, on); }
 // 根控制器共用方向 / 铰链 / 分屏区域；游戏层、触点、宽屏都读 play_layout 的同一份区域（屏幕比例与外接屏比例见 ios/play_layout.m screen_ratio）。
 id s2a_ios_ext_register(UIViewController *vc);   // extdisplay.m：登记外接屏场景配件（iOS 27 起系统靠它才给外接屏场景）
 @interface S2AGameVC : S2APlayViewController
@@ -607,6 +617,9 @@ id s2a_ios_ext_register(UIViewController *vc);   // extdisplay.m：登记外接�
 @end
 @implementation S2AGameVC
 - (void)viewDidLoad { [super viewDidLoad]; self.extDisplay = s2a_ios_ext_register(self); }
+// 游戏画面在前台就保持亮屏（#1199）；回游戏库 / 换游戏时根控制器被替换，这里收到消失、交还自动锁屏
+- (void)viewDidAppear:(BOOL)animated { [super viewDidAppear:animated]; s2a_ios_awake_set(2, 1); }
+- (void)viewDidDisappear:(BOOL)animated { [super viewDidDisappear:animated]; s2a_ios_awake_set(2, 0); }
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures { return UIRectEdgeAll; }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (BOOL)prefersStatusBarHidden { return YES; }
@@ -831,7 +844,7 @@ static void library_play_go(const char *gid, S2ASceneDelegate *sd);
 //   记下已处理，进游戏后 diag.m 不再处理一遍（只问发诊断）
 //   v0.4.1：只关出事的那份（game_options.m s2a_ios_crash_pick_for），并记下这局开着的（s2a_ios_crash_session_begin）。
 //   多款容器一律在这里处理（g_s2a_crash_asked 先置上）：原先上一局死的是别的游戏时这里提前返回、没置标记，进游戏后 diag.m 会把这一款开着的关掉
-NSArray<NSDictionary *> *s2a_ios_crash_pick_for(NSString *gid);
+NSArray<NSDictionary *> *s2a_ios_crash_decide_for(NSString *gid);
 void s2a_ios_crash_session_begin(NSString *gid, BOOL prev_clean);
 void s2a_ios_crash_turn_off_for(NSString *gid, NSArray<NSDictionary *> *items);
 extern int g_s2a_crash_asked;
@@ -841,7 +854,7 @@ static void crash_auto_off(const char *gid) {
     NSString *g = @(gid);
     char d[1024]; if (s2a_container_docs(d, sizeof d) <= 0) return;
     BOOL same = [[NSUserDefaults.standardUserDefaults stringForKey:@"S2ALastGameId"] isEqualToString:g], fg = s2a_sesmark_prev(d) == S2A_SESMARK_FG;
-    NSArray<NSDictionary *> *items = same && fg ? s2a_ios_crash_pick_for(g) : @[];
+    NSArray<NSDictionary *> *items = same && fg ? s2a_ios_crash_decide_for(g) : @[];   // 宿主自己崩第一次不关（game_options.m）
     if (items.count) s2a_ios_crash_turn_off_for(g, items);
     s2a_ios_crash_session_begin(g, same && !fg);   // 关完再记这局开着的；上一局是这款且好好收局 → 那局开着的升为「好的」
     if (!items.count) return;

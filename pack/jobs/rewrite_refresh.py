@@ -87,7 +87,7 @@ def original_exefs(c, game, work):
     return sgrade.save_program(c, game["id"], out / "exefs") or out / "exefs"   # 从原件解出来的存一份，下次不用回原件
 
 
-def rewrite_env(c, kit, exefs, target):
+def rewrite_env(c, kit, exefs, target):   # exefs None：不带随包代码补丁（补丁按主程序构建号认，只改 exefs 模块）
     env = dict(c.env(), S2A_TARGET=target, S2A_REWRITE_SPIN=os.environ.get("S2A_REWRITE_SPIN", "1"))
     for k in ("S2A_FPS_TSV", "S2A_CPATCH_TSV", "S2A_CODE_PATCH", "S2A_CODE_BUILD"):
         env.pop(k, None)
@@ -95,7 +95,7 @@ def rewrite_env(c, kit, exefs, target):
         env["S2A_FPS_TSV"] = str(kit / "fps.tsv")
     # 随包代码补丁：同 stage_rewrite.sh（S2A_PATCH_DIR/<程序号>/patch.tsv，构建号 = main 头 0x40 起 16 字节）
     pdir = env.get("S2A_PATCH_DIR")
-    if pdir:
+    if pdir and exefs is not None:
         d = (exefs / "main").read_bytes()
         bid = d[0x40:0x50].hex()
         npdm = (exefs / "main.npdm").read_bytes()
@@ -208,28 +208,147 @@ def sgrade_rewrite(c, game, base, exefs, target, work):
     return root, modules_of(exefs), tables
 
 
-def put_tables(base, tables):
-    """随包表换进 kit / 运行版本：旧的补丁表与金手指原文先删（这次没出的不留），再拷新的"""
+def swap(base, changes):
+    """把一组文件换进 base（kit / Mac 运行版本），要么全换上、要么一个都不动（审计 P1-186：原先先删旧表、逐个换模块，中途失败已经能玩的那款程序与表
+    不再是同一次，失败句却说「先用原来的」）。changes：{文件名: 新内容路径 | None（删掉）}。
+    ① 新内容全部先写临时名 <名>.rw（写不成就清掉临时名、旧的一个字节不动）；② 逐个把旧的挪成 <名>.rwold、临时名改成正名
+    （中途失败按相反顺序还原，旧的回到原位）；③ 全部换上后才删 .rwold。失败照原样抛，调用方的「先用原来的程序」此时为真"""
     base = Path(base)
-    for old in list(base.glob("cheat-src.*")) + [base / t for t in SGRADE_TABLES]:
-        if old.is_file():
-            old.unlink()
-    for t in tables:
-        tmp = base / (t.name + ".rw")
-        shutil.copyfile(t, tmp); os.replace(tmp, base / t.name)
-    return [t.name for t in tables]
+    staged = []
+    try:
+        for name, src in changes.items():
+            if src is not None:
+                shutil.copyfile(src, base / (name + ".rw")); staged.append(name)
+    except BaseException:
+        for name in staged:
+            (base / (name + ".rw")).unlink(missing_ok=True)
+        raise
+    done = []
+    try:
+        for name, src in changes.items():
+            dst, old = base / name, base / (name + ".rwold")
+            had = dst.exists()
+            if had:
+                os.replace(dst, old)
+            done.append((name, had))
+            if src is not None:
+                os.replace(base / (name + ".rw"), dst)
+    except BaseException:
+        for name, had in reversed(done):
+            dst, old = base / name, base / (name + ".rwold")
+            if changes[name] is not None and not (base / (name + ".rw")).exists():
+                dst.unlink(missing_ok=True)   # 新的已换上：撤掉
+            if had:
+                os.replace(old, dst)
+        for name in staged:
+            (base / (name + ".rw")).unlink(missing_ok=True)
+        raise
+    for name, had in done:
+        if had:
+            (base / (name + ".rwold")).unlink(missing_ok=True)
 
 
-def apply_outputs(out, kit, modules):
-    """命中模块的改写产物换进 kit（逐个原子替换）；新改写器不再出的那份删掉（旧的留着会被装载器当成本次的）。没命中的模块一个字节都不动"""
+def table_changes(base, tables):
+    """随包表：旧的补丁表与金手指原文这次没出的删掉，出了的换新"""
+    base = Path(base)
+    ch = {old.name: None for old in list(base.glob("cheat-src.*")) + [base / t for t in SGRADE_TABLES] if old.is_file() and not old.name.endswith((".rw", ".rwold"))}
+    ch.update({t.name: t for t in tables})
+    return ch
+
+
+def output_changes(out, kit, modules):
+    """命中模块的改写产物换新；新改写器不再出的那份删掉（旧的留着会被装载器当成本次的）。没命中的模块不在表里、一个字节都不动"""
+    ch = {}
     for m in modules:
         for ext in OUTPUTS:
             src, dst = Path(out) / f"{m}.{ext}", Path(kit) / f"{m}.{ext}"
             if src.is_file():
-                tmp = dst.with_name(dst.name + ".rw")
-                shutil.copyfile(src, tmp); os.replace(tmp, dst)
+                ch[dst.name] = src
             elif dst.is_file():
-                dst.unlink()
+                ch[dst.name] = None
+    return ch
+
+
+def apply_outputs(out, kit, modules):
+    swap(kit, output_changes(out, kit, modules))
+
+
+def apply_sgrade(out, base, modules, tables):
+    """S 级优化补进：改写产物与随包表一起换（同一次 swap，不会只换上一半）→ 换上的表名"""
+    ch = output_changes(out, base, modules)
+    ch.update(table_changes(base, tables))
+    swap(base, ch)
+    return [t.name for t in tables]
+
+
+def kept_todo(c, gid, base):
+    """游戏库 games/<号>/nro_kept/ 里还没进 base（kit / Mac 运行版本）的 nro_modules.tsv 的 NRO → [路径]（#8be819 运行时留下的 NRO）"""
+    kept = layout.nro_kept(c, gid)
+    if not kept.is_dir():
+        return []
+    table = Path(base) / "nro_modules.tsv"
+    have = {l.split("\t")[1] for l in (table.read_text().splitlines() if table.is_file() else []) if l and not l.startswith("#") and l.count("\t") >= 4}
+    return [p for p in sorted(kept.glob("*.nro")) if re.fullmatch(r"[0-9a-f]{64}\.nro", p.name) and p.name[:64] not in have]
+
+
+def add_kept_nros(c, gid, base, target):
+    """运行时留下、还没进包的 NRO 补进 base（#8be819：游戏把 NRO 藏在自有加密归档里，出包认不出；宿主 LoadNro 缺表时存下游戏解开的那份）：
+    同出包（pack/stage_rewrite.sh）：runtime/rewriter/nro_to_nso.py 转 NSO（第三来源）→ 改写器逐个改写（同 widen_sites.tsv / fps.tsv）→ 产物换进 base、
+    nro_modules.tsv 接着原有编号追加行。资源包、直连库、已有模块一个字节不动。社区补丁不进这几支（补丁按主程序构建号认）。→ 新加的模块名"""
+    todo = kept_todo(c, gid, base)
+    if not todo:
+        return []
+    base = Path(base); table = base / "nro_modules.tsv"
+    rows = [l for l in (table.read_text().splitlines() if table.is_file() else []) if l and not l.startswith("#")]
+    nxt = max((int(l.split("\t")[0][3:]) for l in rows if re.match(r"nro\d+\t", l)), default=-1) + 1
+    with tempfile.TemporaryDirectory(dir=c.private) as tmp:
+        t = Path(tmp); (t / "romfs").mkdir(); (t / "k").mkdir(); out = t / "out"; out.mkdir()
+        for p in todo:
+            shutil.copyfile(p, t / "k" / p.name)
+        r = subprocess.run([os.sys.executable, "-X", "utf8", str(c.engine / "runtime/rewriter/nro_to_nso.py"), str(t / "romfs"), str(t / "nso"), str(t / "k")],
+                           env=c.env(), capture_output=True, text=True, timeout=600)
+        made = [l.split("\t") for l in ((t / "nso/nro_modules.tsv").read_text().splitlines() if (t / "nso/nro_modules.tsv").is_file() else []) if l and not l.startswith("#")]
+        if r.returncode or not made:
+            raise Failure("运行时留下的模块转不出来：" + ((r.stderr.strip() or r.stdout.strip()).splitlines() or ["无输出"])[-1][:200])
+        binary, env, widen = rewriter_bin(c), rewrite_env(c, base, None, target), base / "widen_sites.tsv"
+        names, add = [], []
+        for name0, sha, size, bss, src in made:
+            name = f"nro{nxt}"; nxt += 1
+            shutil.copyfile(t / "nso" / name0, t / name)
+            args = [binary, str(t / name), str(out), name] + ([str(widen)] if widen.is_file() else [])
+            rr = subprocess.run(args, env=env, capture_output=True, text=True, timeout=600)
+            if rr.returncode and not (rr.returncode == 3 and (out / f"{name}.patched.bin").is_file()):
+                raise Failure(f"改写运行时留下的模块 {name} 失败（退出码 {rr.returncode}）：" + ((rr.stderr.strip().splitlines() or [""])[-1])[:200])
+            names.append(name); add.append("\t".join((name, sha, size, bss, src)))
+        newtab = t / "nro_modules.tsv"
+        newtab.write_text("# 模块名\tSHA-256\tNRO 大小\tbss 大小\tromfs 相对路径\n" + "".join(l + "\n" for l in rows + add))  # 非玩家句
+        ch = output_changes(out, base, names); ch[table.name] = newtab   # 模块与表同一次换（中途失败两样都留旧的）
+        swap(base, ch)
+    return names
+
+
+def kept_nros_mac(c, gid, runtime):
+    """Mac 运行版本补上运行时留下的 NRO（起局前、收局时各核一次）：换进运行版本，清单记大小（同 refresh_mac）。补不上不挡起局 → 新加的模块名"""
+    import json
+    from core import atomic, read
+    runtime = Path(runtime)
+    try:
+        if not kept_todo(c, gid, runtime):
+            return []
+        c.emit("message", "正在补上这款游戏运行中才取到的代码模块（只改程序，资源不动）")
+        names = add_kept_nros(c, gid, runtime, "apple")
+        manifest = read(runtime / "manifest.json", {})
+        if isinstance(manifest.get("files"), dict):
+            files = dict(manifest["files"])
+            for n in ["nro_modules.tsv"] + [f"{m}.{ext}" for m in names for ext in OUTPUTS]:
+                if (runtime / n).is_file():
+                    files[n] = [(runtime / n).stat().st_size, ""]
+            atomic(runtime / "manifest.json", dict(manifest, files=files))
+        c.emit("message", f"已补上 {len(names)} 个代码模块，可以继续玩了")
+        return names
+    except (Failure, OSError, subprocess.SubprocessError, ValueError) as e:
+        c.emit("message", f"【红】这款游戏运行中才取到的代码模块没补上：{str(e)[:200]}")
+        return []
 
 
 def ios_key(c, gid, rid):
@@ -256,8 +375,7 @@ def check_and_update(c, gid, kit, target, rid):
         bid = (Path(exefs) / "main").read_bytes()[0x40:0x48].hex().upper()
         if key is not None:   # S 级优化补到老游戏：按出包同一套带社区补丁改写，全部模块与补丁表换进 kit
             out, mods, tables = sgrade_rewrite(c, game, kit, exefs, target, work)
-            apply_outputs(out, kit, mods)
-            names = put_tables(kit, tables)
+            names = apply_sgrade(out, kit, mods, tables)
             import patches
             patches.remember(c, gid.upper(), patches.record(c, gid, "ios", out))   # 哪些打上 / 没打上（结果页列，11-14）
             c.emit("message", f"{gid}：S 级优化已按当前补丁库补进程序（{', '.join(names) or '这款没有匹配的社区补丁'}；资源不用重推）")  # 非玩家句
@@ -280,12 +398,22 @@ def refresh_ios(c, games):
         # 同 refresh_mac：取不到改写器指纹就整轮不核，不挡这次装机；各款保留原来的产物、不记指纹，下次再核
         c.emit("message", f"【黄】没取到改写器指纹，这次先不核要不要按新版更新程序：{str(e)[:200]}")
         return []
+    nro = []   # 运行时留下、还没进 iPhone 件的 NRO（#8be819）：不论改写器变没变都补
+    for g in [g for g in games if kept_todo(c, g, layout.ios_kit(c, g))]:
+        try:
+            names = add_kept_nros(c, g, layout.ios_kit(c, g), "ios"); nro.append(g)
+            c.emit("message", f"{g}：已补上 {len(names)} 个运行中才取到的代码模块（只更新程序，资源不用重推）")
+        except (Failure, OSError, subprocess.SubprocessError) as e:
+            c.emit("message", f"【红】{g}：运行中才取到的代码模块没补上，这款先保留原来的程序：{str(e)[:200]}")
     todo = pending_ios(c, games, rid)
     if not todo:
-        return []
+        return nro
     c.emit("message", f"正在核对 {len(todo)} 款游戏的程序是否要按新版更新（含 S 级优化补丁）")
     updated, missing = [], []
-    for g in todo:
+    names = {x["id"].upper(): x.get("name") or x["id"] for x in c.catalog()["games"]}
+    for i, g in enumerate(todo, 1):
+        # 逐款一行（#1132：升级后第一次导出，库里每款都在这一步重核，整体进度停在 0%，玩家看着像卡死）
+        c.emit("message", f"核对程序 {i}/{len(todo)}：{names.get(g.upper(), g)}")
         try:
             r = check_and_update(c, g, layout.ios_kit(c, g), "ios", rid)
             if r == "updated":
@@ -303,10 +431,10 @@ def refresh_ios(c, games):
                 import patches
                 patches.remember(c, g.upper(), patches.record(c, g, "ios", None, error=str(e)))
                 c.emit("message", f"【红】{g}：S 级优化补丁打入失败（不匹配），这款先保留原来的程序：{str(e)[:200]}")
+    updated = sorted(set(updated) | set(nro))
     if updated:
         c.emit("message", f"已更新 {len(updated)} 款游戏的程序（资源不用重推）")
     if missing:   # 不悄悄跳过：说清哪几款这次没补上、怎么补
-        names = {x["id"].upper(): x.get("name") or x["id"] for x in c.catalog()["games"]}
         c.emit("message", "【黄】这几款这次没补上 S 级优化（找不到游戏原件，也没有 Mac 版可借）："  # 非玩家句
                + "、".join(names.get(g.upper(), g) for g in missing) + "。插上存原件的盘（或在游戏库里重新添加原件）后再更新一次就会补上；这次照常装，游戏照常能玩")  # 非玩家句
     return updated
@@ -333,8 +461,7 @@ def refresh_mac(c, gid, runtime):
             if key is not None and game is not None:   # S 级优化补到老游戏（见文件头）：全部模块与补丁表换进运行版本
                 c.emit("message", "正在按当前补丁库给这款补上 S 级优化（只改程序，资源不动）")
                 out, hit, tables = sgrade_rewrite(c, game, runtime, runtime / "exefs", "apple", Path(tmp))
-                apply_outputs(out, runtime, hit)
-                names = put_tables(runtime, tables)
+                names = apply_sgrade(out, runtime, hit, tables)
                 import patches
                 patches.remember(c, gid.upper(), patches.record(c, gid, "mac", out))
             else:

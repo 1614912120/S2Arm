@@ -46,7 +46,7 @@ NSArray *s2a_ios_per_game_keys(void);
 //   （服务层读本 App 首选语言）。起局时 s2a_ios_apply_graphics_settings 落成 S2A_SYSTEM_LANGUAGE。列表与定义表 options 同序（pack/jobs/tests/test_community.py test_game_language_ios_same_as_table 核）
 #define S2AGameLanguageKey @"S2AGameLanguage"
 NSArray<NSString *> *s2a_ios_game_languages(void);
-// 这款支持的游戏语言（资源包 ctl/control.nacp 支持语言标志，位序 = 宿主 TitleLanguage 枚举名）；读不到 / 标志为 0 → 空（不知道）
+// 这款支持的游戏语言（资源包 ctl/control.nacp 支持语言标志，位序 = 宿主 TitleLanguage 枚举名）；读不到 / 标志为 0 / 合成件（显示版本「?」）→ 空（不知道）
 NSArray<NSString *> *s2a_ios_game_supported_languages(void);
 // 选的游戏语言（没选 = 系统语言）这款不支持时的一句说明（「这款不支持 X，起局用 Y。」），支持或不知道 → nil
 NSString *s2a_ios_game_language_note(void);

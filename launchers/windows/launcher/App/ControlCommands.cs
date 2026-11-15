@@ -170,7 +170,9 @@ public sealed partial class EnvironmentWindow
                 var skipped = batchDraft.Where(row => row.Problem is not null)
                     .Select(row => new Dictionary<string, object?> { ["gameId"] = row.Id, ["reason"] = row.Problem }).ToList();
                 if (batchDraft.All(row => row.Problem is not null)) { batchControlPlatforms = null; return ControlReply.Json(new Dictionary<string, object?> { ["ok"] = false, ["skipped"] = skipped }, 409); }
-                _ = StartBatchAsync();
+                // 等批次真建成、编排作业起了再回 ok（审计 P1-166：原先先回 ok、后台才建，建失败时 s2armctl batch 空等或按上一批退出；同 Mac createBatch）
+                if (!await StartBatchAsync())
+                    return ControlReply.Json(new Dictionary<string, object?> { ["ok"] = false, ["error"] = batchError.Length > 0 ? batchError : "批次没建成", ["skipped"] = skipped }, 409);
                 return ControlReply.Json(new Dictionary<string, object?> { ["ok"] = true, ["skipped"] = skipped });
             }
             case ("POST", "/build"):

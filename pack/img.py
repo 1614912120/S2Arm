@@ -352,6 +352,16 @@ def convert(root, pack_dir, progress=None, romfs_index=None, gid=None, consume=F
     mp = write_map(pack_dir, out)
     ix = f"game.img\t{h['total']}\t{h['pack_id']}\n" + ''.join(l for r, l in rows if r.startswith(KEEP))
     if mp: ix += f"{MAP}\t{os.path.getsize(mp)}\t{hashlib.sha256(open(mp, 'rb').read()).hexdigest()}\n"
+    def put(name, text):
+        tmp = os.path.join(pack_dir, name + '.tmp')
+        with open(tmp, 'w', encoding='utf-8', newline='\n') as f: f.write(text)
+        os.replace(tmp, os.path.join(pack_dir, name))
+    # 先换清单、最后删旧形态文件（审计 P1-171：原先先删再换清单，中间断了清单指着已删的文件，再跑 convert 报文件不在）。
+    #   清单换上后再断：旧文件只是多占空间，清单已经是 IMG 形态、照常能用
+    put('index.tsv', ix)
+    total = sum(int(l.split('\t')[1]) for l in ix.splitlines())
+    put('manifest.json', json.dumps({'version': 3, 'format': 'img', 'imgFile': 'game.img', 'files': len(ix.splitlines()), 'total': total,
+                                     'index_sha256': hashlib.sha256(ix.encode('utf-8')).hexdigest()}, indent=1) + '\n')
     for rel, _ in rows:
         if not rel.startswith(KEEP):
             try: os.unlink(os.path.join(pack_dir, rel))
@@ -360,14 +370,6 @@ def convert(root, pack_dir, progress=None, romfs_index=None, gid=None, consume=F
     shutil.rmtree(os.path.join(pack_dir, 'romfs.files'), ignore_errors=True)   # 旧形态库内镜像的硬链接目录（#329，不在清单里）：IMG 已有原件
     for d, subs, files in os.walk(pack_dir, topdown=False):   # 删空了的目录
         if d != pack_dir and not os.listdir(d): os.rmdir(d)
-    def put(name, text):
-        tmp = os.path.join(pack_dir, name + '.tmp')
-        with open(tmp, 'w', encoding='utf-8', newline='\n') as f: f.write(text)
-        os.replace(tmp, os.path.join(pack_dir, name))
-    put('index.tsv', ix)
-    total = sum(int(l.split('\t')[1]) for l in ix.splitlines())
-    put('manifest.json', json.dumps({'version': 3, 'format': 'img', 'imgFile': 'game.img', 'files': len(ix.splitlines()), 'total': total,
-                                     'index_sha256': hashlib.sha256(ix.encode('utf-8')).hexdigest()}, indent=1) + '\n')
     return out
 
 

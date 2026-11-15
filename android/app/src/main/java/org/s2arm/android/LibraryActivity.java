@@ -20,13 +20,18 @@ public final class LibraryActivity extends Activity {
     private final Set<String> listed = new HashSet<>();
     private final java.util.Map<String, String> names = new java.util.HashMap<>();
     private final android.os.Handler ui = new android.os.Handler(android.os.Looper.getMainLooper());
-    private static final int PICK_PACKAGE = 1;
-    private static final int SAVE_DIAGNOSTICS = 2;
+    private static final int PICK_PACKAGE = 1, PICK_IN_PLACE = 2, ASK_LEGACY_READ = 3, SAVE_DIAGNOSTICS = 4;
+    /** 原地使用的约定位置：文件夹选择器从这里打开（在的话）；deploy_game.py --in-place 也推到这下面。 */
+    static final String IN_PLACE_DIR = "S2Arm/Games";
     // Bundle name waiting for the system file picker (kept across activity recreation).
     private String pendingSave;
     private static final String STATE_PENDING_SAVE = "pendingDiagnosticSave";
     // A caller opts in to consuming one direct child of files/import/.
     public static final String EXTRA_IMPORT_STAGING = "org.s2arm.android.IMPORT_STAGING";
+    /** 电脑直传资源包（ImportReceiver）：开本地套接字 s2arm-import.&lt;包名&gt;，只收 adb（shell uid）连进来的一次传输。 */
+    public static final String EXTRA_IMPORT_RECEIVE = "org.s2arm.android.IMPORT_RECEIVE";
+    static final int SHELL_UID = 2000;          // adb forward 的连接由 adbd 发起，对端是 shell 用户
+    static final int RECEIVE_WAIT_MS = 120000;  // 开着等电脑连进来的最长时间
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -49,6 +54,10 @@ public final class LibraryActivity extends Activity {
         Button importButton = new Button(this); importButton.setText(R.string.import_game);
         importButton.setOnClickListener(v -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PICK_PACKAGE));
         more.addView(importButton);
+        // 原地使用：游戏文件已经在手机存储里（文件管理器 / 电脑拷进去），直接用那里的，不再拷一份进 App
+        Button inPlaceButton = new Button(this); inPlaceButton.setText(R.string.in_place_game);
+        inPlaceButton.setOnClickListener(v -> useInPlace());
+        more.addView(inPlaceButton);
         android.content.SharedPreferences display = getSharedPreferences("display", MODE_PRIVATE);
         fpsOverlay = new CheckBox(this);
         fpsOverlay.setText(R.string.fps_overlay_show);
@@ -209,9 +218,11 @@ public final class LibraryActivity extends Activity {
         super.onResume();
         fpsOverlay.setChecked(getSharedPreferences("display", MODE_PRIVATE).getBoolean("fps", false));
         if (library != null) {
+            boolean receive = getIntent().hasExtra(EXTRA_IMPORT_RECEIVE);
+            getIntent().removeExtra(EXTRA_IMPORT_RECEIVE);
             String staging = getIntent().getStringExtra(EXTRA_IMPORT_STAGING);
             getIntent().removeExtra(EXTRA_IMPORT_STAGING); // do not repeat on later resumes
-            library.scanImports(staging);
+            if (receive) receiveImport(); else library.scanImports(staging);
         }
     }
     @Override protected void onSaveInstanceState(Bundle state) {
@@ -239,14 +250,113 @@ public final class LibraryActivity extends Activity {
     }
 
     @Override protected void onNewIntent(Intent intent) { super.onNewIntent(intent); setIntent(intent); }
+
+    // 直传：本地套接字收一次资源包进私有 files/import/<名字>，收完照常 scanImports（按 index.tsv 逐文件核）。
+    //   不经共享存储（FUSE）。只认 shell uid 的对端：别的 App 连进来直接断开、接着等
+    private void receiveImport() {
+        final GameLibrary lib = library;
+        final String name = "s2arm-import." + getPackageName();
+        final java.io.File parent = new java.io.File(getFilesDir(), "import");
+        new Thread(() -> {
+            android.net.LocalServerSocket server;
+            try { server = new android.net.LocalServerSocket(name); }
+            catch (java.io.IOException e) { android.util.Log.e("S2Arm", "Game import receiver: cannot listen on " + name + ": " + e.getMessage()); return; }
+            final android.net.LocalServerSocket srv = server;
+            Thread timer = new Thread(() -> {
+                try { Thread.sleep(RECEIVE_WAIT_MS); srv.close(); } catch (InterruptedException | java.io.IOException ignored) { }
+            }, "s2a-import-wait");
+            timer.setDaemon(true); timer.start();
+            android.util.Log.i("S2Arm", "Game import receiver listening: " + name);
+            try {
+                while (true) {
+                    android.net.LocalSocket s;
+                    try { s = srv.accept(); } catch (java.io.IOException closed) { android.util.Log.e("S2Arm", "Game import receiver: nobody connected"); return; }
+                    try (android.net.LocalSocket c = s) {
+                        if (c.getPeerCredentials().getUid() != SHELL_UID) {
+                            android.util.Log.e("S2Arm", "Game import receiver: refused peer uid " + c.getPeerCredentials().getUid());
+                            continue;
+                        }
+                        timer.interrupt();
+                        long t0 = System.nanoTime();
+                        ImportReceiver.Received got = ImportReceiver.receiveAny(c.getInputStream(), c.getOutputStream(), parent);
+                        if (got.inPlace) {   // 电脑已把资源目录 adb push 到共享存储：原地登记，不传字节
+                            android.util.Log.i("S2Arm", "Game in-place request: " + got.dir);
+                            runOnUiThread(() -> lib.registerInPlace(got.dir));
+                            return;
+                        }
+                        java.io.File dir = got.dir;
+                        android.util.Log.i("S2Arm", "Game import received " + dir.getName() + " in " + (System.nanoTime() - t0) / 1000000 + " ms");
+                        runOnUiThread(() -> lib.scanImports(dir.getAbsolutePath()));
+                        return;
+                    } catch (java.io.IOException e) {
+                        android.util.Log.e("S2Arm", "Game import of requested directory refused: receive failed: " + e.getMessage());
+                        return;
+                    }
+                }
+            } finally {
+                try { srv.close(); } catch (java.io.IOException ignored) { }
+            }
+        }, "s2a-import-receive").start();
+    }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request == PICK_PACKAGE && result == RESULT_OK && data != null && data.getData() != null) library.importTree(data.getData());
+        if (request == PICK_IN_PLACE && result == RESULT_OK && data != null && data.getData() != null) {
+            String path;
+            try { path = GameLibrary.inPlacePath(android.provider.DocumentsContract.getTreeDocumentId(data.getData()),
+                android.os.Environment.getExternalStorageDirectory()); }
+            catch (IllegalArgumentException notTree) { path = null; }
+            if (path == null) { status.setTextColor(0xFFFF5252); show(getString(R.string.in_place_not_local)); return; }
+            library.registerInPlace(new java.io.File(path));
+        }
         if (request == SAVE_DIAGNOSTICS) {
             String name = pendingSave;
             pendingSave = null;
             if (result == RESULT_OK && data != null && data.getData() != null && name != null) saveDiagnostics(data.getData(), name);
         }
+    }
+
+    // 原地使用：读共享存储上别处来的文件要「所有文件访问」（安卓 11+）；没开就说明并带去系统设置页
+    //   （做法照 mamcjr/Swap2-Native MainActivity.needAccess / openAccessSettings，MIT）。安卓 10 走旧的读存储权限
+    private void useInPlace() {
+        if (android.os.Build.VERSION.SDK_INT >= 30 && !android.os.Environment.isExternalStorageManager()) {
+            new android.app.AlertDialog.Builder(this)
+                .setTitle(R.string.in_place_access_title)
+                .setMessage(getString(R.string.in_place_access_text))
+                .setPositiveButton(R.string.in_place_access_open, (dialog, which) -> openAllFilesAccess())
+                .setNegativeButton(R.string.library_switch_cancel, null)
+                .show();
+            return;
+        }
+        if (android.os.Build.VERSION.SDK_INT < 30 && checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] {android.Manifest.permission.READ_EXTERNAL_STORAGE}, ASK_LEGACY_READ);
+            return;
+        }
+        pickInPlace();
+    }
+
+    private void openAllFilesAccess() {
+        try {
+            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                android.net.Uri.parse("package:" + getPackageName())));
+        } catch (RuntimeException noPerAppPage) {   // 个别系统没有按应用的那一页：打开总列表
+            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
+        }
+    }
+
+    private void pickInPlace() {
+        Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        if (new java.io.File(android.os.Environment.getExternalStorageDirectory(), IN_PLACE_DIR).isDirectory())
+            pick.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, android.net.Uri.parse(
+                "content://com.android.externalstorage.documents/document/primary%3A" + IN_PLACE_DIR.replace("/", "%2F")));
+        startActivityForResult(pick, PICK_IN_PLACE);
+    }
+
+    @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(request, permissions, results);
+        if (request == ASK_LEGACY_READ && results.length == 1 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED)
+            pickInPlace();
     }
     @Override protected void onDestroy() { if (library != null) library.close(); super.onDestroy(); }
 }

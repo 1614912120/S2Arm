@@ -868,6 +868,60 @@ class FlowTests(unittest.TestCase):
         self.assertNotIn("删掉", str(e.exception))
 
 
+class KeptNroTests(unittest.TestCase):
+    """运行时留下的 NRO（#8be819）：Mac 局收局后（build.keep_runtime_nros）/ 装 iPhone 前（install.pull_kept_nros）收进游戏库 games/<号>/nro_kept/。
+    期望按约定手写：只收文件名 = 内容 SHA-256 的 <64 位十六进制>.nro；已收的不重复、不报；收到新的告诉玩家重新准备"""
+    setUp = tj.JobsTests.setUp; tearDown = tj.JobsTests.tearDown
+    G = "0100c2500fc20000"
+
+    def _msgs(self):
+        out = []
+        self.c.emit = lambda kind, text=None, *a, **k: out.append(text)
+        return out
+
+    def test_mac_keep(self):
+        import hashlib, build
+        src = Path(self.c.private) / "docs-wire-nro"; src.mkdir(parents=True)
+        good = b"NRO-A" * 7; sg = hashlib.sha256(good).hexdigest()
+        (src / f"{sg}.nro").write_bytes(good)
+        (src / f"{'0' * 64}.nro").write_bytes(b"name does not match")
+        (src / "readme.txt").write_text("x")
+        msgs = self._msgs()
+        self.assertEqual(build.keep_runtime_nros(self.c, self.G, src), 1)
+        kept = self.c.library / f"games/{self.G}/nro_kept"
+        self.assertEqual(sorted(p.name for p in kept.iterdir()), [f"{sg}.nro"])
+        self.assertEqual((kept / f"{sg}.nro").read_bytes(), good)
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(build.keep_runtime_nros(self.c, self.G, src), 0)   # 已收：不重复、不再提示
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(build.keep_runtime_nros(self.c, self.G, src / "absent"), 0)   # 没有留下的：0、不报错
+
+    def test_iphone_pull(self):
+        import hashlib
+        good = b"NRO-B" * 9; sg = hashlib.sha256(good).hexdigest(); bad = "1" * 64
+        files = {f"{sg}.nro": good, f"{bad}.nro": b"content differs from its name", "notes.txt": b"x"}
+        calls = []
+        def devicectl(c, *a, timeout=0):
+            calls.append(a[2] if a[1] == "copy" else "list")
+            if a[1] == "info":
+                self.assertEqual(a[a.index("--subdirectory") + 1], f"Documents/wire/{self.G.upper()}/nro")
+                return 0, {"result": {"files": [{"relativePath": n} for n in files]}}, ""
+            name = a[a.index("--source") + 1].rsplit("/", 1)[-1]
+            Path(a[a.index("--destination") + 1]).write_bytes(files[name]); return 0, {}, ""
+        import diag
+        msgs = self._msgs()
+        with um.patch.object(diag, "devicectl", devicectl):
+            n1 = install.pull_kept_nros(self.c, "C891", "s2arm.z", self.G)
+            n2 = install.pull_kept_nros(self.c, "C891", "s2arm.z", self.G)
+        kept = self.c.library / f"games/{self.G}/nro_kept"
+        self.assertEqual((n1, n2, sorted(p.name for p in kept.iterdir())), (1, 0, [f"{sg}.nro"]))
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(calls.count("from"), 3)   # 第一次拉两个 .nro（名不符的拉回后核内容丢掉）；第二次好的已在、只再拉名不符那个：共 3 次
+        def missing(c, *a, timeout=0): return 1, {}, "no such directory"
+        with um.patch.object(diag, "devicectl", missing):
+            self.assertEqual(install.pull_kept_nros(self.c, "C891", "s2arm.z", self.G), 0)   # 机上没有：0、不报错
+
+
 class PullSeenTests(unittest.TestCase):
     setUp = tj.JobsTests.setUp; tearDown = tj.JobsTests.tearDown
 
@@ -1307,6 +1361,51 @@ class AssembleTests(unittest.TestCase):
         import ipa as packer
         with um.patch.object(packer, "current_shell_id", return_value="SID1"):
             self.assertEqual(install.phone_updates(self.c), [])
+
+    def test_phone_updates_lists_kept_modules_on_current_shell(self):
+        """壳是本版、但甲有运行时留下、已收回还没补进 iPhone 件的 NRO（#8be819）→ 照样列这台，kept = [甲]；没有留下的 → 空"""
+        A = self.A
+        self._update()
+        import ipa as packer, rewrite_refresh
+        with um.patch.object(packer, "current_shell_id", return_value="SID1"), \
+             um.patch.object(rewrite_refresh, "kept_todo", side_effect=lambda c, g, base: ["x.nro"] if g == A else []):
+            got = install.phone_updates(self.c)
+        self.assertEqual([(u["device"], u["fromShell"], u["toShell"], [g["gameId"] for g in u["kept"]], u["stale"]) for u in got], [("dev1", "SID1", "SID1", [A], [])])
+
+    def test_phone_kept_pull(self):
+        """phoneKeptPull 作业：连着的手机上各款留下的 NRO 拉回 → new = 新收个数、kept = 没补进的款；没连手机 → new 0、不报错"""
+        A = self.A
+        self._update()
+        ph = types.SimpleNamespace(key="dev1", pull_kept=lambda games: 2 if A in games else 0, app_running=lambda: False)
+        import rewrite_refresh
+        with um.patch.object(install, "phone_for", return_value=ph), \
+             um.patch.object(rewrite_refresh, "kept_todo", side_effect=lambda c, g, base: ["x.nro"] if g == A else []):
+            r = install.phone_kept_pull(self.c)
+        self.assertEqual((r["device"], r["new"], r["kept"], r["running"]), ("dev1", 2, [A], False))
+        for state, want in ((True, True), (None, True)):   # 正在玩 / 查不清：running 为真，启动器这一轮不推
+            ph.app_running = lambda s=state: s
+            with um.patch.object(install, "phone_for", return_value=ph), \
+                 um.patch.object(rewrite_refresh, "kept_todo", side_effect=lambda c, g, base: ["x.nro"] if g == A else []):
+                self.assertEqual(install.phone_kept_pull(self.c)["running"], want)
+        def none(c): raise Failure("没连手机", code="device_not_connected")
+        with um.patch.object(install, "phone_for", side_effect=none):
+            self.assertEqual(install.phone_kept_pull(self.c), dict(device="", new=0, kept=[], running=False))
+
+    def test_app_running(self):
+        """自动推送前查手机上 S2Arm 是否在跑（#8be819）：进程在它安装目录下 = True；没有 = False；没装 = False；devicectl 查不了 = None"""
+        url = "file:///private/var/containers/Bundle/Application/X/S2Arm.app/"
+        def fake(procs, apps_rc=0, ps_rc=0, installed=True):
+            def devicectl(c, *a, timeout=0):
+                if a[2] == "apps": return apps_rc, {"result": {"apps": [{"bundleIdentifier": "b", "url": url}] if installed else []}}, ""
+                return ps_rc, {"result": {"runningProcesses": [{"executable": e} for e in procs]}}, ""
+            return devicectl
+        import diag
+        cases = [(fake([url + "S2Arm"]), True), (fake(["file:///System/Library/CoreServices/SpringBoard.app/SpringBoard"]), False),
+                 (fake([url + "S2Arm"], installed=False), False), (fake([], apps_rc=1), None), (fake([], ps_rc=1), None),
+                 (fake(["file:///private/var/containers/Bundle/Application/X/S2Arm.app2/S2Arm"]), False)]
+        for f, want in cases:
+            with um.patch.object(diag, "devicectl", f):
+                self.assertEqual(install.app_running(self.c, "dev", "b"), want)
 
     def test_install_mode_defaults_and_persists(self):
         """装到 iPhone 的方式：没设过 = device；不认识的拒收；设成 device / export 写进 install.json；导出作业在 = exportAvailable"""
@@ -1820,19 +1919,22 @@ class ExportPhoneTests(unittest.TestCase):
         (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
         out = self.c.library / install.EXPORT_DIRS["zh"]
         wrote = self._count_writes()
-        self._export(dict(gameId=A))
+        r = self._export(dict(gameId=A))
         self.assertEqual(sorted(wrote), sorted(["甲.img", "甲 着色器更新包.img", "乙.img", "乙 着色器更新包.img"]))
+        self.assertEqual((sorted(r["fresh"]), r["reused"]), (["乙.img", "甲.img"], 0), "第一次导出：全是新写的，完成页不点名")
         first = {p.name: p.read_bytes() for p in out.iterdir() if p.suffix == ".img"}
         self._library((A, "甲"), (B, "乙"), (C, "丙")); self._img(C, b"S2AIMG01-c")
-        wrote.clear(); self._export(dict(gameId=C))
+        wrote.clear(); r = self._export(dict(gameId=C))
         self.assertEqual(sorted(wrote), sorted(["丙.img", "丙 着色器更新包.img"]))
+        self.assertEqual((r["fresh"], r["reused"]), (["丙.img"], 2), "完成页点名「.img 只要拷 丙.img」，其余 2 款沿用")
         for name, data in first.items():
             self.assertEqual((out / name).read_bytes(), data, name)
         # 乙的资源包里有文件变了（重新打过 iPhone 包）：乙重写，甲照旧沿用
         f = next(p for p in layout.ios_pack(self.c, B).rglob("*") if p.is_file())
         st = f.stat(); os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
-        wrote.clear(); self._export(dict(gameId=A))
+        wrote.clear(); r = self._export(dict(gameId=A))
         self.assertEqual(sorted(wrote), sorted(["乙.img", "乙 着色器更新包.img"]))
+        self.assertEqual((r["fresh"], r["reused"]), (["乙.img"], 2))
 
     def test_export_rewrites_when_link_fails(self):
         """建不了硬链接（exFAT 等）：照常重写，导出照样成功"""
@@ -1844,6 +1946,7 @@ class ExportPhoneTests(unittest.TestCase):
         with um.patch("os.link", side_effect=OSError(45, "Operation not supported")):
             r = self._export(dict(gameId=A))
         self.assertEqual((r["exported"], sorted(wrote)), (True, sorted(["甲.img", "甲 着色器更新包.img"])))
+        self.assertEqual((r["fresh"], r["reused"]), (["甲.img"], 0), "硬链接建不了照常重写：算新写，完成页照实点名")
 
     def test_export_replaces_whole_folder(self):
         """再导出一次：文件夹整个换新（上次的、玩家放进去的别的文件都不在了）"""

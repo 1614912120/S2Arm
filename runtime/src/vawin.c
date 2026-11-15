@@ -201,6 +201,10 @@ void s2a_window_span_forget(void) {
 // 只记真跑起来的局（11-12 iPhone 实机实测回归）：一局刚开就死（缺直连库、崩、被杀）只碰到 2.26 GB，记下后下一局窗口按它缩到 5 GB，
 //   连模块段、栈、堆前段都放不下、起不了局；起不来的局永远写不出更大的值，从此每次都起不来。出图满 SPAN_MIN_PRESENTS 次之后才记
 #define SPAN_MIN_PRESENTS 300
+static uint64_t g_need, g_fit;   // 定义见下（占窗口时定）；记跨度先要用 g_fit
+// 已有记录还算不算数（#1143 续）：不小于空洞的记录装不进任何窗口（旧版把窗口外别名区的远端映射也算进跨度，某机记成 73 GB），按没有处理、允许覆盖，
+//   否则它只增不减、每局宿主都只剩 3 GB。fit = 0（还没占窗口 / 单测）不判。纯函数，t_vawin_learned 测
+int s2a_window_span_rec_ok(uint64_t rec, uint64_t fit) { return rec && (!fit || rec < fit); }
 int s2a_window_span_worth(uint64_t presents) { return presents >= SPAN_MIN_PRESENTS; }   // 纯函数，t_vawin_learned 测
 static void span_note(void) {   // s2a_mem_span_now 在 svc_mem.c、mtl_present_count 在直连图形层：按名字取（只链 vawin.c 的单测没有它们；取不到 = 不记）
     static uint64_t (*spanf)(void), (*presf)(void); static int looked;
@@ -208,12 +212,40 @@ static void span_note(void) {   // s2a_mem_span_now 在 svc_mem.c、mtl_present_
     if (!presf || !s2a_window_span_worth(presf())) return;
     uint64_t now = spanf ? spanf() : 0; if (!now) return;
     char p[1024], t[1100]; if (!span_path(p, sizeof p, 0)) return;
-    static uint64_t rec; static int loaded; if (!loaded) { rec = read_u64(p); loaded = 1; }
+    static uint64_t rec; static int loaded; if (!loaded) { rec = read_u64(p); if (!s2a_window_span_rec_ok(rec, g_fit)) rec = 0; loaded = 1; }
     if (now <= rec) return;
     { char d[1024]; snprintf(d, sizeof d, "%s", p); char *sl = strrchr(d, '/'); if (sl) { *sl = 0; mkdir(d, 0755); } }
     snprintf(t, sizeof t, "%s.tmp", p); FILE *f = fopen(t, "w"); if (!f) return;
     fprintf(f, "%llu\n", (unsigned long long)now); fclose(f);
     if (!rename(t, p)) rec = now;
+}
+// 低区耗尽死的局也记跨度（#1143，11-15 iPhone 读数）：多款容器里一款没有记录时按它自己的标准布局算（75964 MB），窗口一点不缩、下方只留 3 GiB 给宿主；
+//   这款加载中几秒内低区碰底（pthread_create / 着色器库映射失败，最大空洞 6 MB）死在首帧前，心跳（10 秒一次、出图满 300 次才记）一次都赶不上，
+//   永远学不到、永远死。改为崩溃那一刻低区确实碰底（最大空洞 < 64 MB）就把本局已碰到的跨度记下——这是它「至少要这么多」的下界，下一局窗口按它缩、其余给宿主；
+//   碰得更高就再记大（心跳 / 下次崩溃都比大才写），缩过头布局放不下走起局自愈（s2a_window_span_widen）。别的原因早死（低区没碰底）不记，同 11-12 那条。
+//   崩溃处理里只用 open / read / write / close / rename：路径和取跨度的函数在 C# 初始化后预先备好（s2a_window_span_arm，host_main.c 调）
+#define SPAN_CRASH_LOW (64ull << 20)
+int s2a_window_span_crash_worth(uint64_t low_largest) { return low_largest < SPAN_CRASH_LOW; }   // 纯函数，t_vawin_learned 测
+static char g_span_crash_p[1024], g_span_crash_t[1100];
+static uint64_t (*g_span_crash_f)(void);
+void s2a_window_span_arm(void) {
+    char p[1024]; if (!span_path(p, sizeof p, 0)) return;
+    { char d[1024]; snprintf(d, sizeof d, "%s", p); char *sl = strrchr(d, '/'); if (sl) { *sl = 0; mkdir(d, 0755); } }
+    g_span_crash_f = (uint64_t (*)(void))dlsym(RTLD_DEFAULT, "s2a_mem_span_now");
+    snprintf(g_span_crash_t, sizeof g_span_crash_t, "%s.tmp", p); snprintf(g_span_crash_p, sizeof g_span_crash_p, "%s", p);
+}
+uint64_t s2a_window_span_crash(uint64_t low_largest) {   // 返回记下的跨度（没记 = 0）
+    if (!g_span_crash_p[0] || !g_span_crash_f || !s2a_window_span_crash_worth(low_largest)) return 0;
+    uint64_t now = g_span_crash_f(), rec = 0; if (!now) return 0;
+    char b[32]; int fd = open(g_span_crash_p, O_RDONLY);
+    if (fd >= 0) { ssize_t n = read(fd, b, sizeof b - 1); close(fd); for (ssize_t i = 0; i < n && b[i] >= '0' && b[i] <= '9'; i++) rec = rec * 10 + (uint64_t)(b[i] - '0'); }
+    if (!s2a_window_span_rec_ok(rec, g_fit)) rec = 0;
+    if (now <= rec) return 0;
+    char d[24]; int k = (int)sizeof d; d[--k] = '\n'; uint64_t v = now; do { d[--k] = (char)('0' + v % 10); v /= 10; } while (v && k > 0);
+    fd = open(g_span_crash_t, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (fd < 0) return 0;
+    ssize_t w = write(fd, d + k, sizeof d - (size_t)k); close(fd);
+    if (w != (ssize_t)(sizeof d - (size_t)k) || rename(g_span_crash_t, g_span_crash_p)) return 0;
+    return now;
 }
 static uint64_t env_mb(const char *k, uint64_t def) { const char *v = getenv(k); return (v && *v ? strtoull(v, NULL, 10) : def) << 20; }
 static int g_ctr;
@@ -818,6 +850,10 @@ static void vawin_reserve(void) {
         LOG("模拟 iOS 26 大地址档（S2A_VA_IOS26）：空洞放在 %#llx（%s）+%llu MB", (unsigned long long)fat, low ? "同 iOS 26 位置" : "macOS 27 / iOS 27 低区被共享缓存占满，改用 0x70 空洞开头", (unsigned long long)(n >> 20)); } }
     // 放不下标准布局不再起不了局（docs/方案_地址空间根修.md）：占最大一块、下方留 HOST_BELOW（3 GiB）给宿主（Metal / GC），布局小区在前、别名区伸出窗口（layout.c 乙）。
     //   宿主保留段不能放窗口上方：别名区伸出段覆盖那里，宿主放进去的东西会被游戏的远端访问静默读写
+    { void (*lim)(uint64_t) = (void (*)(uint64_t))dlsym(RTLD_DEFAULT, "s2a_mem_span_limit"); if (lim && g_fit) lim(g_fit); }   // 学跨度只认空洞以内的地址（svc_mem.c）
+    if (g_span_learned && !s2a_window_span_rec_ok(g_span_learned, g_fit)) {
+        LOG("【黄】地址窗口：本机学到的跨度 %llu MB 不小于这块空洞 %llu MB（旧版把窗口外的远端映射也算进去了），当作没学到、这一局重新学", (unsigned long long)(g_span_learned >> 20), (unsigned long long)(g_fit >> 20));
+        g_span_learned = 0; }
     if (!sz && g_fit >= MIN_WIN + HOST_BELOW) { uint64_t below = s2a_window_host_below(g_fit, g_span_learned); at = fat + below; want = g_fit - below; g_keep_lo = fat;
         LOG("地址窗口按需：本款标准布局要 %llu MB，本机 %s 以下最大一块 %llu MB（%#llx 起，地址上限 %#llx）——照样起局，下方 %llu MB 留宿主、其余作窗口（本机学到的跨度 %llu MB，0 = 没学到）",
             (unsigned long long)(g_need >> 20), hb, (unsigned long long)(g_fit >> 20), (unsigned long long)fat, (unsigned long long)top, (unsigned long long)(below >> 20),
@@ -1186,8 +1222,10 @@ void s2a_low_tags(char *out, size_t cap) {
         }
     }
     int o = snprintf(out, cap, "按标签（含尾部）：文件页 %llu MB", (unsigned long long)(file >> 20));
-    for (int r = 0; r < 6 && o > 0 && (size_t)o < cap; r++) { int m = -1; for (int i = 0; i < NTAG; i++) if (bytag[i] && (m < 0 || bytag[i] > bytag[m])) m = i; if (m < 0) break;
+    static const char *const vname[S2A_VMTAG_END - S2A_VMTAG_VPOOL] = {"Switch 2 虚拟池预留", "远端影子区", "游戏共享内存", "宿主其他匿名映射"};   // s2a_lowva.h S2A_VMTAG_*
+    for (int r = 0; r < 10 && o > 0 && (size_t)o < cap; r++) { int m = -1; for (int i = 0; i < NTAG; i++) if (bytag[i] && (m < 0 || bytag[i] > bytag[m])) m = i; if (m < 0) break;
         if (m >= S2A_TAIL_TAG0 && m < S2A_TAIL_TAG0 + S2A_TAIL_NUSER) o += snprintf(out + o, cap - (size_t)o, "、%s（标签 %d）%llu MB", g_tl_uname[m - S2A_TAIL_TAG0], m, (unsigned long long)(bytag[m] >> 20));
+        else if (m >= S2A_VMTAG_VPOOL && m < S2A_VMTAG_END) o += snprintf(out + o, cap - (size_t)o, "、%s（标签 %d）%llu MB", vname[m - S2A_VMTAG_VPOOL], m, (unsigned long long)(bytag[m] >> 20));
         else o += snprintf(out + o, cap - (size_t)o, "、标签 %d %llu MB", m, (unsigned long long)(bytag[m] >> 20));
         bytag[m] = 0; }
 }
@@ -1299,6 +1337,6 @@ void s2a_oom_dump(const char *when) {
         prev = a + sz; a += sz;
     }
     s2a_vm_top(when);
-    char b[512]; s2a_low_tags(b, sizeof b); LOG("低区账 [%s]：%s", when, b);
+    char b[768]; s2a_low_tags(b, sizeof b); LOG("低区账 [%s]：%s", when, b);
 }
 #endif

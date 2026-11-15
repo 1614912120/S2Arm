@@ -241,6 +241,35 @@ def collect_pipeline_seed(c, game_id, docs):
             pass
 
 
+def keep_runtime_nros(c, game_id, source):
+    """宿主这局留下的 NRO（runtime/src/loader.c s2a_nro_keep：包里没有改写映像、游戏解开的整份 <SHA-256>.nro）收进游戏库 games/<号>/nro_kept/，
+    下次准备这款时改写进包（#8be819）。只收文件名 = 内容 SHA-256 的；收到新的就告诉玩家重新准备一次。失败不改变本局结果。→ 新收的个数"""
+    import hashlib
+    new = 0
+    try:
+        files = sorted(p for p in Path(source).glob("*.nro") if p.is_file() and not p.is_symlink() and len(p.name) == 68)
+    except OSError:
+        return 0
+    for f in files:
+        try:
+            data = f.read_bytes()
+            if hashlib.sha256(data).hexdigest() != f.name[:64]:
+                continue
+            dest = layout.nro_kept(c, game_id, create=True) / f.name
+            if dest.is_file() and dest.stat().st_size == len(data):
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_name(dest.name + ".tmp"); tmp.write_bytes(data); os.replace(tmp, dest); new += 1
+        except OSError as error:
+            print(f"[s2a] 收运行时留下的 NRO {f.name[:8]}… 失败：{error}", file=sys.stderr)
+    if new:
+        try:
+            c.emit("message", f"这款游戏有 {new} 个代码模块要在运行中才能取到，已经收下，正在自动补上")
+        except Cancelled:
+            pass
+    return new
+
+
 def launch(c):
     require_automatic_memory(c)
     with c.lock("execution"):
@@ -249,8 +278,9 @@ def launch(c):
         recover(c, game, override=c.r.get("overrideRecovery") is True)   # 回退失败：玩家单独确认「仍要启动」才放行（同 iPhone，审计 18:00 P0-3）
         runtime = layout.image_mac(c, game["id"], create=False)
         # 改写器修过的话：起局前按本引擎改写器核一遍这款，受影响的只换改写产物（rewrite_refresh.py；核不了不挡起局）
-        from rewrite_refresh import refresh_mac
+        from rewrite_refresh import refresh_mac, kept_nros_mac
         refresh_mac(c, game["id"], runtime)
+        kept_nros_mac(c, game["id"], runtime)   # 运行时留下、还没补进的 NRO（#8be819）：上次收局没补成的这里再补
         c.begin("验证运行文件")
         manifest = validate_runtime(c, runtime, files=False)   # 只核主程序 / 程序描述（QUICK_FILES），其余直接起（v0.3.1）
         print("[起局] 只核主程序与程序描述，其余文件不逐个核（真读到坏的、游戏退出后再核、说清缺什么）", file=sys.stderr, flush=True)
@@ -274,6 +304,10 @@ def launch(c):
         seed = claim_seed(c, game["id"])
         if seed:
             env["S2A_SAVE_DIR"] = str(seed)   # 玩家导入过存档、这是第一次启动：运行时建好存档再灌入
+        import cheats   # 上次崩溃自动关掉的：启动器换了版本就重开一次（多半已修），要在算启动开关之前
+        back = cheats.restore_after_update(c, game)
+        if back:
+            c.diagnostic("上次游戏崩溃时自动关掉的设置，新版 S2Arm 已重新打开：" + "、".join("帧率" if t == "fps" else "满屏" if t == "fs" else k.split("/", 1)[-1] for t, k in back) + "。", code="crash_restored", severity="warning")
         env.update(community.launch_env(c, game["id"]))   # 宽屏 / 60 帧宿主开关（社区资源面板，10-27）：关掉的才设，下次启动生效
         # 宿主菜单栏「切换游戏」（macos/front_mac.m）：收尾前在这里留标记，结果带 returnToLibrary，启动器回到游戏库。先删上一局残留
         marker = c.private / "runtime-return" / (c.task + ".flag")
@@ -292,7 +326,7 @@ def launch(c):
                     host_update.settle(c, game["id"], host, ok=time.monotonic() - started >= host_update.TRIAL_OK_SECONDS)
                 if f.code == "tool_exit":   # 游戏进程自己非 0 退出（多为崩溃，139 = 段错误）：给启动页一个说人话的码，原文与退出码随错误摘要带走
                     import cheats   # 开着金手指 / 补丁时退出：当场关掉、记下，下次开始时启动器通知关了哪几条（11-13 维护者改定：不问，cheats.note_crash）
-                    cheats.note_crash(c, game)
+                    cheats.note_crash(c, game, env.get("S2A_DOCS"))   # 带文档根：读运行时写的崩溃落点（宿主自己崩第一次不关）
                     broken = missing_after_crash(c, runtime, manifest)
                     if broken:   # 起局前没逐个核（v0.3.1）：退出后再核，运行文件缺 / 坏了就直说，别让玩家以为是游戏崩了
                         raise Failure(f"这款游戏的 Mac 运行文件缺了或坏了（例：{broken}），游戏读到它时退出了。重新出一次 Mac 版就能修好；存档不受影响。",
@@ -306,10 +340,12 @@ def launch(c):
             back = marker.exists()
         finally:
             marker.unlink(missing_ok=True)
-            host_update.forget_registrations()   # 系统起宿主时把它登记成 App、启动台多出「S2ArmGame」：每局结束注销（#1126）
+            host_update.forget_registrations(app=Path(executable).parents[2])   # 系统起宿主时把它登记成 App、启动台多出「S2ArmGame」：每局结束注销（#1126）；不是真 App 包不碰
             if seed:
                 finish_seed(c, game["id"], log)
             collect_pipeline_seed(c, game["id"], env["S2A_DOCS"])
+            if keep_runtime_nros(c, game["id"], Path(env["S2A_DOCS"]) / "wire" / game["id"].upper() / "nro"):
+                kept_nros_mac(c, game["id"], runtime)   # 收局就补上（#8be819），玩家再点开始就能玩，不用判断要重出什么
             import cheats   # 停帧救场：局内画面停住时帧率补丁已被运行时关掉、留了标记 → 这款「帧率」写关，下次开始时通知（正常退出 / 崩溃都要读）
             cheats.note_stall(c, game, env["S2A_DOCS"])
             # Context.run waits for the host, including failure/cancellation.
@@ -554,6 +590,27 @@ def extract_nup(c, game, packages, extraction, env, logs):
 EXTRACTED_FORMATS = ("dump", "extract", "loose")
 
 
+def _dir_link(source, link):
+    """目录链接：link → source。Windows 上建符号链接要开发者模式或管理员（普通玩家 WinError 1314「客户端没有所需的特权」，
+    v0.4.0 已解包散文件出包在解包一步就失败，诊断#1fad25）：先建目录联接（本机磁盘不要特权），联接不支持的位置（网络盘等）再试符号链接，
+    都不行说清楚。Mac / Linux 照旧符号链接"""
+    if os.name != "nt":
+        os.symlink(source, link)
+        return
+    from pack.orch.winlong import create_junction
+    try:
+        create_junction(str(source), str(link))
+        return
+    except OSError as e:
+        junction_error = e
+    try:
+        os.symlink(source, link, target_is_directory=True)
+    except OSError as e:
+        raise Failure(f"没法把已解包的游戏文件夹接进出包目录：Windows 建不了目录联接（{junction_error.strerror or junction_error}），"
+                      f"也建不了符号链接（{e.strerror or e}）。游戏文件夹在网络盘上时请先拷到本机磁盘，或在 Windows 设置里打开「开发者模式」后重试。",
+                      code="permission_denied") from e
+
+
 def extract_folder(c, game, packages, extraction, env, logs):
     """已解包的游戏文件夹（导入时 library.extract_inspect 记 format）→ 共用解包目录，不要 prod.keys：
     extract 本来就是解包产物，克隆过来；dump（Switch 2 导出）交 pack/ns2_dump.py 整理（同 NUP）；loose（exefs + romfs 平铺）软链成 base/ 再走同一条路。"""
@@ -564,7 +621,7 @@ def extract_folder(c, game, packages, extraction, env, logs):
         return
     with tempfile.TemporaryDirectory(prefix="loose-", dir=c.private) as stage:
         if fmt == "loose":
-            os.symlink(source, Path(stage) / "base")
+            _dir_link(source, Path(stage) / "base")
         c.run([sys.executable, "-X", "utf8", c.engine / "pack/ns2_dump.py", stage if fmt == "loose" else source, extraction, "--name", game["name"]],
               logs / "ns2_dump.log", dict(env, S2A_NX_UNPACK=str(reader_program(c, logs))))
 
@@ -746,6 +803,7 @@ def prepare(c):
         extraction = ensure_extract(c, game, packages, env, logs, valid=unpack_ok)
         import patches   # 金手指 / 社区补丁（11-12）：解包后按真构建号查库，交改写阶段（S2A_CHEATS_DIRS / S2A_CPATCH_DIRS）
         patches.prepare(c, game, extraction, env)
+        env["S2A_NRO_KEPT_DIR"] = str(layout.nro_kept(c, game["id"]))   # 运行时留下的 NRO（#8be819），没有 = 改写阶段当无
         # The memory table is collected from the repository table and the recent run logs only; the previously
         # installed table is not fed back (its values would never age out once the host stops needing them)
         if not (root / "roots" / (game["id"] + "@现行")).exists() and not seed_from_sibling(c, game, root / "roots", game["id"]):  # 非玩家句

@@ -1,10 +1,12 @@
 // 崩溃现场（旧库 crash.c 改后搬，只留信号处理本身）：出错地址、pc / lr 换成模块内偏移、寄存器、帧指针回溯、线程表。
 #include "native.h"
+#include "s2a_docs.h"   // 崩溃落点标记写在文档根（s2a_crash_install 时算好路径，信号里只 open / write）
 #include "../../platform/plat.h"
 #include <signal.h>
 #include <dlfcn.h>
 #include <sys/ucontext.h>
 #include <unistd.h>
+#include <fcntl.h>
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #else
@@ -316,6 +318,8 @@ static void reg_objects(ucontext_t *uc) {
 // 11-14 D-G2JB：游戏的 SetHeapSize 因超出宿主地址窗口回了内存不足，它没理会、照样写堆首，崩出 SIGBUS——日志里只见总线错误。
 //   出事地址落在最近一次地址越界的请求里时点名是它，指向起局「自检」行（窗口多大、有没有「提高内存上限」权限）
 int s2a_va_short_last(uint64_t fa, int *num, uint64_t *a, uint64_t *n, uint64_t *count) __attribute__((weak));
+uint64_t s2a_guest_x18_now(void) __attribute__((weak));   // thread.c
+int s2a_phys_unmap_hit(uint64_t fa, uint64_t *a, uint64_t *n, uint64_t *back, uint64_t *ago_ms, uint64_t *total) __attribute__((weak));   // svc_mem.c
 static void fault_region_note(int sig, siginfo_t *si, ucontext_t *uc) {
     if (sig != SIGBUS && sig != SIGSEGV) return;
     uint64_t fa = (uint64_t)(uintptr_t)si->si_addr, esr = uc->uc_mcontext->__es.__esr; const char *rw = (esr >> 6 & 1) ? "写" : "读";
@@ -324,6 +328,14 @@ static void fault_region_note(int sig, siginfo_t *si, ucontext_t *uc) {
           LOG("【红】崩在游戏没要到的地址上：svc %#x 早先要在 %#llx +%#llx 映射，超出宿主占到的地址窗口、回了内存不足（地址越界共 %llu 次），游戏没理会照样访问 %#llx。%s",
               num, (unsigned long long)a, (unsigned long long)n, (unsigned long long)k, (unsigned long long)fa,
               "地址窗口比游戏要的小，看起局「自检」行；手机上缺「提高内存上限」权限时按首启提示重签带权限的包"); }
+    {   // 出事地址是游戏早先自己解除的物理映射（诊断#ff9a04）：命中 = 游戏拿着悬空指针；没命中最近 32 次 = 要么更早解除、要么从没映射 / 被我方弄丢
+        uint64_t a = 0, n = 0, back = 0, ago = 0, total = 0;
+        if (s2a_phys_unmap_hit && s2a_phys_unmap_hit(fa, &a, &n, &back, &ago, &total))
+            LOG("出事地址 %#llx 在游戏自己解除的物理映射段里：倒数第 %llu 次 UnmapPhysicalMemory %#llx +%#llx（%llu ms 前；本局共解除 %llu 次）——游戏拿着已释放内存的指针",
+                (unsigned long long)fa, (unsigned long long)back, (unsigned long long)a, (unsigned long long)n, (unsigned long long)ago, (unsigned long long)total);
+        else if (s2a_phys_unmap_hit) LOG("出事地址 %#llx 不在最近 %llu 次 UnmapPhysicalMemory 的段里（本局共解除 %llu 次）", (unsigned long long)fa, (unsigned long long)(total < 32 ? total : 32), (unsigned long long)total); }
+    // 游戏的 x18 在线程槽里（iOS 不许用 x18，补丁区转接代码从槽里取、用完写回）：补丁区里崩时出事指针常是它（诊断#ff9a04）
+    if (s2a_guest_x18_now) LOG("游戏 x18（线程槽）= %#llx", (unsigned long long)s2a_guest_x18_now());
     vm_address_t r = (vm_address_t)fa; vm_size_t sz = 0; natural_t depth = 0; vm_region_submap_info_data_64_t info; mach_msg_type_number_t cnt;
     for (;;) {
         cnt = VM_REGION_SUBMAP_INFO_COUNT_64;
@@ -354,6 +366,18 @@ static void crash_other_wait(int sig) {
 //   处理函数里本信号是屏蔽的，先放开再抛；万一没结束（不该发生）照旧 _exit(128 + sig)。
 //   读退出码的地方：shell 里被信号结束的 $? 仍是 128 + sig；作业层 Context.run 把 Python 的负返回码折回 128 + sig（pack/jobs/core.py）
 static int g_crash_quiet;   // s2a_crash_install 时取（信号处理里不读环境）：native.h s2a_crash_quiet
+__attribute__((weak)) uint64_t s2a_window_span_crash(uint64_t low_largest) { (void)low_largest; return 0; }   // vawin.c 强定义：低区碰底死的局记跨度（#1143）
+// 崩溃落点（11-15 S 级优化「崩了自动关」归因）：<文档根>/crash_where 一行 game / patch / host——pc 或 lr 落在游戏模块（含补丁区）= game / patch，
+//   两个都在宿主代码 = host。读的一方：Mac pack/jobs/cheats.py note_crash（收局后）、iOS ios/game_options.m（下次启动前），读完删。
+//   宿主自己的崩溃第一次不替玩家关补丁（D-RRES：宿主贴图上传崩溃把自适应满屏关了，补丁没错，修好后也回不来）
+static char g_where_path[1100];
+static void crash_where_note(uint64_t pc, uint64_t lr) {
+    if (!g_where_path[0] || g_crash_quiet) return;
+    module_t *m = module_of((void *)pc), *ml = module_of((void *)lr);
+    const char *w = m ? (s2a_in_patch(m, pc) ? "patch\n" : "game\n") : ml ? "game\n" : "host\n";
+    int fd = open(g_where_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd >= 0) { (void)!write(fd, w, strlen(w)); close(fd); }
+}
 __attribute__((weak)) void s2a_guest_run_mark_crash(void) {}   // runtime/src/vawin.c 强定义：「在跑」标记改写成 crash（闪退不算死于内存，#909）
 static void crash_reraise(int sig) {
     s2a_guest_run_mark_crash();
@@ -481,6 +505,7 @@ static void on_crash(int sig, siginfo_t *si, void *ctx) {
         crash_raw(sig, si, uc, 1); crash_other_wait(sig);
     }
     uint64_t pc = uc->uc_mcontext->__ss.__pc, lr = uc->uc_mcontext->__ss.__lr, fp = uc->uc_mcontext->__ss.__fp;
+    crash_where_note(pc, lr);
     crash_raw(sig, si, uc, 0);
     // 崩在现编着色器里（graphics/nvn/host/dsh_miss.inc，#467）：把正在编的那支输入落盘成 <键>.inflight.*，诊断包带走。只用 open / write，排在原始现场之后、完整报告之前
     { if (g_dsh_crash_dump) g_dsh_crash_dump(); }
@@ -493,7 +518,9 @@ static void on_crash(int sig, siginfo_t *si, void *ctx) {
     fault_region_note(sig, si, uc);
     reg_objects(uc);
     { uint64_t ht, hl, fs, fh; int fn; s2a_low_holes(&ht, &hl); s2a_fd_usage(&fn, &fs, &fh);   // 资源耗尽类崩溃先看这两样：低区地址 / 文件句柄
-      LOG("崩溃时余量：低区空洞合计 %llu MB、最大一块 %llu MB；文件句柄已开 %d 个，软上限 %llu、硬上限 %llu", (unsigned long long)(ht >> 20), (unsigned long long)(hl >> 20), fn, (unsigned long long)fs, (unsigned long long)fh); }
+      LOG("崩溃时余量：低区空洞合计 %llu MB、最大一块 %llu MB；文件句柄已开 %d 个，软上限 %llu、硬上限 %llu", (unsigned long long)(ht >> 20), (unsigned long long)(hl >> 20), fn, (unsigned long long)fs, (unsigned long long)fh);
+      uint64_t sp = s2a_window_span_crash(hl);   // 低区碰底死的局记下已碰到的跨度（vawin.c，#1143）
+      if (sp) LOG("低区碰底：本局已碰到的地址跨度 %llu MB 记为本款学到的跨度，下一局窗口按它缩、其余给宿主", (unsigned long long)(sp >> 20)); }
     s2a_lowva_crash_note();   // 低区账（各家账面、保留量、拦不到的）
     { void s2a_vm_low(const char *); s2a_vm_low("崩溃时"); }   // 低区地址耗尽类崩溃（Metal / spirv_cross / 暂存缓冲）看当时谁占着
     { void s2a_guest_va_report(const char *); s2a_guest_va_report("崩溃时"); }   // 窗口里游戏真映射了多少、落在哪
@@ -518,6 +545,7 @@ void s2a_crash_thread_init(void) {
     if (e) LOG("【红】崩溃：备用栈安装失败 errno=%d", e);
 }
 void s2a_crash_install(void) {
+    s2a_docs_path(g_where_path, sizeof g_where_path, "crash_where");
     int sigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE, SIGABRT};   // SIGABRT：die() 与 C# FailFast 都走 abort，要现场
     g_dsh_crash_dump = (void (*)(void))dlsym(RTLD_DEFAULT, "s2a_dsh_crash_dump");
     g_crash_quiet = s2a_crash_quiet();

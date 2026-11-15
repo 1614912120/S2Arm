@@ -83,6 +83,8 @@
 "crash.off.body" = "前回 %@ をオンにしたままゲームが終了したため、今回はオフになっています。設定から再度オンにできます。";
 "crash.off.prompt" = "前回 %@ をオンにしたままゲームが終了したため、今回はオフになっています。設定から再度オンにできます。\n\n診断を送信していただくと、問題の修正に役立ちます。バンドルには実行ログのみが含まれ、セーブデータ、キー、ゲームファイルは含まれません。";
 "crash.off.title" = "前回問題が発生した設定をオフにしました";
+"crash.restored.title" = "前回のクラッシュでオフにした設定を再びオンにしました";
+"crash.restored.body" = "前回ゲームがクラッシュした際にオフにした %@ を、新しいバージョンの S2Arm で再びオンにしました。再びクラッシュした場合は、またオフになります。";
 "sgrade.title" = "S グレード最適化";
 "sgrade.note" = "パッチに互換性がなくゲームがクラッシュした場合、次回起動時に自動的にオフになるため、引き続きプレイできます。";
 "sgrade.counts" = "オン %ld · 全 %ld";
@@ -219,12 +221,14 @@
 "vpad.menu.ns2pro" = "Switch 2 Proコントローラーを有効にする";
 "vpad.menu.pad" = "コントローラーとモーション";
 "vpad.menu.rumble" = "振動";
+"vpad.menu.volume" = "サウンド";
+"vpad.volume.mute" = "ミュート";
 "vpad.menu.rumble.note" = "スマホのモーターとコントローラーで共有します。レベルを選ぶとサンプル振動が再生されます。";
 "vpad.menu.saves" = "セーブデータ管理";
 "vpad.menu.stickFixed.note" = "オフにすると指を置いた位置がスティックの中心になります";
 "vpad.menu.stickTuning" = "スティックを細かく調整…";
 "vpad.menu.stickTuning.note" = "デッドゾーン / 外周サチュレーション / レスポンス指数";
-"vpad.menu.sticks" = "摇杆";
+"vpad.menu.sticks" = "スティック";
 "vpad.menu.title" = "ゲーム設定";
 "vpad.rumble" = "ゲーム振動";
 "vpad.rumble.level.0" = "最弱";
@@ -289,7 +293,7 @@
 "app.widen.title" = "全画面";
 "common.later" = "後で";
 "common.restartLater" = "後で再起動する";
-"common.restartNow" = "立即重启";
+"common.restartNow" = "今すぐ再起動";
 "controller.allowBluetooth" = "設定で Bluetooth を許可";
 "controller.connect" = "Switch 2 Pro を接続";
 "controller.connect.hint" = "コントローラー上部の SYNC ボタンを、プレイヤーランプが循環点滅するまで長押し";
@@ -412,7 +416,7 @@
 "save.noRoot" = "セーブデータ保存場所にアクセスできないため、今回はセーブデータのインポートまたはエクスポートができません。App を閉じて再度開くか、「仍要開始遊戲…」をタップして通常通りプレイできます。";
 "save.noService" = "このパッケージには、セーブデータ転送に必要なゲーム識別情報またはサービスがありません。最新の S2Arm で再パッケージしてインストールしてください。現在のセーブデータは通常通り使用できます。";
 "save.noService.recover" = "このパッケージには、セーブデータ転送に必要なゲーム識別情報またはサービスがないため、中断されたセーブデータ操作を回復できません。";
-"save.override" = "仍要開始遊戲…";
+"save.override" = "それでもゲームを開始…";
 "save.override.confirm" = "失われる可能性があることを理解しました — ゲームを開始";
 "save.override.done" = "ブロックを解除しました。中断された操作の記録は保持されており、次回 App を開いたときに回復が再試行されます。";
 "save.override.doneNoRoot" = "ブロックを解除しました。今回はセーブデータのインポートまたはエクスポートができません。";
@@ -436,6 +440,7 @@
 "save.restored" = "セーブデータを復元しました。ゲームを開始して進行状況を確認できます。復元前のバックアップが保存されました(復元前にセーブデータがない場合は作成されません)。";
 "save.serviceInvalid" = "セーブデータサービスが有効な結果を返しませんでした。App を閉じて再度開いてください。既存のデータは保持されます。";
 "save.start" = "ゲームを開始";
+"save.leave" = "終了（次回はそのままゲームを開く）";
 "save.status.hasSave" = "現在のセーブデータをエクスポートできます。インポート時はゲームバージョン、アカウント所有権、ファイル整合性を確認してから、復元の確認を求めます。";
 "save.status.noSave" = "エクスポートできるセーブデータがまだありません。バックアップをインポートするか、ゲームを開始してセーブデータを作成してください。";
 "save.tempCleanupFailed" = "一時コピーのクリーンアップに失敗したため、まだ容量を占有しています。「ファイル」App 内の「%@」という名前の一時コピーを削除してください。";
@@ -451,6 +456,7 @@
 "settings.fps.knownIssue.message" = "このゲームでは 60 FPS に既知の問題があります。ゲームの速度が異常な場合はオフにしてください。";
 "settings.fps.native" = "このゲームは元から 60 FPS です";
 "settings.group.dev" = "開発";
+"settings.devEntry" = "開発と診断";
 "settings.notStarted" = "ゲームが起動していません";
 "settings.restart.message" = "今すぐゲームを再起動しますか? 未保存の進行状況は失われますので、ゲーム内でセーブ済みであることを確認してください。";
 "settings.restart.messageLater" = "保存した設定は次回ゲーム起動時に有効になります。";
@@ -504,3 +510,17 @@
 "vpad.screenLock.note" = "外部ディスプレイ用。3回タップで復元。";
 "vpad.screenLock.hint" = "本体画面を復元するには、画面を3回連続でタップしてください";
 "vpad.screenLock.unlock" = "本体画面を復元";
+"sgrade.state.on.adaptive" = "使用中：コミュニティのフルスクリーンパッチ（画面の縦横比に合わせて自動選択）";
+"sgrade.state.on.fixed" = "使用中：コミュニティのフルスクリーンパッチ（固定の縦横比）";
+"sgrade.state.on.own" = "使用中：S2Arm 汎用フルスクリーン（このゲームのコミュニティパッチはありません。S2Arm で確認済み）";
+"sgrade.state.on.fps" = "使用中：最大 %1$@ fps";
+"sgrade.state.off_user" = "オフ";
+"sgrade.state.off_auto.crash" = "自動でオフにしました：%1$@ にゲームがクラッシュしたときオンでした";
+"sgrade.state.off_auto.stall" = "自動でオフにしました：%1$@ に画面が止まったときオンでした";
+"sgrade.state.version.newer" = "パッチライブラリにあるのはバージョン %1$@ 用で、お使いのものは %2$@ です。ゲームを %1$@ に更新して書き出し直すと使えます。";
+"sgrade.state.version.older" = "パッチは古いバージョン %1$@ 用しかなく、お使いのバージョン用はまだありません。";
+"sgrade.state.version.port_failed" = "お使いのバージョンへの移植を試しましたが、うまくいきませんでした。";
+"sgrade.state.none" = "パッチライブラリにこのゲームの%1$@パッチはまだありません。";
+"sgrade.state.opted_out" = "未適用：書き出し時に「書き出し時に適用」をオフにしました。オンにして書き出し直すと入ります。";
+"sgrade.state.pending.ios" = "新しいパッチがあります：パソコンの S2Arm で「S 級最適化アップグレード」を選んでください。";
+"sgrade.state.mac_only" = "画面パッチは Mac 版のみです。";

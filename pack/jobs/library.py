@@ -2228,7 +2228,8 @@ def sgrade_badge(c, gid, image):
     #   Mac 运行版本 / iPhone 程序件里补丁表有条目，或带着随包金手指原文（多数金手指只改内存、不进补丁表）。Mac 老游戏启动器打开时会补上（sgradeMac），补完就亮
     for d in (Path(image), layout.ios_kit(c, gid)):
         try:
-            if table_rows(d / "cpatch.tsv") or any(d.glob("cheat-src.*")):
+            # 维护者 11-15「两者合成一套」：没补丁、但本包在宽屏已验证名单（我方通用满屏缺省开，产物根 widen_verified.tsv）也算带上了 S 级优化的满屏
+            if table_rows(d / "cpatch.tsv") or any(d.glob("cheat-src.*")) or (d / "widen_verified.tsv").is_file():
                 return True
         except OSError:
             continue

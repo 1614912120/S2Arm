@@ -18,6 +18,27 @@ set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/../../.." && pwd)
 mode=${1:-}
+# 窄 shim 的 wrap 直通用例（#1091 复审）：不设驱动时 5 个入口必须逐条落 __real_*。
+# 只依赖编译器与仓内 Vulkan 头，不需要 lavapipe / validation，放在容器分流之前无条件跑。
+if [ "$(uname -s)" = Linux ]; then
+    shim_out="$repo/build/vk-loader-shim"
+    mkdir -p "$shim_out"
+    cc -D_POSIX_C_SOURCE=200809L -std=c11 -O1 -g -Wall -Wextra -Werror \
+        -DS2A_ANDROID_VK_LOADER_SHIM=1 \
+        -I "$repo/graphics/nvn/third_party/vulkan-headers/include" \
+        -I "$repo/android/native/direct" -I "$repo/android/native" \
+        "$repo/android/native/vk_loader_shim.c" \
+        "$repo/android/tests/vk/vkfake_driver_stub.c" "$repo/android/tests/vk/t_loader_shim_wrap.c" \
+        -Wl,--wrap=vkEnumerateInstanceVersion \
+        -Wl,--wrap=vkEnumerateInstanceExtensionProperties \
+        -Wl,--wrap=vkEnumerateInstanceLayerProperties \
+        -Wl,--wrap=vkCreateInstance \
+        -Wl,--wrap=vkGetInstanceProcAddr \
+        -o "$shim_out/t_loader_shim_wrap"
+    timeout 30 "$shim_out/t_loader_shim_wrap"
+else
+    echo "窄 shim wrap 直通用例：$(uname -s) 的链接器不支持 -Wl,--wrap，改在 Linux / 离线容器里跑（本机跳过）" >&2
+fi
 if [ "$mode" = "--shown-only" ] && [ -z "${S2A_VULKAN_IMAGE_ID:-}" ]; then
     . "$repo/android/tools/ndk_toolchain.sh"
     ndk=$(s2a_ndk_resolve) || { echo 'NDK 29 missing' >&2; exit 2; }
@@ -47,7 +68,7 @@ if [ "$mode" = "--indirect-core" ] || [ "$mode" = "--zero-attr-core" ]; then
     "$glslc_bin" --target-env=vulkan1.1 "$repo/android/native/nvn/blit_shaders/fullscreen.vert" -o "$out/shaders/depth_state.vert.spv"
     inc=(); for d in android/tests/vkhost graphics/nvn/third_party/vulkan-headers/include graphics/nvn graphics/nvn/replay graphics/nvn/gfx/nvn graphics/nvn/gfx/nvn/include android/native android/native/nvn android/native/direct runtime/include; do inc+=(-I "$repo/$d"); done
     src=("$repo/android/tests/vk/$core_test.c")
-    for f in graphics/nvn/replay/rp_draw.c graphics/nvn/replay/rp_buf.c graphics/nvn/replay/rp_state.c graphics/nvn/replay/nvn_unimpl.c android/native/nvn/backend_vulkan.c android/native/direct/vk_device.c android/native/direct/gs_path.c android/native/capprobe/capprobe_host.c android/native/nvn/nvn_vk_format.c graphics/nvn/gfx/nvn/nvn_fmt_expand.c android/native/nvn/nvn_vk_bcdec.c android/native/nvn/nvn_vk_driver_cache.c android/native/direct/sha256.c; do src+=("$repo/$f"); done
+    for f in graphics/nvn/replay/rp_draw.c graphics/nvn/replay/rp_buf.c graphics/nvn/replay/rp_state.c graphics/nvn/replay/nvn_unimpl.c android/native/nvn/backend_vulkan.c android/native/nvn/nvn_pipe_flight.c android/native/nvn/nvn_vk_pipe_once.c android/native/direct/vk_device.c android/native/direct/gs_path.c android/native/capprobe/capprobe_host.c android/native/nvn/nvn_vk_format.c graphics/nvn/gfx/nvn/nvn_fmt_expand.c android/native/nvn/nvn_vk_bcdec.c android/native/nvn/nvn_vk_driver_cache.c android/native/direct/sha256.c; do src+=("$repo/$f"); done
     cc -D_POSIX_C_SOURCE=200809L -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -DS2A_ANDROID_VK_BACKEND_NVN_VK=1 "${inc[@]}" "${src[@]}" -Wl,--gc-sections -Wl,--wrap=nvn_gpu_draw -lvulkan -lpthread -lm -o "$out/$core_test"
     export VK_ICD_FILENAMES="$S2A_LAVAPIPE_ICD" VK_LAYER_PATH="$S2A_VK_LAYER_DIR" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
     set +e
@@ -155,7 +176,7 @@ inc=(-I "$repo/android/tests/vkhost"
 if [ "$mode" = "--dispatch-barrier" ] || [ "$mode" = "--dispatch-barrier-neg" ] || [ "$mode" = "--xfer-dispatch" ]; then
     "$glslc" --target-env=vulkan1.1 "$repo/android/tests/vk/shaders/bar_double.comp" -o "$out/shaders/bar_double.comp.spv"
     src=("$repo/android/tests/vk/t_replay_dispatch_barrier.c")
-    for f in graphics/nvn/replay/rp_draw.c graphics/nvn/replay/rp_buf.c graphics/nvn/replay/rp_state.c graphics/nvn/replay/nvn_unimpl.c android/native/nvn/backend_vulkan.c android/native/direct/vk_device.c android/native/direct/gs_path.c android/native/capprobe/capprobe_host.c android/native/nvn/nvn_vk_format.c graphics/nvn/gfx/nvn/nvn_fmt_expand.c android/native/nvn/nvn_vk_bcdec.c android/native/nvn/nvn_vk_driver_cache.c android/native/direct/sha256.c; do src+=("$repo/$f"); done
+    for f in graphics/nvn/replay/rp_draw.c graphics/nvn/replay/rp_buf.c graphics/nvn/replay/rp_state.c graphics/nvn/replay/nvn_unimpl.c android/native/nvn/backend_vulkan.c android/native/nvn/nvn_pipe_flight.c android/native/nvn/nvn_vk_pipe_once.c android/native/direct/vk_device.c android/native/direct/gs_path.c android/native/capprobe/capprobe_host.c android/native/nvn/nvn_vk_format.c graphics/nvn/gfx/nvn/nvn_fmt_expand.c android/native/nvn/nvn_vk_bcdec.c android/native/nvn/nvn_vk_driver_cache.c android/native/direct/sha256.c; do src+=("$repo/$f"); done
     cc -D_POSIX_C_SOURCE=200809L -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -DS2A_ANDROID_VK_BACKEND_NVN_VK=1 "${inc[@]}" "${src[@]}" -Wl,--gc-sections -Wl,--wrap=vkGetDeviceProcAddr -lvulkan -lpthread -lm -o "$out/dispatch-barrier"
     mkdir -p "$repo/build/978-tests"
     db_red=0
@@ -191,7 +212,7 @@ if [ "$mode" = "--shown-only" ]; then
     inc=(-I "$repo/build/c883-ndk" "${inc[@]}")
 fi
 src=("$repo/android/tests/vk/t_backend_vk.c"
-     "$repo/android/native/nvn/backend_vulkan.c"
+     "$repo/android/native/nvn/backend_vulkan.c" "$repo/android/native/nvn/nvn_pipe_flight.c" "$repo/android/native/nvn/nvn_vk_pipe_once.c"
      "$repo/android/native/direct/vk_device.c"
      "$repo/android/native/direct/gs_path.c"
      "$repo/android/native/capprobe/capprobe_host.c"
@@ -211,15 +232,19 @@ case "$mode" in
     --tsan) cflags+=(-fsanitize=thread) ;;
     --asan) cflags+=(-fsanitize=address,undefined -fno-omit-frame-pointer) ;;
     --shown-only) cflags+=(-DS2A_C883_TEST=1) ;;
-    ""|--separate-core|--separate-neg-sampler|--gs-only|--gs-compiler|--gs-core|--gs-no-cap|--gs-neg-stage|--gs-neg-flags|--gs-neg-cap) ;;
+    ""|--present-only|--separate-core|--separate-neg-sampler|--gs-only|--gs-compiler|--gs-core|--gs-no-cap|--gs-neg-stage|--gs-neg-flags|--gs-neg-cap) ;;
     *) echo "未知参数：${mode}（可用 --tsan / --asan）" >&2; exit 64 ;;
 esac
 
 echo "lavapipe: $icd"
 echo "validation: $layer"
+if [ "$mode" = "--present-only" ]; then
+    src[0]="$repo/android/tests/vk/t_present_encoding.c"
+    cflags+=(-ffunction-sections -fdata-sections -Wno-unused-function)
+fi
 if [ "$mode" = "--gs-core" ]; then
-    src=("$repo/android/tests/vk/t_replay_gs.c" "$repo/graphics/nvn/replay/rp_draw.c" "$repo/graphics/nvn/replay/rp_state.c" "$repo/graphics/nvn/replay/nvn_unimpl.c" "$repo/android/native/gfx_plat/nvk_shader.c"
-         "$repo/android/native/nvn/backend_vulkan.c" "$repo/android/native/direct/vk_device.c" "$repo/android/native/direct/gs_path.c" "$repo/android/native/capprobe/capprobe_host.c"
+    src=("$repo/android/tests/vk/t_replay_gs.c" "$repo/graphics/nvn/replay/rp_draw.c" "$repo/graphics/nvn/replay/rp_state.c" "$repo/graphics/nvn/replay/nvn_unimpl.c" "$repo/android/native/gfx_plat/nvk_shader.c" "$repo/android/native/nvn/nvn_vk_prog_warm.c" "$repo/android/native/direct/libpack_vk.c"
+         "$repo/android/native/nvn/backend_vulkan.c" "$repo/android/native/nvn/nvn_pipe_flight.c" "$repo/android/native/nvn/nvn_vk_pipe_once.c" "$repo/android/native/direct/vk_device.c" "$repo/android/native/direct/gs_path.c" "$repo/android/native/capprobe/capprobe_host.c"
          "$repo/android/native/nvn/nvn_vk_format.c" "$repo/graphics/nvn/gfx/nvn/nvn_fmt_expand.c" "$repo/android/native/nvn/nvn_vk_bcdec.c"
          "$repo/android/native/nvn/nvn_vk_program_result.c" "$repo/android/native/nvn/nvn_vk_compute_request.c"
          "$repo/android/native/nvn/nvn_vk_driver_cache.c"
@@ -230,7 +255,7 @@ if [ "$mode" = "--gs-core" ]; then
 fi
 if [ "$mode" = "--separate-core" ] || [ "$mode" = "--separate-neg-sampler" ]; then
     src=("$repo/android/tests/vk/t_replay_separate.c" "$repo/graphics/nvn/replay/rp_draw.c" "$repo/graphics/nvn/replay/rp_state.c" "$repo/graphics/nvn/replay/nvn_unimpl.c"
-         "$repo/android/native/nvn/backend_vulkan.c" "$repo/android/native/direct/vk_device.c" "$repo/android/native/direct/gs_path.c" "$repo/android/native/capprobe/capprobe_host.c"
+         "$repo/android/native/nvn/backend_vulkan.c" "$repo/android/native/nvn/nvn_pipe_flight.c" "$repo/android/native/nvn/nvn_vk_pipe_once.c" "$repo/android/native/direct/vk_device.c" "$repo/android/native/direct/gs_path.c" "$repo/android/native/capprobe/capprobe_host.c"
          "$repo/android/native/nvn/nvn_vk_format.c" "$repo/graphics/nvn/gfx/nvn/nvn_fmt_expand.c" "$repo/android/native/nvn/nvn_vk_bcdec.c"
          "$repo/android/native/nvn/nvn_vk_driver_cache.c" "$repo/android/native/direct/sha256.c")   # 后端的管线缓存落盘（#856）
     cflags+=(-ffunction-sections -fdata-sections -Wno-unused-function)
@@ -310,6 +335,20 @@ with open(sys.argv[2], 'w') as f:
     json.dump({'source': 'probe', 'gs_occlusion': 'supported'}, f, separators=(',', ':'))
 PYPROBE
 export S2A_CAPPROBE_RESULT="$out/probe-result.json"
+
+if [ "$mode" = "--present-only" ]; then
+    for order in rgba bgra; do
+    if [ "$order" = bgra ]; then export S2A_TEST_PRESENT_BGRA=1; else unset S2A_TEST_PRESENT_BGRA; fi
+    set +e
+    timeout 60 "$out/t_backend_vk" 2>&1 | tee "$out/present-log"
+    rc=${PIPESTATUS[0]}
+    set -e
+    bad=$(grep -cE 'Validation Error|VUID-|SYNC-HAZARD-' "$out/present-log" || true)
+    [ "$rc" -eq 0 ] && [ "$bad" -eq 0 ] || exit 1
+    done
+    unset S2A_TEST_PRESENT_BGRA
+    exit 0
+fi
 
 if [ "$mode" = "--separate-neg-sampler" ]; then
     set +e
@@ -421,8 +460,20 @@ if ! grep -q "C697f 3D BC 按切片号上传：已核对" "$out/log"; then
     echo "【红】没跑到 C697f（缓冲 → 3D BC 现解贴图按切片号上传）" >&2
     exit 1
 fi
+if ! grep -q "C206 段内已引用句柄备忘：重复引用只记一次 / release 之后再用照样报错且报错的不进备忘 / 无关 release 作废备忘 / 归还次数对得上 / 新段不继承旧段的备忘 / 并发无竞争，缺省与对照两档已核对" "$out/log"; then
+    echo "【红】没跑到 C206（段内已引用句柄备忘：重复引用只记一次、release 之后再用照样报错且报错的不进备忘、无关 release 作废备忘、归还次数对得上、新段不继承旧段的备忘、并发无竞争）" >&2
+    exit 1
+fi
 if ! grep -q "C907 保留路径管线缓存落盘：已核对" "$out/log"; then
     echo "【红】没跑到 C907（停局保留会话时的管线缓存落盘）" >&2
+    exit 1
+fi
+if ! grep -q "C205 图形管线散列表：增长 / 多次翻倍 / 增长失败沿用旧表 / 逐字节逐字段 / 先比散列 / 两条退路已核对" "$out/log"; then
+    echo "【红】没跑到 C205（图形管线散列表：增长重排、起始 16 桶多次翻倍、增长分配失败沿用旧表、散列覆盖每个字节 / 字段、先比存下的散列、两条退路）" >&2
+    exit 1
+fi
+if ! grep -q "C207 诊断读数互不清零：近 300 帧读数与逐笔读数各自读增量、不清零共享累加器，已核对" "$out/log"; then
+    echo "【红】没跑到 C207（诊断读数互不清零：近 300 帧读数与每 5 秒的逐笔读数读同一批累加器，各自读增量）" >&2
     exit 1
 fi
 bad=$(grep -cE "Validation Error|VUID-" "$out/log" || true)
@@ -538,4 +589,10 @@ if [ "$mode" = "--tsan" ]; then
     echo "【绿】C01–C08 + C23/C25/C26/C27/C28/C29/C30/C31/C32/C33/C34/C35/C36-55/C70/C71/C72/C73 + 清屏/复制/深度/纹理三角形：TSan 0 报告（validation 由默认档单独跑）；设备 $(grep '^device:' "$out/log" | head -1)"
 else
     echo "【绿】C01–C08 + C23/C25/C26/C27/C28/C29/C30/C31/C32/C33/C34/C35/C36-55/C70/C71/C72/C73 + 清屏/复制/深度/纹理三角形 + BC1–BC7 逐像素解码：validation 0 条；设备 $(grep '^device:' "$out/log" | head -1)"
+fi
+
+# #1142：默认 vk 套件也验非线性上屏，立即 / 延迟两档均开同步校验。
+if [ -z "$mode" ]; then
+    (unset S2A_TEST_NVK_DQ; bash "$repo/android/tests/vk/run.sh" --present-only)
+    S2A_TEST_NVK_DQ=1 bash "$repo/android/tests/vk/run.sh" --present-only
 fi

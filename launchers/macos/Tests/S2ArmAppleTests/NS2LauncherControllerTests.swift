@@ -163,7 +163,7 @@ private final class BareSystemController: GCController {
     override var vendorName: String? { name }
 }
 
-private final class NamedSystemController: GCController {
+final class NamedSystemController: GCController {   // 面板截图测试（NS2PanelSnapshotTests #1151）也用
     private let name: String
     private let gamepadSnapshot = GCController.withExtendedGamepad()
 

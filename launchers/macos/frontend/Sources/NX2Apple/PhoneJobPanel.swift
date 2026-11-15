@@ -178,6 +178,11 @@ struct PhoneJobPanel: View {
                     .buttonStyle(.plain).help(o.exportFolder).accessibilityIdentifier("phone.export.path")
                 }
             }
+            if o.exportReused > 0 {
+                Text(LauncherCopy.note(o.exportFresh.isEmpty ? t("phone.done.export.same")
+                    : t("phone.done.export.fresh").replacingOccurrences(of: "{0}", with: o.exportFresh.joined(separator: "、")).replacingOccurrences(of: "{1}", with: "\(o.exportReused)")))
+                    .font(.manrope(15, .semibold)).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("phone.export.fresh")
+            }
             HStack(alignment: .top, spacing: 52) {
                 ForEach(Array(stats.enumerated()), id: \.offset) { _, s in
                     VStack(alignment: .leading, spacing: 6) {

@@ -84,6 +84,8 @@
 "crash.off.body" = "上次开着 %@ 时游戏退出了，这次已为你关掉。想用的话，可以在设置里重新打开。";
 "crash.off.prompt" = "上次开着 %@ 时游戏退出了，这次已为你关掉，想用的话可以在设置里重新打开。\n\n把这次的诊断发给我们，能帮我们修好它。诊断包里只有运行日志，不含存档、密钥和游戏文件。";
 "crash.off.title" = "已关掉上次出问题的设置";
+"crash.restored.title" = "已重新打开上次崩溃时关掉的设置";
+"crash.restored.body" = "上次游戏崩溃时自动关掉的 %@，新版 S2Arm 已重新打开。再崩溃会再自动关。";
 "sgrade.title" = "S 级优化";
 "sgrade.note" = "开着补丁如遇到不兼容导致游戏崩溃，下次启动会自动将崩溃补丁关掉以确保您正常游戏。";
 "sgrade.counts" = "已开 %ld · 共 %ld";
@@ -220,6 +222,8 @@
 "vpad.menu.ns2pro" = "启用 Switch 2 Pro 手柄";
 "vpad.menu.pad" = "手柄与体感";
 "vpad.menu.rumble" = "震动";
+"vpad.menu.volume" = "声音";
+"vpad.volume.mute" = "静音";
 "vpad.menu.rumble.note" = "手机马达和手柄共用；选档位时会按那一档震一下";
 "vpad.menu.saves" = "存档管理";
 "vpad.menu.stickFixed.note" = "关掉 = 手指落点当中心";
@@ -441,6 +445,7 @@
 "save.restored" = "存档已恢复。可开始游戏检查进度；恢复前备份已保留（此前无存档时不生成备份）。";
 "save.serviceInvalid" = "存档服务未返回有效结果。请关闭后重新打开 App，保留现有数据。";
 "save.start" = "开始游戏";
+"save.leave" = "退出（下次打开直接进游戏）";
 "save.status.hasSave" = "当前存档可以导出。导入会先检查游戏版本、账号归属和文件完整性，再由你确认恢复。";
 "save.status.noSave" = "尚无可导出的存档。可以导入备份，或开始游戏创建存档。";
 "save.tempCleanupFailed" = "临时副本清理失败，仍占用设备空间。请在“文件”中删除 App 内名为“%@”的临时副本。";
@@ -456,6 +461,7 @@
 "settings.fps.knownIssue.message" = "此游戏开 60 帧有已知问题，若游戏速度异常请关闭";
 "settings.fps.native" = "本款原生 60 帧";
 "settings.group.dev" = "开发";
+"settings.devEntry" = "开发与诊断";
 "settings.notStarted" = "未启动游戏";
 "settings.restart.message" = "是否立刻重启游戏？未保存的进度会丢失，请确认已在游戏内保存进度。";
 "settings.restart.messageLater" = "保存的设置将在下次启动游戏时生效。";
@@ -510,3 +516,17 @@
 "vpad.screenLock.note" = "外接显示器时用，点三下恢复";
 "vpad.screenLock.hint" = "如需关闭手机黑屏，请连续点击3次屏幕";
 "vpad.screenLock.unlock" = "恢复手机屏幕";
+"sgrade.state.on.adaptive" = "在用：社区满屏补丁（按屏幕比例自动选）";
+"sgrade.state.on.fixed" = "在用：社区满屏补丁（固定画幅）";
+"sgrade.state.on.own" = "在用：S2Arm 通用满屏（这款没有社区满屏补丁，S2Arm 验过能铺满）";
+"sgrade.state.on.fps" = "在用：最高 %1$@ 帧";
+"sgrade.state.off_user" = "已关";
+"sgrade.state.off_auto.crash" = "已自动关：%1$@ 游戏崩溃时它开着";
+"sgrade.state.off_auto.stall" = "已自动关：%1$@ 画面停住时它开着";
+"sgrade.state.version.newer" = "补丁库里是 %1$@ 版的，你这份是 %2$@。把游戏更新到 %1$@ 后重新出包就能用。";
+"sgrade.state.version.older" = "补丁只有旧版本 %1$@ 的，你这个版本暂时没有。";
+"sgrade.state.version.port_failed" = "已试过移植到你这份，没成功。";
+"sgrade.state.none" = "补丁库里还没有这款游戏的%1$@补丁。";
+"sgrade.state.opted_out" = "没打入：出包时取消了「出包时打入」。重新出包时勾上就有。";
+"sgrade.state.pending.ios" = "电脑上有可用的新补丁：在电脑的 S2Arm 点「S 级优化升级」装进来。";
+"sgrade.state.mac_only" = "画面补丁只在 Mac 版里。";

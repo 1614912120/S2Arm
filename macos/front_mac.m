@@ -1601,10 +1601,14 @@ static void front_layer_detach(void) {
 //   帧步（hle_nvn.c front_screen_max_fps → shown_slack）据此不把准时帧判成迟到。主线程在建窗与换屏时刷新，任意线程读
 static _Atomic int g_screen_max_fps;
 int front_screen_max_fps(void) { return atomic_load(&g_screen_max_fps); }
+__attribute__((weak)) void s2a_cpatch_screen_changed(void) {}   // runtime/src/cpatch.c 强定义；不链它的构建（输入单测）落到这个空桩
 static void screen_fps_note(NSWindow *w) {
     NSScreen *sc = w.screen ?: NSScreen.mainScreen; int hz = 0;
     if (@available(macOS 12.0, *)) hz = (int)sc.maximumFramesPerSecond;
-    if (atomic_exchange(&g_screen_max_fps, hz) != hz) fprintf(stderr, "[s2a] 窗口所在屏最高刷新 %d Hz\n", hz);
+    if (atomic_exchange(&g_screen_max_fps, hz) != hz) {
+        fprintf(stderr, "[s2a] 窗口所在屏最高刷新 %d Hz\n", hz);
+        s2a_cpatch_screen_changed();   // 帧率补丁自动档按新屏幕重挑（起局选档时还没窗口，按 60 算过）
+    }
 }
 @implementation S2AMetalView
 - (BOOL)acceptsFirstResponder { return YES; }

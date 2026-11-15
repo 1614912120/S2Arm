@@ -64,11 +64,12 @@ final class NS2LauncherController: ObservableObject {
     /// 弹窗标题：照连着的型号写；没连 / 还不知道型号时写通用的「Switch 手柄」（不分代：一代 Joy-Con 以后也在这里）（#520）
     /// 标题：一只写型号；一对 Joy-Con 2 合成一位写「Joy-Con 2 (L + R)」；其余两只以上写「N 个 NS2 手柄」（同蓝牙手柄那块写数量，玩家在玩家列表）
     func title(lang: String) -> String {
-        if hasSystemController, let systemControllerName { return systemControllerName }   // #901：只有系统手柄连着时写它的真实名字
-        return switchTitle(lang: lang)
+        if hasSystemController, let systemControllerName { return systemControllerName }   // #901：只有系统手柄连着时写它的真实名字（顶栏按钮用）
+        return switch2Title(lang: lang)
     }
-    /// Switch 专用通道的标题必须与该通道的状态配对，不能借用系统手柄名称。
-    func switchTitle(lang: String) -> String {
+    /// 面板顶部那一块只讲 Switch 2 手柄（#1151）：状态点是 Switch 2 连接的状态，标题不能借系统手柄的名字——
+    ///   系统手柄在下面自己那一块写「已连接」，原先顶部同时写它的名字 +「未连接」，同一只两种状态
+    func switch2Title(lang: String) -> String {
         let mergedPair = kind == 4 && players == 1
         let count = max(deviceCount, 0) + extras.reduce(0) { $0 + $1.devices.count }
         if count >= 2 && !(mergedPair && count == 2) { return Self.text("s2arm.controller.countTitle", lang).replacingOccurrences(of: "{0}", with: "\(count)") }

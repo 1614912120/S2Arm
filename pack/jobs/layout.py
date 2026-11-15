@@ -402,6 +402,12 @@ def path(c, gid, *parts, create=True):
     return d.joinpath(*parts)
 
 
+def nro_kept(c, gid, create=False):
+    """运行时留下的 NRO（#8be819：游戏自有加密归档里的 NRO，出包时认不出；宿主 LoadNro 缺表时把游戏解开的那份存成 <SHA-256>.nro，
+    Mac 局收局后 / 装 iPhone 前收回这里），出包改写阶段经 S2A_NRO_KEPT_DIR 读（runtime/rewriter/nro_to_nso.py 第三来源）"""
+    return path(c, gid, "nro_kept", create=create)
+
+
 def image_mac(c, gid, create=True):
     return path(c, gid, "image", "mac", create=create)
 
@@ -439,7 +445,11 @@ def ios_pack(c, gid):
             os.rename(legacy, pack)
             hide(pack)
         except OSError:
-            return legacy   # 改不了名（被占着）：照旧用老位置，下次再改
+            # 审计 P1-183：改名失败可能是另一路（装机页轮询 / 出包）刚改完：.pack 已在就用它，不退回已经不存在的 pack/；
+            #   真被占着（老位置还在）才照旧用老位置，下次再改。不加锁、不要求重新出包
+            if pack.is_dir():
+                return pack
+            return legacy
     return pack
 
 

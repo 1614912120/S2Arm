@@ -41,6 +41,7 @@ def main():
         command([os.environ.get("CC", "cc"), "-D_GNU_SOURCE", "-D__ANDROID__", "-DS2A_UNIT_TEST",
                  "-ffunction-sections", "-fdata-sections", "-fvisibility=hidden",
                  "-Wall", "-Wextra", "-Werror", "-I" + str(ROOT),
+                 "-I" + str(ROOT / "android/tests/hostvk"),
                  "-I" + str(ROOT / "runtime/src"), "-I" + str(ROOT / "runtime/include"),
                  path, helper, fixture, "-pthread", "-ldl", "-Wl,--gc-sections",
                  "-Wl,--wrap=pthread_create,--wrap=pipe2", "-o", binary], "build-" + name)
@@ -76,10 +77,15 @@ def main():
     for mode in ("inflight", "writers-fail", "watchdog-fail", "vk-drain-fail"):
         log, _ = command([binary, mode], mode, 125)
         assert "cs-shutdown" not in log and "优雅退出完成" not in log
+        if mode != "vk-drain-fail":
+            expected = {"inflight": "services still in flight", "writers-fail": "guest/fault writers not settled",
+                        "watchdog-fail": "shutdown watchdog start failed"}[mode]
+            assert "[exit125] " + expected in log, (mode, log)
     log, _ = command([binary, "vk-drain-fail"], "vk-drain-fail-order", 125)
     assert "vk-drain\n" in log and not any(s in log for s in ("cancel\n", "park\n", "writers\n")), log
     log, _ = command([binary, "cleanup-fail"], "cleanup-fail", 125)
     assert "cs-shutdown\ncleanup-result\n" in log and "优雅退出完成" not in log
+    assert "[exit125] services cleanup not confirmed" in log, log
     for mode in ("hang", "full-stderr", "hang-threaded", "full-stderr-threaded"):
         log, elapsed = command([binary, mode], mode, 124)
         assert "优雅退出完成" not in log and 1.3 < elapsed < 3.0

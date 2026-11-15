@@ -347,7 +347,8 @@ def convert(dump, out, name=None):
     with open(os.path.join(tmp, '.ns2_dump_key'), 'w', encoding='utf-8', newline='\n') as f:
         f.write(key + '\n')
     shutil.rmtree(out, ignore_errors=True)
-    os.rename(tmp, out)
+    from orch.dirrename import rename_dir   # 刚写完整份解包，Windows 上杀软 / 索引扫描开着句柄时目录改名报 WinError 5：按 #361 同一套退避重试
+    rename_dir(tmp, out)
     print(f'🟢 Switch 2 导出目录 → {out}：程序号 {tid:016x}；exefs {" ".join(b.split(":")[0] for b in builds)}；'
           f'romfs {len(rom)} 个文件 {nb >> 20} MB（{how}）；DLC {len(aoc_idx)} 个；{ctl_note}；标题「{nm}」')
     return 0

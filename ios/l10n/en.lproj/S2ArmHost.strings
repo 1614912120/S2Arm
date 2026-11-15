@@ -84,6 +84,8 @@
 "crash.off.body" = "The game quit last time while %@ was on, so it’s off this time. You can turn it back on in Settings.";
 "crash.off.prompt" = "The game quit last time while %@ was on, so it’s off this time. You can turn it back on in Settings.\n\nSending us the diagnostics helps us fix it. The bundle contains only run logs — no saves, keys or game files.";
 "crash.off.title" = "Turned off what was on when the game quit";
+"crash.restored.title" = "Turned back on what was switched off after a crash";
+"crash.restored.body" = "%@ was switched off after the game crashed; this version of S2Arm turns it back on. If it crashes again it will be switched off again.";
 "sgrade.title" = "S-grade enhancements";
 "sgrade.note" = "If a patch is incompatible and makes the game crash, it is turned off automatically the next time you launch, so you can keep playing.";
 "sgrade.counts" = "%ld on · %ld in all";
@@ -220,6 +222,8 @@
 "vpad.menu.ns2pro" = "Enable Switch 2 Pro Controller";
 "vpad.menu.pad" = "Controllers & Motion";
 "vpad.menu.rumble" = "Rumble";
+"vpad.menu.volume" = "Sound";
+"vpad.volume.mute" = "Mute";
 "vpad.menu.rumble.note" = "Shared by the phone motor and controllers; picking a level plays a sample";
 "vpad.menu.saves" = "Manage saves";
 "vpad.menu.stickFixed.note" = "Off = the stick centers where your finger lands";
@@ -441,6 +445,7 @@
 "save.restored" = "Save restored. You can start the game to check your progress. A pre-restore backup was kept (none is created if there was no save before).";
 "save.serviceInvalid" = "The save service didn’t return a valid result. Close and reopen the app; your existing data is kept.";
 "save.start" = "Start game";
+"save.leave" = "Quit (open straight into the game next time)";
 "save.status.hasSave" = "Your current save can be exported. Importing first checks the game version, account ownership and file integrity, then asks you to confirm the restore.";
 "save.status.noSave" = "There’s no save to export yet. You can import a backup, or start the game to create a save.";
 "save.tempCleanupFailed" = "Couldn’t clean up a temporary copy, so it still takes up space. In Files, delete the temporary copy named “%@” inside the app.";
@@ -456,6 +461,7 @@
 "settings.fps.knownIssue.message" = "60 FPS has known issues in this game. Turn it off if the game runs at the wrong speed.";
 "settings.fps.native" = "Native 60 FPS in this game";
 "settings.group.dev" = "Development";
+"settings.devEntry" = "Developer & diagnostics";
 "settings.notStarted" = "Game not started";
 "settings.restart.message" = "Restart the game now? Unsaved progress will be lost, so make sure you’ve saved in the game.";
 "settings.restart.messageLater" = "Your saved settings take effect the next time you start the game.";
@@ -510,3 +516,17 @@
 "vpad.screenLock.note" = "For external displays. Tap 3 times to restore.";
 "vpad.screenLock.hint" = "To restore the phone screen, tap 3 times in succession";
 "vpad.screenLock.unlock" = "Restore phone screen";
+"sgrade.state.on.adaptive" = "In use: community full screen patch (picked for your screen's aspect ratio)";
+"sgrade.state.on.fixed" = "In use: community full screen patch (fixed aspect ratio)";
+"sgrade.state.on.own" = "In use: S2Arm full screen (no community patch for this game; checked by S2Arm)";
+"sgrade.state.on.fps" = "In use: up to %1$@ fps";
+"sgrade.state.off_user" = "Off";
+"sgrade.state.off_auto.crash" = "Turned off automatically: it was on when the game crashed on %1$@";
+"sgrade.state.off_auto.stall" = "Turned off automatically: it was on when the picture froze on %1$@";
+"sgrade.state.version.newer" = "The patch library has it for version %1$@; yours is %2$@. Update the game to %1$@ and export again to use it.";
+"sgrade.state.version.older" = "Patches only exist for the older version %1$@; there's none for your version yet.";
+"sgrade.state.version.port_failed" = "We tried adapting it to your version, but it didn't work.";
+"sgrade.state.none" = "The patch library has no %1$@ patch for this game yet.";
+"sgrade.state.opted_out" = "Not added: \"Add when building\" was off at export. Turn it on and export again.";
+"sgrade.state.pending.ios" = "New patches are available: open S2Arm on your computer and choose \"S-grade upgrade\".";
+"sgrade.state.mac_only" = "Graphics patches are Mac-only.";

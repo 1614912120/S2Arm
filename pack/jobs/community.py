@@ -247,8 +247,10 @@ NACP_LANGUAGES = ("AmericanEnglish", "BritishEnglish", "Japanese", "French", "Ge
 
 
 def nacp_languages(nacp_bytes):
-    """control.nacp 原文 → 支持的语言（NACP_LANGUAGES 的名字，按位序）；读不到 / 标志为 0 → []"""
-    if len(nacp_bytes) < 0x3030:
+    """control.nacp 原文 → 支持的语言（NACP_LANGUAGES 的名字，按位序）；读不到 / 标志为 0 / 合成件 → []（不知道）
+    合成件（pack/ns2_dump.py synth_nacp：显示版本 0x3060 写「?」）只为防 #401 黑屏声明了美式英语，不是游戏真实支持表；
+    当真用会把下拉缩成「跟随系统 + 英语」，玩家选不了中文（#1209）。服务层对合成件同样不信支持表（IApplicationFunctions Switch2LanguagesUnknown / SynthTableHonorsExplicitLanguage）"""
+    if len(nacp_bytes) < 0x3030 or nacp_bytes[0x3060:0x3061] == b"?":
         return []
     flag = int.from_bytes(nacp_bytes[0x302C:0x3030], "little")
     return [n for i, n in enumerate(NACP_LANGUAGES) if flag >> i & 1]
@@ -470,8 +472,9 @@ def describe_game(c, game):
     for it in a["graphics"]:
         it["enabled"] = s["enabled"].get(it["id"]) is not False   # 11-13：没选过 = 默认开（S 级优化命中的打入并默认开）
     import cheats   # 金手指（11-12）：同一页「游戏设置 → 金手指」列出与开关
+    import sgrade   # S 级按类状态（满屏来源 / 是否生效 / 自动关 / 版本，pack/jobs/sgrade.py state）
     return dict(gameId=game["id"], version=_version(game), mac=mac_settings(c, game["id"]), cheats=cheats.listing(c, game),
-                crashed=cheats.crashed(c, game), **a)
+                crashed=cheats.crashed(c, game), sgradeState=sgrade.state(c, game), **a)
 
 
 def listing(c):
@@ -512,6 +515,12 @@ def save(c):
     if c.r.get("crashAnswer") is not None:   # 上次开着金手指 / 补丁时异常退出、已当场关掉，玩家看过通知 ack（pack/jobs/cheats.py answer_crash）
         import cheats
         cheats.answer_crash(c, game, c.r["crashAnswer"])
+    # 玩家自己动了帧率 / 满屏 / 补丁 / 金手指开关：这几项不再算「自动关的」（S 级状态 autoOff，pack/jobs/cheats.py forget_auto_off）
+    touched = ([("fps", "fps60")] if "fps60" in want else []) + ([("fs", "fullscreen")] if "widescreen" in want else []) \
+        + [("patch", k) for k in (c.r.get("graphics") or {})] + [("cheat", k) for k in (c.r.get("cheats") or {})]
+    if touched:
+        import cheats
+        cheats.forget_auto_off(c, game["id"].upper(), touched)
     graphics = c.r.get("graphics") or {}
     if not isinstance(graphics, dict):
         raise Failure("社区资源选择格式不对。", code="job_failed")
@@ -551,7 +560,7 @@ def launch_env(c, gid):
     strong = caps.get("widen") == "0" and "强信号" in runtime_caps_rows(c, gid).get("widen", ("", ""))[1]  # 非玩家句
     fams, fam_default = adaptive_patches(c, gid)
     full = False if strong else s["widescreen"] if isinstance(s.get("widescreen"), bool) else (caps.get("widen") == "1" or bool(fams))   # 有自适应满屏补丁 = 默认开（11-13）
-    if s.get("widescreen") is True and not strong and not fams:
+    if s.get("widescreen") is True and not strong and not fams and os.environ.get("S2A_CAPS_OWN") == "1":   # 11-15：我方通用满屏缺省不用（runtime/src/widen.c），老设置不再绕过
         env["S2A_WIDEN_VERIFIED"] = "1"
         env["S2A_WIDESCREEN"] = "1"
     elif s.get("widescreen") is False:

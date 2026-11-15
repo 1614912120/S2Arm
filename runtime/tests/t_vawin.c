@@ -71,7 +71,7 @@ int main(void) {
         if (vm_region_recurse_64(mach_task_self(), &ra, &rs, &d, (vm_region_recurse_info_t)&si, &c) || si.user_tag != S2A_TAIL_TAG0 + S2A_TAIL_METAL) { printf("✗ 退回低区的映射应带 Metal 使用者标签 %d，得 %u\n", S2A_TAIL_TAG0 + S2A_TAIL_METAL, si.user_tag); bad++; }
         char fn[900]; s2a_tail_note(fn, sizeof fn);
         if (!strstr(fn, "落低区在用 2.0 MB 峰值 2.0 MB")) { printf("✗ 退回 2 MB 未还时应记落低区在用 2.0 MB：%s\n", fn); bad++; }
-        char tg[400]; s2a_low_tags(tg, sizeof tg);
+        char tg[768]; s2a_low_tags(tg, sizeof tg);
         if (!strstr(tg, "Metal 缓冲（标签")) { printf("✗ 按标签合计应按名字列出 Metal 使用者：%s\n", tg); bad++; }
         s2a_tail_unmap(fb, 2 * M, S2A_TAIL_METAL); }
       s2a_tail_unmap(fill, rest - M, S2A_TAIL_METAL);
@@ -82,6 +82,12 @@ int main(void) {
       s2a_tail_note(note, sizeof note);
       if (!strstr(note, "接管 256 MB，已用 0.0 MB、剩余 256.0 MB（最大空闲块 256.0 MB、空闲段 1）")) { printf("✗ 全部还回后应合并成一整段：%s\n", note); bad++; }
       printf("· 窗口尾部分配：%s\n", note); }
+    { // #7c1a0f：宿主自有映射带 S2A_VMTAG_* 标签，按标签合计按名字列出（期望按 s2a_lowva.h 的名字手写）。64 MB 不提交物理页，排进前 10
+      const uint64_t N = 64ull << 20; void *fm = mmap(NULL, N, PROT_NONE, MAP_PRIVATE | MAP_ANON, S2A_VMTAG_FD(S2A_VMTAG_FAR), 0);
+      if (fm == MAP_FAILED) { printf("✗ 带远端影子区标签的 64 MB 映射失败\n"); bad++; }
+      else { char tg[768]; s2a_low_tags(tg, sizeof tg);
+        if (!strstr(tg, "远端影子区（标签 249）")) { printf("✗ 按标签合计应按名字列出远端影子区：%s\n", tg); bad++; }
+        munmap(fm, N); } }
     printf("%s t_vawin：%d 处不符\n", bad ? "✗" : "✓", bad);
     return bad != 0;
 }
