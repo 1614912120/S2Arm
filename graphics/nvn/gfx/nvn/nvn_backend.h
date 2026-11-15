@@ -105,6 +105,8 @@ enum {
     NVN_GPU_CAP_DYN_RASTER        = 1u << 17,  // 剔除 / 正反面 / 多边形模式是动态状态（Metal 恒有 / Vulkan extended_dynamic_state(3)）
     NVN_GPU_CAP_BLIT_SCALED       = 1u << 18,  // 带缩放 / 格式转换的贴图拷贝原生（Metal 无，核心 copy_t2t_draw 用绘制做；vkCmdBlitImage）
     NVN_GPU_CAP_GPU_DESWIZZLE     = 1u << 19,  // 后端能在 GPU 上解 NVN 块线性排布（Metal 现有 nvn_deswizzle_gpu.h；定稿 #3）
+    NVN_GPU_CAP_NO_ATTACH_PASS    = 1u << 20,  // 能开一个附件都不挂的渲染通道（NVN 不挂目标照样绘制：片元只写存储 / 只为遮挡计数）。尺寸由 pass_desc 的 w / h 给；
+                                               //   Vulkan 核心 1.0 恒有（零附件子通道 + 带宽高的帧缓冲）；Metal 的 renderTargetWidth / Height 没接，不置位 → 核心照旧跳过并记账
 };
 // 绑定资源类别（布局项 cls；描述符上限按它分）
 enum { NVN_GPU_RES_UBO = 0, NVN_GPU_RES_SSBO, NVN_GPU_RES_TEX, NVN_GPU_RES_SAMP, NVN_GPU_RES_TEX_SAMP, NVN_GPU_RES_IMAGE,
@@ -327,6 +329,7 @@ typedef struct {
     uint8_t fb_fetch;     // 本通道有片元读本像素颜色（各颜色附件格式须有 NVN_GPU_FMT_FB_FETCH）
     uint8_t _rsv[2];
 } nvn_gpu_pass_desc;
+// 一个附件都不挂（ncolor 个槽全空、无深度模板）只在 caps 有 NVN_GPU_CAP_NO_ATTACH_PASS 时合法，此时 w / h 就是帧缓冲尺寸（核心按视口给）。
 // 开 / 关渲染通道。load / store 全由核心定（TBDR 策略在核心）。通道内只许状态 / 绑定 / 绘制 / 遮挡查询。线程：[提交]。出错：粘滞 ORDER / ARG。
 void nvn_gpu_pass_begin(nvn_gpu_cmd c, const nvn_gpu_pass_desc *d);
 void nvn_gpu_pass_end(nvn_gpu_cmd c);

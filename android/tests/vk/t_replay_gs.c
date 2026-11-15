@@ -57,6 +57,7 @@ nvn_gpu_tex rp_tex_backend_by_serial(uint64_t s) { (void)s; return NULL; }
 const p_set_rt *rp_pass_target(void) { return &target; }
 int rp_pass_slot_attached(int i) { return i == 0; }
 void rp_pass_slot_size(int i, uint32_t *w, uint32_t *h) { (void)i; *w = *h = 4; }
+void rp_pass_noatt_size(uint32_t *w, uint32_t *h) { (void)w; (void)h; }   // 有附件的通道：不动尺寸
 void rp_pass_note_draw(int d) { (void)d; }
 // #950 新增的回放核心依赖：替身取保守中性值（写日志恒报「写过」= 不让暂存命中；没有待折清除、不缩渲染区域）
 uint64_t rp_write_mark(void) { return 0; }
