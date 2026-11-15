@@ -3284,14 +3284,40 @@ static int up_lost_take(id tex) {   // This texture's upload was dropped: take i
 static void up_diag(void);
 // Staging block pool: a batch that outgrows its slot block takes fresh UP_BLOCK_SIZE private blocks (up_alloc), and the upload's completion used to retire them. On entering a scene that
 //   uploads ~0.9 GB of textures in one frame, that was ~1.2 GB of staging made, made resident (residency commit: 418 ms of the 755 ms frame, with the textures and the zero-copy sources)
-//   and freed again. Retired blocks of UP_BLOCK_SIZE now stay resident in a pool (up to DM_NVN_UP_POOL_MB, default 512; 0 = off, as before) for the next ones; a pool unused for 5 s is
-//   released (up_pool_trim, at each submission's start), so idle play holds no extra memory
+//   and freed again. Retired blocks of UP_BLOCK_SIZE now stay resident in a pool (up to DM_NVN_UP_POOL_MB, default 512 on the Mac, 128 on iOS; 0 = off, as before) for the next ones;
+//   a pool unused for 5 s is released (up_pool_trim, at each submission's start), so idle play holds no extra memory.
+//   Memory headroom (mem_avail): a block is not kept while the headroom to the system's memory limit is under its size + mem_margin(), and the pool is released at once when the
+//   headroom falls under mem_margin(). Only iOS has that limit; the Mac reads unknown and is not limited
+// Headroom to the system's memory limit. iOS: os_proc_available_memory, which reads 0 when the process is not an app or is over its limit; 0 is taken as no headroom (what it
+//   guards then falls back to how it was before: upload on first use, no pool). The Mac has no such limit: 0 = unknown, callers do not limit. DM_NVN_AVAIL_MB stands in a reading
+//   (tests, or checking the log lines on the Mac); g_mem_avail_fake: -2 not read yet, -1 none, else bytes
+static _Atomic int64_t g_mem_avail_fake = -2;
+static int mem_avail(uint64_t *out) {   // 1 = *out is the headroom; 0 = unknown here
+    int64_t f = atomic_load_explicit(&g_mem_avail_fake, memory_order_relaxed);
+    if (f == -2) { const char *e = getenv("DM_NVN_AVAIL_MB"); int64_t v = e && *e ? (int64_t)atoll(e) : -1; v = v < 0 ? -1 : v << 20; int64_t x = -2; atomic_compare_exchange_strong(&g_mem_avail_fake, &x, v); f = atomic_load(&g_mem_avail_fake); }
+    if (f >= 0) { *out = (uint64_t)f; return 1; }
+#if TARGET_OS_IPHONE
+    *out = os_proc_available_memory();
+    if (!*out) { static _Atomic int once; if (!atomic_exchange(&once, 1)) MLOG("memory headroom: os_proc_available_memory reads 0 (not an app, or over the memory limit): uploads ahead and the upload staging pool hold off while it does; textures upload on first use as before"); }
+    return 1;
+#else
+    return 0;
+#endif
+}
+static uint64_t mem_margin(void) { static int64_t v = -1; if (v < 0) { const char *e = getenv("DM_NVN_MEM_MARGIN_MB"); int64_t m = e && *e ? (int64_t)atoll(e) : 1024; v = (m < 0 ? 0 : m) << 20; } return (uint64_t)v; }   // DM_NVN_MEM_MARGIN_MB, default 1024
+static _Atomic uint64_t g_up_pool_skip_b;   // staging bytes not kept in the pool for memory headroom (tp_take's 10 s line takes it)
 static _Atomic uint64_t g_ma_inf_priv, g_ma_inf_src, g_ma_pk_pool, g_ma_pk_priv, g_ma_pk_src;   // memory ledger (ma_take): in flight now, peaks since the last frame
 static void ma_peak(_Atomic uint64_t *pk, uint64_t v) { uint64_t o = atomic_load_explicit(pk, memory_order_relaxed); while (v > o && !atomic_compare_exchange_weak_explicit(pk, &o, v, memory_order_relaxed, memory_order_relaxed)) {} }
 static NSMutableArray *g_up_pool; static uint64_t g_up_pool_bytes, g_up_pool_used_ns, g_up_pool_hits, g_up_pool_puts; static os_unfair_lock g_up_pool_lk = OS_UNFAIR_LOCK_INIT;
-static uint64_t up_pool_cap(void) { static int64_t v = -1; if (v < 0) { const char *e = getenv("DM_NVN_UP_POOL_MB"); v = (e ? atoll(e) : 512) << 20; if (v < 0) v = 0; } return (uint64_t)v; }
+#if TARGET_OS_IPHONE
+#define UP_POOL_MB_DEF 128   // a phone's process has a hard memory limit; a guess, to be set from device runs
+#else
+#define UP_POOL_MB_DEF 512
+#endif
+static uint64_t up_pool_cap(void) { static int64_t v = -1; if (v < 0) { const char *e = getenv("DM_NVN_UP_POOL_MB"); v = (e ? atoll(e) : UP_POOL_MB_DEF) << 20; if (v < 0) v = 0; } return (uint64_t)v; }
 static int up_pool_put(id<MTLBuffer> b) {   // completion thread: 1 = kept (still resident)
     if (!up_pool_cap() || b.length != UP_BLOCK_SIZE || b.storageMode != MTLStorageModePrivate) return 0;
+    uint64_t av; if (mem_avail(&av) && av < b.length + mem_margin()) { atomic_fetch_add_explicit(&g_up_pool_skip_b, b.length, memory_order_relaxed); return 0; }   // low headroom: not kept (released as before)
     os_unfair_lock_lock(&g_up_pool_lk); int ok = g_up_pool_bytes + b.length <= up_pool_cap();
     if (ok) { if (!g_up_pool) g_up_pool = [NSMutableArray array]; [g_up_pool addObject:b]; g_up_pool_bytes += b.length; g_up_pool_puts++; ma_peak(&g_ma_pk_pool, g_up_pool_bytes); }
     os_unfair_lock_unlock(&g_up_pool_lk); return ok;
@@ -3301,12 +3327,14 @@ static id<MTLBuffer> up_pool_get(void) {   // submit thread: a resident idle blo
     if (g_up_pool.count) { b = g_up_pool.lastObject; [g_up_pool removeLastObject]; g_up_pool_bytes -= b.length; g_up_pool_hits++; }
     g_up_pool_used_ns = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); os_unfair_lock_unlock(&g_up_pool_lk); return b;
 }
-static void up_pool_trim(void) {   // submit thread (nvn_be_sub_begin): release the pool after 5 s unused
+static void up_pool_trim(void) {   // submit thread (nvn_be_sub_begin): release the pool after 5 s unused, or at once when the memory headroom is under mem_margin()
     if (!g_up_pool_bytes) return;
+    uint64_t av = 0; int low = mem_avail(&av) && av < mem_margin();
     NSArray *drop = nil; os_unfair_lock_lock(&g_up_pool_lk);
-    if (g_up_pool.count && clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - g_up_pool_used_ns > 5000000000ull) { drop = [g_up_pool copy]; [g_up_pool removeAllObjects]; g_up_pool_bytes = 0; }
+    if (g_up_pool.count && (low || clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - g_up_pool_used_ns > 5000000000ull)) { drop = [g_up_pool copy]; [g_up_pool removeAllObjects]; g_up_pool_bytes = 0; }
     os_unfair_lock_unlock(&g_up_pool_lk);
-    if (drop) { MLOG("upload staging pool: %lu idle blocks released (%llu taken from the pool, %llu returned so far)", (unsigned long)drop.count, (unsigned long long)g_up_pool_hits, (unsigned long long)g_up_pool_puts);
+    if (drop) { if (low) MLOG("upload staging pool: %lu blocks released for memory headroom (%llu MB < margin %llu MB; %llu taken from the pool, %llu returned so far)", (unsigned long)drop.count, (unsigned long long)(av >> 20), (unsigned long long)(mem_margin() >> 20), (unsigned long long)g_up_pool_hits, (unsigned long long)g_up_pool_puts);
+        else MLOG("upload staging pool: %lu idle blocks released (%llu taken from the pool, %llu returned so far)", (unsigned long)drop.count, (unsigned long long)g_up_pool_hits, (unsigned long long)g_up_pool_puts);
         @autoreleasepool { for (id b in drop) res_remove((id<MTLResource>)b); } res_commit(); }
 }
 static void up_flush(void) {
@@ -3586,6 +3614,7 @@ static uint64_t g_tp_jb, g_tp_jh;   // judged bytes uploaded ahead (TP_AGE ago o
 static tp_up *g_tp_u; static uint32_t g_tp_nu, g_tp_ucap, g_tp_judged; static nvn_hmap g_tp_uix = {.klen = 8};   // uploaded ahead: ser → index + 1 (submit thread)
 static tp_kf *g_tp_fr, *g_tp_run; static uint32_t g_tp_nfr, g_tp_frcap, g_tp_nrun, g_tp_runcap; static uint64_t g_tp_fr_b;   // this frame's demand; this run's kept frames (g_tp_lk)
 static uint64_t g_tp_rej, g_tp_polls, g_tp_miss, g_tp_zero;   // candidates refused at the cap; looks; looks whose fingerprint is not listed (of them, with an untouched piece)
+static int g_tp_mem_held; static uint64_t g_tp_w_mem_n, g_tp_w_mem_b;   // held for memory headroom (submit thread); 10 s window: frames held, bytes then waiting (g_tp_lk)
 static uint64_t g_tp_f_b, g_tp_f_n, g_tp_f_ns, g_tp_f_dcmp, g_tp_f_hit, g_tp_w_b, g_tp_w_hit, g_tp_sync_b;   // per frame (tp_take) / 10 s window: bytes uploaded ahead, count, time, system decompressions, hits; this frame's own first uploads
 static id<MTLTexture> tex_mtl(const tex_t *ct);
 static NSString *pso_user_path(void);
@@ -3682,12 +3711,25 @@ static void tp_tick(void) {   // submit thread, end of a submission (nvn_be_sub_
     }
     os_unfair_lock_unlock(&g_tp_lk);
     if (!g_tp_nr || longf || sync >= TP_SYNC_MB || cmp > TP_CMP) return;
-    // upload some of the ready ones, oldest first
+    // upload some of the ready ones, oldest first. Memory headroom (mem_avail, read once a frame and counted down by what is made): a texture that would leave less than
+    //   mem_margin() stops this frame's uploads and stays ready for a later frame; a texture needed before then uploads on first use as before. Not a wrong guess: the judging is untouched.
+    //   Its size is tex_rd_size, an estimate of what the texture takes
+    uint64_t avail = 0, mrg = mem_margin(); int lim = mem_avail(&avail);
     uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW), b = 0; uint32_t i = 0, made = 0;
     for (; i < g_tp_nr && b < TP_MB && (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0) / 1e6 < TP_MS && g_tp_done_b < g_tp_cap; i++) {
         tex_t *t = &g_tp_r[i];
         if (!nvn_be_tex_is_live(t->serial) || tex_get(t->serial) || !tp_storage_ok(t)) continue;
+        uint64_t need = tex_rd_size(t);
+        if (lim && avail < need + mrg) {   // held: i stays on this one, so it and the rest stay ready
+            uint64_t wb = 0; for (uint32_t k = i; k < g_tp_nr; k++) wb += tex_rd_size(&g_tp_r[k]);
+            if (!g_tp_mem_held) MLOG("[texpre] uploads ahead held for memory headroom: %llu MB < %.1f MB + margin %llu MB; %u ready (%.0f MB) wait, textures upload on first use as before",
+                                     (unsigned long long)(avail >> 20), need / 1048576.0, (unsigned long long)(mrg >> 20), g_tp_nr - i, wb / 1048576.0);
+            g_tp_mem_held = 1; os_unfair_lock_lock(&g_tp_lk); g_tp_w_mem_n++; g_tp_w_mem_b = wb; os_unfair_lock_unlock(&g_tp_lk);
+            break;
+        }
+        if (lim && g_tp_mem_held) { g_tp_mem_held = 0; MLOG("[texpre] uploads ahead resume: memory headroom %llu MB (margin %llu MB); %u ready", (unsigned long long)(avail >> 20), (unsigned long long)(mrg >> 20), g_tp_nr - i); }
         g_tp_active = 1; id<MTLTexture> r = tex_mtl(t); g_tp_active = 0;
+        avail = avail > need ? avail - need : 0;
         __unsafe_unretained id h = tex_get(t->serial); NvPkg *pk = [h isKindOfClass:[NvPkg class]] ? (NvPkg *)h : nil;
         if (!r || !pk) continue;   // not made as a packaged texture: nothing to judge (a real use decides again)
         uint64_t by = tex_rd_size(t); pk->pre = 1; pk->pre_fp = tp_fp(t); b += by; g_tp_done_b += by; made++;
@@ -3712,17 +3754,21 @@ static void tp_first_upload(const tex_t *t) {   // submit thread (tex_mtl_): a p
     os_unfair_lock_lock(&g_tp_lk); g_tp_sync_b += tex_rd_size(t); os_unfair_lock_unlock(&g_tp_lk);
 }
 static size_t tp_take(char *out, size_t n) {   // nvn_be_stall_take (present thread, once a frame): this frame's uploads ahead for the long-frame line; a [texpre] line every 10 s while uploading ahead
-    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); static uint64_t wns; char line[400]; line[0] = 0;
+    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); static uint64_t wns; char line[600]; line[0] = 0;
     os_unfair_lock_lock(&g_tp_lk);
     tp_frame_end();
     uint64_t pb = g_tp_f_b, pn = g_tp_f_n, pns = g_tp_f_ns, pdc = g_tp_f_dcmp, ph = g_tp_f_hit; g_tp_f_b = g_tp_f_n = g_tp_f_ns = g_tp_f_dcmp = g_tp_f_hit = 0;
     if (!wns) wns = now;
     if (now - wns >= 10000000000ull) {
-        if (g_tp_on && (g_tp_w_b || g_tp_w_hit || g_tp_nc))
-            snprintf(line, sizeof line, "[texpre] last 10 s (frame %llu): uploaded ahead %.1f MB, first used %.1f MB; so far %.0f of %.0f MB; candidates %u, ready %u, refused at the cap %llu; looks %llu, not listed %llu (with untouched pages %llu)%s",
+        uint64_t pskip = atomic_exchange_explicit(&g_up_pool_skip_b, 0, memory_order_relaxed); char mem[160]; mem[0] = 0;   // held / not kept for memory headroom (mem_avail)
+        if (g_tp_w_mem_n || pskip) snprintf(mem, sizeof mem, "; for memory headroom: held %llu frames (%.0f MB waiting), staging not kept in the pool %.0f MB",
+                                            (unsigned long long)g_tp_w_mem_n, g_tp_w_mem_b / 1048576.0, pskip / 1048576.0);
+        if (g_tp_on && (g_tp_w_b || g_tp_w_hit || g_tp_nc || mem[0]))
+            snprintf(line, sizeof line, "[texpre] last 10 s (frame %llu): uploaded ahead %.1f MB, first used %.1f MB; so far %.0f of %.0f MB; candidates %u, ready %u, refused at the cap %llu; looks %llu, not listed %llu (with untouched pages %llu)%s%s",
                      (unsigned long long)atomic_load(&g_cur_frame), g_tp_w_b / 1048576.0, g_tp_w_hit / 1048576.0, g_tp_done_b / 1048576.0, g_tp_cap / 1048576.0, g_tp_nc, g_tp_nr,
-                     (unsigned long long)g_tp_rej, (unsigned long long)g_tp_polls, (unsigned long long)g_tp_miss, (unsigned long long)g_tp_zero, g_tp_stopped ? " (stopped)" : "");
-        g_tp_w_b = g_tp_w_hit = 0; wns = now;
+                     (unsigned long long)g_tp_rej, (unsigned long long)g_tp_polls, (unsigned long long)g_tp_miss, (unsigned long long)g_tp_zero, g_tp_stopped ? " (stopped)" : "", mem);
+        else if (mem[0]) snprintf(line, sizeof line, "[texpre] last 10 s (frame %llu)%s", (unsigned long long)atomic_load(&g_cur_frame), mem);
+        g_tp_w_b = g_tp_w_hit = g_tp_w_mem_n = g_tp_w_mem_b = 0; wns = now;
     }
     os_unfair_lock_unlock(&g_tp_lk);
     if (line[0]) MLOG("%s", line);
@@ -3740,8 +3786,9 @@ static size_t ma_take(char *out, size_t n) {
     if (pool > pp) pp = pool;
     double dc = ok && have ? ((double)vi.compressed - (double)pcmp) / 1048576.0 : 0; unsigned long long dcmp = hok && have ? hs.compressions - pcomp : 0, ddec = hok && have ? hs.decompressions - pdec : 0;
     if (ok) pcmp = vi.compressed; if (hok) { pcomp = hs.compressions; pdec = hs.decompressions; } have = 1;
-    return (size_t)snprintf(out, n, "mem fp %.0f MB cmpr %.0f (%+.1f) MB, sys compress %llu decompress %llu pages; peak pool %.0f inflight %.0f src %.0f MB",
-                            ok ? vi.phys_footprint / 1048576.0 : -1.0, ok ? vi.compressed / 1048576.0 : -1.0, dc, dcmp, ddec, pp / 1048576.0, pv / 1048576.0, ps / 1048576.0);
+    uint64_t av; char avs[32] = "n/a on the Mac"; if (mem_avail(&av)) snprintf(avs, sizeof avs, "%llu MB", (unsigned long long)(av >> 20));   // headroom to the system memory limit
+    return (size_t)snprintf(out, n, "mem fp %.0f MB cmpr %.0f (%+.1f) MB, sys compress %llu decompress %llu pages; peak pool %.0f inflight %.0f src %.0f MB; headroom %s",
+                            ok ? vi.phys_footprint / 1048576.0 : -1.0, ok ? vi.compressed / 1048576.0 : -1.0, dc, dcmp, ddec, pp / 1048576.0, pv / 1048576.0, ps / 1048576.0, avs);
 }
 static unsigned tex_layers(const tex_t *t) { return (t->d.target == 4 || t->d.target == 9) ? t->d.depth : t->d.target == 8 ? 6 : t->d.target == 3 ? t->d.height : 1; }   // as pkg_upload_ (a cube array's depth counts layer-faces)
 // Block-linear storage (Tegra X1): each layer holds its levels one after another; a level is rows of blocks, a block 2^tileH GOBs tall and one GOB (64 bytes x 8 rows of format blocks) wide,
