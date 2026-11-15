@@ -336,6 +336,7 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
     fi_inflight_add(-1);   // 两张画布都交完（或没取到）：显示链可以挂了
 } }
 // 出图线程写输入图 in_tex[k] 之前：等这张图上没有还在算的插值（超时迟到的那次，见 fi_job）。最多等 1 秒（GPU 卡死时不永远挂住），超了记红照写
+API_AVAILABLE(macos(26.0), ios(26.0))
 static void fi_in_wait(NvPresentFI *f, int k) {
     pthread_mutex_lock(&g_pq_mu);
     if (f->in_busy[k]) {
