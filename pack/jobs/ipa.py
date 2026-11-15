@@ -263,6 +263,7 @@ def _build(c):
         extraction = ensure_extract(c, game, selected_packages(game), env, logs)
         import patches   # 金手指 / 社区补丁（11-12）：解包后按真构建号查库，交改写阶段（同 build.prepare）
         patches.prepare(c, game, extraction, env, target="ios")   # iPhone 包不带画面类补丁（patches.fetch）
+        env["S2A_NRO_KEPT_DIR"] = str(layout.nro_kept(c, gid))   # 运行时留下的 NRO（#8be819；装 iPhone 前从机上拉回，install.pull_kept_nros）
         try:   # 原始程序存一份到这款游戏文件夹（v0.4.0）：以后补丁库更新，「S 级优化升级」只读它、不用回原件（pack/jobs/sgrade.py）
             import sgrade
             sgrade.save_program(c, gid, Path(extraction) / "exefs")

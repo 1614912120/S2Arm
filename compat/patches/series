@@ -597,3 +597,4 @@
 20261114-1318-set-keycodemap-byport.patch
 20261114-1824-hid-supported-follow-sync.patch
 20261114-1829-surfaceflinger-swap-oob.patch
+20261114-2043-ro-nro-keep-unpacked.patch

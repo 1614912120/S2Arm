@@ -96,6 +96,7 @@ int s2a_nro_map(const uint8_t sha[32], uint64_t size, uint64_t bss, uint64_t *ba
     (void)sha; (void)size; (void)bss; if (base) *base = 0; unbacked(__func__); return 1;
 }
 int s2a_nro_unmap(uint64_t base) { (void)base; unbacked(__func__); return 1; }
+int s2a_nro_keep(const uint8_t sha[32], const uint8_t *data, uint64_t size) { (void)sha; (void)data; (void)size; unbacked(__func__); return 1; }
 // 金手指（services Cheats.cs）取主程序基址 / 构建号（runtime/src/loader.c）：诊断目标没有装载器，回「未装载」
 uint64_t s2a_main_base(void) { unbacked(__func__); return 0; }
 uint64_t s2a_main_region_va(uint64_t off) { (void)off; unbacked(__func__); return 0; }

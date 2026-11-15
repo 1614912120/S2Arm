@@ -868,6 +868,60 @@ class FlowTests(unittest.TestCase):
         self.assertNotIn("删掉", str(e.exception))
 
 
+class KeptNroTests(unittest.TestCase):
+    """运行时留下的 NRO（#8be819）：Mac 局收局后（build.keep_runtime_nros）/ 装 iPhone 前（install.pull_kept_nros）收进游戏库 games/<号>/nro_kept/。
+    期望按约定手写：只收文件名 = 内容 SHA-256 的 <64 位十六进制>.nro；已收的不重复、不报；收到新的告诉玩家重新准备"""
+    setUp = tj.JobsTests.setUp; tearDown = tj.JobsTests.tearDown
+    G = "0100c2500fc20000"
+
+    def _msgs(self):
+        out = []
+        self.c.emit = lambda kind, text=None, *a, **k: out.append(text)
+        return out
+
+    def test_mac_keep(self):
+        import hashlib, build
+        src = Path(self.c.private) / "docs-wire-nro"; src.mkdir(parents=True)
+        good = b"NRO-A" * 7; sg = hashlib.sha256(good).hexdigest()
+        (src / f"{sg}.nro").write_bytes(good)
+        (src / f"{'0' * 64}.nro").write_bytes(b"name does not match")
+        (src / "readme.txt").write_text("x")
+        msgs = self._msgs()
+        self.assertEqual(build.keep_runtime_nros(self.c, self.G, src), 1)
+        kept = self.c.library / f"games/{self.G}/nro_kept"
+        self.assertEqual(sorted(p.name for p in kept.iterdir()), [f"{sg}.nro"])
+        self.assertEqual((kept / f"{sg}.nro").read_bytes(), good)
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(build.keep_runtime_nros(self.c, self.G, src), 0)   # 已收：不重复、不再提示
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(build.keep_runtime_nros(self.c, self.G, src / "absent"), 0)   # 没有留下的：0、不报错
+
+    def test_iphone_pull(self):
+        import hashlib
+        good = b"NRO-B" * 9; sg = hashlib.sha256(good).hexdigest(); bad = "1" * 64
+        files = {f"{sg}.nro": good, f"{bad}.nro": b"content differs from its name", "notes.txt": b"x"}
+        calls = []
+        def devicectl(c, *a, timeout=0):
+            calls.append(a[2] if a[1] == "copy" else "list")
+            if a[1] == "info":
+                self.assertEqual(a[a.index("--subdirectory") + 1], f"Documents/wire/{self.G.upper()}/nro")
+                return 0, {"result": {"files": [{"relativePath": n} for n in files]}}, ""
+            name = a[a.index("--source") + 1].rsplit("/", 1)[-1]
+            Path(a[a.index("--destination") + 1]).write_bytes(files[name]); return 0, {}, ""
+        import diag
+        msgs = self._msgs()
+        with um.patch.object(diag, "devicectl", devicectl):
+            n1 = install.pull_kept_nros(self.c, "C891", "s2arm.z", self.G)
+            n2 = install.pull_kept_nros(self.c, "C891", "s2arm.z", self.G)
+        kept = self.c.library / f"games/{self.G}/nro_kept"
+        self.assertEqual((n1, n2, sorted(p.name for p in kept.iterdir())), (1, 0, [f"{sg}.nro"]))
+        self.assertEqual(len(msgs), 1)
+        self.assertEqual(calls.count("from"), 3)   # 第一次拉两个 .nro（名不符的拉回后核内容丢掉）；第二次好的已在、只再拉名不符那个：共 3 次
+        def missing(c, *a, timeout=0): return 1, {}, "no such directory"
+        with um.patch.object(diag, "devicectl", missing):
+            self.assertEqual(install.pull_kept_nros(self.c, "C891", "s2arm.z", self.G), 0)   # 机上没有：0、不报错
+
+
 class PullSeenTests(unittest.TestCase):
     setUp = tj.JobsTests.setUp; tearDown = tj.JobsTests.tearDown
 

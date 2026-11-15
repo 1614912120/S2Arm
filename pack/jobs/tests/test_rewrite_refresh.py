@@ -71,6 +71,7 @@ class RewriteRefreshTests(unittest.TestCase):
         with patch.object(rr, "rewriter_id", return_value="rid-new"), patch.object(rr, "rewriter_bin", return_value=binary), \
              patch.object(rr, "rewrite_env", return_value=dict(os.environ)), patch.object(rr, "original_exefs", side_effect=exefs_of), \
              patch.object(rr.layout, "ios_kit", side_effect=lambda c, g: kits[g]), \
+             patch.object(rr.layout, "nro_kept", return_value=self.tmp / "no-kept"), \
              patch.object(rr.layout, "game_info", side_effect=lambda c, g: self.info.get(g, {})), \
              patch.object(rr.layout, "update_info", side_effect=lambda c, g, **f: self.info.setdefault(g, {}).update(f)), \
              patch.object(rr, "rewrite_modules", side_effect=rewrite), \
@@ -197,7 +198,7 @@ class RewriteRefreshTests(unittest.TestCase):
         with patch.object(rr, "rewriter_id", return_value="rid-new"), patch.object(rr, "sgrade_off", return_value=False), \
              patch.object(rr, "sgrade_key", return_value="k"), patch.object(rr.layout, "game_info", return_value={}), \
              patch.object(rr.layout, "update_info", side_effect=lambda c, g, **f: self.info.setdefault(g, {}).update(f)), \
-             patch.object(rr.layout, "ios_kit", return_value=self.tmp), \
+             patch.object(rr.layout, "ios_kit", return_value=self.tmp), patch.object(rr.layout, "nro_kept", return_value=self.tmp / "no-kept"), \
              patch.object(rr, "check_and_update", side_effect=lambda c, g, *a: "unavailable" if g == "0100A" else "updated"):
             self.assertEqual(rr.refresh_ios(self.c, ["0100A", "0100B"]), ["0100B"])
         self.assertTrue(any("甲游戏" in e and "没补上 S 级优化" in e and "乙游戏" not in e for e in self.events), self.events)
@@ -205,3 +206,65 @@ class RewriteRefreshTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def synthetic_nro(tag):
+    """合成 NRO（同 tests/nro_to_nso_test.sh 夹具，按 switchbrew NRO 手写）：text / ro / data 各 0x1000、bss 0x1000，构建号末字节 = tag"""
+    import struct
+    text = bytearray(0x1000)
+    struct.pack_into('<II', text, 0, 0, 0x1000)
+    text[0x10:0x14] = b'NRO0'; struct.pack_into('<III', text, 0x14, 0, 0x3000, 0)
+    struct.pack_into('<6I', text, 0x20, 0, 0x1000, 0x1000, 0x1000, 0x2000, 0x1000)
+    struct.pack_into('<I', text, 0x38, 0x1000); text[0x48] = tag
+    ro = bytearray(0x1000); struct.pack_into('<4s', ro, 0, b'MOD0')
+    return bytes(text) + bytes(ro) + bytes(0x1000)
+
+
+class KeptNroRefreshTests(unittest.TestCase):
+    """运行时留下的 NRO 自动补进程序（#8be819，rewrite_refresh.add_kept_nros / kept_nros_mac / refresh_ios）。
+    期望按约定手写：只补还没进 nro_modules.tsv 的；新模块接着原有编号（已有 nro0 → nro1）、来源 kept:<文件名>；产物 = 改写器输出；已有模块与表里原有行不动；
+    补过一次再核 = 不再动；Mac 运行版本清单记上新文件大小；refresh_ios 把补上的款算进「更新了」"""
+    def setUp(self):
+        import hashlib
+        self.tmp = Path(tempfile.mkdtemp())
+        self.events = []
+        self.c = types.SimpleNamespace(private=self.tmp, engine=Path(__file__).resolve().parents[3], env=lambda: dict(os.environ),
+                                       emit=lambda kind, text, **_: self.events.append(text), catalog=lambda: {"games": [{"id": "0100A"}]})
+        self.kept = self.tmp / "kept"; self.kept.mkdir()
+        self.nro = synthetic_nro(7); self.sha = hashlib.sha256(self.nro).hexdigest()
+        (self.kept / f"{self.sha}.nro").write_bytes(self.nro)
+        self.base = self.tmp / "base"; self.base.mkdir()
+        (self.base / "nro_modules.tsv").write_text("# 表头\nnro0\t" + "b" * 64 + "\t0x3000\t0x1000\tnro/a.nro\n")
+        (self.base / "nro0.patched.bin").write_bytes(b"old-nro0")
+        self.rew = fake_rewriter(self.tmp, [])
+
+    def run_add(self, fn, *a):
+        with patch.object(rr.layout, "nro_kept", return_value=self.kept), patch.object(rr, "rewriter_bin", return_value=self.rew), \
+             patch.object(rr, "rewrite_env", return_value=dict(os.environ)):
+            return fn(self.c, "0100A", *a)
+
+    def test_add_once(self):
+        self.assertEqual(self.run_add(rr.add_kept_nros, self.base, "ios"), ["nro1"])
+        rows = [l.split("\t") for l in (self.base / "nro_modules.tsv").read_text().splitlines() if not l.startswith("#")]
+        self.assertEqual([(r[0], r[1], r[4]) for r in rows], [("nro0", "b" * 64, "nro/a.nro"), ("nro1", self.sha, f"kept:{self.sha}.nro")])
+        self.assertEqual([r[2:4] for r in rows][1], ["0x3000", "0x1000"])
+        self.assertEqual((self.base / "nro1.patched.bin").read_bytes(), b"new-nro1")
+        self.assertEqual((self.base / "nro0.patched.bin").read_bytes(), b"old-nro0")
+        self.assertEqual(self.run_add(rr.add_kept_nros, self.base, "ios"), [], "补过一次再核不再动")
+
+    def test_mac_manifest(self):
+        import json
+        (self.base / "exefs").mkdir()
+        (self.base / "manifest.json").write_text(json.dumps({"files": {"nro0.patched.bin": [8, ""]}}))
+        self.assertEqual(self.run_add(rr.kept_nros_mac, self.base), ["nro1"])
+        files = json.loads((self.base / "manifest.json").read_text())["files"]
+        self.assertEqual(files["nro1.patched.bin"], [len(b"new-nro1"), ""])
+        self.assertEqual(files["nro_modules.tsv"][0], (self.base / "nro_modules.tsv").stat().st_size)
+        self.assertEqual(files["nro0.patched.bin"], [8, ""])
+        self.assertTrue(any("已补上 1 个" in e for e in self.events))
+
+    def test_refresh_ios_counts_kept(self):
+        with patch.object(rr, "rewriter_id", return_value="rid"), patch.object(rr, "pending_ios", return_value=[]), \
+             patch.object(rr.layout, "ios_kit", return_value=self.base):
+            self.assertEqual(self.run_add(lambda c, g: rr.refresh_ios(c, [g])), ["0100A"])
+        self.assertTrue((self.base / "nro1.patched.bin").is_file())
