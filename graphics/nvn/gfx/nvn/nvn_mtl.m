@@ -9524,7 +9524,8 @@ static int pool_pin_retire(void *r) {   // res_remove (g_res_mu held): 1 = pinne
     if (!atomic_load_explicit(&g_ptab_any, memory_order_relaxed)) return 0;
     pthread_mutex_lock(&g_pin_mu);
     int pinned = g_pin.n && nvn_hm_get(&g_pin, &r) != NULL, late = 0;
-    if (!pinned && g_unpin.n) { void *v = nvn_hm_del(&g_unpin, &r); late = v && (uint64_t)(uintptr_t)v > pin_done(); }   // unpinned this submission: retire behind it (g_unpin)
+    if (!pinned && g_unpin.n) { void *v = nvn_hm_get(&g_unpin, &r); late = v && (uint64_t)(uintptr_t)v > pin_done(); }   // unpinned this submission: retire behind it (g_unpin).
+    //   Look up, not take: a texture often gets two retire requests (the pool's finalize and the serial's delete) and both may arrive late; the entry goes with unpin_prune / pin_add
     if (pinned && !nvn_hm_get(&g_pin_ret, &r)) {
         nvn_hm_put(&g_pin_ret, &r, (void *)1);
         if (g_pin_nnew == g_pin_cnew) { uint32_t c = g_pin_cnew ? g_pin_cnew * 2 : 64; void **g = realloc(g_pin_new, c * sizeof *g); if (!g) MDIE("pool pins: out of memory"); g_pin_new = g; g_pin_cnew = c; }

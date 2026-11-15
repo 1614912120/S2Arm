@@ -256,6 +256,29 @@ int main(void) { @autoreleasepool {
         VERIFY(before == W.gpuResourceID._impl && e93 == dmy && r1 && !r2, "⑩c 表项换走后才到的退役请求：本次提交指过 %d、换成占位 %d（期望 1 / 1）；res_remove 后仍常驻 %d（期望 1，本次提交还没做完）；提交做完后出常驻集合 %d（期望 1）",
                before == W.gpuResourceID._impl, e93 == dmy, r1, !r2);
     }
+    // ⑩d 拔钉后两个退役请求都晚到（池销毁、serial_del 各一个，回调线程先后处理）：第一个延后时不能把记下的栅栏用掉，否则第二个直接移出。仿 ⑩b：完成回调在自己的线程上清延迟队列，先把对象取出队列、之后才 res_remove；
+    //   提交线程在这中间把表项换走、钉子拔掉，res_remove 就看不到钉子，把本次提交还指着的贴图移出常驻集合。这里直接按「表项先换走、res_remove 后到」的次序做
+    {   atomic_fetch_add(&g_cur_frame, 1);
+        pool_t *pool5 = calloc(1, sizeof *pool5); REQUIRE(pool5);
+        *pool5 = (pool_t){.magic = MAGIC('P', 'O', 'O', 'L'), .flags = pool->flags, .mem = memory, .size = MEM};
+        pool_t *keep = pool; pool = pool5; texture_ex(94, 4, 4, NVN_TEXTURE_FLAGS_IMAGE, 94.5f); pool = keep;
+        read4(cs, 94u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20, 3u | 1u << 20);
+        REQUIRE(near(out4[0], 94.5f));
+        id<MTLTexture> V = tex_get(texs[94].serial); REQUIRE([V conformsToProtocol:@protocol(MTLTexture)]);
+        nvn_be_sub_begin(); REQUIRE(table_entry(94, 0, NULL) == V.gpuResourceID._impl); { uint64_t f = nvn_be_sub_commit(); REQUIRE(nvn_be_wait(f, 10000000000ull)); }
+        nvn_be_sub_begin();
+        uint64_t before = table_entry(94, 0, NULL);   // 本次提交指着 V（之前编码的绘制可能读它）
+        nvn_be_alias_drop_pool(pool5); pool5->magic = 0; serial_del(texs[94].serial);
+        uint64_t e94 = table_entry(94, 0, NULL);   // 同一次提交里表项换成占位：最后一根钉子拔掉
+        res_remove(V); res_remove(V);   // 两个晚到的退役请求
+        int r1 = resident(V);
+        { uint64_t f = nvn_be_sub_commit(); REQUIRE(nvn_be_wait(f, 10000000000ull)); }
+        empty_sub(); empty_sub();   // 开头清队列：本次提交已做完
+        int r2 = resident(V);
+        uint64_t dmy = g_dummy_tex_rid[MTLTextureType2D][0];
+        VERIFY(before == V.gpuResourceID._impl && e94 == dmy && r1 && !r2, "⑩d 表项换走后才到的退役请求：本次提交指过 %d、换成占位 %d（期望 1 / 1）；res_remove 后仍常驻 %d（期望 1，本次提交还没做完）；提交做完后出常驻集合 %d（期望 1）",
+               before == V.gpuResourceID._impl, e94 == dmy, r1, !r2);
+    }
     // ⑪ 表长大后对象数组和登记的容量一样长：越过缓冲（按 64 KB 取整）的长大换新缓冲，之后在新缓冲容量内再长大不再 realloc，
     //    所以对象数组必须一次给够 t->cap 项（修前只给 n + n/4 + 1 项，第二次长大后 pool_ent_put 读越界，第47版 objc_retain 0x1f7 崩）
     { int ti = -1; for (int k = 0; k < POOL_TABS; k++) if (g_ptab[k].used && !g_ptab[k].samp) { ti = k; break; }
