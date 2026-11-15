@@ -2,7 +2,7 @@
 """各语言叠加文案的门禁（11-14 i18n 加新语言）：译文里的占位符必须和原文一模一样，少一个、多一个运行时就拼错句子。
 
 查两类文件：
-  launchers/shared/l10n/<语言>.json     launcher 块（按 id，对照共享体验表的 en 列）、text 块（按简中原句，对照原句）
+  launchers/shared/l10n/<语言>.json     launcher 块（按 id，对照共享体验表的 en 列）、text 块（按简中原句，对照这句的英文；没有英文对照原句）
   launchers/macos/frontend/l10n/<语言>.json（除 zh / en 两张底表）   按键对照 en.json
 占位符：{0} {1} …、%@ %d %s %ld %1$@ 这类 printf 写法，按出现的多重集合比。
 原表里已经没有的键只提示（别的支删文案不该打红你），占位符不一致退出 1、点名文件 / 键。
@@ -29,7 +29,9 @@ def main(argv):
     spec = json.loads((shared / "experience.v1.json").read_text(encoding="utf-8"))
     items = {i["id"]: i for i in spec["launcher"]["items"]}
     table = root / "launchers/macos/adapter/Sources/S2ArmAppleAdapter/Resources/Localizable.json"
-    sources = {e["source"] for e in json.loads(table.read_text(encoding="utf-8"))} if table.exists() else set()
+    # 作业层句子：日 / 西 / 法等从英文翻出，占位符对照这句的英文（英文本身省掉某个占位、译文跟着省是对的）；繁中从简中原句转出，对照原句
+    english = {e["source"]: e.get("en", "") for e in json.loads(table.read_text(encoding="utf-8"))} if table.exists() else {}
+    sources = set(english)
 
     def walk(o):
         if isinstance(o, dict):
@@ -58,8 +60,9 @@ def main(argv):
             if source not in sources:
                 stale += 1
                 continue
-            if slots(text) != slots(source):
-                bad.append(f"{rel} text「{source[:40]}」占位符和原文不一致：{dict(slots(text))} ≠ {dict(slots(source))}")
+            ref = source if doc.get("language") == "zh-Hant" else (english.get(source) or source)   # 繁中从简中原句转出，其余从英文翻出
+            if slots(text) != slots(ref):
+                bad.append(f"{rel} text「{source[:40]}」占位符和原文不一致：{dict(slots(text))} ≠ {dict(slots(ref))}")
     front = root / "launchers/macos/frontend/l10n"
     if (front / "en.json").exists():
         en = json.loads((front / "en.json").read_text(encoding="utf-8"))

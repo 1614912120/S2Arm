@@ -7,8 +7,8 @@ final class BackendTextTests: XCTestCase {
     func testLauncherTextFallsBackToEnglish() {
         XCTAssertEqual(BackendText.launcherText("duration.s", language: "zh-Hans"), "{0} 秒")
         XCTAssertEqual(BackendText.launcherText("duration.s", language: "en"), "{0}s")
-        XCTAssertEqual(BackendText.launcherText("duration.s", language: "ja"), "{0}s")
-        XCTAssertEqual(BackendText.launcherText("no.such.key", language: "ja"), "[no.such.key]")
+        XCTAssertEqual(BackendText.launcherText("duration.s", language: "xx"), "{0}s")   // 没有文案文件的语言
+        XCTAssertEqual(BackendText.launcherText("no.such.key", language: "xx"), "[no.such.key]")
     }
 
     /// 作业层拼出来的整句按多占位句式翻，占位里的中文再翻、数字原样（11-14 i18n 第四批：诊断上传总时限）
