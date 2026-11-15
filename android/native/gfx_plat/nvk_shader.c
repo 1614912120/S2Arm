@@ -412,6 +412,7 @@ struct facts {
     uint32_t ubo_use[6];
 };
 
+static int depth_clip_cap(void);
 static void fill_facts(const struct rp_shader_req *q, const struct s2a_direct_compile_context *pc, struct facts *f, int nst) {
     memset(f, 0, sizeof *f);
     struct s2a_compile_graphics_src *g = &f->gfx;
@@ -421,7 +422,10 @@ static void fill_facts(const struct rp_shader_req *q, const struct s2a_direct_co
     g->has_alpha_to_coverage = 1; g->alpha_to_coverage_enable = rp_S.ms.a2c ? 1 : 0; g->alpha_to_coverage_dither = rp_S.ms.a2c_dither ? 1 : 0;
     g->has_blend = 1;
     for (int i = 0; i < 8; i++) if (src1(rp_S.blend[i].src_rgb) || src1(rp_S.blend[i].dst_rgb) || src1(rp_S.blend[i].src_a) || src1(rp_S.blend[i].dst_a)) g->dual_source_blend = 1;
-    g->has_depth_mode = 1; g->depth_mode = !rp_depth_zero();
+    // 设备能把管线裁剪深度设成 [-1, 1]（CAP_DEPTH_CLIP_CTL）时现编也不改写 z，深度一律交给管线（rp_draw clip_neg1）：
+    //   出包预编库的程序不改写 z，两条路必须同一种算法，否则同一几何的深度不逐位相等，先画深度、再按「深度相等」画的引擎
+    //   在预编 / 现编程序混用时整块画不上（11-15 王国之泪用预编库整屏发暗，二分下去「两段同时开才坏」）
+    g->has_depth_mode = 1; g->depth_mode = !rp_depth_zero() && depth_clip_cap() != 1;
     g->has_y_negate = 1; g->y_negate = rp_origin_lower_left();
     g->has_origin = 1; g->origin_upper_left = 1;
     g->has_halve_primitive_id = 1; g->halve_primitive_id = g->topology && q->prim == 0x7u;
@@ -630,6 +634,7 @@ static struct entry *build(const uint8_t *bytes, size_t len, const struct s2a_so
         }
     }
     e->prog.support_bytes = fp.support_bytes; e->prog.attr_mask = fp.stage[0].attr_mask;
+    e->prog.z_raw = depth_clip_cap() == 1;   // 同 fill_facts：有管线裁剪深度时所有图形程序都不改写 z（预编库的程序另在取用处置 1）
     e->prog.color_out_mask = nst >= 2 && fp.stage[1].present ? fp.stage[1].fragment_output_map : 0xffffffffu;
     { static _Atomic int said; if (nst >= 2 && nvn_plat_flag("nvk_drawlog", 0) && atomic_fetch_add(&said, 1) < 40) { char m[96]; snprintf(m, sizeof m, "片元输出映射 %#x（片元代码 %zu 字节）", (unsigned)e->prog.color_out_mask, fp.stage[1].spirv_bytes); nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", m); } }
     for (int st = 0; st < nst && !e->failed; st++) {
@@ -667,9 +672,9 @@ static struct entry *build(const uint8_t *bytes, size_t len, const struct s2a_so
 //   不开 alpha 转覆盖、无双源混合；Metal 那边按入口补深度改写，这里没有）。状态不同时取到的 SPIR-V 与现场编的语义不一致：
 //   11-14 王国之泪深度为 near=-w，用了预编库的图形程序画面整片暗 / 缺。只在状态相符时用（状态都进了程序身份，身份即状态）。
 //   深度例外：设备能把管线裁剪深度设成 [-1, 1]（CAP_DEPTH_CLIP_CTL）时 near=-w 也能用，程序标 z_raw，rp_draw 置 clip_neg1
-static int depth_clip_cap(void) {
+static int depth_clip_cap(void) {   // 1 = 有；能力还没取到时按没有（0），取到后定死
     static _Atomic int v = -1; int c = atomic_load(&v);
-    if (c < 0) { nvn_gpu_caps cp; nvn_gpu_caps_get(&cp); c = (cp.caps & NVN_GPU_CAP_DEPTH_CLIP_CTL) != 0; if (cp.caps) atomic_store(&v, c); }
+    if (c < 0) { nvn_gpu_caps cp; nvn_gpu_caps_get(&cp); c = (cp.caps & NVN_GPU_CAP_DEPTH_CLIP_CTL) != 0; if (!cp.caps) return 0; atomic_store(&v, c); }
     return c;
 }
 static int libpack_state_ok(const struct s2a_compile_graphics_src *g) {
