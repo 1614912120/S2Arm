@@ -14,7 +14,7 @@
 static VkExtent2D probe_extent;
 static VkFormat probe_format;
 static VkImage probe_images[64];
-static unsigned probe_active, probe_value, probe_bars, probe_cases, probe_pattern, probe_flip;
+static unsigned probe_active, probe_value, probe_bars, probe_cases, probe_pattern, probe_flip, probe_alpha255;
 static VkImage encoded_image;
 static unsigned encoded_created, encoded_destroyed;
 
@@ -92,7 +92,7 @@ static void probe_readback(VkQueue q, VkImage image) {
     uint64_t bad=0; unsigned first=0;
     for(uint32_t y=0;y<probe_extent.height;y++) for(uint32_t x=0;x<probe_extent.width;x++) {
         int inside=!probe_bars || (x>=40 && x<280 && y>=20 && y<160);
-        unsigned want=inside?probe_value:0, alpha=inside?128:255;
+        unsigned want=inside?probe_value:0, alpha=inside?(probe_alpha255?255:128):255;
         const uint8_t *p=data+4*((size_t)y*probe_extent.width+x);
         unsigned rgb[3] = {want,want,want};
         if (probe_pattern) {
@@ -152,6 +152,33 @@ int main(void) {
         CHECK(OK(nvn_gpu_present(sf,&dr,&pd,ticket,on_shown,NULL,&e)),"pattern present");probe_active=probe_pattern=0;
         CHECK(OK(nvn_gpu_fence_wait(ticket++,5000000000ull,&e)),"pattern wait");
         nvn_gpu_view_release(v);nvn_gpu_tex_release(t);
+    }
+    // EASU 上屏放大（开关打开）：sRGB 源 + 非线性 UNORM 交换链，非整数倍缩放必须走片元 EASU。
+    // 平坦灰阶要穿过「硬件解码 → EASU → 写编码字节」整条链回到源字节（±1）；矩形外仍是黑边。
+    // alpha 由 EASU 固定写 1.0（交换链是不透明合成），这是与 blit 唯一的有意差别。
+    {
+        const unsigned val = 64;
+        g_upscale_flag = 1;
+        nvn_gpu_tex t = make_tex(64, 36, NVN_FORMAT_RGBA8_SRGB, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
+        nvn_gpu_view v = make_view(t); uint8_t pixels[64*36*4];
+        for (unsigned p = 0; p < 64*36; p++) { pixels[p*4]=pixels[p*4+1]=pixels[p*4+2]=(uint8_t)val; pixels[p*4+3]=128; }
+        nvn_gpu_cmd c = begin_cmd(); nvn_gpu_tex_upload(c, t, 0, 0, NULL, pixels, 64*4, sizeof pixels);
+        CHECK(OK(nvn_gpu_cmd_commit(c, ticket, on_done, NULL, &e)), "upscale upload %s", e.why);
+        nvn_gpu_drawable dr = {0};
+        CHECK(OK(nvn_gpu_drawable_acquire(sf, 1000000000ull, NULL, &dr, &e)), "upscale acquire %s", e.why);
+        nvn_gpu_present_desc pd = {0}; pd.src = v; pd.filter = 1;
+        pd.crop[0]=4; pd.crop[1]=2; pd.crop[2]=48; pd.crop[3]=24;   // 48x24 → 240x140：3.75 / 5.83 倍，非整数
+        pd.dst[0]=40; pd.dst[1]=20; pd.dst[2]=240; pd.dst[3]=140;
+        probe_bars=1; probe_value=val; probe_alpha255=1; probe_pattern=0; probe_active=1;
+        uint64_t hits0 = s2a_vk_easu_hits();
+        CHECK(OK(nvn_gpu_present(sf, &dr, &pd, ticket, on_shown, NULL, &e)), "upscale present %s", e.why);
+        probe_active=0;
+        uint64_t dh = s2a_vk_easu_hits() - hits0;
+        CHECK(dh == 1, "upscale: EASU 应被选中，实际 %llu（回落 blit 说明适用条件不满足）", (unsigned long long)dh);
+        printf("PRESENT_UPSCALE SRGB→UNORM：EASU 次数 %llu\n", (unsigned long long)dh);
+        CHECK(OK(nvn_gpu_fence_wait(ticket++, 5000000000ull, &e)), "upscale wait %s", e.why);
+        g_upscale_flag = -1; probe_bars=0; probe_alpha255=0;
+        nvn_gpu_view_release(v); nvn_gpu_tex_release(t);
     }
     CHECK(encoded_created==1 && encoded_destroyed==0,"encoding target reused: %u/%u",encoded_created,encoded_destroyed);
     CHECK(OK(nvn_gpu_surface_rebuild(sf,&e)),"rebuild encoding target %s",e.why);
