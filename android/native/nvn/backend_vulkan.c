@@ -73,6 +73,7 @@ struct nvn_gpu_tex_s {
     VkImageView view;
     VkFormat format, sample_format;
     VkImageAspectFlags aspect;
+    VkImageUsageFlags usage;
     VkImageLayout layout;
     uint32_t w, h, depth, levels, layers, samples, nvn_format, target;
     int array_compatible;
@@ -102,6 +103,7 @@ struct nvn_gpu_view_s {
     uint32_t att_layer;          // 当附件时取的层 / 3D 深度切片（视图没设层范围 = 0）
     VkImageView att;             // 附件形态（一级一层的 2D 视图），第一次当附件时建（view_attachment）
     VkImageView img;             // 图像形态（恒等通道映射），第一次当存储图像时建：存储图像视图必须恒等映射（view_image_form）
+    VkImageView depth_blit[2];   // 辅助深度模板拷贝的恒等单级单层采样视图，随本视图保活与释放
     // 反查表：这个视图当过附件的帧缓冲（帧缓冲缓存槽位 + 代 + 句柄）。视图销毁时只拆这几项，
     // 不必在全局 2048 项里线性扫一遍（真机上一帧 30 个视图销毁 × 扫描全表 × 每通道开通道要拿同一把锁，开通道里光等锁就 10 微秒）。
     struct { uint16_t idx; uint32_t gen; VkFramebuffer fb; } fbs[6];
@@ -513,6 +515,7 @@ static VkImageLayout pass_att_layout(const nvn_gpu_pass_desc *d, const struct nv
 }
 // 采样这张图要用哪个布局：深度模板只有 DEPTH_STENCIL_READ_ONLY 这一种只读布局
 static VkImageLayout sample_layout_for(const struct nvn_gpu_tex_s *t) {
+    if (!(t->usage & (VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT))) return VK_IMAGE_LAYOUT_GENERAL;
     return (t->aspect & VK_IMAGE_ASPECT_DEPTH_BIT) ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 }
 // 绑定项里的贴图（采样 / 存储图像；别的类别没有图）
@@ -723,6 +726,7 @@ static void destroy_view_locked(struct nvn_gpu_vk *vk, struct nvn_gpu_view_s *v)
     pc_drop_view_fast(v, v->att); pc_drop_view_fast(v, v->img); pc_drop_view_fast(v, v->view); LIFE_ADD(6);
     if (v->att) vkDestroyImageView(vk->d, v->att, NULL);
     if (v->img) vkDestroyImageView(vk->d, v->img, NULL);
+    for (unsigned i = 0; i < 2; i++) if (v->depth_blit[i]) vkDestroyImageView(vk->d, v->depth_blit[i], NULL);
     if (v->view) vkDestroyImageView(vk->d, v->view, NULL);
     LIFE_ADD(5);
     if (v->buffer_view) vkDestroyBufferView(vk->d, v->buffer_view, NULL);
@@ -948,6 +952,7 @@ static void fill_caps(struct nvn_gpu_vk *vk, const nvn_gpu_open_desc *d) {
     if (f.textureCompressionBC || vk->dev->bc_decode_mask) c->caps |= NVN_GPU_CAP_TEX_BC;
     if (f.textureCompressionASTC_LDR) c->caps |= NVN_GPU_CAP_TEX_ASTC;
     c->caps |= NVN_GPU_CAP_BLIT_SCALED;   // vkCmdBlitImage；具体格式对行不行在 nvn_gpu_blit 里逐次按格式特性判
+    c->caps |= NVN_GPU_CAP_BLIT_DEPTH_STENCIL; // 辅助绘制拷贝；具体格式仍须有采样与深度模板附件能力
     c->caps |= NVN_GPU_CAP_NO_ATTACH_PASS;   // 零附件子通道 + 带宽高的帧缓冲是 Vulkan 1.0 核心，不看设备
     // B2：设备 advertise VK_GOOGLE_display_timing 且 debug.s2a.display_timing=1（默认关）才有
     // 每帧实际上屏时刻可报——能力位如实反映 advertise∧启用，时刻取不到时按契约报 UNKNOWN。
@@ -1595,6 +1600,7 @@ uint32_t nvn_gpu_format_caps(uint32_t nvn_format) {
 
 static void wsi_close_locked(void);   // backend_vulkan_wsi.inc
 static void clr_close(void);          // backend_vulkan_clear.inc
+static void depth_blit_close(void);   // backend_vulkan_depth_blit.inc
 nvn_gpu_rc nvn_gpu_close(uint64_t timeout_ns, nvn_gpu_err *err) {
     if (!g_open) return rc(NVN_GPU_OK);
     if (g_in_callback) return fail(err, NVN_GPU_E_ORDER, "回调里不许 close");
@@ -1682,6 +1688,7 @@ nvn_gpu_rc nvn_gpu_close(uint64_t timeout_ns, nvn_gpu_err *err) {
         b = next;
     }
     clr_close();
+    depth_blit_close();
     struct nvn_gpu_pipe_s *p = g.pipes;
     g.pipes = NULL;
     memset(g_pipe_ht, 0, sizeof g_pipe_ht);
@@ -3405,8 +3412,7 @@ static void pass_flush_pending(struct nvn_gpu_cmd_s *c) {
         int attached = 0;
         for (uint32_t k = 0; k < c->pass_natt; k++) if (c->pass_tex[k] == t) { attached = 1; break; }
         if (attached) continue;
-        if (c->lay[i].cur == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL) image_barrier(c, t, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        else if (c->lay[i].cur == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) image_barrier(c, t, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL);
+        if (c->lay[i].cur == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL || c->lay[i].cur == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL) image_barrier(c, t, sample_layout_for(t));
         if (!rc_is(c->sticky, NVN_GPU_OK)) return;
     }
 }
@@ -4609,6 +4615,7 @@ nvn_gpu_rc nvn_gpu_tex_create(const nvn_gpu_tex_desc *d, nvn_gpu_tex *out, nvn_g
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     if (t->view_fmt || sample_fmt != fmt) ci.flags |= VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT;
     LIFE_T0;
+    t->usage = ci.usage;
     if (vkCreateImage(g.d, &ci, NULL, &t->image) != VK_SUCCESS) {
         free(t);
         return fail(err, NVN_GPU_E_UNSUPPORTED, "vkCreateImage 拒绝（格式 0x%x / usage 0x%x / %ux%u）", d->d.format, usage, d->d.width, d->d.height);
@@ -5597,9 +5604,11 @@ void nvn_gpu_barrier(nvn_gpu_cmd ch, uint32_t nvn_bits) {
     full_barrier(c);
 }
 
-// 带缩放 / 换格式的贴图拷贝（vkCmdBlitImage）。源、目标都取视图的第一级第一层；区域按各自那一级的像素给。
-// 只做单采样、两边都不是整数 / 深度模板格式、视图没换格式的情形；格式对不支持（设备的格式特性里没有 BLIT_SRC / BLIT_DST，
-// 或要线性过滤而源不支持）报 UNSUPPORTED。目标是 sRGB 格式时写进去的值按 sRGB 编码（同把它当颜色附件画进去）。
+#include "backend_vulkan_depth_blit.inc"
+
+// 带缩放 / 换格式的贴图拷贝。源、目标都取视图的第一级第一层；区域按各自那一级的像素给。
+// 颜色采用原生 blit；同格式 D24S8/D32FS8 最近点缩放采用辅助绘制，不依赖深度 BLIT 格式位。
+// 其它不支持的格式对报 UNSUPPORTED。sRGB 目标按 sRGB 编码（同颜色附件写入）。
 void nvn_gpu_blit(nvn_gpu_cmd ch, nvn_gpu_view sv, const NVNcopyRegion *sr, nvn_gpu_view dv, const NVNcopyRegion *dr, int linear) {
     struct nvn_gpu_cmd_s *c = ch;
     if (!c || !rc_is(c->sticky, NVN_GPU_OK)) return;
@@ -5638,7 +5647,8 @@ void nvn_gpu_blit(nvn_gpu_cmd ch, nvn_gpu_view sv, const NVNcopyRegion *sr, nvn_
         cmd_ref(c, s, REF_TEX); cmd_ref(c, d, REF_TEX);
         return;
     }
-    if (s->samples > 1 || d->samples > 1 || nvn_vk_format_is_depth(s->format) || nvn_vk_format_is_depth(d->format)) { set_sticky(c, NVN_GPU_E_UNSUPPORTED, "blit：多重采样 / 深度模板没接"); return; }
+    if (nvn_vk_format_is_depth(s->format) || nvn_vk_format_is_depth(d->format)) { depth_blit(c, sv, sr, dv, dr, linear); return; }
+    if (s->samples > 1 || d->samples > 1) { set_sticky(c, NVN_GPU_E_UNSUPPORTED, "blit：多重采样没接"); return; }
     { nvn_fmt_info a, b; int ai = nvn_fmt_info_of(s->nvn_format, &a) && (a.kind == NVN_FMT_UINT || a.kind == NVN_FMT_SINT), bi = nvn_fmt_info_of(d->nvn_format, &b) && (b.kind == NVN_FMT_UINT || b.kind == NVN_FMT_SINT);
       if (ai || bi) { set_sticky(c, NVN_GPU_E_UNSUPPORTED, "blit：整数格式没接"); return; } }
     VkFormatProperties fs, fd; s2a_vk_format_properties(g.phys, s->format, &fs); s2a_vk_format_properties(g.phys, d->format, &fd);
