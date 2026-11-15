@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Windows 一键出包 result 事件里的路径换回（诊断#0e3bd5）：python3 tests/oneclick_win_shortroot_test.py
-期望按规则写：登记一条短入口 C:\\Users\\A\\AppData\\Local\\S2A\\j\\gkam → 玩家路径 D:\\Lib\\games\\x\\build\\ios，
+期望按规则写：登记一条短入口 C:\\Data\\A\\AppData\\Local\\S2A\\j\\gkam → 玩家路径 D:\\Lib\\games\\x\\build\\ios，
   Run.ev 写出的 result 里 ipa 路径
   ① 大小写与登记不同（c:\\users\\a\\appdata\\local\\s2a\\j\\GKAM\\pkg\\t.ipa）→ 换成 D:\\Lib\\games\\x\\build\\ios\\pkg\\t.ipa
   ② 分隔符是 /（C:/Data/A/AppData/Local/S2A/j/gkam/pkg/t.ipa）→ 换成 D:\\Lib\\games\\x\\build\\ios/pkg/t.ipa（前缀换回，尾巴原样）
