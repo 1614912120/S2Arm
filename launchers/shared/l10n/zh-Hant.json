@@ -933,7 +933,9 @@
   "welcome.step.keys.panel": "選擇從你的 Switch 匯出的 prod.keys",
   "welcome.step.keys.done": "金鑰已就緒",
   "welcome.step.games.title": "新增你的遊戲",
-  "welcome.step.games.what": "NSP、XCI、NUP 檔案或解包好的遊戲資料夾都可以。"
+  "welcome.step.games.what": "NSP、XCI、NUP 檔案或解包好的遊戲資料夾都可以。",
+  "phone.done.export.fresh": ".img 只要拷這次新寫的：{0}。其餘 {1} 款和上次匯出的一樣，手機上已有就不用再拷。",
+  "phone.done.export.same": "各款 .img 都和上次匯出的一樣，手機上已有就不用再拷。"
  },
  "text": {
   "直连": "直連",

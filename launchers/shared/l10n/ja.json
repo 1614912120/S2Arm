@@ -933,7 +933,9 @@
   "welcome.step.keys.panel": "Switch からエクスポートした prod.keys を選択してください",
   "welcome.step.keys.done": "キー準備完了",
   "welcome.step.games.title": "ゲームを追加",
-  "welcome.step.games.what": "NSP、XCI、NUP ファイル、または展開済みゲームフォルダのいずれも使用できます。"
+  "welcome.step.games.what": "NSP、XCI、NUP ファイル、または展開済みゲームフォルダのいずれも使用できます。",
+  "phone.done.export.fresh": "今回コピーが必要な .img：{0}。残りの {1} 本は前回の書き出しと同じなので、すでに iPhone にあればコピーし直す必要はありません。",
+  "phone.done.export.same": "すべての .img が前回の書き出しと同じです。すでに iPhone にあればコピーし直す必要はありません。"
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "全画面パッチ（画面比率に応じて自動選択）",
