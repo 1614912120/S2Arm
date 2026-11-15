@@ -42,7 +42,8 @@ VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDe
     VkFormat want=getenv("S2A_TEST_PRESENT_BGRA")?VK_FORMAT_B8G8R8A8_UNORM:VK_FORMAT_R8G8B8A8_UNORM;
     for(uint32_t i=0;i<count;i++) if(available[i].format==want && available[i].colorSpace==VK_COLOR_SPACE_SRGB_NONLINEAR_KHR) {
         if(out && !*n)return VK_INCOMPLETE;
-        if(out)*out=available[i];*n=1;return VK_SUCCESS;
+        if(out)*out=available[i];
+        *n=1;return VK_SUCCESS;
     }
     CHECK(0,"真实表面不支持待测格式 %d",(int)want);return VK_ERROR_FORMAT_NOT_SUPPORTED;
 }
