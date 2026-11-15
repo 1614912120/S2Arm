@@ -9482,6 +9482,7 @@ static nvn_hmap g_pin = {.klen = 8}, g_pin_ret = {.klen = 8};
 //   and took the texture out of the residency set while the open submission still named it (11-14: t_nvn_pool_tex ⑩ red about 1 in 30 runs under load). pool_pin_retire
 //   defers such a request behind that fence. Pruned of completed fences as it grows (unpin_prune)
 static nvn_hmap g_unpin = {.klen = 8}; static uint32_t g_unpin_next = 1024;
+static _Atomic uint64_t g_unpin_late;   // retire requests deferred this way (pool tables stat line: without the fix each was a texture leaving the residency set too early)
 static uint64_t pin_done(void) { return __atomic_load_n(&g_done, __ATOMIC_ACQUIRE); }   // g_done without g_mu (g_res_mu / g_pin_mu are held here): a stale value only keeps an entry longer
 static void unpin_prune(void) {   // g_pin_mu held
     uint64_t done = pin_done();
@@ -9532,7 +9533,7 @@ static int pool_pin_retire(void *r) {   // res_remove (g_res_mu held): 1 = pinne
         g_pin_new[g_pin_nnew++] = r;
     }
     pthread_mutex_unlock(&g_pin_mu);
-    if (late) defer_obj_release((__bridge id)r);   // g_res_mu held: defer_obj_release only takes g_deferred_mu, which nothing holds while taking another lock
+    if (late) { defer_obj_release((__bridge id)r); atomic_fetch_add_explicit(&g_unpin_late, 1, memory_order_relaxed); }   // g_res_mu held: defer_obj_release only takes g_deferred_mu, which nothing holds while taking another lock
     return pinned || late;
 }
 // Entry i of table ti names o (NULL: the dummy)
@@ -9721,8 +9722,8 @@ static uint64_t pool_gpu(int samp, int dtt, int dpf, int base, __unsafe_unretain
     g_pool_ms += (double)(mach_absolute_time() - t0) * tb.numer / tb.denom / 1e6;
     if (!(g_pool_calls & 0x3fff)) {   // how the tables stand: whole walks, buffers, entries looked up again by cause, time in all
         unsigned nseen = 0; uint64_t bseen = 0; for (int id_ = 1; id_ < g_ntreg; id_++) if (g_treg[id_].ok && pool_seen(id_)) { nseen++; bseen += pool_tex_size(&g_treg[id_].t); }
-        MLOG("pool tables: %llu calls, whole walks %llu (%.0f ms), buffers %llu; entries looked up again: registrations %llu, retired %llu, read by a shader %llu, left out %llu; %.0f ms in all; %u IDs read by a shader (%llu MB), %u left out, allocated %llu MB",
-             (unsigned long long)g_pool_calls, (unsigned long long)g_pool_walks, g_pool_walk_ms, (unsigned long long)g_pool_made, (unsigned long long)g_pool_upd_dirty, (unsigned long long)g_pool_upd_ret,
+        MLOG("pool tables: %llu calls, whole walks %llu (%.0f ms), buffers %llu; entries looked up again: registrations %llu, retired %llu (late, deferred behind the unpinning submission %llu), read by a shader %llu, left out %llu; %.0f ms in all; %u IDs read by a shader (%llu MB), %u left out, allocated %llu MB",
+             (unsigned long long)g_pool_calls, (unsigned long long)g_pool_walks, g_pool_walk_ms, (unsigned long long)g_pool_made, (unsigned long long)g_pool_upd_dirty, (unsigned long long)g_pool_upd_ret, (unsigned long long)atomic_load(&g_unpin_late),
              (unsigned long long)g_pool_upd_seen, (unsigned long long)g_pool_upd_left, g_pool_ms, nseen, (unsigned long long)(bseen >> 20), g_pleft.n, (unsigned long long)(g_dev.currentAllocatedSize >> 20)); }
     if (ti < 0) { *out = dummy_buf(); return dummy_buf_gpu(); }
     *out = g_ptab[ti].buf; return g_ptab[ti].gpu;
