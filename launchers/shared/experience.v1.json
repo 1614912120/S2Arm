@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "contract": "s2a.experience.v1",
-  "revision": 66,
+  "revision": 67,
   "languages": ["zh-Hans", "en"],
   "source_language": "zh-Hans",
   "note": "四端（Mac / iOS / Android / 鸿蒙）启动器的「一套体验」规格。状态、文案、错误码、任务事件到界面的映射只在这里定义一次；各端只负责画，不另写一套措辞。错误码的「下一步」不在本文件里写第二份：一律指向 pack/jobs/errors.py 的 RECOVERY（口径见 README.md）。口径号 revision 改动规则见 README.md。",
@@ -1569,7 +1569,7 @@
       {"id": "action.bottom_bar.cancel", "zh-Hans": "取消", "en": "Cancel"},
       {"id": "export.running.back_bottom", "zh-Hans": "回到游戏库，后台继续", "en": "Back to library, keep running"},
       {"id": "welcome.win.title", "zh-Hans": "把你的 Switch 游戏，\n原生装进 iPhone 和 iPad。", "en": "Put your Switch games on\niPhone and iPad, natively."},
-      {"id": "welcome.win.lead", "zh-Hans": "不是模拟器。S2Arm 把游戏翻译成苹果设备的原生程序，整座游戏库装进一个 App。跟着右边一步步做，就能开始出包。", "en": "Not an emulator. S2Arm translates each game into a native program for Apple devices, with your whole library in one app. Follow the steps on the right to start building."},
+      {"id": "welcome.win.lead", "zh-Hans": "不是模拟器。S2Arm 把游戏翻译成苹果设备的原生程序，整座游戏库装进一个 App。照着这三步做，就能开始出包。", "en": "Not an emulator. S2Arm translates each game into a native program for Apple devices, with your whole library in one app. Follow the three steps to start building."},
       {"id": "s2arm.job.running", "zh-Hans": "出包中", "en": "Building"},
       {"id": "s2arm.library.notPrepared", "zh-Hans": "未就绪", "en": "Not ready"},
       {"id": "welcome.step.mac.title", "zh-Hans": "准备这台 Mac", "en": "Get this Mac ready"},
