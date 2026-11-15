@@ -619,6 +619,12 @@ void s2a_cpatch_fps_pick(int target) {
     g_fps_want = target > 0 ? target : 0;
     if (g_fps_on > 0) s2a_cpatch_fps_follow(1);
 }
+// 屏幕最高刷新率刚知道 / 变了（Mac 宿主 macos/front_mac.m screen_fps_note：建窗、换屏时调）：自动档（玩家没选、起局也没给 S2A_FPS_PICK）按新屏幕重挑。
+//   起局选档早于建窗，那时屏幕刷新率还不知道按 60 算，120 Hz 的 Mac 自动档永远落在 60（11-15 v0.4.0 自测：「帧率档 60 帧（默认…屏幕最高 60 Hz）」之后才「窗口所在屏最高刷新 120 Hz」）
+void s2a_cpatch_screen_changed(void) {
+    if (g_fps_on <= 0 || g_fps_want || getenv("S2A_FPS_PICK")) return;
+    if (fps_pick() != g_fps_target) s2a_cpatch_fps_follow(1);
+}
 // 金手指逐条开关（Cheats.cs 每次重载开关表时对每条调；主代码 = 同文件任一条开着）：
 //   → 1 这条编进了包、已按 on 生效；0 包里没有这条（交运行时 Tamper）
 int s2a_cpatch_cheat(const char *file, const char *name, int on) {

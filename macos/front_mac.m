@@ -1489,7 +1489,11 @@ int front_screen_max_fps(void) { return atomic_load(&g_screen_max_fps); }
 static void screen_fps_note(NSWindow *w) {
     NSScreen *sc = w.screen ?: NSScreen.mainScreen; int hz = 0;
     if (@available(macOS 12.0, *)) hz = (int)sc.maximumFramesPerSecond;
-    if (atomic_exchange(&g_screen_max_fps, hz) != hz) fprintf(stderr, "[s2a] 窗口所在屏最高刷新 %d Hz\n", hz);
+    if (atomic_exchange(&g_screen_max_fps, hz) != hz) {
+        fprintf(stderr, "[s2a] 窗口所在屏最高刷新 %d Hz\n", hz);
+        extern void s2a_cpatch_screen_changed(void) __attribute__((weak_import));   // runtime/src/cpatch.c；不链它的构建取不到就不调
+        if (s2a_cpatch_screen_changed) s2a_cpatch_screen_changed();   // 帧率补丁自动档按新屏幕重挑（起局选档时还没窗口，按 60 算过）
+    }
 }
 @implementation S2AMetalView
 - (BOOL)acceptsFirstResponder { return YES; }
