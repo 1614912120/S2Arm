@@ -1242,6 +1242,7 @@ __attribute__((visibility("default"), used)) int s2a_nro_unmap(uint64_t base) {
 // 包里没有改写映像的 NRO（s2a_nro_map 返回 1）：游戏此刻已在内存里解开了整份 NRO（#8be819：一款把 NRO 藏在自有加密归档里，出包时 romfs 里认不出），
 //   原样存一份到 <文档根>/wire/<程序号>/nro/<SHA-256>.nro，下次准备这款时收进改写（runtime/rewriter/nro_to_nso.py 的「运行时留下的 NRO」来源）。
 //   sha 由调用方（ro 服务）按这份字节算好、且已核过在游戏的 NRR 登记里。0 = 新存下；2 = 早已存过（还没重新准备）；1 = 存不了
+__attribute__((weak)) uint64_t s2a_program_id(void) { return 0; }   // svc_mem.c 强定义；只链 loader.c 的单测（loader_ro_lookup / jumpslot / order）用这个
 __attribute__((visibility("default"), used)) int s2a_nro_keep(const uint8_t sha[32], const uint8_t *data, uint64_t size) {
     if (!sha || !data || !size || size > (1ull << 30)) return 1;
     char hex[65], dir[1100], p[1200], tmp[1240];
