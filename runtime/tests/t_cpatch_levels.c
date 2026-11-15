@@ -13,6 +13,9 @@
 void s2a_cpatch_load(module_t *m, const char *dir);
 void s2a_cpatch_fps_follow(int on); void s2a_cpatch_fps_pick(int target); int s2a_cpatch_fps_levels(int *out, int n, int *cur); int s2a_cpatch_stall_rescue(void);
 static int fails;
+static int g_scr;   // ⑤ 屏幕最高刷新率（覆盖 cpatch.c 的弱定义 front_screen_max_fps；0 = 还不知道）
+int front_screen_max_fps(void) { return g_scr; }
+void s2a_cpatch_screen_changed(void);
 #define CHECK(c, ...) do { if (!(c)) { fails++; printf("✗ "); printf(__VA_ARGS__); printf("\n"); } } while (0)
 static const char *E(const char *k) { const char *v = getenv(k); return v ? v : "-"; }
 static int g_fi;   // ④ 补帧开着（DM_PRESENT_FI=1）
@@ -33,6 +36,24 @@ static void run(const char *dir, int pick_env, char *out, size_t n) {
             s2a_cpatch_fps_pick(60); k += snprintf(b + k, sizeof b - (size_t)k, " 选60 %llx %02x %s %s", (unsigned long long)(*slot & 0xC0), m.base[0x40], E("DM_PRESENT_LINK"), E("DM_PRESENT_HZ"));
         }
         s2a_cpatch_fps_follow(0); k += snprintf(b + k, sizeof b - (size_t)k, " 关 %llx %02x", (unsigned long long)(*slot & 0xC0), m.base[0x40]);
+        write(pp[1], b, (size_t)k); _exit(0);
+    }
+    close(pp[1]); ssize_t r = read(pp[0], out, n - 1); out[r > 0 ? r : 0] = 0; close(pp[0]); waitpid(c, NULL, 0);
+}
+// ⑤ 屏幕刷新率起局后才知道（Mac 建窗晚于选档）：期望（手算）——屏幕不知道按 60 开 L（40 55 链 1）；屏幕报 120 → 自动档重挑开 H（80 77 链 2）；
+//   再报 120 不重复动；玩家选过 60 档（s2a_cpatch_fps_pick）后屏幕变 120 不动（仍 40 55）
+static void run_screen(const char *dir, char *out, size_t n) {
+    int pp[2]; pipe(pp); pid_t c = fork();
+    if (c == 0) {
+        close(pp[0]); unsetenv("DM_PRESENT_LINK"); unsetenv("DM_PRESENT_HZ"); unsetenv("S2A_CPATCH_ON"); unsetenv("S2A_FPS_PICK"); unsetenv("DM_PRESENT_FI");
+        module_t m; memset(&m, 0, sizeof m); snprintf(m.name, sizeof m.name, "%s", "main");
+        m.size = 0x8000; m.base = mmap(NULL, m.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); m.key_page_off = 0x4000; m.key_page_size = 0x4000;
+        s2a_cpatch_load(&m, dir);
+        uint64_t *slot = (uint64_t *)(m.base + m.key_page_off) + 2046; char b[512]; int k = 0;
+        g_scr = 0; s2a_cpatch_fps_follow(1); k += snprintf(b + k, sizeof b - (size_t)k, "起 %llx %02x %s", (unsigned long long)(*slot & 0xC0), m.base[0x40], E("DM_PRESENT_LINK"));
+        g_scr = 120; s2a_cpatch_screen_changed(); k += snprintf(b + k, sizeof b - (size_t)k, " 屏120 %llx %02x %s", (unsigned long long)(*slot & 0xC0), m.base[0x40], E("DM_PRESENT_LINK"));
+        s2a_cpatch_screen_changed(); k += snprintf(b + k, sizeof b - (size_t)k, " 再报 %llx %02x", (unsigned long long)(*slot & 0xC0), m.base[0x40]);
+        g_scr = 60; s2a_cpatch_fps_pick(60); g_scr = 120; s2a_cpatch_screen_changed(); k += snprintf(b + k, sizeof b - (size_t)k, " 选60后屏120 %llx %02x", (unsigned long long)(*slot & 0xC0), m.base[0x40]);
         write(pp[1], b, (size_t)k); _exit(0);
     }
     close(pp[1]); ssize_t r = read(pp[0], out, n - 1); out[r > 0 ? r : 0] = 0; close(pp[0]); waitpid(c, NULL, 0);
@@ -101,6 +122,9 @@ int main(void) {
     CHECK(!strcmp(got, "6 11 22 00"), "⑥ 同档两组、都没验过 → 只开第一组：期望 6 11 22 00，实得 %s", got);
     run_group(1, got, sizeof got);
     CHECK(!strcmp(got, "8 00 00 33"), "⑥ 第二组我方验过 → 只开它：期望 8 00 00 33，实得 %s", got);
+    run_screen(dir, got, sizeof got);
+    const char *want5 = "起 40 55 1 屏120 80 77 2 再报 80 77 选60后屏120 40 55";
+    CHECK(!strcmp(got, want5), "⑤ 起局后才知道屏幕 120 Hz：期望 %s，实得 %s", want5, got);
     run_rescue(dir, got, sizeof got);
     const char *want3 = "未开救 0 开 80 77 2 120 救 1 0 00 1 60 标记 fps 再救 0";
     CHECK(!strcmp(got, want3), "③ 停帧救场：期望 %s，实得 %s", want3, got);
