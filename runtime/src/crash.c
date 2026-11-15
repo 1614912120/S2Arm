@@ -398,7 +398,7 @@ static int ww_fault(void *ctx, uint64_t fa, int w) {
         uint64_t pg = g_ww[i].a & ~0x3FFFull;
         if ((fa & ~0x3FFFull) != pg) continue;
         // 别的线程刚在这一页缺页、正在放开（armed 已清）：同样放开、重执行，不能当成「不是我的页」交给崩溃路径
-        //   （测试机2 实测：被监视对象与对象池自旋锁同页，两条线程同时写，后到的一条 stlxr 落空成 SIGBUS）
+        //   （iPhone 实测：被监视对象与对象池自旋锁同页，两条线程同时写，后到的一条 stlxr 落空成 SIGBUS）
         if (atomic_load(&g_ww[i].armed) && fa + 8 > g_ww[i].a && fa < g_ww[i].a + g_ww[i].n) {
             uint64_t k = atomic_fetch_add(&g_ww[i].hits, 1) + 1;
             if (k <= WW_LOG) {

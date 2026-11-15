@@ -166,7 +166,7 @@ int main(void) {
       eq("⑦ 区间内第 2 次（重新设只读后 +0x40）记下", 1, strstr(out, w2) != NULL);
       eq("⑦ 区间外那次不记、没有第 3 次", 1, strstr(out, "第 3 次被写") == NULL);
       munmap((void *)pg, 0x4000); }
-    // ⑧ 写监视下多线程同时写同一页（区间外）：期望不崩、所有写都进去（测试机2 实测：两条线程同时缺页，后到的那条看到标记已清就落进崩溃路径）。
+    // ⑧ 写监视下多线程同时写同一页（区间外）：期望不崩、所有写都进去（iPhone 实测：两条线程同时缺页，后到的那条看到标记已清就落进崩溃路径）。
     //   8 条线程各往同页区间外自己那格写 10 万次、监视线程同时反复重新设只读；期望按构造：子进程正常退出、每格 = 100000
     { char path[] = "/tmp/t_crash_ww2_XXXXXX"; int fd = mkstemp(path);
       volatile uint64_t *pg = mmap(NULL, 0x4000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
