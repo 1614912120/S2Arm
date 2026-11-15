@@ -89,6 +89,13 @@ void s2a_dprompt_attach(UIView *root) {
 }
 
 // 只有「知道了」的提示条（别的模块用，主线程）：delay 秒后显示；横幅正被别的提示占着就再等 5 秒，不顶掉（审计 P2-3 IML 权限丢失）
+// C 入口（runtime/src/ap_host.c 停帧救场经 dlsym 调，任意线程）：「标题\n\n正文」拆开交 s2a_dprompt_notice，显示 seconds 秒
+void s2a_ios_banner(const char *m, double seconds) {
+    if (!m) return;
+    NSString *s = @(m); NSRange r = [s rangeOfString:@"\n"];
+    NSString *t = r.location == NSNotFound ? s : [s substringToIndex:r.location], *b = r.location == NSNotFound ? @"" : [[s substringFromIndex:r.location] stringByTrimmingCharactersInSet:NSCharacterSet.newlineCharacterSet];
+    s2a_dprompt_notice(t, b, 0, seconds);
+}
 void s2a_dprompt_notice(NSString *title, NSString *body, double delay, double seconds) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         if (!g_banner) return;
