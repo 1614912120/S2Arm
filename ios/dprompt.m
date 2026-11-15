@@ -37,6 +37,13 @@ static void show(NSString *title, NSString *body, NSString *accept, NSString *de
 static void poll(void) {
     // 存档不能原子提交（审计 P2-45，Mac 同款判定 runtime/src/direct_prompt.c）：第一次读到非 0 时用这条横幅提示一次
     if (s2a_save_atomic_poll()) s2a_dprompt_notice(S2APICK(S2A_DPROMPT_SAVE_ATOMIC_TITLE), S2APICK(S2A_DPROMPT_SAVE_ATOMIC_IOS), 0, 15);
+    // 画面没出来（体验梳理线 11-14：直连现编全失败、起局 20 秒一次绘制都没画）：游戏上方横幅，不挡游戏；「故障报修」走现有报修（诊断包带上现编失败次数那行日志），
+    //   「知道了」收起；一局只提示一次（s2a_no_picture_poll 只返回一次 1）
+    if (s2a_no_picture_poll()) {
+        void s2a_diag_report(void);   // ios/diag.m
+        g_onAnswer = ^(BOOL report) { if (report) s2a_diag_report(); };
+        show(S2APICK(S2A_DPROMPT_NOPIC_TITLE), S2APICK(S2A_DPROMPT_NOPIC_BODY), S2AL(@"diag.report.title"), S2APICK(S2A_DPROMPT_OK), 60);
+    }
 }
 
 static UIButton *button(SEL action, BOOL primary) {
