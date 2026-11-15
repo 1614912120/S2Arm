@@ -3,7 +3,7 @@
 #   解码器协议、H.264 未接回失败、同步点事件、av1C、NVN2 原生图像 → 线性纹理；纯 C + 替身，不需要游戏
 # S2A_DAV1D=0 的本地构建不链 dav1d：这条单测的 dav1d 部分无法链接，整条跳过（默认构建照常跑）
 NATIVE_TEST_OWN += nvn2_codec
-ifeq ($(shell uname -s),Darwin)
+ifeq ($(S2A_UNAME),Darwin)
 ifneq ($(S2A_DAV1D),0)
 .PHONY: native-test-nvn2_codec
 native-test-nvn2_codec:
