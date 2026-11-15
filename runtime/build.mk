@@ -12,6 +12,9 @@ s2a_comma := ,
 # 弱链接放行参数与 tools/weak_link_decl.py 读同一份解析结果（11-05：原先这里用 sed 按子串收场合「[^]]*host[^]]*」，Python 侧按逗号拆开整词比，
 #   安卓登记 android_draw_host 被 make 误收进 host，c4d0a36e4 合入后 weak_link_decl_test「两侧 host 放行参数同一份」红）
 S2A_WEAK_U = $(shell python3 tools/weak_link_decl.py flags $(1))
+ifndef S2A_UNAME   # 顶层 Makefile 已定义（只算一次）；t_present_settings / t_present_residency / t_fps_limit / tools/gate.sh 单独 make -f 本文件取 NVN_TEST_WEAK 时没有它，不补就整段 Darwin 分支落空、弱链接放行参数为空，三项上屏单测链接报未定义符号（11-15）
+S2A_UNAME := $(shell uname -s)
+endif
 NATIVE_SRCS := runtime/src/envfile.c $(filter-out runtime/src/envfile.c,$(sort $(wildcard runtime/src/*.c runtime/src/*.S)))
 APPLE_PLAT_SRCS := platform/apple/plat_apple.c
 HOST_SRCS   := $(NATIVE_SRCS) $(APPLE_PLAT_SRCS) $(HOST_SRCS)
