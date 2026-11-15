@@ -71,6 +71,8 @@ def verify(path):
         if missing:
             raise ValueError('APK lacks license files: ' + ', '.join(missing))
         for entry, original in LICENSE_EXACT:
+            if entry not in needs:          # 不带驱动库的 APK 不要求这两份
+                continue
             if entry not in files:
                 raise ValueError('APK lacks third-party license: ' + entry)
             if apk.read(entry) != original.read_bytes():
