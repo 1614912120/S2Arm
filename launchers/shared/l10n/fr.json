@@ -252,7 +252,7 @@
   "library.refresh": "Actualiser la Bibliothèque",
   "library.import_files": "Choisir les fichiers du jeu",
   "library.import_folder": "Choisir un dossier de jeu",
-  "library.import_keys": "Importer vos Clés",
+  "library.import_keys": "Importer vos clés",
   "library.source_hint": "Les fichiers du jeu sont uniquement lus, jamais déplacés ; conservez la Bibliothèque sur le même lecteur que vos fichiers de jeu",
   "library.empty": "La Bibliothèque est vide ; choisissez d'abord vos fichiers de jeu",
   "library.disconnected": "Aucune Bibliothèque connectée",
@@ -954,7 +954,9 @@
   "export.sgrade.ownWiden": "Plein écran : pas de patch communautaire pour ce jeu, le plein écran S2Arm est donc utilisé (vérifié par S2Arm), activé par défaut",
   "sgrade.upgrade.cat.ownWiden": "plein écran (S2Arm)",
   "sgrade.upgrade.version.mine": " (la vôtre : {0})",
-  "sgrade.upgrade.cat.cheatPlain": "codes de triche"
+  "sgrade.upgrade.cat.cheatPlain": "codes de triche",
+  "phone.done.export.fresh": "Fichiers .img à copier cette fois : {0}. Les {1} autres sont identiques à la dernière exportation ; s'ils sont déjà sur votre téléphone, inutile de les recopier.",
+  "phone.done.export.same": "Tous les .img sont identiques à la dernière exportation ; s'ils sont déjà sur votre téléphone, inutile de les recopier."
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "Correctif plein écran (choisi selon votre ratio d'écran)",

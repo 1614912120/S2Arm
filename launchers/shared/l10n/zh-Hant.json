@@ -954,7 +954,9 @@
   "export.sgrade.ownWiden": "滿螢幕：這款沒有社群滿螢幕補丁，使用 S2Arm 通用滿螢幕（S2Arm 驗證過能鋪滿），預設開啟",
   "sgrade.upgrade.cat.ownWiden": "滿螢幕（S2Arm 通用）",
   "sgrade.upgrade.version.mine": "（你這份是 {0}）",
-  "sgrade.upgrade.cat.cheatPlain": "金手指"
+  "sgrade.upgrade.cat.cheatPlain": "金手指",
+  "phone.done.export.fresh": ".img 只要拷這次新寫的：{0}。其餘 {1} 款和上次匯出的一樣，手機上已有就不用再拷。",
+  "phone.done.export.same": "各款 .img 都和上次匯出的一樣，手機上已有就不用再拷。"
  },
  "text": {
   "直连": "直連",
