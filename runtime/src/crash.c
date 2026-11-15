@@ -290,6 +290,26 @@ static void crash_raw(int sig, siginfo_t *si, ucontext_t *uc, int other) {
         raw_end(&l);
     }
 }
+// 崩溃时寄存器指向的对象（#016fde：游戏对象成员里的「取对象」接口返回空、一用就读 0，崩溃现场只有寄存器，认不出成员指向哪个类）：
+//   x19–x28（被调用者保存，多是 this / 外层对象）能读的地址往下 0x100 字节，每 8 字节：落在模块里写「模块+偏移」；是指针、它指向的首字在模块里 =
+//   「对象 虚表 …」；再隔一层（指向的首字再指向的首字）在模块里写「→对象 虚表 …」。只经 mem_read 读（读不了跳过，不再缺页）
+static void reg_objects(ucontext_t *uc) {
+    for (int r = 19; r <= 28; r++) {
+        uint64_t a = uc->uc_mcontext->__ss.__x[r], q[32];
+        if (a < 0x10000 || !mem_read(a, q, sizeof q)) continue;
+        char line[1536]; size_t at = (size_t)snprintf(line, sizeof line, "x%d %#llx：", r, (unsigned long long)a); int any = 0;
+        for (int i = 0; i < 32 && at < sizeof line - 200; i++) {
+            char w[160]; uint64_t v = q[i], v1 = 0, v2 = 0; const char *kind = NULL;
+            if (v < 0x10000) continue;
+            if (module_of((void *)(uintptr_t)v)) { where(v, w, sizeof w); kind = ""; }
+            else if (mem_read(v, &v1, 8) && v1 >= 0x10000 && module_of((void *)(uintptr_t)v1)) { where(v1, w, sizeof w); kind = "对象 虚表 "; }
+            else if (v1 >= 0x10000 && mem_read(v1, &v2, 8) && v2 >= 0x10000 && module_of((void *)(uintptr_t)v2)) { where(v2, w, sizeof w); kind = "→对象 虚表 "; }
+            if (!kind) continue;
+            at += (size_t)snprintf(line + at, sizeof line - at, " +%#x=%s%s", i * 8, kind, w); any = 1;
+        }
+        if (any) LOG("崩溃时寄存器指向：%s", line);
+    }
+}
 // 出事那块内存（#523 / #815：游戏装完 NRO 后 SIGBUS 落在主程序 +0x579508，日志只有地址，定不了是只读还是没映射）：
 //   缺页类信号（SIGBUS / SIGSEGV）打一行——读还是写（ESR 的 WnR 位）、地址所在（或之后第一块）映射的起止、当前 / 最大权限、标签、共享方式，块起点换成「模块+偏移」。
 //   只用 Mach 调用和 LOG，不分配
@@ -416,6 +436,7 @@ static void on_crash(int sig, siginfo_t *si, void *ctx) {
     s2a_backtrace(fp);
     code_note(pc, lr, fp);
     fault_region_note(sig, si, uc);
+    reg_objects(uc);
     { uint64_t ht, hl, fs, fh; int fn; s2a_low_holes(&ht, &hl); s2a_fd_usage(&fn, &fs, &fh);   // 资源耗尽类崩溃先看这两样：低区地址 / 文件句柄
       LOG("崩溃时余量：低区空洞合计 %llu MB、最大一块 %llu MB；文件句柄已开 %d 个，软上限 %llu、硬上限 %llu", (unsigned long long)(ht >> 20), (unsigned long long)(hl >> 20), fn, (unsigned long long)fs, (unsigned long long)fh); }
     s2a_lowva_crash_note();   // 低区账（各家账面、保留量、拦不到的）
