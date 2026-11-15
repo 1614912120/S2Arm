@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+CRASH = object()   # 期望表里的特殊项：进程被信号杀掉也算拦住（只给会越界写的变异体用）
+
 ROOT = Path(__file__).resolve().parents[3]
 OUT = ROOT / 'build/span-memo-mutations'
 OUT.mkdir(parents=True, exist_ok=True)
@@ -68,7 +70,8 @@ dirty_mutations = [
     ('注销后不重算 sm', [(SM_ROW, 'atomic_store_explicit(&g_span_n, n - 1, memory_order_release);')], INDEX_BAD),
     ('注销时按错位置找条目（索引悄悄停用）', [('p = span_lower(base, slot, n);\n    if (p >= n ||', 'p = 0;\n    if (p >= n ||')], '索引意外停用'),
     # 上限、分配失败、重置会话
-    ('上限不判', [('    if (n >= SPAN_IDX_MAX) { span_off("现存范围超过索引上限"); return; }\n', '')], '超过上限：索引停用'),
+    # 去掉上限判断后第 SPAN_IDX_MAX + 1 条写到块数组外面（未定义行为）：Linux 上通常还能走到断言，macOS 上当场被 SIGSEGV 杀掉——两种都是被拦住
+    ('上限不判', [('    if (n >= SPAN_IDX_MAX) { span_off("现存范围超过索引上限"); return; }\n', '')], ('超过上限：索引停用', CRASH)),
     ('分配失败只返回、不停用索引', [('if (!nb) { span_off("内存分配失败"); return; }', 'if (!nb) return;')], '分配失败：索引停用'),
     ('重置会话不清索引', [('    span_reset();\n    for (int b = 0; b < NBLK; b++) {', '    for (int b = 0; b < NBLK; b++) {')], '重置会话之后索引是空的'),
     ('重置会话不恢复停用', [('atomic_store(&g_span_n, 0); atomic_store(&g_span_off, 0);', 'atomic_store(&g_span_n, 0);')], '重置会话：索引恢复、清空'),
@@ -152,7 +155,9 @@ def expect_red(name, r, want):
     wants = (want,) if isinstance(want, str) else tuple(want)
     if r.returncode == 0:
         raise SystemExit(name + '：变异体居然通过了（单测没拦住）')
-    seen = next((w for w in wants if w in out), None)
+    seen = next((w for w in wants if w is not CRASH and w in out), None)
+    if seen is None and CRASH in wants and r.returncode < 0:   # 只对标了 CRASH 的变异体：越界写被信号杀掉也算拦住
+        seen = '被信号 %d 杀掉（越界写）' % -r.returncode
     if seen is None:
         ended = '被信号 %d 杀掉' % -r.returncode if r.returncode < 0 else '退出码 %d' % r.returncode
         reds = [l for l in out.splitlines() if '【红】' in l or l.startswith('FAIL')]
