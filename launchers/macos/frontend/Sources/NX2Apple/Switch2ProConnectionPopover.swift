@@ -153,8 +153,8 @@ struct Switch2ProConnectionPopover: View {
                         }
                     }
                     HStack(spacing: 8) {
-                        Button(zh ? "取消" : "Cancel") { controller.cancelAssign() }.controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true))
-                        Button(zh ? "完成" : "Done") { controller.finishAssign() }.controllerButtonStyle(LauncherPrimaryButtonStyle(fill: true))
+                        Button(zh ? "取消" : "Cancel") { controller.cancelAssign() }.controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true)).controllerShortcut(.back)
+                        Button(zh ? "完成" : "Done") { controller.finishAssign() }.controllerButtonStyle(LauncherPrimaryButtonStyle(fill: true)).controllerShortcut(.primary)
                     }
                 }
                 .onAppear {

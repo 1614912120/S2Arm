@@ -59,7 +59,8 @@ import LauncherPadBridge
     func windowShouldClose(_ sender: NSWindow) -> Bool { close(apply: false); return false }
     func handle(_ action: LauncherPadAction) -> Bool {
         switch action {
-        case .back, .menu: close(apply: true); return true
+        case .back: close(apply: false); return true
+        case .menu: close(apply: true); return true
         case .filter: if !value.isEmpty { value.removeLast() }; return true
         case .details: value.append(" "); return true
         default: return false
@@ -99,13 +100,14 @@ private struct LauncherPadKeyboardView: View {
             HStack(spacing: 10) {
                 Button(keyboard.symbols ? "abc" : "#+=") { keyboard.symbols.toggle() }.controllerID("pad.keyboard.symbols")
                 Button(keyboard.uppercase ? "abc" : "ABC") { keyboard.uppercase.toggle() }
-                Button(keyboard.t("home.keyboard.space")) { keyboard.value.append(" ") }
-                Button("⌫") { if !keyboard.value.isEmpty { keyboard.value.removeLast() } }
+                Button(keyboard.t("home.keyboard.space")) { keyboard.value.append(" ") }.controllerShortcut(.tertiary)
+                Button("⌫") { if !keyboard.value.isEmpty { keyboard.value.removeLast() } }.controllerShortcut(.secondary)
                 Button(keyboard.t("home.keyboard.clear")) { keyboard.value = "" }
                 Spacer(minLength: 4)
                 Button(keyboard.t("home.keyboard.cancel")) { keyboard.close(apply: false) }
+                    .controllerShortcut(.back)
                 Button(keyboard.t("home.keyboard.done")) { keyboard.close(apply: true) }
-                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
             }.controllerButtonStyle(LauncherSecondaryButtonStyle()).font(.manrope(12.5, .semibold))
         }.padding(LauncherTheme.Space.section).launcherSheet(.form, height: 410)
     }

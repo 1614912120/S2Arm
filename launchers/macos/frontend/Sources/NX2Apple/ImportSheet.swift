@@ -126,28 +126,28 @@ struct ImportSheet: View {
         }
     }
 
-    private static let footerButtonWidth: CGFloat = 84
+    private static let footerButtonWidth: CGFloat = 136
 
     private var footer: some View {
         HStack {
             if page == .results, detail == nil {
                 Button(common("cancel")) { model.cancelImport() }
-                    .controllerButtonStyle(LauncherSecondaryButtonStyle())
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.back)
             }
             Spacer()
             if let detail, page == .results {
                 Button(resultText("back")) { backFromDetails(detail) }
-                    .controllerButtonStyle(LauncherSecondaryButtonStyle())
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.back)
             } else if page == .results {
                 Button(resultText("back")) { model.backFromImportResults() }
-                    .controllerButtonStyle(LauncherSecondaryButtonStyle())
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.secondary)
                     .disabled(model.busy)
                 Button(resultText("retry")) { model.retryImport() }
-                .controllerButtonStyle(LauncherPrimaryButtonStyle())
+                .controllerButtonStyle(LauncherPrimaryButtonStyle()).controllerShortcut(.primary)
                 .disabled(model.busy)
             } else {
                 Button(common("cancel")) { cancel() }
-                    .controllerButtonStyle(LauncherSecondaryButtonStyle())
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.back)
                     .disabled(job?.phase == .stopping)
             }
         }
@@ -422,8 +422,8 @@ struct UploadDiagnosticsSheet: View {
                 }
                 HStack {
                     Spacer()
-                    Button(loc.t("s2arm.diagUpload.cancel")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
-                    Button(loc.t("s2arm.diagUpload.send")) { send() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                    Button(loc.t("s2arm.diagUpload.cancel")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.back)
+                    Button(loc.t("s2arm.diagUpload.send")) { send() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
                         .accessibilityIdentifier("diag.upload.send")
                 }
             case .uploading:
@@ -431,21 +431,21 @@ struct UploadDiagnosticsSheet: View {
                 // 11-13：卡在这一步（网慢 / 代理半通）原先没有任何出口；作业层另有 90 秒总时限兜底
                 HStack {
                     Spacer()
-                    Button(loc.t("s2arm.diagUpload.cancel")) { cancelUpload() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                    Button(loc.t("s2arm.diagUpload.cancel")) { cancelUpload() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.back)
                         .accessibilityIdentifier("diag.upload.cancelSending")
                 }
             case .done(let receipt):
                 Text(loc.t("s2arm.diagUpload.done")).font(LauncherTheme.TypeStyle.detail).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {
                     Text(receipt.code).font(.system(size: 26, weight: .semibold, design: .monospaced)).textSelection(.enabled).accessibilityIdentifier("diag.upload.code")
-                    Button(copied ? loc.t("s2arm.export.copied") : loc.t("s2arm.diagUpload.copy")) { copy(receipt.code) }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("diag.upload.copy")
+                    Button(copied ? loc.t("s2arm.export.copied") : loc.t("s2arm.diagUpload.copy")) { copy(receipt.code) }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("diag.upload.copy").controllerShortcut(.secondary)
                 }
                 Text(loc.t("s2arm.diagUpload.repo").replacingOccurrences(of: "{0}", with: receipt.repo)).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary).textSelection(.enabled)
                 HStack {
                     Spacer()
-                    Button(loc.t("s2arm.diagUpload.close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                    Button(loc.t("s2arm.diagUpload.close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.back)
                     if let url = receipt.issueURL {   // 主按钮：系统浏览器打开预填好诊断码 / 版本 / 平台的新帖页
-                        Button(loc.t("s2arm.diagUpload.github")) { NSWorkspace.shared.open(url) }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                        Button(loc.t("s2arm.diagUpload.github")) { NSWorkspace.shared.open(url) }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
                             .accessibilityIdentifier("diag.upload.github")
                     }
                 }
@@ -454,8 +454,8 @@ struct UploadDiagnosticsSheet: View {
                     .accessibilityIdentifier("diag.upload.failed")
                 HStack {
                     Spacer()
-                    Button(loc.t("s2arm.diagUpload.close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
-                    Button(loc.t("s2arm.play.diagnostics")) { exportInstead() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                    Button(loc.t("s2arm.diagUpload.close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.back)
+                    Button(loc.t("s2arm.play.diagnostics")) { exportInstead() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
                         .accessibilityIdentifier("diag.upload.export")
                 }
             }

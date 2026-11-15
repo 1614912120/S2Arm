@@ -11,6 +11,8 @@ struct LauncherPadTarget {
     let frame: CGRect
     let role: String
     let element: Any
+    var unclippedFrame: CGRect? = nil
+    var clippingFrame: CGRect? = nil
 }
 
 enum LauncherPadSpatial {
@@ -39,6 +41,7 @@ enum LauncherPadSpatial {
     @Published private(set) var focusedID: String?
     @Published private(set) var visible = false
     let source = LauncherPadSource()
+    let presentation = PadPresentation()
     var language = "zh-Hans"
     var text: (String) -> String = { $0 }
     var onAction: ((LauncherPadAction) -> Bool)?
@@ -53,29 +56,101 @@ enum LauncherPadSpatial {
     private var trackingMenu = false
     var keyboard: LauncherPadKeyboard?
     private var controls: [UUID: PadControl] = [:]
+    private var geometryRefreshPending = false
+    private let nativeButtons = LauncherPadNativeButtons()
 
     func register(_ control: PadControl) {
         controls[control.token] = control
-        if visible, focusedID == control.id {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.visible, self.focusedID == control.id, let window = control.view.window else { return }
-                self.draw(self.targets(in: window).first { $0.id == control.id }, in: window)
-            }
-        }
+        requestGeometryRefresh()
     }
-    func removeControl(_ token: UUID) { controls[token] = nil }
+    func removeControl(_ token: UUID) { controls[token] = nil; requestGeometryRefresh() }
     func isFullyVisible(_ id: String) -> Bool {
-        guard let control = controls.values.first(where: { $0.id == id && $0.view.window === window }) else { return false }
-        return control.view.visibleRect.contains(control.view.bounds.insetBy(dx: 1, dy: 1))
+        guard let control = controls.values.first(where: { $0.id == id && $0.view.window === activeWindow }) else { return false }
+        let frame = Self.screenFrame(control.view)
+        return Self.clippingFrame(control.view).insetBy(dx: -1, dy: -1).contains(frame)
+    }
+    private static func screenFrame(_ view: NSView) -> CGRect {
+        view.window?.convertToScreen(view.convert(view.bounds, to: nil)) ?? .zero
+    }
+    /// visibleRect is not reliable for SwiftUI's background representables: their
+    /// AppKit layer can extend past the ScrollView. Intersect the actual clip ancestors.
+    private static func clippingFrame(_ view: NSView) -> CGRect {
+        guard let window = view.window, let content = window.contentView else { return .zero }
+        var clip = screenFrame(content)
+        var ancestor = view.superview
+        while let current = ancestor {
+            if current is NSClipView { clip = clip.intersection(screenFrame(current)) }
+            ancestor = current.superview
+        }
+        return clip
+    }
+    private func registeredControls(in window: NSWindow) -> [PadControl] {
+        let registered = controls.values.filter { $0.view.window === window && !$0.view.isHiddenOrHasHiddenAncestor }
+        let modal = registered.filter { $0.scope == "dropdown" && controlTarget($0) != nil }
+        return (modal.isEmpty ? Array(registered) : modal).filter(\.enabled)
+    }
+    private func controlTarget(_ control: PadControl, includeOffscreen: Bool = false) -> LauncherPadTarget? {
+        let full = Self.screenFrame(control.view), clip = Self.clippingFrame(control.view)
+        let visible = full.intersection(clip)
+        let frame = includeOffscreen ? full : visible
+        guard frame.width > 2, frame.height > 2 else { return nil }
+        return LauncherPadTarget(id: control.id, frame: frame, role: "AXButton", element: control.view, unclippedFrame: full, clippingFrame: clip)
     }
     func controlTargets(in window: NSWindow) -> [LauncherPadTarget] {
-        let registered = controls.values.filter { $0.enabled && $0.view.window === window && !$0.view.isHiddenOrHasHiddenAncestor && !$0.view.visibleRect.isEmpty }
-        let modal = registered.filter { $0.scope == "dropdown" }
-        return (modal.isEmpty ? Array(registered) : modal).compactMap { control in
-            let frame = window.convertToScreen(control.view.convert(control.view.bounds, to: nil))
-            guard frame.width > 2, frame.height > 2, window.frame.intersects(frame) else { return nil }
-            return LauncherPadTarget(id: control.id, frame: frame, role: "AXButton", element: control.view)
-        }.sorted(by: Self.order)
+        registeredControls(in: window).compactMap { controlTarget($0) }.sorted(by: Self.order)
+    }
+    func shortcutTargets(in window: NSWindow) -> [PadShortcut: [String]] {
+        var result: [PadShortcut: [String]] = [:]
+        for control in controls.values where control.view.window === window && !control.view.isHiddenOrHasHiddenAncestor && controlTarget(control) != nil {
+            for shortcut in control.shortcuts { result[shortcut, default: []].append(control.id) }
+        }
+        return result
+    }
+    func focusRingFrame(in window: NSWindow) -> CGRect? {
+        guard let overlay = overlays[window.windowNumber], let target = overlay.target else { return nil }
+        return window.convertToScreen(overlay.convert(target.intersection(overlay.clip ?? overlay.bounds), to: nil))
+    }
+    private func requestGeometryRefresh() {
+        guard visible, !geometryRefreshPending else { return }
+        geometryRefreshPending = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.geometryRefreshPending = false
+            self.refreshFocusGeometry()
+        }
+    }
+    func refreshFocusGeometry() {
+        guard visible, !trackingMenu, let window = activeWindow else { clearRings(); return }
+        let previousID = focusedID, previousScope = scope
+        let old = overlays[window.windowNumber]?.screenTarget
+        let all = prepare(in: window)
+        if previousScope == scope, let id = previousID, !id.hasPrefix("card.") {
+            let selected = all.first { $0.id == id }
+            let complete = selected.map { ($0.clippingFrame ?? window.frame).insetBy(dx: -1, dy: -1).contains($0.unclippedFrame ?? $0.frame) } ?? false
+            if !complete {
+                let scroll = controls.values.first { $0.id == id && $0.view.window === window }?.view.enclosingScrollView
+                let completeTargets = all.filter { ($0.clippingFrame ?? window.frame).insetBy(dx: -1, dy: -1).contains($0.unclippedFrame ?? $0.frame) }
+                let nearby = completeTargets.filter { ($0.element as? NSView)?.enclosingScrollView === scroll }
+                let candidates = nearby.isEmpty ? completeTargets : nearby
+                focusedID = (selected?.frame ?? old).flatMap { frame in candidates.min { a, b in
+                hypot(a.frame.midX - frame.midX, a.frame.midY - frame.midY) < hypot(b.frame.midX - frame.midX, b.frame.midY - frame.midY)
+                }?.id } ?? focusedID
+            }
+        }
+        draw(all.first { $0.id == focusedID }, in: window)
+    }
+    private func reveal(_ id: String, in window: NSWindow) {
+        if let control = controls.values.first(where: { $0.id == id && $0.view.window === window }) {
+            control.view.scrollToVisible(control.view.bounds.insetBy(dx: -6, dy: -6))
+        }
+    }
+    private func nextInScroll(from selected: LauncherPadTarget, action: LauncherPadAction, window: NSWindow) -> LauncherPadTarget? {
+        guard action == .up || action == .down,
+              let view = selected.element as? NSView, let scroll = view.enclosingScrollView else { return nil }
+        let candidates = registeredControls(in: window).filter {
+            $0.id != selected.id && $0.view.enclosingScrollView === scroll
+        }.compactMap { controlTarget($0, includeOffscreen: true) }
+        return LauncherPadSpatial.next(from: selected.unclippedFrame ?? selected.frame, targets: candidates, action: action)
     }
     private static func order(_ a: LauncherPadTarget, _ b: LauncherPadTarget) -> Bool {
         let ay = Int(a.frame.midY / 24), by = Int(b.frame.midY / 24)
@@ -88,12 +163,33 @@ enum LauncherPadSpatial {
         guard self.window !== window else { return }
         self.window = window
         source.receive = { [weak self] action in self?.handle(action) }
+        source.updateSymbols = { [weak self] symbols in
+            guard let self, self.presentation.symbols != symbols else { return }
+            self.presentation.symbols = symbols
+        }
+        source.refresh = { [weak self] in
+            guard let self, let window = self.activeWindow else { return }
+            if !self.controls.values.contains(where: { $0.view.window === window }) {
+                self.nativeButtons.update(in: window, presentation: self.presentation)
+            }
+        }
         source.start()
         if monitors.isEmpty {
             if let monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] event in
                 self?.hide(); return event
             }) { monitors.append(monitor) }
             let center = NotificationCenter.default
+            notifications.append(center.addObserver(forName: NSView.boundsDidChangeNotification, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard let clip = note.object as? NSClipView, clip.window === self?.activeWindow else { return }
+                    self?.requestGeometryRefresh()
+                }
+            })
+            for name in [NSWindow.didResizeNotification, NSWindow.didMoveNotification, NSWindow.didEndSheetNotification, NSWindow.didBecomeKeyNotification] {
+                notifications.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.requestGeometryRefresh() }
+                })
+            }
             notifications.append(center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.trackingMenu = true; self?.clearRings() }
             })
@@ -117,6 +213,7 @@ enum LauncherPadSpatial {
     }
     func detach() {
         source.stop(); clearRings(); keyboard?.close(apply: false); keyboard = nil
+        nativeButtons.restore(); source.refresh = {}; source.updateSymbols = { _ in }
         for monitor in monitors { NSEvent.removeMonitor(monitor) }; monitors.removeAll()
         for observer in notifications { NotificationCenter.default.removeObserver(observer) }; notifications.removeAll()
         for overlay in overlays.values { overlay.removeFromSuperview() }; overlays.removeAll()
@@ -141,7 +238,7 @@ enum LauncherPadSpatial {
     var inMainContent: Bool { activeWindow === window && !trackingMenu && !hasDropdown }
     private var hasDropdown: Bool {
         guard let window = activeWindow else { return false }
-        if controls.values.contains(where: { $0.scope == "dropdown" && $0.view.window === window && !$0.view.visibleRect.isEmpty }) { return true }
+        if controls.values.contains(where: { $0.scope == "dropdown" && $0.view.window === window && !$0.view.isHiddenOrHasHiddenAncestor && controlTarget($0) != nil }) { return true }
         return Self.elements(window).contains { S2ALauncherAX.identifier($0) == "launcher.dropdown" }
     }
 
@@ -157,6 +254,7 @@ enum LauncherPadSpatial {
         return result
     }
     func targets(in window: NSWindow) -> [LauncherPadTarget] {
+        if !controls.values.contains(where: { $0.view.window === window }) { nativeButtons.update(in: window, presentation: presentation) }
         let registered = controlTargets(in: window)
         if controls.values.contains(where: { $0.scope == "dropdown" && $0.view.window === window && !$0.view.visibleRect.isEmpty }) { return registered }
         let all = Self.elements(window)
@@ -169,19 +267,28 @@ enum LauncherPadSpatial {
             let frame = S2ALauncherAX.frame(element)
             guard frame.width > 2, frame.height > 2, window.frame.intersects(frame) else { return nil }
             if role == "AXButton", frame.width <= 18, frame.height <= 18 { return nil }
-            if registered.contains(where: { $0.frame.insetBy(dx: -2, dy: -2).contains(CGPoint(x: frame.midX, y: frame.midY)) }) { return nil }
+            // Also exclude clipped/disabled registered controls from the native
+            // fallback; otherwise AX would reintroduce their unbounded frames.
+            if controls.values.contains(where: { $0.view.window === window && Self.screenFrame($0.view).insetBy(dx: -2, dy: -2).contains(CGPoint(x: frame.midX, y: frame.midY)) }) { return nil }
+            let view = (element as? NSView) ?? (element as? NSCell)?.controlView
+            if let view, view.isHiddenOrHasHiddenAncestor { return nil }
+            let clip = view.map(Self.clippingFrame) ?? window.frame
+            let visibleFrame = frame.intersection(clip)
+            guard visibleFrame.width > 2, visibleFrame.height > 2 else { return nil }
             let explicit = S2ALauncherAX.identifier(element) ?? ""
             if ["AXCloseButton", "AXMinimizeButton", "AXZoomButton"].contains(explicit) { return nil }
             let id = explicit.isEmpty ? "ax.\(role).\(S2ALauncherAX.label(element) ?? "").\(index)" : explicit
-            return LauncherPadTarget(id: id, frame: frame, role: role, element: element)
+            return LauncherPadTarget(id: id, frame: visibleFrame, role: role, element: element, unclippedFrame: frame, clippingFrame: clip)
         }
         return (registered + native).sorted(by: Self.order)
     }
     func focus(_ id: String) {
         visible = true
+        guard let window = activeWindow else { focusedID = id; return }
+        _ = prepare(in: window)
         focusedID = id
-        guard let window = activeWindow else { return }
         memories[scope] = id
+        reveal(id, in: window)
         draw(targets(in: window).first { $0.id == id }, in: window)
     }
     private func prepare(in window: NSWindow) -> [LauncherPadTarget] {
@@ -218,6 +325,7 @@ enum LauncherPadSpatial {
         }
         let all = prepare(in: currentWindow)
         if let keyboard, currentWindow === keyboard.panel, keyboard.handle(action) { return }
+        if performShortcut(action, in: currentWindow) { return }
         if inMainContent, onAction?(action) == true { return }
         let selected = all.first { $0.id == focusedID }
         switch action {
@@ -237,7 +345,8 @@ enum LauncherPadSpatial {
                let control = controls.values.first(where: { $0.id == focusedID && $0.enabled && $0.view.window === currentWindow }), let adjust = control.adjust { adjust(step); break }
             if let selected, ["AXSlider", "AXIncrementor"].contains(selected.role), action == .left || action == .right,
                S2ALauncherAX.adjust(selected.element, step: step) { break }
-            if let selected, let next = LauncherPadSpatial.next(from: selected.frame, targets: all.filter { $0.id != selected.id }, action: action) {
+            if let selected, let next = nextInScroll(from: selected, action: action, window: currentWindow)
+                ?? LauncherPadSpatial.next(from: selected.frame, targets: all.filter { $0.id != selected.id }, action: action) {
                 focus(next.id)
                 if next.role == "AXRow" { _ = S2ALauncherAX.pick(next.element) }
             } else if let selected, action == .up || action == .down,
@@ -258,6 +367,31 @@ enum LauncherPadSpatial {
         }
         if let focusedID { memories[scope] = focusedID }
         draw(targets(in: currentWindow).first { $0.id == focusedID }, in: currentWindow)
+    }
+    private func performShortcut(_ action: LauncherPadAction, in window: NSWindow) -> Bool {
+        let shortcut: PadShortcut
+        switch action {
+        case .menu: shortcut = .primary
+        case .back: shortcut = .back
+        case .filter: shortcut = .secondary
+        case .details: shortcut = .tertiary
+        default: return false
+        }
+        let dropdown = hasDropdown
+        let matches = controls.values.filter {
+            $0.view.window === window && !$0.view.isHiddenOrHasHiddenAncestor && $0.shortcuts.contains(shortcut)
+                && (!dropdown || $0.scope == "dropdown") && controlTarget($0) != nil
+        }
+        // A disabled submit/cancel must not fall through to Escape or to the page underneath.
+        guard let control = matches.first else {
+            guard !controls.values.contains(where: { $0.view.window === window }),
+                  let button = nativeButtons.buttons(in: window).first(where: { $0.0 == shortcut })?.1 else { return false }
+            if button.isEnabled { button.performClick(nil) }
+            return true
+        }
+        if control.enabled { control.activate() }
+        requestGeometryRefresh()
+        return true
     }
     private func linear(_ step: Int, all: [LauncherPadTarget]) {
         guard !all.isEmpty else { return }
@@ -316,16 +450,23 @@ enum LauncherPadSpatial {
             container.addSubview(overlay, positioned: .above, relativeTo: nil)
             overlays[window.windowNumber] = overlay
         }
-        overlay.target = overlay.convert(window.convertFromScreen(target.frame), from: nil)
+        overlay.screenTarget = target.frame
+        overlay.clip = target.clippingFrame.map { overlay.convert(window.convertFromScreen($0), from: nil) }
+        overlay.target = overlay.convert(window.convertFromScreen(target.unclippedFrame ?? target.frame), from: nil)
     }
 }
 
 private final class LauncherPadRing: NSView {
+    var screenTarget: CGRect?
+    var clip: CGRect?
     var target: CGRect? { didSet { needsDisplay = true } }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
     override func isAccessibilityElement() -> Bool { false }
     override func draw(_ dirtyRect: NSRect) {
         guard let target else { return }
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        if let clip { NSBezierPath(rect: clip).addClip() }
         let ring = NSBezierPath(roundedRect: target.insetBy(dx: -3, dy: -3), xRadius: 10, yRadius: 10)
         NSColor(srgbRed: 1, green: 0.94, blue: 0.84, alpha: 1).setStroke()
         ring.lineWidth = 3; ring.stroke()

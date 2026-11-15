@@ -124,9 +124,9 @@ struct DevCertSheet: View {
                     Text(sx(loc, "sheet.working")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button(sx(loc, "sheet.cancel")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                Button(sx(loc, "sheet.cancel")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.back)
                 Button(sx(loc, "sheet.import")) { start() }
-                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
                     .disabled(working || p12.isEmpty || profile.isEmpty)
                     .accessibilityIdentifier("export.sign.sheet.import")
             }

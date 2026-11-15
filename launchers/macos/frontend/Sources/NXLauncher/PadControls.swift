@@ -6,6 +6,7 @@ import SwiftUI
 /// Buttons register their actual action and view, including when SwiftUI has not
 /// materialized its out-of-process accessibility tree. Native panels use AppKit.
 @MainActor package protocol PadControlRegistry: AnyObject {
+    var presentation: PadPresentation { get }
     func register(_ control: PadControl)
     func removeControl(_ token: UUID)
 }
@@ -18,7 +19,26 @@ package struct PadControl {
     package let activate: () -> Void
     package let adjust: ((Int) -> Void)?
     package let preferred: Bool
+    package var shortcuts: [PadShortcut] = []
 }
+/// A always operates the focused control. Menu/Options submits the sheet without
+/// stealing A from editable fields; B returns, X/Y are explicit secondary actions.
+package enum PadShortcut: String, CaseIterable {
+    case primary, back, secondary, tertiary
+    package var symbol: String {
+        switch self {
+        case .primary: return "line.3.horizontal.circle"
+        case .back: return "b.circle"
+        case .secondary: return "x.circle"
+        case .tertiary: return "y.circle"
+        }
+    }
+}
+@MainActor package final class PadPresentation: ObservableObject {
+    @Published package var symbols: [PadShortcut: String] = [:]
+    package init() {}
+}
+private struct PadShortcutsKey: EnvironmentKey { static let defaultValue: [PadShortcut] = [] }
 private struct PadRegistryKey: EnvironmentKey { static let defaultValue: (any PadControlRegistry)? = nil }
 private struct PadControlIDKey: EnvironmentKey { static let defaultValue: String? = nil }
 private struct PadControlScopeKey: EnvironmentKey { static let defaultValue = "page" }
@@ -28,11 +48,13 @@ extension EnvironmentValues {
     package var padControlID: String? { get { self[PadControlIDKey.self] } set { self[PadControlIDKey.self] = newValue } }
     package var padControlScope: String { get { self[PadControlScopeKey.self] } set { self[PadControlScopeKey.self] = newValue } }
     package var padPreferred: Bool { get { self[PadPreferredKey.self] } set { self[PadPreferredKey.self] = newValue } }
+    package var padShortcuts: [PadShortcut] { get { self[PadShortcutsKey.self] } set { self[PadShortcutsKey.self] = newValue } }
 }
 extension View {
     package func controllerID(_ id: String) -> some View { environment(\.padControlID, id).accessibilityIdentifier(id) }
     package func controllerScope(_ scope: String) -> some View { environment(\.padControlScope, scope) }
     package func controllerPreferredFocus(_ preferred: Bool) -> some View { environment(\.padPreferred, preferred) }
+    package func controllerShortcut(_ shortcuts: PadShortcut...) -> some View { environment(\.padShortcuts, shortcuts) }
     package func controllerButtonStyle<S: ButtonStyle>(_ style: S) -> some View { buttonStyle(PadVisualButtonStyle(style: style)) }
     package func controllerButtonStyle<S: PrimitiveButtonStyle>(_ style: S) -> some View { buttonStyle(PadPrimitiveButtonStyle(style: style)) }
     package func controllerControl(id: String? = nil, activate: @escaping () -> Void, adjust: ((Int) -> Void)? = nil) -> some View {
@@ -42,15 +64,43 @@ extension View {
 private struct PadVisualButtonStyle<Style: ButtonStyle>: PrimitiveButtonStyle {
     let style: Style
     func makeBody(configuration: Configuration) -> some View {
-        Button(action: configuration.trigger) { configuration.label }
+        Button(action: configuration.trigger) { PadButtonLabel(label: configuration.label) }
             .buttonStyle(style).modifier(PadControlModifier(activate: configuration.trigger))
     }
 }
 private struct PadPrimitiveButtonStyle<Style: PrimitiveButtonStyle>: PrimitiveButtonStyle {
     let style: Style
     func makeBody(configuration: Configuration) -> some View {
-        Button(action: configuration.trigger) { configuration.label }
+        Button(action: configuration.trigger) { PadButtonLabel(label: configuration.label) }
             .buttonStyle(style).modifier(PadControlModifier(activate: configuration.trigger))
+    }
+}
+private struct PadButtonLabel<Label: View>: View {
+    let label: Label
+    @Environment(\.padShortcuts) private var shortcuts
+    @Environment(\.padControls) private var registry
+    @ViewBuilder var body: some View {
+        if shortcuts.isEmpty { label }
+        else {
+            HStack(spacing: 6) {
+                if let presentation = registry?.presentation {
+                    PadShortcutSymbols(shortcuts: shortcuts, presentation: presentation)
+                } else {
+                    ForEach(shortcuts, id: \.self) { Image(systemName: $0.symbol).accessibilityHidden(true) }
+                }
+                label
+            }
+        }
+    }
+}
+private struct PadShortcutSymbols: View {
+    let shortcuts: [PadShortcut]
+    @ObservedObject var presentation: PadPresentation
+    var body: some View {
+        ForEach(shortcuts, id: \.self) { shortcut in
+            Image(systemName: presentation.symbols[shortcut] ?? shortcut.symbol)
+                .font(.system(size: 16, weight: .medium)).accessibilityHidden(true)
+        }
     }
 }
 private struct PadControlModifier: ViewModifier {
@@ -63,11 +113,12 @@ private struct PadControlModifier: ViewModifier {
     @Environment(\.padControlScope) private var scope
     @Environment(\.isEnabled) private var enabled
     @Environment(\.padPreferred) private var preferred
+    @Environment(\.padShortcuts) private var shortcuts
     func body(content: Content) -> some View {
         content.background {
             if registry != nil {
                 PadControlFrame(registry: registry, token: token, id: explicitID ?? identifier ?? "control." + token.uuidString,
-                    scope: scope, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred)
+                    scope: scope, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred, shortcuts: shortcuts)
             }
         }
     }
@@ -81,6 +132,7 @@ private struct PadControlFrame: NSViewRepresentable {
     let activate: () -> Void
     let adjust: ((Int) -> Void)?
     let preferred: Bool
+    let shortcuts: [PadShortcut]
     final class Host: NSView {
         weak var registry: (any PadControlRegistry)?
         var token: UUID?
@@ -90,7 +142,7 @@ private struct PadControlFrame: NSViewRepresentable {
     func makeNSView(context: Context) -> Host { Host() }
     func updateNSView(_ view: Host, context: Context) {
         view.registry = registry; view.token = token
-        registry?.register(PadControl(token: token, id: id, scope: scope, view: view, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred))
+        registry?.register(PadControl(token: token, id: id, scope: scope, view: view, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred, shortcuts: shortcuts))
     }
     static func dismantleNSView(_ view: Host, coordinator: ()) { if let token = view.token { view.registry?.removeControl(token) } }
 }

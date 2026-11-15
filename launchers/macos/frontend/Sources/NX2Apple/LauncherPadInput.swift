@@ -3,6 +3,7 @@
 import AppKit
 import GameController
 import LauncherPadBridge
+import NXLauncher
 
 enum LauncherPadAction: String, Equatable {
     case left, right, up, down, confirm, back, details, filter, previousGroup, nextGroup, pageUp, pageDown, search, menu, scrollUp, scrollDown
@@ -82,6 +83,9 @@ struct LauncherPadRepeater {
     var relayPath: () -> String? = { nil }
     var relayAllowed: () -> Bool = { true }
     var controllers: () -> [GCController] = { GCController.controllers() }
+    var isActive: () -> Bool = { NSApp.isActive }
+    var updateSymbols: ([PadShortcut: String]) -> Void = { _ in }
+    var refresh: () -> Void = {}
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
     private var client: OpaquePointer?
@@ -90,6 +94,7 @@ struct LauncherPadRepeater {
     private var lastPacketAt: TimeInterval = 0
     private var token = ""
     private var repeater = LauncherPadRepeater()
+    private var hintController: ObjectIdentifier?
 
     func start() {
         guard observers.isEmpty else { return }
@@ -119,11 +124,11 @@ struct LauncherPadRepeater {
             MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(t, forMode: .common)
+        RunLoop.main.add(t, forMode: .modalPanel)
         timer = t
     }
-    func tick() {
-        guard NSApp.isActive else { pause(); return }
-        let now = ProcessInfo.processInfo.systemUptime
+    func tick(now: TimeInterval = ProcessInfo.processInfo.systemUptime) {
+        guard isActive() else { pause(); return }
         if !relayAllowed() { if client != nil { releaseRelay() } }
         else {
             if client == nil, now >= retryAt, let path = relayPath() {
@@ -137,6 +142,16 @@ struct LauncherPadRepeater {
             }
         }
         let pads = controllers()
+        let activePad = pads.first { $0.extendedGamepad.map { !LauncherPadInput.system($0).neutral } ?? false }
+            ?? pads.first { ObjectIdentifier($0) == hintController } ?? pads.first
+        hintController = activePad.map(ObjectIdentifier.init)
+        if let pad = activePad?.extendedGamepad {
+            updateSymbols([.primary: pad.buttonMenu.sfSymbolsName ?? PadShortcut.primary.symbol,
+                           .back: pad.buttonB.sfSymbolsName ?? PadShortcut.back.symbol,
+                           .secondary: pad.buttonX.sfSymbolsName ?? PadShortcut.secondary.symbol,
+                           .tertiary: pad.buttonY.sfSymbolsName ?? PadShortcut.tertiary.symbol])
+        } else { updateSymbols([:]) }
+        refresh()
         var input = LauncherPadInput()
         for pad in pads.compactMap(\.extendedGamepad) {
             let state = LauncherPadInput.system(pad)

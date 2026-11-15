@@ -69,14 +69,14 @@ struct SGradeUpgradeBody: View {
             if games != nil || failure != nil {
                 LauncherSheetFooter {
                     if failure == nil, upgrades.contains(where: \.iphone) {
-                        Button(x("install")) { upgrade("device") }.controllerButtonStyle(LauncherPrimaryButtonStyle()).controllerID("sgrade.upgrade.install")
-                        Button(x("export")) { upgrade("export") }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("sgrade.upgrade.export")
+                        Button(x("install")) { upgrade("device") }.controllerButtonStyle(LauncherPrimaryButtonStyle()).controllerID("sgrade.upgrade.install").controllerShortcut(.primary)
+                        Button(x("export")) { upgrade("export") }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("sgrade.upgrade.export").controllerShortcut(.secondary)
                         Spacer()
-                        Button(x("close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("sgrade.upgrade.close")
+                        Button(x("close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("sgrade.upgrade.close").controllerShortcut(.back)
                     } else {
                         Spacer()
                         Button(x("ok")) { close() }.controllerButtonStyle(LauncherPrimaryButtonStyle())
-                            .keyboardShortcut(.defaultAction).controllerID("sgrade.upgrade.ok")
+                            .keyboardShortcut(.defaultAction).controllerID("sgrade.upgrade.ok").controllerShortcut(.primary, .back)
                     }
                 }.disabled(failure == nil && upgrades.contains(where: \.iphone) && busy)
             }

@@ -107,6 +107,13 @@ import NXLauncher
                     XCTAssertTrue(expanded.contains("controller.main-action"), "手柄 A 能展开 Switch 选项并保留实际连接操作")
                     XCTAssertTrue(expanded.contains("controller.system.settings"))
                     XCTAssertFalse(expanded.contains("controller.switch-options"))
+                    controller.setAssignmentForTesting(.init())
+                    try await Task.sleep(for: .milliseconds(100))
+                    let shortcuts = navigation.shortcutTargets(in: window)
+                    XCTAssertEqual(shortcuts[.primary]?.count, 1, "分配玩家的完成按钮必须有直接快捷键")
+                    XCTAssertEqual(shortcuts[.back]?.count, 1, "分配玩家的取消按钮必须有直接快捷键")
+                    navigation.handle(.back)
+                    XCTAssertFalse(controller.assigning, "B 应实际取消当前分配")
                 }
             }
         }

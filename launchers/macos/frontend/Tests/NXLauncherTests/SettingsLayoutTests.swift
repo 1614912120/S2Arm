@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 S2Arm contributors
 import AppKit
+import GameController
 import SwiftUI
 import XCTest
 import NXCore
@@ -11,6 +12,66 @@ import S2ArmAppleAdapter
 
 /// Real SwiftUI pages with original, asset-free job responses; never reads the player's library.
 @MainActor final class SettingsLayoutTests: XCTestCase {
+    func testControllerSettingsScrollKeepsFocusOnVisibleControls() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        for language in [Lang.zh, .en] {
+            let (host, window) = try await render(AnyView(EnvironmentView(model: fixture.model)), fixture: fixture, language: language)
+            let navigation = fixture.navigation
+            navigation.source.controllers = { [] }
+            navigation.attach(window)
+            defer { navigation.detach(); window.close() }
+            let snapshot = GCController.withExtendedGamepad()
+            let pad = try XCTUnwrap(snapshot.extendedGamepad)
+            navigation.source.stop()
+            navigation.source.controllers = { [snapshot] }
+            navigation.source.isActive = { true }
+            var time: TimeInterval = 0
+            func press(_ down: Bool) {
+                time += 0.1
+                pad.dpad.setValueForXAxis(0, yAxis: down ? -1 : 1)
+                navigation.source.tick(now: time)
+                pad.dpad.setValueForXAxis(0, yAxis: 0)
+                navigation.source.tick(now: time + 0.01)
+            }
+            navigation.source.tick(now: 0)
+            navigation.focus("settings.language")
+            let scroll = try XCTUnwrap(scrollViews(in: host).first { $0.hasVerticalScroller })
+            for down in [true, false] {
+                for _ in 0..<22 {
+                    press(down)
+                    try await Task.sleep(for: .milliseconds(25))
+                    let targets = navigation.controlTargets(in: window)
+                    let focused = try XCTUnwrap(targets.first { $0.id == navigation.focusedID })
+                    let view = try XCTUnwrap(focused.element as? NSView)
+                    if view.enclosingScrollView != nil {
+                        let viewport = window.convertToScreen(scroll.contentView.convert(scroll.contentView.bounds, to: nil))
+                        XCTAssertTrue(viewport.insetBy(dx: -1, dy: -1).contains(focused.unclippedFrame ?? focused.frame),
+                            "\(language.code)：方向导航必须先将整个控件滚入可见区域，\(focused.id)")
+                    }
+                }
+            }
+            navigation.focus("env.installMode.device")
+            for step in 0..<14 {
+                navigation.handle(.scrollDown)
+                try await Task.sleep(for: .milliseconds(25))
+                if let focused = navigation.controlTargets(in: window).first(where: { $0.id == navigation.focusedID }) {
+                    let view = try XCTUnwrap(focused.element as? NSView)
+                    let frame = window.convertToScreen(view.convert(view.bounds, to: nil))
+                    XCTAssertTrue(frame.intersects(window.convertToScreen(host.bounds)), "滚动第 \(step) 步不能留下脱离控件的焦点")
+                    XCTAssertTrue(navigation.isFullyVisible(focused.id), "手动滚动后也应选中完整可见的项")
+                    let ring = try XCTUnwrap(navigation.focusRingFrame(in: window))
+                    XCTAssertEqual(ring.minX, focused.frame.minX, accuracy: 1)
+                    XCTAssertEqual(ring.minY, focused.frame.minY, accuracy: 1)
+                    XCTAssertEqual(ring.width, focused.frame.width, accuracy: 1)
+                    XCTAssertEqual(ring.height, focused.frame.height, accuracy: 1)
+                } else { XCTFail("滚动后焦点必须对应仍然可见的控件") }
+            }
+            try self.snapshot(host, "controller-settings-scrolled-" + language.code)
+            if let container = host.superview { try self.snapshot(container, "controller-settings-focus-ring-" + language.code) }
+        }
+    }
+
     func testExportLocationSurvivesReopeningAndRestartingWithAnUnchangedList() async throws {
         for language in [Lang.zh, .en] {
             let fixture = try SettingsFixture()
@@ -630,12 +691,18 @@ import S2ArmAppleAdapter
     func testAllUtilitySheetsRenderWithContainedControlsInBothLanguages() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
-        fixture.model.updatePopup = ["kind": "available", "version": "1.0.0", "notes": ["sections": [
-            ["title": "UI", "items": [["zh-Hans": "统一设置界面", "en": "Consistent settings"]]]]]]
         fixture.model.messages = [["id": "original-message", "text": ["zh-Hans": "原创界面检查消息", "en": "Original interface review message"]]]
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         for language in [Lang.zh, .en] {
             let uiLanguage = language == .zh ? "zh-Hans" : "en"
+            fixture.model.updatePopup = ["kind": "available", "version": "1.0.0", "notes": ["sections": [
+                ["title": "UI", "items": [["zh-Hans": "统一设置界面", "en": "Consistent settings"]]]]]]
             let pages: [(String, AnyView)] = [
+                ("settings", AnyView(EnvironmentView(model: fixture.model))),
+                ("launch-settings", AnyView(LaunchSettingsSheet(model: fixture.model, gameID: "fixture"))),
+                ("input-settings", AnyView(InputSettingsSheet(model: fixture.model, gameID: "fixture"))),
+                ("downstream", AnyView(DownstreamConfirmSheet(model: fixture.model, gameID: "fixture", zh: language == .zh))),
                 ("storage", AnyView(FreeSpaceView(model: fixture.model, gameID: "fixture"))),
                 ("saves", AnyView(SaveManageSheet(model: fixture.model, gameID: "fixture"))),
                 ("certificate", AnyView(DevCertSheet(model: fixture.model))),
@@ -661,7 +728,30 @@ import S2ArmAppleAdapter
                     XCTAssertTrue(bounds.insetBy(dx: -1, dy: -1).contains(target.frame),
                                   "\(name)/\(language.code): 控件溢出 \(target.id) \(target.frame), \(bounds)")
                 }
+                if name != "messages" {
+                    let shortcuts = fixture.navigation.shortcutTargets(in: window)
+                    XCTAssertFalse(shortcuts.isEmpty, "\(name)/\(language.code)：弹窗底栏必须登记手柄快捷键")
+                    for (key, ids) in shortcuts {
+                        XCTAssertEqual(ids.count, 1, "\(name)/\(language.code)：同一按键不能同时触发多个底栏按钮：\(key) \(ids)")
+                    }
+                    if !["downstream", "import-games", "import-keys"].contains(name) {
+                        XCTAssertNotNil(shortcuts[.back], "\(name)：必须能用 B 关闭或取消")
+                    }
+                }
                 try snapshot(host, "\(name)-\(language.code)")
+                window.close()
+            }
+            for feature in [false, true] {
+                fixture.model.updatePopup = feature
+                    ? ["kind": "feature", "pages": [["title": ["zh-Hans": "原创说明", "en": "Original guide"]], ["title": ["zh-Hans": "第二页", "en": "Second page"]]]]
+                    : ["kind": "afterUpdate", "version": "1.0.0", "notes": [:]]
+                let page = feature ? AnyView(FeatureSpotlightView(model: fixture.model, language: uiLanguage))
+                    : AnyView(UpdatePopupView(model: fixture.model, language: uiLanguage))
+                let (host, window) = try await render(page, fixture: fixture, language: language)
+                let keys = fixture.navigation.shortcutTargets(in: window)
+                XCTAssertEqual(keys[.primary]?.count, 1)
+                XCTAssertEqual(keys[.back]?.count, 1)
+                try snapshot(host, (feature ? "feature-" : "updated-") + language.code)
                 window.close()
             }
         }

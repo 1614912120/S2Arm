@@ -74,14 +74,14 @@ struct UpdatePopupView: View {
             HStack {
                 if let link = releasePage(version) {
                     Button { NSWorkspace.shared.open(link) } label: { Text(t("update.popup.fullLog")).font(LauncherTheme.TypeStyle.detail).underline() }
-                        .controllerButtonStyle(.plain).foregroundStyle(LauncherPalette.cream)
+                        .controllerButtonStyle(.plain).foregroundStyle(LauncherPalette.cream).controllerShortcut(.secondary)
                 }
                 Spacer()
                 Button(t("update.popup.later")) { model.closeUpdatePopup() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
-                    .keyboardShortcut(.cancelAction).accessibilityIdentifier("update.popup.later")
+                    .keyboardShortcut(.cancelAction).accessibilityIdentifier("update.popup.later").controllerShortcut(.back)
                 Button(t("update.popup.now")) { model.restartToUpdate() }
                     .controllerButtonStyle(LauncherPrimaryButtonStyle()).disabled(model.updateState != .ready)
-                    .accessibilityIdentifier("update.popup.now")
+                    .accessibilityIdentifier("update.popup.now").controllerShortcut(.primary)
             }
         }
     }
@@ -97,11 +97,11 @@ struct UpdatePopupView: View {
             HStack {
                 if let link = releasePage(version) {
                     Button { NSWorkspace.shared.open(link) } label: { Text(t("update.popup.fullLog")).font(LauncherTheme.TypeStyle.detail).underline() }
-                        .controllerButtonStyle(.plain).foregroundStyle(LauncherPalette.cream)
+                        .controllerButtonStyle(.plain).foregroundStyle(LauncherPalette.cream).controllerShortcut(.secondary)
                 }
                 Spacer()
                 Button(t("update.after.ok")) { model.closeUpdatePopup() }
-                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).accessibilityIdentifier("update.after.ok")
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).accessibilityIdentifier("update.after.ok").controllerShortcut(.primary, .back)
             }
         }
     }

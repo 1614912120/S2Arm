@@ -119,10 +119,10 @@ struct SaveManageSheet: View {
                 }
                 Spacer(minLength: 8)
                 if state.busy, state.running != .restore {
-                    Button(t("save.stop")) { state.stop() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+                    Button(t("save.stop")) { state.stop() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.secondary)
                 }
                 Button(t("save.done")) { dismiss() }
-                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.cancelAction)
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.primary, .back)
                     .disabled(state.running == .restore)
             }
         }

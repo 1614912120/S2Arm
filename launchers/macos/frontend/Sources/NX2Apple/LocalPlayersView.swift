@@ -57,7 +57,11 @@ struct PlayerToolbarButton: View {
         case .removing(let uid) where uid == p.uid:
             VStack(alignment: .leading, spacing: 8) {
                 Text(loc.t("s2arm.players.remove.body").replacingOccurrences(of: "{0}", with: name(p))).font(.manrope(12)).fixedSize(horizontal: false, vertical: true)
-                HStack { Spacer(); Button(loc.t("s2arm.players.cancel")) { finish() }; Button(loc.t("s2arm.players.remove")) { store.remove(p.uid); finish(); reload() } }
+                HStack {
+                    Spacer()
+                    Button(loc.t("s2arm.players.cancel")) { finish() }.controllerShortcut(.back)
+                    Button(loc.t("s2arm.players.remove")) { store.remove(p.uid); finish(); reload() }.controllerShortcut(.primary)
+                }
             }
         default:
             HStack(spacing: 10) {
@@ -83,8 +87,8 @@ struct PlayerToolbarButton: View {
         HStack {
             TextField(loc.t("s2arm.players.name"), text: $text, prompt: Text(loc.t("s2arm.players.name")).foregroundColor(LauncherTheme.Colors.secondary))
                 .textFieldStyle(LauncherTextFieldStyle()).onSubmit(action).accessibilityLabel(loc.t("s2arm.players.name"))
-            Button(loc.t("s2arm.players.cancel")) { finish() }
-            Button(confirm, action: action).keyboardShortcut(.defaultAction)
+            Button(loc.t("s2arm.players.cancel")) { finish() }.controllerShortcut(.back)
+            Button(confirm, action: action).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
         }
     }
     private func commit(_ body: () throws -> Void) {

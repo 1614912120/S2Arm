@@ -100,6 +100,19 @@ planned runtime log protocol in `docs/standards/logging.md`. Runtime markers and
 measurement logs retain their existing contract. Full gate/train/merge remain
 with the owning maintainer lines.
 
+## 不接实体手柄测试交互
+
+```sh
+bash launchers/macos/test_controller.sh
+```
+
+测试使用 Apple 的可写入 [GCController 快照](https://developer.apple.com/documentation/gamecontroller/gccontroller/withextendedgamepad())，
+把按键、方向键和摇杆样本交给启动器原有的输入采样、重复节奏、焦点导航与按钮动作链。
+不需要连接手柄、辅助功能授权、游戏文件或玩家游戏库；不会往系统注册虚拟硬件。
+真实 SwiftUI 设置页、弹窗、下拉框、屏幕键盘和原生确认框使用原创夹具，
+中英文截图写入 `build/controller-qa/`。完整 Mac 回归仍用 `bash launchers/macos/test.sh`。
+此检查覆盖应用内交互；蓝牙配对、射频断连、震动和实体按键手感须另用真手柄验证。
+
 ## DMG installation window / 拖拽安装窗口
 
 安装窗口沿用 [GitHub Pages 下载页](../../docs/site/index.html) 的近黑底、奶油白、

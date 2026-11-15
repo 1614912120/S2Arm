@@ -334,7 +334,7 @@ struct InputSettingsSheet: View {
             }
             HStack(spacing: 10) {
                 Button(t("restoreDefault")) { config = .standard; recording = nil; failure = nil }
-                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(saving)
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(saving).controllerShortcut(.secondary)
                 LauncherDropdown(options: [("", t("preset"))] + InputConfig.Preset.allCases.map { ($0.rawValue, t("preset." + $0.rawValue)) },
                                  selection: "", label: t("preset")) { value in
                     if let p = InputConfig.Preset(rawValue: value) { config = .preset(p); failure = nil }
@@ -350,9 +350,9 @@ struct InputSettingsSheet: View {
                     Text(t("unsaved")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary)
                 }
                 Button(t("cancel")) { dismiss() }
-                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).disabled(saving)
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).disabled(saving).controllerShortcut(.back)
                 Button(t("save")) { save() }
-                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).disabled(!canSave)
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).disabled(!canSave).controllerShortcut(.primary)
                     .controllerID("input.save")
             }
         }

@@ -41,10 +41,10 @@ struct DownstreamConfirmSheet: View {
                 HStack(spacing: 12) {
                     Spacer()
                     Button(text.original) { model.chooseDownstream(gameID, scheme: ""); dismiss() }
-                        .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("downstream.original")
+                        .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("downstream.original").controllerShortcut(.secondary)
                     Button(text.recommend) { model.chooseDownstream(gameID, scheme: offer.id); dismiss() }
                         .controllerButtonStyle(LauncherPrimaryButtonStyle()).disabled(!offer.eligible)
-                        .keyboardShortcut(.defaultAction).controllerID("downstream.recommend")
+                        .keyboardShortcut(.defaultAction).controllerID("downstream.recommend").controllerShortcut(.primary)
                 }
             }
         }

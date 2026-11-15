@@ -37,7 +37,7 @@ struct InstallView: View {
                     // 手机作业三态统一（PhoneJobPanel）：钥匙串提示只在后端标了 keychainPrompt 的阶段挂（#266），在组件里
                     ScrollView { PhoneJobPanel(model: model, session: job).frame(maxWidth: .infinity, alignment: .leading) }
                     // 装机在后台照跑：关掉弹层回游戏库，顶部胶囊「正在装到 iPhone · 查看进度」能回来（#308，Mac 与 Windows 同一套）
-                    HStack { Spacer(); Button(text("install.background")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.background") }
+                    HStack { Spacer(); Button(text("install.background")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.background").controllerShortcut(.back) }
                 }
                 .padding(.horizontal, LauncherTheme.Space.page).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -110,10 +110,10 @@ struct InstallView: View {
             }
             Divider().opacity(0.3)
             if model.installDone == gameID {
-                HStack { Spacer(); Button(text("install.close")) { model.installDone = nil; dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction) }
+                HStack { Spacer(); Button(text("install.close")) { model.installDone = nil; dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary, .back) }
                     .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
             } else if let job = installJob {
-                HStack { Spacer(); Button(loc.t("s2arm.job.cancel")) { model.stop() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(job.phase == .stopping) }
+                HStack { Spacer(); Button(loc.t("s2arm.job.cancel")) { model.stop() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(job.phase == .stopping).controllerShortcut(.back) }
                     .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
             } else {
             HStack(spacing: 14) {
@@ -121,13 +121,13 @@ struct InstallView: View {
                 Spacer(minLength: 8)
                 if let ipa = model.installReadiness?.ipaPath, !ipa.isEmpty {
                     Button(loc.t("s2arm.export.revealIpa")) { model.revealIpa(ipa) }
-                        .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.revealIpa")
+                        .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.revealIpa").controllerShortcut(.secondary)
                 }
-                Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+                Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.back)
                 Button(loc.t("s2arm.install.start")) {
                     if let game { model.clearInlineFailure(); model.install(game) }
                 }
-                .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
+                .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
                 // 不按清单置灰（维护者 11-11：玩家主动点装机不许前端挡）：清单可能是旧的（在外面登录好、插好线回来仍灰），
                 // 真做不下去的（没出 iPhone 版、没连设备、签名失败）作业层开头自己判、回真实原因；只在有作业在跑时置灰
                 .disabled(model.busy)

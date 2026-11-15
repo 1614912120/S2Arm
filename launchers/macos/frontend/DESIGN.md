@@ -43,6 +43,9 @@
 - 签名子区只缩进左侧，身份选择框和引导卡片的右边缘与父选项对齐
 - 打开引导项目失败时在该操作旁显示原因，避免把错误写进其他窗口
 - 确认页和升级列表使用有最小可见高度的滚动阅读区，短内容按实际高度排版，长内容不挤走操作按钮
+- 手柄焦点按窗口和下拉菜单隔离；方向导航先将下一项完整滚入视口，再绘制焦点框，滚动或缩放后按实际裁剪边界更新
+- A 操作当前焦点；弹窗底栏直接显示快捷键：Menu / Options 完成或确认、B 取消或返回、X / Y 执行标出的辅助动作，禁用按钮不响应快捷键
+- 按键图标跟随最近操作的系统手柄；屏幕键盘 B 放弃输入，Menu / Options 提交，返回后恢复原控件焦点
 
 ## 材质
 
@@ -62,6 +65,7 @@
 
 ```sh
 swift test --disable-sandbox --package-path launchers/macos/frontend --filter SettingsLayoutTests
+bash launchers/macos/test_controller.sh
 bash launchers/macos/test.sh
 python3 launchers/macos/prepare_build.py
 build/venv/bin/python3 launchers/macos/build_app.py

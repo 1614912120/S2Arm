@@ -137,10 +137,10 @@ struct EnvironmentView: View {
                 Text(loc.t("s2arm.env.note")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true).frame(maxWidth: .infinity, alignment: .leading)
                 Button(loc.t("s2arm.env.recheck")) { model.checkEnvironment() }
-                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.checking || model.busy)
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.checking || model.busy).controllerShortcut(.secondary)
                 Button(loc.t("launch.done")) { dismiss() }
                     .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
-                    .controllerID("settings.done")
+                    .controllerID("settings.done").controllerShortcut(.primary, .back)
             }
         }
         .onAppear { if model.checks.isEmpty { model.checkEnvironment() } }
