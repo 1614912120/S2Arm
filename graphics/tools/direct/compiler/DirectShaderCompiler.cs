@@ -236,8 +236,10 @@ namespace S2A.DirectCompiler
 
         // 池槽位只能由反射结果决定：翻译器先建 texture binding、后 RegisterTexture，
         // 按调用顺序猜会把这几个槽位全指到第一张纹理上。cbufSlot >= 0 的句柄来自常量
-        // 缓冲：只有同句柄存在直接绑定事实时才按 NVN c2→组合槽放行；其余 cbuf 路径和
-        // separate 采样器仍未实现，明确报红，不写死 0 让运行时绑错。
+        // 缓冲：c2 只有同句柄存在直接绑定事实时才按 NVN c2→组合槽放行；游戏 UBO（c3..c18）
+        // 的单个组合句柄给出 uboSlot / uboOffset（见下）；其余 cbuf 路径和 separate 采样器
+        // 仍未实现，明确报红，不写死 0 让运行时绑错。
+        private const int UserUboFirstCbuf = 3, UserUboLastCbuf = 18, UserUboMaxBytes = 0x10000;
         private static void ResolvePoolSlots(List<(DirectStage stage, ShaderProgram shader, DirectGpuAccessor accessor)> translated,
             DirectAllocator allocator)
         {
@@ -264,6 +266,24 @@ namespace S2A.DirectCompiler
                         throw new DirectCompileException("UNSUPPORTED_PROGRAM", binding.Stage + ": separate sampler arrays are not implemented");
                     binding.Slot = texWord;
                     binding.SamplerSlot = samplerSlot;
+                    continue;
+                }
+                if (resolved.CbufSlot >= UserUboFirstCbuf && resolved.CbufSlot <= UserUboLastCbuf)
+                {
+                    // 句柄在游戏自己的 UBO 里（#999 第 2 片）：照 Ryujinx（TextureBindingsManager 每笔读绑定 UBO 当时的句柄字）
+                    //   与 iOS NVN_RB_TEXU，结果给 uboSlot（NVN UBO 号 = cbuf − 3，同存储绑定的 uboSlot）和 uboOffset（句柄字的字节偏移
+                    //   = HandleIndex × 4），不给 slot（slot 只指 c2 句柄表 / 组合槽）。回放在绑定时读当时的 UBO 字解出贴图号 / 采样器号。
+                    //   编译期事实是这个 (stage, handle, cbufSlot) 的精确事实（NeedTexture 不借组合槽事实，缺就 MISSING_FACT）。
+                    //   只接单个、非分离的采样贴图；分离对（第 4 片）、句柄数组（第 5 片）、贴图缓冲、图像仍如实报未接。
+                    string shape = binding.Kind != "texture" ? "image" : binding.Source == "buffer-texture" ? "buffer texture" :
+                        resolved.Separate ? "separate" : binding.Count != 1 || resolved.ArrayLength > 1 ? "array" :
+                        resolved.HandleIndex < 0 || (long)resolved.HandleIndex * 4 + 4 > UserUboMaxBytes ? "offset outside 64 KiB" : null;
+                    if (shape != null)
+                        throw new DirectCompileException("UNSUPPORTED_PROGRAM",
+                            binding.Stage + ": texture handle from cbuf slot " + resolved.CbufSlot + " is not implemented (" + shape + ")");
+                    binding.Slot = -1;
+                    binding.UboSlot = resolved.CbufSlot - UserUboFirstCbuf;
+                    binding.UboOffset = resolved.HandleIndex * 4;
                     continue;
                 }
                 if (resolved.CbufSlot >= 0)
@@ -458,6 +478,12 @@ namespace S2A.DirectCompiler
                     writer.WriteNumber("count", binding.Count);
                     if (binding.Slot >= 0) writer.WriteNumber("slot", binding.Slot);
                     if (binding.SamplerSlot >= 0) writer.WriteNumber("samp_slot", binding.SamplerSlot);
+                    if (binding.Kind == "texture" && binding.UboSlot >= 0)
+                    {
+                        // 句柄在游戏 UBO 里（ResolvePoolSlots）：没有 slot，只有这两个来源字段
+                        writer.WriteNumber("uboSlot", binding.UboSlot);
+                        writer.WriteNumber("uboOffset", binding.UboOffset);
+                    }
                     if (binding.Kind == "storage")
                     {
                         // Resolved and uniqueness-checked by ResolveStorageSlots above.
