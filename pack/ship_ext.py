@@ -67,7 +67,9 @@ def program_dirs(root):
 
 def modules(root):
     # 偏移表顺序与运行时装载序一致（host_main.c 候选名单 main → subsdk0..9 → sdk）：字母序会把 sdk 排到 subsdk* 前
-    return load_order(p.name[:-len(".fixups.tsv")] for p in Path(root).glob("*.fixups.tsv"))
+    # 跳过 ._*：工作目录在 exFAT / FAT / 网络盘上时 macOS 给每个文件配一份 AppleDouble 附属文件 ._<名>（二进制头 00 05 16 07），
+    #   当成模块 "._main" 交给 embed.py 按文本读，报 UnicodeDecodeError 0xb0 position 37（Finder 信息长度 0x0EB0 的低字节）
+    return load_order(p.name[:-len(".fixups.tsv")] for p in Path(root).glob("*.fixups.tsv") if not p.name.startswith("._"))
 
 
 def per_game(app, tables):
