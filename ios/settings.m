@@ -345,7 +345,9 @@ void s2a_ios_apply_graphics_settings(NSUserDefaults *defaults) {
         [game removeObjectForKey:@"S2AWidenForce"];
         BOOL fs = NO;
         // 有自适应满屏补丁的款由补丁铺满（下面社区补丁那段让 S2Arm 满屏让开），这里不强开 S2Arm 满屏，免得拉宽两次
-        if ([game objectForKey:@"S2AWidescreen"] && [game boolForKey:@"S2AWidescreen"] && s2a_ios_fullscreen_state(@(gid), &fs) == 0 && fs && !adaptive_items(s2a_ios_game_dir(@(gid)), NULL).count) {
+        // 11-15：我方通用满屏缺省不用（runtime/src/widen.c）——玩家以前存下的「满屏明确开」也只在旧口径（S2A_CAPS_OWN=1）转成 S2A_WIDEN_VERIFIED，否则老设置会绕过闸
+        const char *own = getenv("S2A_CAPS_OWN");
+        if (own && !strcmp(own, "1") && [game objectForKey:@"S2AWidescreen"] && [game boolForKey:@"S2AWidescreen"] && s2a_ios_fullscreen_state(@(gid), &fs) == 0 && fs && !adaptive_items(s2a_ios_game_dir(@(gid)), NULL).count) {
             if (!getenv("S2A_WIDEN_VERIFIED")) apply_environment("S2A_WIDEN_VERIFIED", @"1");
             if (!getenv("S2A_WIDESCREEN")) apply_environment("S2A_WIDESCREEN", @"1");
             fprintf(stderr, "[S2A 画面设置] 满屏：这款明确开（没进已验证名单也铺满，自检兜底）\n");
