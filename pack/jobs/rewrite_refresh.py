@@ -208,28 +208,77 @@ def sgrade_rewrite(c, game, base, exefs, target, work):
     return root, modules_of(exefs), tables
 
 
-def put_tables(base, tables):
-    """随包表换进 kit / 运行版本：旧的补丁表与金手指原文先删（这次没出的不留），再拷新的"""
+def swap(base, changes):
+    """把一组文件换进 base（kit / Mac 运行版本），要么全换上、要么一个都不动（审计 P1-186：原先先删旧表、逐个换模块，中途失败已经能玩的那款程序与表
+    不再是同一次，失败句却说「先用原来的」）。changes：{文件名: 新内容路径 | None（删掉）}。
+    ① 新内容全部先写临时名 <名>.rw（写不成就清掉临时名、旧的一个字节不动）；② 逐个把旧的挪成 <名>.rwold、临时名改成正名
+    （中途失败按相反顺序还原，旧的回到原位）；③ 全部换上后才删 .rwold。失败照原样抛，调用方的「先用原来的程序」此时为真"""
     base = Path(base)
-    for old in list(base.glob("cheat-src.*")) + [base / t for t in SGRADE_TABLES]:
-        if old.is_file():
-            old.unlink()
-    for t in tables:
-        tmp = base / (t.name + ".rw")
-        shutil.copyfile(t, tmp); os.replace(tmp, base / t.name)
-    return [t.name for t in tables]
+    staged = []
+    try:
+        for name, src in changes.items():
+            if src is not None:
+                shutil.copyfile(src, base / (name + ".rw")); staged.append(name)
+    except BaseException:
+        for name in staged:
+            (base / (name + ".rw")).unlink(missing_ok=True)
+        raise
+    done = []
+    try:
+        for name, src in changes.items():
+            dst, old = base / name, base / (name + ".rwold")
+            had = dst.exists()
+            if had:
+                os.replace(dst, old)
+            done.append((name, had))
+            if src is not None:
+                os.replace(base / (name + ".rw"), dst)
+    except BaseException:
+        for name, had in reversed(done):
+            dst, old = base / name, base / (name + ".rwold")
+            if changes[name] is not None and not (base / (name + ".rw")).exists():
+                dst.unlink(missing_ok=True)   # 新的已换上：撤掉
+            if had:
+                os.replace(old, dst)
+        for name in staged:
+            (base / (name + ".rw")).unlink(missing_ok=True)
+        raise
+    for name, had in done:
+        if had:
+            (base / (name + ".rwold")).unlink(missing_ok=True)
 
 
-def apply_outputs(out, kit, modules):
-    """命中模块的改写产物换进 kit（逐个原子替换）；新改写器不再出的那份删掉（旧的留着会被装载器当成本次的）。没命中的模块一个字节都不动"""
+def table_changes(base, tables):
+    """随包表：旧的补丁表与金手指原文这次没出的删掉，出了的换新"""
+    base = Path(base)
+    ch = {old.name: None for old in list(base.glob("cheat-src.*")) + [base / t for t in SGRADE_TABLES] if old.is_file() and not old.name.endswith((".rw", ".rwold"))}
+    ch.update({t.name: t for t in tables})
+    return ch
+
+
+def output_changes(out, kit, modules):
+    """命中模块的改写产物换新；新改写器不再出的那份删掉（旧的留着会被装载器当成本次的）。没命中的模块不在表里、一个字节都不动"""
+    ch = {}
     for m in modules:
         for ext in OUTPUTS:
             src, dst = Path(out) / f"{m}.{ext}", Path(kit) / f"{m}.{ext}"
             if src.is_file():
-                tmp = dst.with_name(dst.name + ".rw")
-                shutil.copyfile(src, tmp); os.replace(tmp, dst)
+                ch[dst.name] = src
             elif dst.is_file():
-                dst.unlink()
+                ch[dst.name] = None
+    return ch
+
+
+def apply_outputs(out, kit, modules):
+    swap(kit, output_changes(out, kit, modules))
+
+
+def apply_sgrade(out, base, modules, tables):
+    """S 级优化补进：改写产物与随包表一起换（同一次 swap，不会只换上一半）→ 换上的表名"""
+    ch = output_changes(out, base, modules)
+    ch.update(table_changes(base, tables))
+    swap(base, ch)
+    return [t.name for t in tables]
 
 
 def kept_todo(c, gid, base):
@@ -271,10 +320,10 @@ def add_kept_nros(c, gid, base, target):
             if rr.returncode and not (rr.returncode == 3 and (out / f"{name}.patched.bin").is_file()):
                 raise Failure(f"改写运行时留下的模块 {name} 失败（退出码 {rr.returncode}）：" + ((rr.stderr.strip().splitlines() or [""])[-1])[:200])
             names.append(name); add.append("\t".join((name, sha, size, bss, src)))
-        apply_outputs(out, base, names)
-        tmpf = table.with_name(table.name + ".rw")
-        tmpf.write_text("# 模块名\tSHA-256\tNRO 大小\tbss 大小\tromfs 相对路径\n" + "".join(l + "\n" for l in rows + add))  # 非玩家句
-        os.replace(tmpf, table)
+        newtab = t / "nro_modules.tsv"
+        newtab.write_text("# 模块名\tSHA-256\tNRO 大小\tbss 大小\tromfs 相对路径\n" + "".join(l + "\n" for l in rows + add))  # 非玩家句
+        ch = output_changes(out, base, names); ch[table.name] = newtab   # 模块与表同一次换（中途失败两样都留旧的）
+        swap(base, ch)
     return names
 
 
@@ -326,8 +375,7 @@ def check_and_update(c, gid, kit, target, rid):
         bid = (Path(exefs) / "main").read_bytes()[0x40:0x48].hex().upper()
         if key is not None:   # S 级优化补到老游戏：按出包同一套带社区补丁改写，全部模块与补丁表换进 kit
             out, mods, tables = sgrade_rewrite(c, game, kit, exefs, target, work)
-            apply_outputs(out, kit, mods)
-            names = put_tables(kit, tables)
+            names = apply_sgrade(out, kit, mods, tables)
             import patches
             patches.remember(c, gid.upper(), patches.record(c, gid, "ios", out))   # 哪些打上 / 没打上（结果页列，11-14）
             c.emit("message", f"{gid}：S 级优化已按当前补丁库补进程序（{', '.join(names) or '这款没有匹配的社区补丁'}；资源不用重推）")  # 非玩家句
@@ -413,8 +461,7 @@ def refresh_mac(c, gid, runtime):
             if key is not None and game is not None:   # S 级优化补到老游戏（见文件头）：全部模块与补丁表换进运行版本
                 c.emit("message", "正在按当前补丁库给这款补上 S 级优化（只改程序，资源不动）")
                 out, hit, tables = sgrade_rewrite(c, game, runtime, runtime / "exefs", "apple", Path(tmp))
-                apply_outputs(out, runtime, hit)
-                names = put_tables(runtime, tables)
+                names = apply_sgrade(out, runtime, hit, tables)
                 import patches
                 patches.remember(c, gid.upper(), patches.record(c, gid, "mac", out))
             else:

@@ -290,3 +290,54 @@ class KeptNroRefreshTests(unittest.TestCase):
              patch.object(rr.layout, "ios_kit", return_value=self.base):
             self.assertEqual(self.run_add(lambda c, g: rr.refresh_ios(c, [g])), ["0100A"])
         self.assertTrue((self.base / "nro1.patched.bin").is_file())
+
+
+class SwapKeepsOld(unittest.TestCase):
+    """审计 P1-186：S 级优化 / 新版改写器把产物和补丁表换进正在用的 kit / 运行版本，要么全换上、要么一个都不动。
+    合成目录夹具（不要游戏原件）：期望值手写——中途失败后旧的 main.patched.bin、旧补丁表 cpatch.tsv、旧金手指原文都在且内容不变，目录里不留 .rw / .rwold"""
+    def setUp(self):
+        self.t = tempfile.TemporaryDirectory(); d = Path(self.t.name)
+        self.kit, self.out = d / "kit", d / "out"; self.kit.mkdir(); self.out.mkdir()
+        for n, v in (("main.patched.bin", "old-main"), ("main.fixups.tsv", "old-fx"), ("cheat-src.x.txt", "old-cheat")):
+            (self.kit / n).write_text(v)
+        if rr.SGRADE_TABLES:
+            (self.kit / rr.SGRADE_TABLES[0]).write_text("old-table")
+        (self.out / "main.patched.bin").write_text("new-main"); (self.out / "main.fixups.tsv").write_text("new-fx")
+        self.newtab = d / (rr.SGRADE_TABLES[0] if rr.SGRADE_TABLES else "cpatch.tsv"); self.newtab.write_text("new-table")
+
+    def tearDown(self):
+        self.t.cleanup()
+
+    def state(self):
+        return {p.name: p.read_text() for p in sorted(self.kit.iterdir())}
+
+    def test_all_swapped_on_success(self):
+        rr.apply_sgrade(self.out, self.kit, ["main"], [self.newtab])
+        s = self.state()
+        self.assertEqual((s["main.patched.bin"], s["main.fixups.tsv"], s[self.newtab.name]), ("new-main", "new-fx", "new-table"))
+        self.assertNotIn("cheat-src.x.txt", s)   # 这次没出的金手指原文删掉（同原 put_tables）
+        self.assertFalse([n for n in s if n.endswith((".rw", ".rwold"))])
+
+    def test_failure_midway_leaves_old_set(self):
+        before = self.state()
+        real = os.replace; n = [0]
+        def flaky(a, b):   # 第二次「临时名改正名」失败（模拟 Windows 目标被占用 WinError 32）
+            if str(a).endswith(".rw"):
+                n[0] += 1
+                if n[0] == 2:
+                    raise PermissionError(32, "目标被占用")
+            return real(a, b)
+        with patch.object(rr.os, "replace", side_effect=flaky), self.assertRaises(PermissionError):
+            rr.apply_sgrade(self.out, self.kit, ["main"], [self.newtab])
+        self.assertEqual(self.state(), before)
+
+    def test_staging_failure_touches_nothing(self):
+        before = self.state()
+        real = rr.shutil.copyfile
+        def boom(src, dst):
+            if str(dst).endswith("main.fixups.tsv.rw"):
+                raise OSError(28, "盘满")
+            return real(src, dst)
+        with patch.object(rr.shutil, "copyfile", side_effect=boom), self.assertRaises(OSError):
+            rr.apply_sgrade(self.out, self.kit, ["main"], [self.newtab])
+        self.assertEqual(self.state(), before)
