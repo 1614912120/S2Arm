@@ -56,6 +56,28 @@ static void run_rescue(const char *dir, char *out, size_t n) {
     }
     close(pp[1]); ssize_t r = read(pp[0], out, n - 1); out[r > 0 ? r : 0] = 0; close(pp[0]); waitpid(c, NULL, 0);
 }
+// ⑥ 同档几个上游补丁只开一组（11-15）：表里两份 60 档，组 g1 两行（位 1 写 0x48 = 11、位 2 写 0x4c = 22，同一上游补丁的 main / sdk）、组 g2 一行（位 3 写 0x50 = 33）。
+//   期望（手算）：都没验过 → 开表里第一组 g1：掩码 0x06、0x48 11、0x4c 22、0x50 00；g2 缺省开（我方验过）→ 开 g2：掩码 0x08、00 00 33
+static void run_group(int g2_def, char *out, size_t n) {
+    char dir[] = "/tmp/t_cpatch_grp.XXXXXX"; if (!mkdtemp(dir)) { out[0] = 0; return; }
+    char p[256]; snprintf(p, sizeof p, "%s/cpatch.tsv", dir); FILE *f = fopen(p, "w");
+    fprintf(f, "编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\t组\n");
+    fprintf(f, "fps:A\tmain\t1\tfps\t60 a\t\ta\t48:00:11\t0\t60\t\t\tg1\n");
+    fprintf(f, "fps:B\tmain\t2\tfps\t60 b\t\tb\t4c:00:22\t0\t60\t\t\tg1\n");
+    fprintf(f, "fps:C\tmain\t3\tfps\t60 c\t\tc\t50:00:33\t%d\t60\t\t\tg2\n", g2_def);
+    fclose(f);
+    int pp[2]; pipe(pp); pid_t c = fork();
+    if (c == 0) {
+        close(pp[0]); unsetenv("DM_PRESENT_LINK"); unsetenv("DM_PRESENT_HZ"); unsetenv("S2A_CPATCH_ON"); unsetenv("S2A_FPS_PICK"); unsetenv("DM_PRESENT_FI");
+        module_t m; memset(&m, 0, sizeof m); snprintf(m.name, sizeof m.name, "%s", "main");
+        m.size = 0x8000; m.base = mmap(NULL, m.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); m.key_page_off = 0x4000; m.key_page_size = 0x4000;
+        s2a_cpatch_load(&m, dir); s2a_cpatch_fps_follow(1);
+        uint64_t *slot = (uint64_t *)(m.base + m.key_page_off) + 2046; char b[128];
+        int k = snprintf(b, sizeof b, "%llx %02x %02x %02x", (unsigned long long)(*slot & 0x0e), m.base[0x48], m.base[0x4c], m.base[0x50]);
+        write(pp[1], b, (size_t)k); _exit(0);
+    }
+    close(pp[1]); ssize_t r = read(pp[0], out, n - 1); out[r > 0 ? r : 0] = 0; close(pp[0]); waitpid(c, NULL, 0); unlink(p); rmdir(dir);
+}
 int main(void) {
     char dir[] = "/tmp/t_cpatch_levels.XXXXXX"; if (!mkdtemp(dir)) return 1;
     char p[256]; snprintf(p, sizeof p, "%s/cpatch.tsv", dir); FILE *f = fopen(p, "w");
@@ -75,6 +97,10 @@ int main(void) {
     g_fi = 1; run(dir, 0, got, sizeof got); g_fi = 0;
     const char *want4 = "档 2:60/120 开 40 55 0 60 选120 80 77 2 120 选60 40 55 0 60 关 0 00";
     CHECK(!strcmp(got, want4), "④ 补帧开着：期望 %s，实得 %s", want4, got);
+    run_group(0, got, sizeof got);
+    CHECK(!strcmp(got, "6 11 22 00"), "⑥ 同档两组、都没验过 → 只开第一组：期望 6 11 22 00，实得 %s", got);
+    run_group(1, got, sizeof got);
+    CHECK(!strcmp(got, "8 00 00 33"), "⑥ 第二组我方验过 → 只开它：期望 8 00 00 33，实得 %s", got);
     run_rescue(dir, got, sizeof got);
     const char *want3 = "未开救 0 开 80 77 2 120 救 1 0 00 1 60 标记 fps 再救 0";
     CHECK(!strcmp(got, want3), "③ 停帧救场：期望 %s，实得 %s", want3, got);
