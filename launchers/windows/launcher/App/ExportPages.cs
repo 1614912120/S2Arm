@@ -1201,7 +1201,7 @@ public sealed partial class EnvironmentWindow
         var text = new StackPanel { Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
         text.Children.Add(new TextBlock { Text = T("export.boost.title"), FontSize = 24, FontWeight = FontWeight.Black, Foreground = Diag((SGoldHi, 0), (SGold, 0.5), (SRose, 1)) });
         text.Children.Add(new TextBlock { Text = string.Join(" · ", parts), FontSize = 15, FontWeight = FontWeight.SemiBold, Foreground = Ink, TextWrapping = TextWrapping.Wrap });
-        text.Children.Add(WrappedMuted(T("export.boost.hint"), 13));
+        text.Children.Add(WrappedMuted(T("export.boost.hint.win"), 13));   // 金手指在哪开按平台各写各的（Mac 版 export.boost.hint 写 Mac 启动设置）
         Grid.SetColumn(text, 1); row.Children.Add(text);
         var card = new Border { Child = row, Padding = new Thickness(22, 18), CornerRadius = new CornerRadius(18), BorderThickness = new Thickness(1),
             Background = new SolidColorBrush(A(SGold, 0.08)), BorderBrush = new SolidColorBrush(A(SGold, 0.35)) };

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "contract": "s2a.experience.v1",
-  "revision": 66,
+  "revision": 67,
   "languages": ["zh-Hans", "en"],
   "source_language": "zh-Hans",
   "note": "四端（Mac / iOS / Android / 鸿蒙）启动器的「一套体验」规格。状态、文案、错误码、任务事件到界面的映射只在这里定义一次；各端只负责画，不另写一套措辞。错误码的「下一步」不在本文件里写第二份：一律指向 pack/jobs/errors.py 的 RECOVERY（口径见 README.md）。口径号 revision 改动规则见 README.md。",
@@ -1199,7 +1199,8 @@
       {"id": "export.boost.fps", "zh-Hans": "帧率补丁 {0} 份", "en": "{0} frame-rate patches"},
       {"id": "export.boost.widescreen", "zh-Hans": "满屏补丁 {0} 份", "en": "{0} full screen patch(es)"},
       {"id": "export.boost.gfx", "zh-Hans": "画面补丁 {0} 份", "en": "{0} graphics patches"},
-      {"id": "export.boost.hint", "zh-Hans": "满屏与帧率补丁默认开启，金手指需在 Mac 启动设置或 iPhone 游戏设置中按需开启", "en": "Full screen and frame-rate patches start on; enable cheats as needed in Mac Launch settings or iPhone game settings"},
+      {"id": "export.boost.hint", "zh-Hans": "满屏与帧率补丁默认开启，金手指默认关闭，可在 Mac「启动设置」或 iPhone「设置 › 金手指」中开启", "en": "Full screen and frame-rate patches start on, with cheats off until enabled in Mac Launch Settings or iPhone Settings › Cheats"},
+      {"id": "export.boost.hint.win", "zh-Hans": "满屏与帧率补丁默认开启，金手指默认关闭，可在 Windows 游戏菜单「金手指」或 iPhone「设置 › 金手指」中开启", "en": "Full screen and frame-rate patches start on, with cheats off until enabled from the game’s Cheats menu on Windows or iPhone Settings › Cheats"},
       {"id": "export.done.macSize", "zh-Hans": "运行版本", "en": "Game files"},
       {"id": "export.done.install", "zh-Hans": "一键装到 iPhone", "en": "Install on iPhone"},
       {"id": "export.done.install_ipad", "zh-Hans": "一键装到 iPad", "en": "Install on iPad"},

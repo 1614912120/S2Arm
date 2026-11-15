@@ -122,10 +122,11 @@ struct SGradeUpgradeBody: View {
         return parts.joined(separator: zh ? "、" : ", ")
     }
 
+    // 分组标题与游戏行要一眼分得开（11-14 体验走查：同号同色粗体分不清哪行是标题）：标题小一号、金 / 灰色、带款数，游戏行缩进
     private func group(_ title: String, _ rows: [(String, String)], gold: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(LauncherTheme.TypeStyle.section).foregroundStyle(gold ? SGradeCardView.gold : .primary)
-            list(rows)
+            Text("\(title) · \(rows.count)").font(LauncherTheme.TypeStyle.caption).foregroundStyle(gold ? SGradeCardView.gold : .secondary)
+            list(rows).padding(.leading, LauncherTheme.Space.medium)
         }
     }
 
