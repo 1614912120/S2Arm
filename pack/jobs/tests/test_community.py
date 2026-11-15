@@ -2,6 +2,7 @@
 画面同互斥组单选；Mac 启动按选择设 S2A_WIDESCREEN=0 / S2A_FPS60=0。期望按规则手写"""
 import json, os, shutil, sys, tempfile, unittest
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import community
 import layout
@@ -262,7 +263,10 @@ class MacDisplayTests(unittest.TestCase):
         # 满屏明确开 = 没验证过也铺满（同 iPhone settings.m）；明确关 = 16:9；强信号判坏的款明确开也不开
         self.caps()
         self.save(widescreen=True)
-        self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
+        # 11-15：我方通用满屏缺省不用（runtime/src/widen.c），满屏明确开只在旧口径（S2A_CAPS_OWN=1）强开
+        self.assertEqual(community.launch_env(self.c, GID), {})
+        with mock.patch.dict(os.environ, {"S2A_CAPS_OWN": "1"}):
+            self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
         self.save(widescreen=False)
         self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDESCREEN": "0"})
         self.caps("widen\t1\t# 默认开：widen_verified.tsv\ndirect\t1\n")
@@ -316,7 +320,9 @@ class MacDisplayTests(unittest.TestCase):
         self.caps()
         write(community.launch_path(self.c, GID), json.dumps({"schema": 1, "settings": {"widenForce": True}, "patches": {}}))
         self.assertTrue(self.mac()["widescreen"]["value"])
-        self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
+        self.assertEqual(community.launch_env(self.c, GID), {})   # 11-15 缺省口径：我方通用满屏不用
+        with mock.patch.dict(os.environ, {"S2A_CAPS_OWN": "1"}):
+            self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
 
     def test_fps60_off_and_manual_on_over_a_red_game(self):
         self.caps()

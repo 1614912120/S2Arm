@@ -538,7 +538,7 @@ def launch_env(c, gid):
     strong = caps.get("widen") == "0" and "强信号" in runtime_caps_rows(c, gid).get("widen", ("", ""))[1]
     fams, fam_default = adaptive_patches(c, gid)
     full = False if strong else s["widescreen"] if isinstance(s.get("widescreen"), bool) else (caps.get("widen") == "1" or bool(fams))   # 有自适应满屏补丁 = 默认开（11-13）
-    if s.get("widescreen") is True and not strong and not fams:
+    if s.get("widescreen") is True and not strong and not fams and os.environ.get("S2A_CAPS_OWN") == "1":   # 11-15：我方通用满屏缺省不用（runtime/src/widen.c），老设置不再绕过
         env["S2A_WIDEN_VERIFIED"] = "1"
         env["S2A_WIDESCREEN"] = "1"
     elif s.get("widescreen") is False:
