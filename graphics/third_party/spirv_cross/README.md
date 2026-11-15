@@ -11,6 +11,8 @@
   - 后果：带这类辅助函数的 MSL 与 Homebrew spirv-cross 1.4.363.0 命令行不再逐字节相同（数值逐位相同，见 tests/msl_nocontraction_test.sh）；
     不带的照旧逐字节相同（tests/spvc_inproc_test.sh）。直连出库（进程内库）与 GAL 运行时现编用本仓源码，走 Homebrew 命令行的 Vulkan / OpenGL 款离线库照旧。
   - 链锁的 spirv-cross 一行只记版本号；直连出库的着色器缓存键含本仓源码身份（spvc_inproc.identity），改动后照常重翻。
+  - 升级上游时：换新版 SPIRV-Cross 后，在 spirv_msl.cpp 里找到上面六个辅助函数，重新把 `[[clang::optnone]]` 改成 `inline`、fma 的 0 / 1 改为取自函数内一次 `thread volatile float` 读，并标 `S2A:`；
+    改完跑 tests/msl_nocontraction_test.sh，核对「GPU 输出与原版逐字相同、负对照（不受保护写法）有差异」。若上游已自行去掉 optnone 或改了写法，按该测试结果决定这处改动是否还要保留。
 11-01 出包线补：命令行 main.cpp 与它链接要的 HLSL / C++ / 反射后端（spirv_hlsl / spirv_cpp / spirv_reflect / spirv_cross_util 的 .cpp），同一标签、同一源码包（sha256 同上），零改动（命令行入口这几个文件没动）；
   供 translator/spvc_inproc.py 把命令行编成动态库在进程内调用（直连出库翻译段，输出与 Homebrew spirv-cross 1.4.363.0 命令行逐字节相同）。
 编译开关：SPIRV_CROSS_C_API_MSL=1 SPIRV_CROSS_C_API_GLSL=1（其余语言不收）。
