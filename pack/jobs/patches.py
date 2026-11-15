@@ -450,7 +450,9 @@ def match(c):
                 others.setdefault(v, set()).add(cat)
     # 满屏跨版本（11-13 维护者「画幅补丁扩大泛化性」，pack/cpatch.py scan 末尾 port_writes）：这份主程序没有同版本的满屏补丁时，出包会把同款别的版本的满屏补丁
     #   按原指令移植过来，移植成的打入。所以别的版本的满屏补丁不算「不会打入」：单列 port（出包时尝试移植的那几版），others 里去掉满屏这一类（帧率 / 画面 / 金手指才要版本对上）
-    port = foreign_ws and not exact["widescreen"]
+    # 没解过包（build 空）不知道玩家是哪一版：所有满屏补丁都会被算成「别的版本」，卡片就会把同版本的说成「尝试移植」（v0.4.0 候选：游戏 1.4.0、补丁 1.4.0，卡片写
+    #   「补丁库里是 1.4.0 版的，出包时尝试移植」）。解过包才判移植；没解过时满屏照常留在各版本清单里
+    port = bool(build) and foreign_ws and not exact["widescreen"]
     key = lambda kv: [int(x) if x.isdigit() else 0 for x in re.split(r"[.]", kv[0])]
     port_versions = [v for v, cs in sorted(others.items(), key=key) if "widescreen" in cs] if port else []
     if port:

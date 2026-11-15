@@ -304,6 +304,7 @@ def launch(c):
             back = marker.exists()
         finally:
             marker.unlink(missing_ok=True)
+            host_update.forget_registrations()   # 系统起宿主时把它登记成 App、启动台多出「S2ArmGame」：每局结束注销（#1126）
             if seed:
                 finish_seed(c, game["id"], log)
             collect_pipeline_seed(c, game["id"], env["S2A_DOCS"])

@@ -1802,6 +1802,49 @@ class ExportPhoneTests(unittest.TestCase):
         self.assertEqual((r["games"], r["skipped"]), ([A], []))
         self.assertEqual([d for d in self.c.job.get("diagnostics", []) if "已从游戏库删除" in d.get("summary", "")], [])   # 导出前就不带：不出「已从游戏库删除」这类提醒
 
+    def _count_writes(self):
+        """包住 _export_img / _export_update：照常写，记下这次真写了哪些文件（沿用的不在里面）"""
+        wrote = []
+        real_img, real_upd = install._export_img, install._export_update
+        def img(c, pack, dst): wrote.append(Path(dst).name); return real_img(c, pack, dst)
+        def upd(c, pack, dst): wrote.append(Path(dst).name); return real_upd(c, pack, dst)
+        p1 = um.patch.object(install, "_export_img", img); p2 = um.patch.object(install, "_export_update", upd)
+        p1.start(); p2.start(); self.addCleanup(p1.stop); self.addCleanup(p2.stop)
+        return wrote
+
+    def test_export_again_reuses_unchanged_imgs(self):
+        """#1132：加一款新游戏再导出，只写新的那款；没变的甲、乙沿用上次的（内容逐字节同）；乙的资源包变了就重写乙"""
+        A, B, C = self.A, self.B, self.C
+        self._library((A, "甲"), (B, "乙"))
+        self._img(A, b"S2AIMG01-a"); self._img(B, b"S2AIMG01-b")
+        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
+        out = self.c.library / install.EXPORT_DIRS["zh"]
+        wrote = self._count_writes()
+        self._export(dict(gameId=A))
+        self.assertEqual(sorted(wrote), sorted(["甲.img", "甲 着色器更新包.img", "乙.img", "乙 着色器更新包.img"]))
+        first = {p.name: p.read_bytes() for p in out.iterdir() if p.suffix == ".img"}
+        self._library((A, "甲"), (B, "乙"), (C, "丙")); self._img(C, b"S2AIMG01-c")
+        wrote.clear(); self._export(dict(gameId=C))
+        self.assertEqual(sorted(wrote), sorted(["丙.img", "丙 着色器更新包.img"]))
+        for name, data in first.items():
+            self.assertEqual((out / name).read_bytes(), data, name)
+        # 乙的资源包里有文件变了（重新打过 iPhone 包）：乙重写，甲照旧沿用
+        f = next(p for p in layout.ios_pack(self.c, B).rglob("*") if p.is_file())
+        st = f.stat(); os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+        wrote.clear(); self._export(dict(gameId=A))
+        self.assertEqual(sorted(wrote), sorted(["乙.img", "乙 着色器更新包.img"]))
+
+    def test_export_rewrites_when_link_fails(self):
+        """建不了硬链接（exFAT 等）：照常重写，导出照样成功"""
+        A = self.A
+        self._library((A, "甲")); self._img(A, b"S2AIMG01-a")
+        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
+        wrote = self._count_writes()
+        self._export(dict(gameId=A)); wrote.clear()
+        with um.patch("os.link", side_effect=OSError(45, "Operation not supported")):
+            r = self._export(dict(gameId=A))
+        self.assertEqual((r["exported"], sorted(wrote)), (True, sorted(["甲.img", "甲 着色器更新包.img"])))
+
     def test_export_replaces_whole_folder(self):
         """再导出一次：文件夹整个换新（上次的、玩家放进去的别的文件都不在了）"""
         self._library((self.A, "甲")); self._img(self.A, b"S2AIMG01-a")

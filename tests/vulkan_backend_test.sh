@@ -74,7 +74,8 @@ for p in "${PROJ[@]}"; do case $p in */Control.Tests.csproj) ctl "$p";; *) run "
 #   run_host 要 spirv-as / spirv-val（汇编三段 SPIR-V 再跑 CodecTests 全量），utility 用 spirv-val 校验项目内嵌工具着色器
 pyck() { n=$((n + 1)); if [ "$2" = 0 ]; then echo "通 ${1}：$(tail -1 <<< "$3" | cut -c1-120)"; else echo "不通 ${1}（rc=${2}）：$(tail -5 <<< "$3" | tr '\n' ' ' | cut -c1-400)"; bad=1; fi; }
 PYV=${S2A_PY:-python3}; export PATH="${DN%/*}:$PATH"   # run_host / wsi 跑器按 PATH 找 dotnet：与上面工程用同一个 SDK
-o=$(timeout 300 "$PYV" "$H/graphics/vulkan/cache/tests/run_host.py" --out "$T/codec-host" 2>&1 < /dev/null); pyck cache/run_host $? "$o"
+# run_host 直接用上面合编好的 CodecTests（11-14 门禁提速：原先在临时目录里重新还原 + 冷编一遍，约 25 秒）；合编没过（built 空）照旧自己编
+o=$(timeout 300 "$PYV" "$H/graphics/vulkan/cache/tests/run_host.py" --out "$T/codec-host" ${built:+--artifacts "$ART/artifacts"} 2>&1 < /dev/null); pyck cache/run_host $? "$o"
 o=$(timeout 300 "$PYV" "$H/graphics/vulkan/cache/tests/test_profile_runner.py" 2>&1 < /dev/null); pyck cache/test_profile_runner $? "$o"
 o=$(timeout 300 "$PYV" "$H/graphics/vulkan/runtime/utility-tests/run.py" --vulkan-root "$H/compat/tree/src/Ryujinx.Graphics.Vulkan" --spirv-val "$(command -v spirv-val || echo spirv-val)" --output "$T/utility" 2>&1 < /dev/null); pyck runtime/utility-tests $? "$o"
 o=$(timeout 300 "$PYV" "$H/graphics/vulkan/wsi/tests/run.py" --negative-controls --output-root "$T/wsi-run" 2>&1 < /dev/null); pyck wsi/run $? "$o"
