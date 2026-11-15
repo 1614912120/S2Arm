@@ -219,6 +219,8 @@
 "vpad.menu.ns2pro" = "Activer la manette Switch 2 Pro";
 "vpad.menu.pad" = "Manettes & Mouvement";
 "vpad.menu.rumble" = "Vibration";
+"vpad.menu.volume" = "Son";
+"vpad.volume.mute" = "Muet";
 "vpad.menu.rumble.note" = "Partagé par le moteur du téléphone et les manettes ; sélectionner un niveau joue un échantillon";
 "vpad.menu.saves" = "Gérer les sauvegardes";
 "vpad.menu.stickFixed.note" = "Désactivé = le stick se centre là où votre doigt se pose";

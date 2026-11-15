@@ -12,7 +12,7 @@ import ShellUI
 /// - 按键透明度：App 级 `S2AVPadOpacity`（0.1–1，缺省 1），全部游戏共用；宿主 ios/vpad.m 进游戏时读
 /// - 虚拟手柄布局：按游戏，走 C 接口 s2a_shell_vpad_*（宿主 ios/vpad_shell.m），与游戏内拖动编辑同一份文件
 public enum S2ArmGameSettings {
-    public static let fps60 = "fps60", fpsPick = "fpsPick", fullscreen = "fullscreen", opacity = "vpadOpacity", layout = "vpadLayout", holdLock = "vpadHoldLock", identity = "gameIdentity", editIdentity = "edit"
+    public static let fps60 = "fps60", fpsPick = "fpsPick", volume = "gameVolume", fullscreen = "fullscreen", opacity = "vpadOpacity", layout = "vpadLayout", holdLock = "vpadHoldLock", identity = "gameIdentity", editIdentity = "edit"
     /// 社区补丁 / 金手指的行号前缀（后接补丁编号 / 「文件名/条目名」）
     public static let patchPrefix = "patch.", cheatPrefix = "cheat."
     /// 布局多选里打开二级编辑页的那一项（不是一个方案）
@@ -28,6 +28,8 @@ public enum S2ArmGameSettings {
         public struct Switch: Equatable, Sendable { public var on: Bool; public var enabled = true; public var note = ""; public var title = ""; public var hidden = false; public var levels: [Level] = []; public var pick = "0"; public var levelsTitle = "" }
         public struct Item: Equatable, Sendable { public var id: String; public var title: String; public var note = ""; public var on: Bool }
         public var fps: Switch; public var fullscreen: Switch; public var patches: [Item] = []; public var cheats: [Item] = []
+        /// 游戏音量 0–100（#1186，同齿轮菜单「声音」）；宿主没给 = nil，不出这一行
+        public var volume: Int? = nil
         public init(fps: Switch, fullscreen: Switch, patches: [Item] = [], cheats: [Item] = []) { self.fps = fps; self.fullscreen = fullscreen; self.patches = patches; self.cheats = cheats }
         static func parse(_ json: String) -> Options? {
             guard let o = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { return nil }
@@ -40,7 +42,9 @@ public enum S2ArmGameSettings {
             func items(_ v: Any?, _ idKey: String, _ titleKey: String) -> [Item] {
                 (v as? [[String: Any]] ?? []).compactMap { d in (d[idKey] as? String).map { Item(id: $0, title: d[titleKey] as? String ?? $0, note: d["note"] as? String ?? "", on: d["on"] as? Bool ?? false) } }
             }
-            return Options(fps: sw(o["fps"]), fullscreen: sw(o["fullscreen"]), patches: items(o["patches"], "id", "title"), cheats: items(o["cheats"], "key", "name"))
+            var out = Options(fps: sw(o["fps"]), fullscreen: sw(o["fullscreen"]), patches: items(o["patches"], "id", "title"), cheats: items(o["cheats"], "key", "name"))
+            out.volume = (o["volume"] as? NSNumber)?.intValue
+            return out
         }
     }
 
@@ -127,6 +131,14 @@ public enum S2ArmGameSettings {
                     SettingRow(id: cheatPrefix + $0.id, label: $0.title, note: $0.note, kind: .toggle(on: "on", off: "off"), value: $0.on ? "on" : "off") }))
             }
         }
+        // 声音（#1186）：游戏音量五档，同齿轮菜单；静音就是 0 那一档，不另设开关
+        if let v = o?.volume {
+            let levels = [0, 25, 50, 75, 100]
+            out.append(SettingSection(id: "s2a.sound", title: "Sound", rows: [
+                SettingRow(id: volume, label: "Game volume", note: "This game only; doesn't change the system volume or other apps",
+                           kind: .choice(levels.map { SettingOption(String($0), $0 == 0 ? "Mute" : "\($0)%") }),
+                           value: String(levels.min { abs($0 - v) < abs($1 - v) } ?? 100))]))
+        }
         out.append(SettingSection(id: "s2a.vpad", title: "Virtual controller", rows: [
             SettingRow(id: layout, label: "Button layout", note: "Adjust normal and split positions separately; applies to this game only", kind: .choice(options), value: current),
             SettingRow(id: holdLock, label: "Hold-lock ZL / ZR", note: "Hold for 2 s to lock, tap again to unlock; this game only", kind: .toggle(on: "on", off: "off"), value: state.holdLock ? "on" : "off"),
@@ -143,6 +155,7 @@ public enum S2ArmGameSettings {
         case screenOrientation: if ["auto", "landscape", "portrait"].contains(value) { stores.app.set(value, forKey: screenOrientation); stores.app.removeObject(forKey: "S2AScreenOrientation") }
         case fps60: _ = stores.setOption(id, "fps", "", value == "on")
         case fpsPick: _ = stores.setOption(id, "fpspick", value, true)
+        case volume: if Int(value) != nil { _ = stores.setOption(id, "volume", value, true) }
         case fullscreen: _ = stores.setOption(id, "fullscreen", "", value == "on")
         case _ where setting.hasPrefix(patchPrefix): _ = stores.setOption(id, "patch", String(setting.dropFirst(patchPrefix.count)), value == "on")
         case _ where setting.hasPrefix(cheatPrefix): _ = stores.setOption(id, "cheat", String(setting.dropFirst(cheatPrefix.count)), value == "on")

@@ -193,6 +193,8 @@
 "vpad.menu.ns2pro" = "啟用 Switch 2 Pro 手把";
 "vpad.menu.pad" = "手把與體感";
 "vpad.menu.rumble" = "震動";
+"vpad.menu.volume" = "聲音";
+"vpad.volume.mute" = "靜音";
 "vpad.menu.rumble.note" = "手機馬達和手把共用；選擇強度時會以該強度震一下";
 "vpad.menu.saves" = "存檔管理";
 "vpad.menu.stickFixed.note" = "關閉 = 以手指按下的位置為中心";

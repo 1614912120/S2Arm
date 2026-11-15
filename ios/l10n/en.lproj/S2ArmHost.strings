@@ -220,6 +220,8 @@
 "vpad.menu.ns2pro" = "Enable Switch 2 Pro Controller";
 "vpad.menu.pad" = "Controllers & Motion";
 "vpad.menu.rumble" = "Rumble";
+"vpad.menu.volume" = "Sound";
+"vpad.volume.mute" = "Mute";
 "vpad.menu.rumble.note" = "Shared by the phone motor and controllers; picking a level plays a sample";
 "vpad.menu.saves" = "Manage saves";
 "vpad.menu.stickFixed.note" = "Off = the stick centers where your finger lands";

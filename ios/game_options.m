@@ -155,7 +155,9 @@ char *s2a_shell_game_options_json(const char *game_id) {
         NSMutableArray *cheats = [NSMutableArray array];
         for (NSDictionary *e in s2a_ios_cheat_entries(dir))
             [cheats addObject:@{@"key": e[@"key"], @"name": e[@"name"], @"on": @([con containsObject:e[@"key"]]), @"note": [e[@"fixed"] boolValue] ? S2AL(@"cheats.fixedAddress") : @""}];
-        return dup_json(@{@"fps": fps, @"fullscreen": full, @"patches": patches, @"cheats": cheats});
+        // 游戏音量（#1186，同齿轮菜单「声音」）：0–100，没设过 = 100
+        id vo = [d objectForKey:@"S2AGameVolume"]; NSInteger volume = vo ? MAX(0, MIN(100, [vo integerValue])) : 100;
+        return dup_json(@{@"fps": fps, @"fullscreen": full, @"patches": patches, @"cheats": cheats, @"volume": @(volume)});
     }
 }
 
@@ -165,6 +167,7 @@ int s2a_shell_game_option_set(const char *game_id, const char *kind, const char 
         if (!gid_ok(game_id) || !kind) return 0;
         NSString *gid = @(game_id), *k = @(kind), *item = key ? @(key) : @"";
         if ([k isEqual:@"fps"]) { s2a_ios_set_fps60_for(gid, on != 0); return 1; }
+        if ([k isEqual:@"volume"]) { [s2a_ios_settings_defaults_for(gid) setInteger:MAX(0, MIN(100, item.integerValue)) forKey:@"S2AGameVolume"]; return 1; }   // 游戏音量：key = 百分比，on 不看（#1186）
         if ([k isEqual:@"fpspick"]) { [s2a_ios_settings_defaults_for(gid) setInteger:MAX(0, item.integerValue) forKey:@"S2AFpsPick"]; return 1; }   // 帧率档位：key = 目标帧率（"0" = 自动），on 不看
         if ([k isEqual:@"fullscreen"]) { BOOL now; if (s2a_ios_fullscreen_state(gid, &now)) return 0; s2a_ios_set_fullscreen(gid, on != 0); return 1; }
         if ([k isEqual:@"patch"]) { S2ACPatchSetEnabled(patch_groups(gid), s2a_ios_settings_defaults_for(gid), item, on != 0); return 1; }
