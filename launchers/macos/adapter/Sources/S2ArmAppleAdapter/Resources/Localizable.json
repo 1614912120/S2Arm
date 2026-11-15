@@ -8038,5 +8038,193 @@
  {
   "source": "没有选新的存放位置。",
   "en": "No new location was chosen."
+ },
+ {
+  "source": "Team ID 要是 10 位大写字母或数字，可以在 Xcode 的账户页或 Apple 开发者网站查到。",
+  "en": "A Team ID is 10 uppercase letters or digits. You can find it on the Accounts page in Xcode or on the Apple Developer website."
+ },
+ {
+  "source": "编号末尾 {0}",
+  "en": "ID ending in {0}"
+ },
+ {
+  "source": "编号末尾 {0}、编号末尾 {1}",
+  "en": "IDs ending in {0} and {1}"
+ },
+ {
+  "source": "正在和设备建立开发连接",
+  "en": "Setting up a developer connection with the device"
+ },
+ {
+  "source": "没找到这款的资源包（{0}），没有装。请重新「打 iPhone 包」后再装。",
+  "en": "This game's resource pack wasn't found ({0}), so nothing was installed. Build the iPhone package again, then install."
+ },
+ {
+  "source": "机上解包 {0}/{1}",
+  "en": "Unpacking on device {0}/{1}"
+ },
+ {
+  "source": "覆盖装前没能备份手机上的存档，玩家已确认继续：{0}",
+  "en": "Couldn't back up the saves on the phone before installing over them; continuing as you confirmed: {0}"
+ },
+ {
+  "source": "这次装机前没能备份手机上的存档（{0}）。存档没备份，万一覆盖出问题可能丢档；确认仍然继续再点一次。",
+  "en": "Couldn't back up the saves on the phone before this install ({0}). Without a backup, saves could be lost if the install goes wrong. Click again to continue anyway."
+ },
+ {
+  "source": "读不懂 iPhone 返回的存档文件清单（{0} 条没有路径字段，多半是 Xcode 版本不同）",
+  "en": "Couldn't understand the save file list from the iPhone ({0} entries have no path; usually a different Xcode version)"
+ },
+ {
+  "source": "确认不了 iPhone 上有没有装过这款：{0}",
+  "en": "Couldn't confirm whether this game is installed on the iPhone: {0}"
+ },
+ {
+  "source": "读不到 iPhone 上这款的存档目录：{0}",
+  "en": "Couldn't read this game's save folder on the iPhone: {0}"
+ },
+ {
+  "source": "拉存档失败（{0}）：{1}",
+  "en": "Couldn't copy saves ({0}): {1}"
+ },
+ {
+  "source": "拉存档失败：{0}",
+  "en": "Couldn't copy saves: {0}"
+ },
+ {
+  "source": "devicectl 退出 {0}",
+  "en": "devicectl exited with {0}"
+ },
+ {
+  "source": "devicectl 退出 {0}（未提供错误详情）",
+  "en": "devicectl exited with {0} (no error details)"
+ },
+ {
+  "source": "「导出，自己签名安装」下一版提供。",
+  "en": "\"Export and sign it yourself\" comes in the next version."
+ },
+ {
+  "source": "写导出用的游戏文件失败：{0}",
+  "en": "Couldn't write the game files for export: {0}"
+ },
+ {
+  "source": "写着色器更新包失败：{0}",
+  "en": "Couldn't write the shader update pack: {0}"
+ },
+ {
+  "source": "导出文件夹里还没有 .img：先点「导出，自己签名安装」，导出完再推到手机。",
+  "en": "There's no .img in the export folder yet. Click \"Export and sign it yourself\" first, then push to the phone when it's done."
+ },
+ {
+  "source": "导出文件夹里还没有这款游戏的 .img：先点「导出，自己签名安装」，导出完再推到手机。",
+  "en": "There's no .img for this game in the export folder yet. Click \"Export and sign it yourself\" first, then push to the phone when it's done."
+ },
+ {
+  "source": "找连着的 iPhone",
+  "en": "Finding the connected iPhone"
+ },
+ {
+  "source": "连着的 {0} 都装着 S2Arm：在装机页选好要推到哪台，再点「推到手机」。",
+  "en": "The connected devices ({0}) all have S2Arm installed. Choose which one to push to on the install page, then click \"Push to phone\"."
+ },
+ {
+  "source": "把游戏文件推进 iPhone",
+  "en": "Pushing game files to the iPhone"
+ },
+ {
+  "source": "打开手机上的 S2Arm，等游戏库导入完就能玩（大游戏要等一会儿）。",
+  "en": "Open S2Arm on the phone. You can play once the library finishes importing (large games take a while)."
+ },
+ {
+  "source": "核对要导出的游戏",
+  "en": "Checking the games to export"
+ },
+ {
+  "source": "组装 S2Arm.ipa（未签名）",
+  "en": "Assembling S2Arm.ipa (unsigned)"
+ },
+ {
+  "source": "写各款游戏的 .img（含着色器库）与着色器更新包",
+  "en": "Writing each game's .img (with shader library) and shader update packs"
+ },
+ {
+  "source": "写安装说明",
+  "en": "Writing install instructions"
+ },
+ {
+  "source": "这几款没放进这次导出（要按新版重新「打 iPhone 包」）：{0}",
+  "en": "These games weren't included in this export (build the iPhone package again for the new version): {0}"
+ },
+ {
+  "source": "签名没成：{0}；{1}",
+  "en": "Signing failed: {0}; {1}"
+ },
+ {
+  "source": "签名装机没成：{0}",
+  "en": "Signing and install failed: {0}"
+ },
+ {
+  "source": "Impactor 已装好并登录过 Apple ID",
+  "en": "Impactor is installed and signed in to an Apple ID"
+ },
+ {
+  "source": "问不出 iPhone 上有没有装过 S2Arm（{0}），按装着、读不到继续",
+  "en": "Couldn't ask the iPhone whether S2Arm is installed ({0}); continuing as if installed but unreadable"
+ },
+ {
+  "source": "包名 {0} 已被别的签名占用，这次自动改用 {1} 装好了",
+  "en": "The bundle ID {0} is taken by another signature, so this install used {1} instead"
+ },
+ {
+  "source": "读不到 Impactor 当前账号的团队号，定不了要装的包名，查不了手机上这款的存档",
+  "en": "Couldn't read the team ID of Impactor's current account, so the bundle ID couldn't be decided and this game's saves on the phone couldn't be checked"
+ },
+ {
+  "source": "Impactor 里存着一个 Apple ID 但没选中，已替你选上",
+  "en": "Impactor had an Apple ID saved but not selected; it has been selected for you"
+ },
+ {
+  "source": "列不出{0}上装了哪些游戏，按没有别的游戏继续装（{1}）",
+  "en": "Couldn't list the games on {0}; continuing as if there are no others ({1})"
+ },
+ {
+  "source": "核对手机上的游戏要不要跟着更新",
+  "en": "Checking whether the games on the phone need updating too"
+ },
+ {
+  "source": "手机上的 S2Arm 已是这一版，跳过签名和安装",
+  "en": "S2Arm on the phone is already this version; skipping signing and install"
+ },
+ {
+  "source": "核对手机上游戏的资源（有变化的才推，通常一个都不用推）",
+  "en": "Checking the games' resources on the phone (only changed ones are pushed; usually none)"
+ },
+ {
+  "source": "把游戏推进 iPhone（只推变了的文件；第一次大游戏要几分钟）",
+  "en": "Pushing the game to the iPhone (only changed files; a large game takes a few minutes the first time)"
+ },
+ {
+  "source": "读不出手机上 S2Arm 的内容摘要，照常签名安装（{0}）",
+  "en": "Couldn't read the content summary of S2Arm on the phone; signing and installing as usual ({0})"
+ },
+ {
+  "source": "要更新的是另一台设备（编号末尾 {0}），它现在不在线；现在连着的这台（编号末尾 {1}）已经是新版 S2Arm，不用更新。那台以后要用时连上它再点更新；不再用了的话，删掉游戏库文件夹 devices 里名字以 {2} 结尾的那个文件，这个更新提醒就不再出现。",
+  "en": "The update is for another device (ID ending in {0}), which isn't connected now. The connected device (ID ending in {1}) already has the new S2Arm and doesn't need it. Connect that device and click update when you use it again; if you no longer use it, delete the file ending in {2} in the library's devices folder and this reminder goes away."
+ },
+ {
+  "source": "这几款要按新版重新出包，更新后在重新出包之前暂时打不开：{0}。确认更新再点一次。",
+  "en": "These games need to be built again for the new version and won't open until then: {0}. Click again to confirm the update."
+ },
+ {
+  "source": "手机上的游戏都要按新版重新出包，这次没法只更新 S2Arm（更新后一款都打不开）。可以先给它们各「打 iPhone 包」，再点「装到 iPhone」，游戏和 S2Arm 会一起换成新版；存档和资源都留在手机上。「只更新 S2Arm、暂不带游戏」下一版开放。",
+  "en": "All games on the phone need to be built again for the new version, so S2Arm can't be updated on its own this time (none would open afterwards). Build the iPhone package for each, then click \"Install to iPhone\"; the games and S2Arm will be updated together, and saves and resources stay on the phone. \"Update only S2Arm without games\" comes in the next version."
+ },
+ {
+  "source": "手机上的 S2Arm 里本来就没有 {0}，不用删",
+  "en": "{0} isn't in S2Arm on the phone, nothing to delete"
+ },
+ {
+  "source": "手机上没装这个 S2Arm，{0} 不在手机上，不用删",
+  "en": "This S2Arm isn't installed on the phone, so {0} isn't there; nothing to delete"
  }
 ]
