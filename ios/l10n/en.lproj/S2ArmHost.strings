@@ -35,14 +35,14 @@
 "common.ok" = "OK";
 "common.settings" = "Settings";
 "cpatch.footer" = "Changes take effect the next time you start the game.";
-"cpatch.footer.fps" = "Items marked “Follows 60 FPS” turn on and off with the 60 FPS switch in Settings. Changes take effect the next time you start the game.";
+"cpatch.footer.fps" = "Items marked “Follows Frame Rate” turn on and off with the Frame Rate switch in Settings. Changes take effect the next time you start the game.";
 "cpatch.group.fps" = "Frame rate";
 "cpatch.state.on" = "On";
 "cpatch.state.off" = "Off";
 "cpatch.group.gfx" = "Graphics";
 "cpatch.group.widescreen" = "Full screen";
 "cpatch.item.detail" = "%@\n%@ · License %@%@";
-"cpatch.item.followsFps" = " · Follows 60 FPS";
+"cpatch.item.followsFps" = " · Follows Frame Rate";
 "cpatch.item.followsFullscreen" = " · Follows Full screen";
 "cpatch.license.none" = "Not stated";
 "cpatch.notice" = "Full screen and higher frame rates add load and use more power in exchange for a better experience; turn them on as you like on lower-end devices.";
@@ -214,6 +214,8 @@
 "vpad.menu.holdLock.note" = "Hold for 2 s to lock; this game only";
 "vpad.menu.hud" = "Performance overlay";
 "vpad.menu.hud.note" = "Frame rate and memory in the top-right corner";
+"vpad.menu.fi" = "Frame generation";
+"vpad.menu.fi.note" = "Fills 30 FPS up to 60: smoother, with slightly more input delay; applies right away";
 "vpad.menu.manageLayouts" = "Import / Export / Save As…";
 "vpad.menu.ns2pro" = "Enable Switch 2 Pro Controller";
 "vpad.menu.pad" = "Controllers & Motion";
@@ -501,3 +503,7 @@
 "settings.gameLanguage.restart" = "Takes effect the next time you open this game.";
 "settings.gameLanguage.fallback" = "This game doesn't have %@; it starts in %@.";
 "settings.gameLanguage.ja" = "日本語";
+"vpad.screenLock.title" = "Phone screen off";
+"vpad.screenLock.note" = "For external displays. Tap 3 times to restore.";
+"vpad.screenLock.hint" = "To restore the phone screen, tap 3 times in succession";
+"vpad.screenLock.unlock" = "Restore phone screen";

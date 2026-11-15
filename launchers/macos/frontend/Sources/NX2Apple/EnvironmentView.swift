@@ -52,7 +52,7 @@ struct EnvironmentView: View {
                     // 存放位置（社区贡献者补丁 #10）：游戏库、iPhone 包、磁盘空间集中在这一处；单款游戏放在哪看出包页的「存放位置」
                     CardGroup(s("settings.locations")) {
                         let library = model.provider.client.environment.library
-                        CardRow(s("settings.locations.library"), detail: loc.t("s2arm.env.library.detail"), detail2: library) {   // 路径放 detail2：以 / 开头就画成可点的路径链接（PathLink）
+                        CardRow(s("settings.locations.library"), detail: loc.t("s2arm.env.library.detail"), detail2: library, stacked: true) {   // 说明长 + 两个按钮：按钮另起一行（11-14 第二轮）   // 路径放 detail2：以 / 开头就画成可点的路径链接（PathLink）
                             HStack(spacing: 8) {
                                 Button(s("settings.open")) { NSWorkspace.shared.open(URL(fileURLWithPath: library)) }
                                     .buttonStyle(LauncherSecondaryButtonStyle()).disabled(library.isEmpty)

@@ -410,6 +410,27 @@ int main(int argc, char **argv) {
         rig_down(&r, &VP9);
     }
 
+    // ---------- 同一块对象没 Finalize 又 Initialize（诊断「解码器初始化两次」12 份）：不中止，旧的收掉，新的照常出帧；
+    //   Finalize 一次只销毁一次游戏事件（期望手写：重建不碰游戏事件，destroyed 仍 0；收尾 +1）。旧实现：第二次 Initialize 直接 die ----------
+    {
+        rig r; rig_up(&r, &VP9, 64, 64);
+        uint64_t id = 0;
+        CHECK(((f_sub)E(VP9.sub))(&id, r.obj, red_vp9_0, sizeof red_vp9_0, 33333000, 0) == 0 && id == 1);   // 旧解码器里留一包没取
+        int d0 = g_destroys;
+        CHECK(((f_init_tm)E(VP9.init))(r.obj, NULL, 0, 0, 64, 64, 0, 0, 2, 0) == 0);
+        CHECK(g_destroys == d0 && !((fake_sev *)(r.obj + 8))->destroyed);
+        for (uint32_t i = 0; i < 2; i++) CHECK(((f_reg)E(VP9.reg))(r.obj, i, r.pool[i], 0) == 0);
+        CHECK(((f_t)E(VP9.start))(r.obj) == 0);
+        CHECK(((f_sub)E(VP9.sub))(&id, r.obj, red_vp9_0, sizeof red_vp9_0, 33333000, 0) == 0 && id == 1);   // 新解码器从 1 数
+        CHECK(((f_sub)E(VP9.sub))(&id, r.obj, red_vp9_1, sizeof red_vp9_1, 66666999, 0) == 0 && id == 2);
+        sync_h h1, h2; uint32_t i1 = take(&r, &VP9, &spev, &h1), i2 = take(&r, &VP9, &spev, &h2);
+        uint8_t p[4]; px(&r, i1, p);
+        printf("重新初始化后第 1 帧像素 (%u,%u,%u,%u)，期望红 (255,0,0,255)\n", p[0], p[1], p[2], p[3]);
+        CHECK(p[0] >= 253 && p[1] <= 1 && p[2] <= 1 && p[3] == 255);
+        ((f_rel)E(VP9.rel))(r.obj, i1, 0, 0); ((f_rel)E(VP9.rel))(r.obj, i2, 0, 0);
+        rig_down(&r, &VP9);   // 内含：Finalize 后 g_destroys 恰 +1、事件已销毁
+    }
+
     // ---------- VP9 系统后端（S2A_VP9_SYSTEM=1，VideoToolbox）：同样的两帧红走整条接管路径 ----------
     if (nvn2_vp9_vt_probe()) {
         setenv("S2A_VP9_SYSTEM", "1", 1);
@@ -737,6 +758,21 @@ int main(int argc, char **argv) {
         free(buf);
     }
     ((f_spv)E(SP_DESTROY))(&spev);
+    // ---------- 11-14 进程内重启（D-VHSE）：同步点事件不能沿用上一局挂的读端句柄 ----------
+    //   期望：换局（会话代号 +1）后再建同步点事件，挂到游戏 SystemEventType 上的是新事件的新句柄；上一局那个事件宿主那份引用放掉（refs −1）。
+    //   反证：去掉 sp_create 里的 sp_slots_for_session_locked，换局后拿到的还是上一局的句柄，本项红
+    {
+        uint32_t a = 0; uint8_t ho[0x40];
+        CHECK(((f_spc)E(SP_CREATE))(&a) == 0); ((f_sph)E(SP_HOLDER))(ho, &a);
+        uint32_t h1 = ((fake_sev *)g_sp_sev)->handle; int e1 = (int)h1 - 0x100, r1 = g_ev[e1].refs;
+        ((f_spv)E(SP_DESTROY))(&a);
+        atomic_fetch_add(&g_gen, 1);
+        uint32_t b2 = 0; CHECK(((f_spc)E(SP_CREATE))(&b2) == 0); ((f_sph)E(SP_HOLDER))(ho, &b2);
+        uint32_t h2 = ((fake_sev *)g_sp_sev)->handle;
+        if (h2 == h1 || g_ev[e1].refs != r1 - 1) fprintf(stderr, "换局后同步点事件：句柄 %#x → %#x，上一局事件引用 %d → %d\n", h1, h2, r1, g_ev[e1].refs);
+        CHECK(h2 != h1 && g_ev[e1].refs == r1 - 1);
+        ((f_spv)E(SP_DESTROY))(&b2);
+    }
     printf("✓ t_nvn2_codec：%u 项检查全过\n", checks);
     return 0;
 }

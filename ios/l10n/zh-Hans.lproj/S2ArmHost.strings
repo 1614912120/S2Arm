@@ -35,14 +35,14 @@
 "common.ok" = "好";
 "common.settings" = "设置";
 "cpatch.footer" = "改动下次启动游戏生效";
-"cpatch.footer.fps" = "标「跟随 60 帧开关」的项随设置页里的「60 帧」一起开关。改动下次启动游戏生效";
+"cpatch.footer.fps" = "标「跟随帧率开关」的项随设置页里的「帧率」一起开关。改动下次启动游戏生效";
 "cpatch.group.fps" = "帧率";
 "cpatch.state.on" = "已开";
 "cpatch.state.off" = "已关";
 "cpatch.group.gfx" = "画面";
 "cpatch.group.widescreen" = "满屏";
 "cpatch.item.detail" = "%@\n%@ · 许可 %@%@";
-"cpatch.item.followsFps" = " · 跟随 60 帧开关";
+"cpatch.item.followsFps" = " · 跟随帧率开关";
 "cpatch.item.followsFullscreen" = " · 跟随满屏开关";
 "cpatch.license.none" = "未声明";
 "cpatch.notice" = "满屏和高帧率会增加负载和耗电，换取更好的游玩体验；低配设备请按需开关。";
@@ -214,6 +214,8 @@
 "vpad.menu.holdLock.note" = "按住 2 秒锁定，只对这款游戏";
 "vpad.menu.hud" = "性能浮层";
 "vpad.menu.hud.note" = "右上角显示帧率和内存";
+"vpad.menu.fi" = "补帧";
+"vpad.menu.fi.note" = "30 帧补到 60 帧，更顺但操作稍慢一点；切换当场生效";
 "vpad.menu.manageLayouts" = "导入 / 导出 / 另存布局…";
 "vpad.menu.ns2pro" = "启用 Switch 2 Pro 手柄";
 "vpad.menu.pad" = "手柄与体感";
@@ -501,3 +503,7 @@
 "settings.gameLanguage.restart" = "下次打开这款游戏时生效。";
 "settings.gameLanguage.fallback" = "这款不支持%@，起局用%@。";
 "settings.gameLanguage.ja" = "日本語";
+"vpad.screenLock.title" = "手机黑屏";
+"vpad.screenLock.note" = "外接显示器时用，点三下恢复";
+"vpad.screenLock.hint" = "如需关闭手机黑屏，请连续点击3次屏幕";
+"vpad.screenLock.unlock" = "恢复手机屏幕";

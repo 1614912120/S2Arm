@@ -1,4 +1,5 @@
 #!/bin/bash
+# 门禁覆盖：*.py *.sh *.cs
 # RomFS 只遍历一次的守卫单测（tools/romfs_walk_lint.py + graphics/nvn/tools/romfs_list.py，约 3 秒）：bash tests/romfs_walk_lint_test.sh
 # 期望（按规则手写）：
 #   ① 本仓库：除 romfs_list.py 外没有 RomFS 目录遍历（白名单逐条有理由、没有过期条目）

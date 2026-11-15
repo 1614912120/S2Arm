@@ -56,7 +56,7 @@ if [ "$mode" = "--indirect-core" ]; then
     glslc_bin=${GLSLC:-glslc}
     : "${S2A_LAVAPIPE_ICD:?set S2A_LAVAPIPE_ICD for isolated replay test}"
     : "${S2A_VK_LAYER_DIR:?set S2A_VK_LAYER_DIR for isolated replay test}"
-    for shader in quad.vert quad.frag count_args.comp replay_drv0.vert replay_drv0.frag replay_drv0_args.comp; do
+    for shader in replay_front_face.vert solid_green.frag quad.vert quad.frag count_args.comp replay_drv0.vert replay_drv0.frag replay_drv0_args.comp; do
         "$glslc_bin" --target-env=vulkan1.1 "$repo/android/tests/vk/shaders/$shader" -o "$out/shaders/$shader.spv"
     done
     inc=(); for d in android/tests/vkhost graphics/nvn/third_party/vulkan-headers/include graphics/nvn graphics/nvn/replay graphics/nvn/gfx/nvn graphics/nvn/gfx/nvn/include android/native android/native/nvn android/native/direct runtime/include; do inc+=(-I "$repo/$d"); done
@@ -139,7 +139,7 @@ export TMPDIR="$repo/build/vk-tests"
 out=$(mktemp -d "$TMPDIR/s2a-nvn-vk.XXXXXX")
 trap 'rm -rf "$out"' EXIT
 mkdir -p "$out/shaders"
-for s in count_args.comp logic_float.frag logic_uint.frag logic_float_mrt.frag logic_uint_mrt.frag gs_probe.vert gs_probe.geom gs_probe.frag tri.vert tri.frag tri_combined.frag tri3.vert tri_solid.frag tri_invert.frag solid_green.frag solid_blue.frag out1_green.frag tex_u.frag quad.vert quad.frag inst.vert point.vert quad2.frag arr.frag cube.frag cubearr.frag tex3d.frag comp.comp pushc.frag pushc.comp tbuf.comp itbuf.comp itbuf_unknown.comp itbuf_unknown_read.comp img.comp tsamp.comp arr2.frag separate.vert separate.frag; do
+for s in count_args.comp logic_float.frag logic_uint.frag logic_float_mrt.frag logic_uint_mrt.frag gs_probe.vert gs_probe.geom gs_probe.frag gs_tstrip.vert gs_tstrip.geom gs_tstrip.frag tri.vert tri.frag tri_combined.frag tri3.vert tri_solid.frag tri_invert.frag solid_green.frag solid_blue.frag out1_green.frag tex_u.frag quad.vert quad.frag inst.vert point.vert quad2.frag arr.frag cube.frag cubearr.frag tex3d.frag comp.comp pushc.frag pushc.comp tbuf.comp itbuf.comp itbuf_unknown.comp itbuf_unknown_read.comp img.comp tsamp.comp arr2.frag separate.vert separate.frag; do
     "$glslc" --target-env=vulkan1.1 "$repo/android/tests/vk/shaders/$s" -o "$out/shaders/$s.spv"
 done
 

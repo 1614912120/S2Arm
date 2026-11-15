@@ -82,7 +82,16 @@ namespace S2A.Services
         }
         public static bool ExternalController => _externalController;
 
-        public static void Start(Switch device) => SetPrimary(device, Host.Docked ? PlayerIndex.Player1 : PlayerIndex.Handheld, Host.Docked ? ControllerType.ProController : ControllerType.Handheld);
+        public static void Start(Switch device)
+        {
+            SetPrimary(device, Host.Docked ? PlayerIndex.Player1 : PlayerIndex.Handheld, Host.Docked ? ControllerType.ProController : ControllerType.Handheld);
+            // 游戏声明收哪些手柄号 / 样式时，在那次服务调用里就跟随改接（NpadDevices.S2ASupportedChanged）。原先只靠下面采样泵 250 ms 一拍：
+            //   11-14 #cef2ab 一款游戏起局只声明 Player1，泵下一拍（0.6–1.2 s，或它后来再声明后的 11 / 22 / 102 s）才把掌机格改接到 Player1 Pro，
+            //   这条「已连接」落在游戏初始化中途，它处理连接的线程用了还没建好的对象崩溃（15 局崩溃 15 局都紧跟这一行）。250 ms 一拍保留兜底
+            Ryujinx.HLE.HOS.Services.Hid.NpadDevices.S2ASupportedChanged = FollowNow;
+        }
+        private static readonly object _followSync = new();
+        internal static void FollowNow(Switch device) { lock (_followSync) { FollowSupportedPlayers(device); FollowSupportedStyles(device); } }
 
         // 游戏声明的手柄号不含掌机格、含 Player1 时（11-02 维护者 手测七龙珠电光炸裂ZERO 010035F022078000：SetSupportedNpadIdType 只给 Player1，
         //   掌机格被 Remap 断开、「No matching controllers found」，触屏手柄按什么都没反应；真机掌机模式下这时握着的 Joy-Con 当 Player1 用）：
@@ -793,7 +802,7 @@ namespace S2A.Services
                 // 本地多手柄：Mac 前端报告接了几只手柄就开到几格（最多 MaxPads），接上第二只手柄即成为玩家 2
                 int livePads = _vpadPadCount != null ? _vpadPadCount() : 0;
                 if (livePads > _pads && livePads <= MaxPads) SetPads(device, livePads);
-                if (Environment.TickCount64 >= nextFollow) { FollowSupportedPlayers(device); FollowSupportedStyles(device); nextFollow = Environment.TickCount64 + 250; }
+                if (Environment.TickCount64 >= nextFollow) { FollowNow(device); nextFollow = Environment.TickCount64 + 250; }
 
                 GamepadInput input = new() { PlayerId = _player };
                 PadSnapshot snapshot = default;

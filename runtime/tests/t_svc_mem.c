@@ -122,6 +122,7 @@ static _Atomic int g_sp_done; static uint64_t g_sp_addr; static pthread_t g_sp_t
 static void *sp_thread(void *x) { (void)x; uint64_t r[8] = {g_sp_addr, 0x4000, 3}; svc_mem(0x02, r, 0); atomic_store(&g_sp_done, 1); return NULL; }
 static int sp_begin(uint64_t a, uint64_t n, uint64_t src) { (void)a; (void)n; (void)src; pthread_create(&g_sp_t, NULL, sp_thread, NULL); usleep(100000); g_sp_during = atomic_load(&g_sp_done); return 0; }
 
+int s2a_va_short_last(uint64_t fa, int *num, uint64_t *a, uint64_t *n, uint64_t *count);
 int main(void) {
     const uint64_t W = 0x7000000000ull, AB = W + 0x200000, AS = 64ull << 20, HEAP = W + 0x10000000, HCUR = 4ull << 20, MAPB = W + 0x20000000, MAPN = 0x8000;
     // 复用宿主地址护栏，先给末尾大堆测试留出真地址，再放行 xzm；不带 MAP_FIXED，不覆盖已有映射。
@@ -538,6 +539,13 @@ int main(void) {
         s2a_mem_test_peaks(&pk,&ap); CHECK(ap==2*G+0x4000, "解除映射后保留别名最高偏移");
         uint64_t far=W+layout.win_size+G;   // 16 GiB 窗口之外的别名区（远端），仍在本块预留里
         CHECK(SVH(0x2C,far,0x4000,0,0)==0xD001, "窗口外别名映射回内存不足");
+        {   // 11-14 D-G2JB 崩溃归因：最近一次地址越界的请求记下来，出事地址落在里面才点名（crash.c fault_region_note）
+            int vn=0; uint64_t va=0, vl=0, vk=0;
+            int in=s2a_va_short_last(far+0x40,&vn,&va,&vl,&vk), past=s2a_va_short_last(far+0x4000,&vn,&va,&vl,&vk), inwin=s2a_va_short_last(W+0x40,&vn,&va,&vl,&vk);
+            s2a_va_short_last(far,&vn,&va,&vl,&vk);
+            CHECK(in==1 && past==0 && inwin==0 && vn==0x2C && va==far && vl==0x4000 && vk>=1, "地址越界记账：请求内 1 / 请求末尾外 0 / 窗口内 0，记的 svc 0x2C、起点、长度（实 %d %d %d，svc %#x，%#llx +%#llx，次数 %llu）",
+                  in, past, inwin, vn, (unsigned long long)va, (unsigned long long)vl, (unsigned long long)vk);
+        }
         CHECK(SVH(0x2C,W+layout.win_size-0x4000,0x8000,0,0)==0xD001, "跨窗口末尾的映射整笔拒绝");
         {   // 审计 #806 第 2 条：跨窗口的物理映射，窗口外给影子页失败 → 回内存不足，窗口内那段不许已被放开、不许记账（原先先 mprotect 窗口内再要影子，失败直接返回）
             uint64_t xa=W+layout.win_size-0x4000, ph0=s2a_mem_test_phys();

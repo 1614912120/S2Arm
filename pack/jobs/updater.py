@@ -449,10 +449,11 @@ def notes_from_markdown(text):
 PLATFORMS = ("mac", "windows")
 
 
-def notice_messages(data, platform):
+def notice_messages(data, platform, current=None):
     """notice.json → 本平台的公告列表，最新的在前：[{id, level, text, url?}]。
     新版读 messages 数组（每条 id / level important|info / platforms / text / url，数组按最新在前排）；没有 messages 时把顶层那条（旧版也认）当一条全平台「重要」。
-    platforms 不写 = 全平台；写了只给列着的平台（11-12：Mac 上不再看到 Windows 的公告）"""
+    platforms 不写 = 全平台；写了只给列着的平台（11-12：Mac 上不再看到 Windows 的公告）。
+    maxVersion（11-14）：只给这一版及更早的本机看（如「0.3.9 及更早请下 dmg」不该一直挂在新版上）；current 给不出版本号时照常显示"""
     if not isinstance(data, dict) or data.get("schema") != 1:
         return []
     rows = data.get("messages") if isinstance(data.get("messages"), list) else None
@@ -464,6 +465,9 @@ def notice_messages(data, platform):
         item = notice_valid(dict(row, schema=1)) if isinstance(row, dict) else None
         platforms = row.get("platforms") if isinstance(row, dict) else None
         if item is None or (platforms is not None and (not isinstance(platforms, list) or platform not in platforms)):
+            continue
+        ceiling, mine = version_tuple(row.get("maxVersion") or ""), re.match(r"v?(\d+)\.(\d+)\.(\d+)", (current or "").strip())
+        if ceiling and mine and tuple(int(n) for n in mine.groups()) > ceiling:
             continue
         item["level"] = "important" if row.get("level") == "important" else "info"
         out.append(item)
@@ -752,7 +756,7 @@ def main(argv=None):
         data = notice_data()
         withdrawn = [i for i in data.get("featureWithdrawn") or [] if isinstance(i, str)] if isinstance(data.get("featureWithdrawn"), list) else []
         feature = feature_spotlight(a.platform, a.current, withdrawn=withdrawn)
-        print(json.dumps(inbox(a.platform, a.current, a.private_root, check, notice_messages(data, a.platform), feature), ensure_ascii=False))
+        print(json.dumps(inbox(a.platform, a.current, a.private_root, check, notice_messages(data, a.platform, a.current), feature), ensure_ascii=False))
         return 0
     if a.command == "inbox-seen":
         try:

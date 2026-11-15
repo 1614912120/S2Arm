@@ -619,6 +619,21 @@ def _size_of(path):
     return sum((Path(d) / f).lstat().st_size for d, _, files in os.walk(path) for f in files)
 
 
+def _size_on(path, cluster):
+    """拷到分配单元为 cluster 字节的卷上要占的空间：每个文件按簇向上取整、每个目录至少占一簇（exFAT 目录项本身也占簇）；cluster ≤ 0 = 读不到，按原始大小。
+    #1112：exFAT 1 MB 簇的外接盘上，92 GB / 21 万个文件的游戏库实际要约 280 GB，按原始大小估「251 GB 够」放行后写到盘满"""
+    if cluster <= 0:
+        return _size_of(path)
+    up = lambda n: -(-n // cluster) * cluster
+    if path.is_symlink() or path.is_file():
+        return up(path.lstat().st_size)
+    total = 0
+    for d, dirs, files in os.walk(path):
+        total += cluster
+        total += sum(up((Path(d) / f).lstat().st_size) for f in files)
+    return total
+
+
 def _sha256(path):
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -774,9 +789,12 @@ def move_library(c, source):
         pairs = _move_pairs(c, source)
         c.library.mkdir(parents=True, exist_ok=True)
         cross = [(a, b) for a, b in pairs if not _same_volume(a, c.library)]
-        need = sum(_size_of(a) for a, _ in cross)
-        if need and shutil.disk_usage(c.library).free < need:
-            raise Failure("新位置空间不够，游戏库没有搬。", code="disk_full")
+        cluster = volume_cluster(c.library)
+        need = sum(_size_on(a, cluster) for a, _ in cross)   # 按新位置的簇算实际占用（#1112：exFAT 大簇上小文件多，实际要原始大小的好几倍）
+        free = shutil.disk_usage(c.library).free
+        if need and free < need:
+            big = f"（这块盘的分配单元是 {cluster // 1024} KB，游戏库里小文件多，实际要占约 {need / 1e9:.0f} GB）" if cluster >= (64 << 10) else ""
+            raise Failure(f"新位置空间不够，游戏库没有搬：要约 {need / 1e9:.0f} GB，只剩 {free / 1e9:.0f} GB{big}。", code="disk_full")
         stage = c.library / ".s2arm-moving"
         done, staged = [], {}
         try:
@@ -810,7 +828,14 @@ def move_library(c, source):
                 done.append((a, b))
             for root in (c.library, _work_root_of(c, c.library)):
                 _retarget_links(root, source, c.library)
-        except BaseException:
+        except BaseException as failure:
+            if cross and isinstance(failure, OSError) and failure.errno in (errno.ENOSPC, errno.EIO):
+                # #1112：exFAT 写满盘失败后删掉残留，空闲空间仍显示 0（无日志的文件系统空闲位图没跟着回来），要跑一次修复才找得回
+                # #1112 玩家复核：盘本身没坏（verifyVolume 0），在访达里删的残留进了这块盘自己的废纸篓（.Trashes），要接着盘清倒才腾出空间
+                bin_, repair = (("回收站", "在「此电脑」里右键这块盘 →「属性」→「工具」→「检查」") if os.name == "nt"
+                                else ("废纸篓", "用「磁盘工具」选中这块盘点「急救」"))
+                c.diagnostic(f"换库写到一半失败（盘满或写入出错）。手动删新位置残留的临时文件夹后，要在这块盘还接着时清倒{bin_}，空间才会腾出来；"
+                             f"清倒以后可用空间仍明显比实际少，再{repair}检查一次（不会删文件）。", code="library_move_failed", severity="warning")
             if done:
                 _retarget_links(c.library, c.library, source)
             for a, b in reversed(done):
@@ -818,7 +843,11 @@ def move_library(c, source):
                     _discard(b)
                 else:
                     _rename_library_path(c, b, a)
-            _discard(stage)
+            try:
+                _discard(stage)
+            except OSError as error:   # #1112：清临时目录自己出错不许盖住起因（原先盘满的 ENOSPC 被 rmtree 的 FileNotFoundError 盖掉，251 GB 留在盘上没人知道）
+                c.diagnostic(f"换库失败后，新位置的临时文件夹没删干净，可以手动删除：{c.redact(str(stage))}（{c.redact(str(error))}）",
+                             code="library_move_failed", severity="warning")
             with contextlib.suppress(OSError):
                 (c.library / ".s2arm-work").rmdir()   # 回滚后别留下搬的时候建的空目录
             raise
@@ -852,7 +881,20 @@ def _discard(p):
                     continue
                 with contextlib.suppress(OSError):
                     os.chmod(Path(d) / f, 0o644)
-        shutil.rmtree(p)
+        _rmtree_gone_ok(p)
+
+
+def _rmtree_gone_ok(p):
+    """删整棵目录，中途已经不在的项当删完（#1112：exFAT 上 AppleDouble「._」附属文件随主文件一起没了，rmtree 报 FileNotFoundError 半途停下）；
+    别的错照抛"""
+    def gone(_fn, _path, exc):
+        error = exc if isinstance(exc, BaseException) else exc[1]
+        if not isinstance(error, FileNotFoundError):
+            raise error
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(p, onexc=gone)
+    else:
+        shutil.rmtree(p, onerror=gone)
 
 
 def _within(path, parent):
@@ -2177,20 +2219,19 @@ def table_rows(path):
 
 
 def sgrade_badge(c, gid, image):
-    """游戏库封面左上角的金色 S（v0.4.0 维护者）：这款有 S 级优化——Mac 运行版本或 iPhone 程序件里已经打进了社区补丁 / 金手指，
-    或者补丁库（随启动器的快照）里有这款的包、下次起局 / 更新 iPhone 就会补上（pack/jobs/rewrite_refresh.py）。出包页取消过「出包时打入」的款不亮"""
+    """游戏库封面左上角的金色 S（v0.4.0 维护者）：这款已经带上 S 级优化——Mac 运行版本或 iPhone 程序件里打进了社区补丁 / 金手指。出包页取消过「出包时打入」的款不亮"""
     gid = gid.upper()
     if layout.game_info(c, gid).get("sgradeOff") is True:
         return False
-    if table_rows(Path(image) / "cpatch.tsv") or table_rows(layout.ios_kit(c, gid) / "cpatch.tsv"):
-        return True
-    import patches
-    main = Path(image) / "exefs/main"
-    try:
-        bid = main.read_bytes()[0x40:0x48].hex().upper() if main.is_file() else (layout.game_info(c, gid).get("ios") or {}).get("mainBid", "")
-        return patches.has_match(c, gid, bid)
-    except (OSError, ValueError):
-        return False
+    # 只认真打进去了的（11-14：原先「补丁库里有这款的包」也亮，没出过包的款也亮了；发布说明写的是「亮起的已经带上了」）：
+    #   Mac 运行版本 / iPhone 程序件里补丁表有条目，或带着随包金手指原文（多数金手指只改内存、不进补丁表）。Mac 老游戏启动器打开时会补上（sgradeMac），补完就亮
+    for d in (Path(image), layout.ios_kit(c, gid)):
+        try:
+            if table_rows(d / "cpatch.tsv") or any(d.glob("cheat-src.*")):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 CONTAINER_KIT = layout.IOS_KIT   # 每款 image/ios/kit：装机组装容器要用的文件，出包成功后从产物根存一份独立副本（游戏库结构 v3；旧布局是 iPhone/<号>/container-kit）
@@ -2749,9 +2790,14 @@ def validate_input(config):
 
 def save_input(c):
     config = validate_input(c.r["config"])
+    # player：键位设置的玩家（1–4；1 / 没给 = 玩家 1 的 input.json，2–4 = 这款文件夹的 input-pN.json）。
+    #   起局时 build.py 读这些文件交给宿主（S2A_INPUT_CONFIG_P2..P4，槽位各照各玩家的映射采样）
+    player = c.r.get("player", 1)
+    if type(player) is not int or not 1 <= player <= 4 or (player != 1 and not c.r.get("gameId")):
+        raise Failure("无效的玩家序号。")
     if c.r.get("gameId"):
         c.game()
-        target = layout.path(c, c.r["gameId"], "input.json")
+        target = layout.path(c, c.r["gameId"], "input.json" if player == 1 else f"input-p{player}.json")
     else:
         target = c.private / "default-input.json"
     atomic(target, config)

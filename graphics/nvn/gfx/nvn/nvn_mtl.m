@@ -532,6 +532,36 @@ static void pidx_removing(int i) {   // before g_pools[i] = g_pools[--g_npool]: 
 static NSMutableArray *g_keep;                  // Holds the buffer references (pool_ent has non-owning pointers)
 static uint64_t g_pool_adds;
 static int g_pool_res_n;   // registered pools already in the residency set (for the memory readout; under g_mu)
+// A queue piece parked after it was submitted may still name a pool after the guest Finalizes it. Keep the buffer alive and resident until that piece is replayed or dropped.
+// The pool's normal deferred release is not merely allowed to run early: it also removes residency at its original fence, which can be before the later replay completes.
+typedef struct { void *buf; uint32_t refs; int retired; } xq_buf_hold;
+static xq_buf_hold *g_xq_bhold; static int g_xq_nbhold, g_xq_cbhold; static pthread_mutex_t g_xq_bhold_mu = PTHREAD_MUTEX_INITIALIZER;
+static void xq_buf_hold_add(void *buf) {
+    if (!buf) return; CFRetain(buf);
+    pthread_mutex_lock(&g_xq_bhold_mu);
+    int i = 0; while (i < g_xq_nbhold && g_xq_bhold[i].buf != buf) i++;
+    if (i == g_xq_nbhold) {
+        if (g_xq_nbhold == g_xq_cbhold) { int c = g_xq_cbhold ? g_xq_cbhold * 2 : 16; xq_buf_hold *p = realloc(g_xq_bhold, (size_t)c * sizeof *p); if (!p) MDIE("cross-queue buffer holds: out of memory"); g_xq_bhold = p; g_xq_cbhold = c; }
+        g_xq_bhold[g_xq_nbhold++] = (xq_buf_hold){buf, 0, 0};
+    }
+    g_xq_bhold[i].refs++; pthread_mutex_unlock(&g_xq_bhold_mu);
+}
+static int xq_buf_hold_retire(void *buf) {
+    int held = 0; pthread_mutex_lock(&g_xq_bhold_mu);
+    for (int i = 0; i < g_xq_nbhold; i++) if (g_xq_bhold[i].buf == buf) { g_xq_bhold[i].retired = held = 1; break; }
+    pthread_mutex_unlock(&g_xq_bhold_mu); return held;
+}
+static void xq_buf_hold_del(void *buf) {
+    if (!buf) return; int retired = 0;
+    pthread_mutex_lock(&g_xq_bhold_mu);
+    for (int i = 0; i < g_xq_nbhold; i++) if (g_xq_bhold[i].buf == buf) {
+        if (!--g_xq_bhold[i].refs) { retired = g_xq_bhold[i].retired; g_xq_bhold[i] = g_xq_bhold[--g_xq_nbhold]; }
+        break;
+    }
+    pthread_mutex_unlock(&g_xq_bhold_mu);
+    if (retired) defer_obj_release((__bridge id)buf);   // re-time residency removal behind the last replay that owned this hold
+    CFRelease(buf);
+}
 // Access bits of the raw pool table (gmem_map / gmem_scan): a pool the table lists but the host has not made resident, or made resident only for the table, gets a bit, which a raw
 // access sets when it chooses the pool's entry. Bits belong to pools, not entries, so a rebuilt table loses none set by submissions still running. Under g_mu
 enum { GSLOT_MAX = 65536 };
@@ -596,6 +626,7 @@ void mtl_init(void) {
     const char *vbc = getenv("DM_NVN_VBUF_CACHE"); g_vbuf_cache = !(vbc && !strcmp(vbc, "0"));
     const char *link = getenv("DM_PRESENT_LINK");
     g_dm_present_link = link ? atoi(link) : 1; if (g_dm_present_link < 0 || g_dm_present_link > 2) g_dm_present_link = 1;   // Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
+    { const char *fi = getenv("DM_PRESENT_FI"); if (fi && !strcmp(fi, "1")) g_dm_present_link = 0; }   // 实验：出图补帧走出图线程自己取画布，一开始就不建显示链接
     const char *latency = getenv("DM_PRESENT_LATENCY");
     if (latency && atoi(latency) > 0) g_present_latency = atoi(latency);
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
@@ -833,7 +864,7 @@ static void nvn_be_pool_del_body(const void *mem) {
     // The no-copy buffer goes through deferred release (out of the residency set and unreferenced after submitted commands complete). It used to be removed only from g_keep while the residency set still held a strong reference: after the pool was freed the buffer stayed alive wrapping that guest memory,
     // and a new pool at the same address wrapped it again. Engage's title demo cycles scenes; GPU allocated grew to 5.4 GB and resident memory to 3.6 GB in 850 s
     for (int i = 0; i < g_npool; i++)
-        if (g_pools[i].key == mem) { id<MTLBuffer> b = g_pools[i].buf; [g_keep removeObject:b]; defer_obj_release(b); if (g_pools[i].res) g_pool_res_n--;
+        if (g_pools[i].key == mem) { id<MTLBuffer> b = g_pools[i].buf; [g_keep removeObject:b]; if (!xq_buf_hold_retire((__bridge void *)b)) defer_obj_release(b); if (g_pools[i].res) g_pool_res_n--;
             if (!g_dead_pools) g_dead_pools = [NSHashTable weakObjectsHashTable];
             gslot_put(i);
             [g_dead_pools addObject:b]; pidx_removing(i); g_pools[i] = g_pools[--g_npool]; if (i < g_npool && g_pools[i].gslot) g_gslot_pool[g_pools[i].gslot - 1] = i;   // the moved pool's bit follows it
@@ -910,6 +941,7 @@ static inline const uint8_t *addr_cpu(uint64_t addr, uint64_t len) {
 }
 // *avail: bytes the GPU pointer has behind it up to the end of the pool's zero-copy buffer (mtl_add_pool rounds the pool's end up to a page). Audit #1534 P1-65 probe (encode_args)
 static inline uint64_t pool_buf_end(uintptr_t hi) { static uintptr_t pg; if (!pg) pg = (uintptr_t)getpagesize(); return (hi + pg - 1) & ~(pg - 1); }
+static int xq_addr_want(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_t *gpu, uint64_t *avail);   // nvn_xqueue.inc: only the state of the parked piece currently being replayed
 static inline int gpu_addr_want(uint64_t addr, uint64_t len, uint64_t want, void **buf, uint64_t *off, uint64_t *gpu, uint64_t *avail) {
     addr = nvn_ga2ca(addr);   // 同 nvn_be_addr
     const pc_ent *c = pc_get(addr, len);
@@ -923,6 +955,7 @@ static inline int gpu_addr_want(uint64_t addr, uint64_t len, uint64_t want, void
         pthread_mutex_lock(&g_mu); i = pool_find(addr, len);
         if (i >= 0) { pool_res(i); pc_put(i, addr); *buf = (__bridge void *)g_pools[i].buf; *off = addr - g_pools[i].base; *gpu = g_pools[i].gpu + *off; *avail = pool_buf_end(g_pools[i].hi) - addr; ok = 1; }
         pthread_mutex_unlock(&g_mu); }
+    if (!ok) ok = xq_addr_want(addr, len, buf, off, gpu, avail);
     return ok;
 }
 static inline int gpu_addr_avail(uint64_t addr, uint64_t len, void **buf, uint64_t *off, uint64_t *gpu, uint64_t *avail) { return gpu_addr_want(addr, len, len, buf, off, gpu, avail); }
@@ -2406,6 +2439,8 @@ static void rt_keep_state(void);
 static void ghost_finish_submission(void);
 static void alias_dead_views(void);
 static void bcal_sweep_overwritten(void);
+int nvn_cmd_call_target(uint64_t h);   // hle_nvn.c：回放 CALL 核目标（#768338 安全阀）
+int nvn_cmd_call_resolve(uint64_t h, uint64_t *to);   // hle_nvn.c：按设备地址解析 CALL 目标（#768338 根修）
 static const char *cctx_snap(void);   // What is in this submission (printed into the failure line on error; defined before nvn_be_exec)
 static void lc_land(void); static int g_nlc;   // lazy clears waiting (lc_push; fb_prepare lands them before a feedback read)
 static _Atomic int g_seg_inflight;   // main command buffers committed and not reported back yet (sub_cut)
@@ -2567,7 +2602,7 @@ void nvn_be_drain(void) { if (mtl_gpu_halted()) { MLOG("GPU 安全停中：后�
 
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[188];   // RED_ONCE keys 0..187 (187: a multisample count the GPU does not support, stepped down, mtl_samples_supported (#903); 186: a packaged texture's storage runs past the end of its memory pool, pkg_upload_ (#819); 183 / 184 / 185: an incompatible Metal texture format view fell back to the base format in rt_view_fmt / attach / clear_tex; 182: a block-compressed texture whose GPU writer resolved to its own Metal format, bcal_copy; 181: a texture view whose target and layer range Metal cannot express (#199), tex_by_id; 179 / 180: a pass's own depth attachment sampled in it could not be copied / viewed (#387); 178: a slot read on-chip by the first draw of a pass was not opened loaded; 177: a compute dispatch's binding ended the shared encoder again on the retry; 175 / 176: a block-compressed texture's GPU-written bytes not taken: no host texture of the uncompressed writer / no staging buffer, bcal_sync; 174: a converted vertex attribute stream address in no memory pool, vconv_bind; 172 / 173: a pool table for handles traced to no slot could not be allocated / grown, pool_tab_new / pool_tab_put_n; 171: a first-invocation store skipped, dispatch; 170: an sRGB / linear view not made again on its upgraded parent, tex_upgrade; 169: unused since 11-07 (a not-loaded color attachment written: g_noload_wrong, first 8 lines); 167 / 168: a storage buffer address the pools do not hold, slot / handle in a uniform buffer; 166: a texture turning packaged whose old host texture has another shape, its GPU-written texels not carried over, carry_gpu) (162: a vertex buffer address the pools do not hold, bind_vbufs) (160 / 161 / 163–165: tensor-core network stand-in, nvn_tensor.inc; 147–159 left for the NVN2 task / mesh branch) (143–146: NVN2 DLSS → MetalFX, nvn_dlss.inc) (139–142: folded linear textures: tex_linear, se_want, se_bind, copies / clears into one) (137 / 138: a GL texture an NVN texture is built from has no usable storage / no matching NVN format) (136: a draw's binding ended its pass twice) (134 / 135: alpha test / multisampling off the fragment shader cannot take); same-pass feedback snapshot too large 127, native image atomics use 128/129, same-pass feedback view narrowing 133
+static int g_red_once[193];   // RED_ONCE keys 0..192 (188–192: internal resolution — 188 a draw / dispatch still held scaled image-slot storages after the retry limit, rs_pre_draw / rs_pre_images; 189 a storage past the device texture limit, rs_rescale / tex_widen; 190 a CPU readback of an enlarged storage not scaled back linearly, nvn_be_read_texels; 191 an image-slot storage that could not go back to its own size; 192 a screenshot of the enlarged window texture not scaled back; 187: a multisample count the GPU does not support, stepped down, mtl_samples_supported (#903); 186: a packaged texture's storage runs past the end of its memory pool, pkg_upload_ (#819); 183 / 184 / 185: an incompatible Metal texture format view fell back to the base format in rt_view_fmt / attach / clear_tex; 182: a block-compressed texture whose GPU writer resolved to its own Metal format, bcal_copy; 181: a texture view whose target and layer range Metal cannot express (#199), tex_by_id; 179 / 180: a pass's own depth attachment sampled in it could not be copied / viewed (#387); 178: a slot read on-chip by the first draw of a pass was not opened loaded; 177: a compute dispatch's binding ended the shared encoder again on the retry; 175 / 176: a block-compressed texture's GPU-written bytes not taken: no host texture of the uncompressed writer / no staging buffer, bcal_sync; 174: a converted vertex attribute stream address in no memory pool, vconv_bind; 172 / 173: a pool table for handles traced to no slot could not be allocated / grown, pool_tab_new / pool_tab_put_n; 171: a first-invocation store skipped, dispatch; 170: an sRGB / linear view not made again on its upgraded parent, tex_upgrade; 169: unused since 11-07 (a not-loaded color attachment written: g_noload_wrong, first 8 lines); 167 / 168: a storage buffer address the pools do not hold, slot / handle in a uniform buffer; 166: a texture turning packaged whose old host texture has another shape, its GPU-written texels not carried over, carry_gpu) (162: a vertex buffer address the pools do not hold, bind_vbufs) (160 / 161 / 163–165: tensor-core network stand-in, nvn_tensor.inc; 147–159 left for the NVN2 task / mesh branch) (143–146: NVN2 DLSS → MetalFX, nvn_dlss.inc) (139–142: folded linear textures: tex_linear, se_want, se_bind, copies / clears into one) (137 / 138: a GL texture an NVN texture is built from has no usable storage / no matching NVN format) (136: a draw's binding ended its pass twice) (134 / 135: alpha test / multisampling off the fragment shader cannot take); same-pass feedback snapshot too large 127, native image atomics use 128/129, same-pass feedback view narrowing 133
 // The key must be a constant inside the table: a key past the end wrote into the statics next to it (11-05: nvn_tensor.inc used 160 / 161 with 147 slots)
 #define RED_ONCE(k, ...) do { _Static_assert((k) >= 0 && (k) < (int)(sizeof g_red_once / sizeof g_red_once[0]), "RED_ONCE key outside g_red_once"); if (!g_red_once[k]++) MLOG("【红】 " __VA_ARGS__); } while (0)
 // NVN vertex streams 0–15 → Metal vertex buffer slots: 0–13 go to 16–29 (30 is the constant fallback buffer), 14 and 15 to 14 and 15. Metal has only the 31 slots 0–30; translated shaders use only buffer(0) (the argument buffer),
@@ -4556,7 +4591,8 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
                         if (nh[k] != pk->ph[k]) changed = 1; else bits[k >> 6] &= ~(1ull << (k & 63));   // bits now: pages whose bytes changed
                     }
                     if (!changed) { pk->stamp = st; pk->seen = nvn_dirty_now(); clean = 1; g_pkg_same++; }
-                    else if (gpu && pk->tex.width >= t->d.width && pk->tex.height >= t->d.height && ncap >= pk->nph && nvn_dirty_page_gens(pk->span, t->mem, t->L.size, gens, pk->nph) == np) {
+                    // internal resolution above 1: an enlarged storage passes the size test below, but the rectangles are game coordinates: it takes the whole upload, as a reduced one does
+                    else if (gpu && !(rs_up_on() && rs_state(pk->tex) == RS_SCALED) && pk->tex.width >= t->d.width && pk->tex.height >= t->d.height && ncap >= pk->nph && nvn_dirty_page_gens(pk->span, t->mem, t->L.size, gens, pk->nph) == np) {
                         // The GPU wrote the texture since this upload: a whole re-upload from guest memory would undo it. Pages the CPU wrote after the GPU go up as their rectangles; the rest stay as the GPU made them
                         // Rectangles use game coordinates. A reduced storage needs the whole upload below, which rebuilds it at game size before the next pass scales it again.
                         rect_list L = {0}; int up = 0;
@@ -4789,6 +4825,7 @@ void nvn_be_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
     alias_orphan_pass();   // #357: before the line cap below, which only limits the readout
     nvn_mem_detail(frame);   // before the line cap below: the detailed accounting has its own interval and must not be starved by the 400-line budget
     fb_report(frame); samp_report(frame); audit_probe_report(frame);
+    rs_report(frame);   // internal resolution coverage line (nvn_rscale_ops.inc; nothing when the scale is 1)
     static unsigned long long last_rss, last_gpu, last_frame; static int lines; unsigned long long gpu = (unsigned long long)(g_dev.currentAllocatedSize >> 20);
     unsigned long long dr = rss_mb > last_rss ? rss_mb - last_rss : last_rss - rss_mb, dg = gpu > last_gpu ? gpu - last_gpu : last_gpu - gpu;
     if (lines >= 400 || (lines && dr < 64 && dg < 64 && frame - last_frame < 3000)) return; lines++; last_rss = rss_mb; last_gpu = gpu; last_frame = frame;
@@ -5312,6 +5349,12 @@ static int tex_widen(const tex_t *t, NSUInteger r, NSUInteger rh) {   // 1 = the
     tex_extent cur = tex_extent_at(t, base, 0, 0);
     if (cur.canvas.width >= r && cur.canvas.height >= rh) return 1;
     tex_extent extent = tex_extent_grow(t, base, r, rh);
+    // internal resolution above 1: the widened canvas × s would pass the device's texture limit (Metal asserts on such a descriptor) → the storage goes back to 1 first and is widened unscaled
+    if (rs_up_on() && rs_state(base) == RS_SCALED && (extent.physical.width > rs_tex_max() || extent.physical.height > rs_tex_max())) {
+        rs_rescale(base, 0, "放宽后放大超过贴图上限"); base = tex_mtl(t);
+        if (!base || rs_state(base) == RS_SCALED) { RED_ONCE(189, "widen: scaled render target ser=%llu not widened: %lux%lu is past the texture limit and it could not go back to 1", (unsigned long long)t->serial, (unsigned long)extent.physical.width, (unsigned long)extent.physical.height); return 0; }
+        extent = tex_extent_grow(t, base, r, rh);
+    }
     int scaled = rs_state(base) == RS_SCALED; NSUInteger cw = extent.canvas.width, ch = extent.canvas.height;
     r = extent.physical.width; rh = extent.physical.height;
     const char *why = tex_widen_why(t);
@@ -5846,7 +5889,8 @@ static void shmap_load_once(void) {
     uint64_t mis[4];   // mis: texture slots 0-255 already reported for a type mismatch (tex_mis_note)
     uint64_t d2d[4];   // texture slots 0-255 whose sampler type the offline translation did not know and took as 2D (library resolution_scale_reasons "unknown_missing_fact:sampler_type:...slot=N"; audit #1534 P1-20 probe)
     NSString *ventry, *fnpfx; id<MTLFunction> vfn; int vfn_state;   // fnpfx: a batched library's function name prefix s<key>_ (json fn_prefix, dmsh_build.py unity_flush); ventry stays the logical entry name
-    uint32_t spill, spill_slot; } @end   // spill: a compute shader's shared memory moved to a device buffer, bytes per threadgroup, bound at spill_slot (dmsh_build.py spill_fix; dispatch)   // vertex: the entry point loaded (by the depth mode); vfn: the same entry of the shadow-input library <key>_bv (vin_fn; state 0 untried, 1 loaded, 2 failed)
+    uint32_t spill, spill_slot;
+    NSString *mslnote, *mslsrc; } @end   // spill: a compute shader's shared memory moved to a device buffer, bytes per threadgroup, bound at spill_slot (dmsh_build.py spill_fix; dispatch)   // vertex: the entry point loaded (by the depth mode); vfn: the same entry of the shadow-input library <key>_bv (vin_fn; state 0 untried, 1 loaded, 2 failed)
 @implementation NvShader
 - (void)dealloc { free(rf.c1); free(rf.b); }
 @end
@@ -6194,8 +6238,29 @@ static int tensor_native_json(NSDictionary *j) {
     return enabled && (enabled == 1 || (flags & 1)) && [j[@"tensor_mma_abi"] intValue] == 1 && [j[@"tensor_mma_count"] intValue] > 0
         && [g_dev supportsFamily:MTLGPUFamilyApple7];
 }
+// #065090：一份 MSL 的摘要，给慢编译那一行（pso_archive.h par_slow_begin）：总行数、FNV-1a 64 哈希、main0 体行数（「kernel void main0(」那行到其后第一行单独的「}」，
+//   同 DshOutline.Compute 的 end - entry）、拆出的 s2a_outline_ 个数、main0 是否 optnone（GiantFix 压不平时加）。拆分门槛 8192 行同 DshOutline KernelLines：
+//   拆了 → 「split into N helpers」；没拆且 main0 体 ≥ 8192 → 「over the 8192-line split threshold, not split」（满足条件却被 DshOutline 放弃，见其各 return msl）
+static NSString *msl_note(NSString *pc, NSString *src) {
+    const char *p = src.UTF8String; if (!p) return nil;
+    uint64_t h = 1469598103934665603ull; long lines = 0, entry = -1, body = -1, ln = 0; int helpers = 0, optnone = 0;
+    for (const char *q = p, *b = p; ; q++) {
+        if (*q && *q != '\n') { h = (h ^ (uint8_t)*q) * 1099511628211ull; continue; }
+        size_t n = (size_t)(q - b);
+        if (n || *q) lines++;
+        if (entry < 0 && (n >= 18 && !memcmp(b, "kernel void main0(", 18))) entry = ln;
+        else if (entry < 0 && n >= 37 && !memcmp(b, "[[clang::optnone]] kernel void main0(", 37)) { entry = ln; optnone = 1; }
+        else if (entry >= 0 && body < 0 && n == 1 && b[0] == '}') body = ln - entry;
+        if (n >= 50 && !memcmp(b, "static __attribute__((noinline)) void s2a_outline_", 50)) helpers++;
+        if (!*q) break;
+        h = (h ^ (uint8_t)'\n') * 1099511628211ull; b = q + 1; ln++;
+    }
+    const char *v = helpers ? "split" : body >= 8192 ? "over the 8192-line split threshold, not split" : body >= 0 ? "under the 8192-line split threshold" : "no main0 kernel";
+    return helpers ? [NSString stringWithFormat:@"%@ fallback translation, %ld lines, fnv %016llx, main0 body %ld lines, split into %d helpers%s", pc, lines, (unsigned long long)h, body, helpers, optnone ? ", optnone" : ""]
+                   : [NSString stringWithFormat:@"%@ fallback translation, %ld lines, fnv %016llx, main0 body %ld lines, %s%s", pc, lines, (unsigned long long)h, body, v, optnone ? ", optnone" : ""];
+}
 static NvShader *shader_build(NSString *pc, int stage, int layer, int depth_zero) {
-    NSError *e = nil;
+    NSError *e = nil; NSString *mnote = nil, *msrc = nil;   // #065090 msl_note
     // S2Arm: a key missing from the library is looked up in DM_MSL_FALLBACK (the on-device fallback translation writes <key>_b.metal + .json there; iOS cannot store a metallib built at runtime)
     NSString *dir = g_msl_dir;
     NSData *jd = json_from_pack(pc.UTF8String);   // S2Arm: from the library container, or its file without one (lib_pack.inc)
@@ -6225,14 +6290,17 @@ static NvShader *shader_build(NSString *pc, int stage, int layer, int depth_zero
     if (!lib) lib = dir == g_msl_dir ? lib_from_pack(pc.UTF8String, &e) : [NSFileManager.defaultManager fileExistsAtPath:lp] ? lib_from_file(lp, &e) : nil;
     if (lib && ul) { os_unfair_lock_lock(&ulock); if (!ulibs) ulibs = [NSMutableDictionary dictionary]; if (!ulibs[ul]) ulibs[ul] = lib; else lib = ulibs[ul]; os_unfair_lock_unlock(&ulock); }
     if (!lib && dir != g_msl_dir) {   // S2Arm fallback: MSL source compiled here, same options as the offline chain (dm_msl_opts)
-        NSString *src = [NSString stringWithContentsOfFile:[NSString stringWithFormat:@"%@/%@.metal", dir, pc] encoding:NSUTF8StringEncoding error:&e];
-        if (src) { MTLCompileOptions *co = dm_msl_opts(); t_lib_layer = [src containsString:@"render_target_array_index"]; lib = [g_dev newLibraryWithSource:src options:co error:&e]; }
+        NSString *sp = [NSString stringWithFormat:@"%@/%@.metal", dir, pc], *src = [NSString stringWithContentsOfFile:sp encoding:NSUTF8StringEncoding error:&e];
+        if (src) { MTLCompileOptions *co = dm_msl_opts(); t_lib_layer = [src containsString:@"render_target_array_index"]; lib = [g_dev newLibraryWithSource:src options:co error:&e]; mnote = msl_note(pc, src); msrc = sp; }
         if (lib) MLOG("shader %s loaded from the fallback translation (%s)", pc.UTF8String, fb);
     }
     if (!lib || !j) { MLOG("【红】 failed to load shader %s: %s", pc.UTF8String, e ? e.localizedDescription.UTF8String : "no reflection json"); return nil; }
     if (![j[@"chain"] isEqual:@DMSH_CHAIN]) { MLOG("【红】 shader %s has translation chain version %s, but this host expects %s", pc.UTF8String, [[j[@"chain"] description] UTF8String], DMSH_CHAIN); return nil; }
     if (layer && !j[@"entry_layer"]) { MLOG("【红】 vertex shader %s has no layer entry points", pc.UTF8String); return nil; }
     NvShader *o = [NvShader new]; o->gs_loc = o->lay_loc = -1;
+    // 出包库没有源：带上出包时的翻译器指纹与本宿主的（只升级 App 不重写已出包的库，COMPUTE_REPAIR.md：指纹不同 = 别的翻译器出的，拆分要重新出包或 repair_compute.py）
+    o->mslnote = mnote ?: [NSString stringWithFormat:@"%@ %s (no source on the device; translator %@, this build %s)", pc, dir == g_msl_dir ? "packaged library" : "fallback library file",
+                           [j[@"xfp"] isKindOfClass:[NSString class]] ? j[@"xfp"] : @"unknown", fb_xfp() ?: "unknown"]; o->mslsrc = msrc;
     o->fnpfx = [j[@"fn_prefix"] isKindOfClass:[NSString class]] ? j[@"fn_prefix"] : @"";
     if (stage == 0 && [j[@"layer_from"] isKindOfClass:[NSDictionary class]]) { o->lay_loc = [j[@"layer_from"][@"loc"] intValue]; o->lay_comp = [[j[@"layer_from"][@"comp"] description] UTF8String][0]; }
     char err[160];
@@ -9028,7 +9096,9 @@ static void warm_task_(WarmTask *t) {
             if (cs && cs->tensor == 1) { g_warm_skip_fz++; g_warm_done++; return; }   // a tensor-core network program: never dispatched (nvn_tensor.inc), no pipeline
             id<MTLFunction> fn = cs && t->fc ? se_warm(cs, t->fc) : cs ? cs->fn : nil;   // S2Arm #800: a C line's emulation bits (warm_parse): the variant a run before made, else made at its first use
             if (cs && !fn) { g_warm_skip_fz++; g_warm_done++; return; }
+            t_par_msl_note = !cs ? NULL : (t->fc ? [@"sampler-emulation variant of " stringByAppendingString:cs->mslnote ?: @"?"] : cs->mslnote).UTF8String; t_par_msl_src = cs && !t->fc ? cs->mslsrc.fileSystemRepresentation : NULL;
             id ps = fn ? par_compute(fn, par_ckey(cs, t->fc), &e) : nil;
+            t_par_msl_note = t_par_msl_src = NULL;
             if (cs && !ps) MLOG("【红】 background compute pipeline creation failed: %s", e.localizedDescription.UTF8String);
             if (ps) { WarmItem *item = [WarmItem new]; item->kind = 2; item->fc = t->fc; item->key = t->key; item->shader = cs; item->object = ps; warm_enqueue(item); g_warm_cps++; }
             g_warm_done++; return;
@@ -9434,6 +9504,22 @@ static uint64_t pool_seen_gpu(void) {
 typedef struct { uint32_t n, cap; uint32_t e[]; } pin_list;
 static pthread_mutex_t g_pin_mu = PTHREAD_MUTEX_INITIALIZER;
 static nvn_hmap g_pin = {.klen = 8}, g_pin_ret = {.klen = 8};
+// Unpinned but maybe still read: allocation → g_fence + 1 when the last entry naming it went (pin_del), whether or not a retire request came already. A draw encoded before the entry
+//   changed may still read it, so it must stay resident until that submission completes. The retire request can come late: the completion handler drains the deferred queue on
+//   its own thread (defer_drain), takes the object out of the queue, and only then calls res_remove; if the submit thread replaced the entry in between, res_remove saw no pin
+//   and took the texture out of the residency set while the open submission still named it (11-14: t_nvn_pool_tex ⑩ red about 1 in 30 runs under load). pool_pin_retire
+//   defers such a request behind that fence. Pruned of completed fences as it grows (unpin_prune)
+static nvn_hmap g_unpin = {.klen = 8}; static uint32_t g_unpin_next = 1024;
+static _Atomic uint64_t g_unpin_late;   // retire requests deferred this way (pool tables stat line: without the fix each was a texture leaving the residency set too early)
+static uint64_t pin_done(void) { return __atomic_load_n(&g_done, __ATOMIC_ACQUIRE); }   // g_done without g_mu (g_res_mu / g_pin_mu are held here): a stale value only keeps an entry longer
+static void unpin_prune(void) {   // g_pin_mu held
+    uint64_t done = pin_done();
+    for (uint32_t i = 0; i < g_unpin.cap;) {
+        if (g_unpin.vals[i] && (uint64_t)(uintptr_t)g_unpin.vals[i] <= done) { void *k; memcpy(&k, g_unpin.keys + (size_t)i * 8, 8); nvn_hm_del(&g_unpin, &k); continue; }   // the backward shift may bring another entry to i
+        i++;
+    }
+    g_unpin_next = g_unpin.n * 2 + 1024;
+}
 static void **g_pin_new; static uint32_t g_pin_nnew, g_pin_cnew;   // retired while pinned since the last pool_gpu
 static int pool_pin_keys(void *o, void *k[4]) {   // the allocations a table entry naming o keeps (always the same for the same object: a view's parent and buffer never change)
     int n = 0; k[n++] = o;
@@ -9450,6 +9536,7 @@ static void pin_add(void *k, uint32_t code) {
     pin_list *l = nvn_hm_get(&g_pin, &k);
     if (!l || l->n == l->cap) { uint32_t c = l ? l->cap * 2 : 4; pin_list *g = realloc(l, sizeof *g + c * sizeof g->e[0]); if (!g) MDIE("pool pins: out of memory"); if (!l) g->n = 0; g->cap = c; l = g; nvn_hm_put(&g_pin, &k, l); }
     l->e[l->n++] = code;
+    if (g_unpin.n) nvn_hm_del(&g_unpin, &k);   // named again: the pins cover it
     pthread_mutex_unlock(&g_pin_mu);
 }
 static int pin_del(void *k, uint32_t code) {   // 1: no entry names k any more and res_remove was asked to retire it while pinned (the caller retires it now)
@@ -9457,21 +9544,25 @@ static int pin_del(void *k, uint32_t code) {   // 1: no entry names k any more a
     pthread_mutex_lock(&g_pin_mu);
     pin_list *l = nvn_hm_get(&g_pin, &k);
     if (l) { for (uint32_t j = 0; j < l->n; j++) if (l->e[j] == code) { l->e[j] = l->e[--l->n]; break; }
-        if (!l->n) { nvn_hm_del(&g_pin, &k); free(l); ret = nvn_hm_del(&g_pin_ret, &k) != NULL; } }
+        if (!l->n) { nvn_hm_del(&g_pin, &k); free(l); ret = nvn_hm_del(&g_pin_ret, &k) != NULL;
+            nvn_hm_put(&g_unpin, &k, (void *)(uintptr_t)(g_fence + 1)); if (g_unpin.n >= g_unpin_next) unpin_prune(); } }   // submit thread: g_fence + 1 = the open submission. Also when ret: a second retire request may still be on its way (the pool's finalize and the serial's delete each queue one)
     pthread_mutex_unlock(&g_pin_mu);
     return ret;
 }
 static int pool_pin_retire(void *r) {   // res_remove (g_res_mu held): 1 = pinned, stays resident
     if (!atomic_load_explicit(&g_ptab_any, memory_order_relaxed)) return 0;
     pthread_mutex_lock(&g_pin_mu);
-    int pinned = g_pin.n && nvn_hm_get(&g_pin, &r) != NULL;
+    int pinned = g_pin.n && nvn_hm_get(&g_pin, &r) != NULL, late = 0;
+    if (!pinned && g_unpin.n) { void *v = nvn_hm_get(&g_unpin, &r); late = v && (uint64_t)(uintptr_t)v > pin_done(); }   // unpinned this submission: retire behind it (g_unpin).
+    //   Look up, not take: a texture often gets two retire requests (the pool's finalize and the serial's delete) and both may arrive late; the entry goes with unpin_prune / pin_add
     if (pinned && !nvn_hm_get(&g_pin_ret, &r)) {
         nvn_hm_put(&g_pin_ret, &r, (void *)1);
         if (g_pin_nnew == g_pin_cnew) { uint32_t c = g_pin_cnew ? g_pin_cnew * 2 : 64; void **g = realloc(g_pin_new, c * sizeof *g); if (!g) MDIE("pool pins: out of memory"); g_pin_new = g; g_pin_cnew = c; }
         g_pin_new[g_pin_nnew++] = r;
     }
     pthread_mutex_unlock(&g_pin_mu);
-    return pinned;
+    if (late) { defer_obj_release((__bridge id)r); atomic_fetch_add_explicit(&g_unpin_late, 1, memory_order_relaxed); }   // g_res_mu held: defer_obj_release only takes g_deferred_mu, which nothing holds while taking another lock
+    return pinned || late;
 }
 // Entry i of table ti names o (NULL: the dummy)
 static void pool_ent_put(int ti, uint32_t i, void *o, uint64_t rid) {
@@ -9659,8 +9750,8 @@ static uint64_t pool_gpu(int samp, int dtt, int dpf, int base, __unsafe_unretain
     g_pool_ms += (double)(mach_absolute_time() - t0) * tb.numer / tb.denom / 1e6;
     if (!(g_pool_calls & 0x3fff)) {   // how the tables stand: whole walks, buffers, entries looked up again by cause, time in all
         unsigned nseen = 0; uint64_t bseen = 0; for (int id_ = 1; id_ < g_ntreg; id_++) if (g_treg[id_].ok && pool_seen(id_)) { nseen++; bseen += pool_tex_size(&g_treg[id_].t); }
-        MLOG("pool tables: %llu calls, whole walks %llu (%.0f ms), buffers %llu; entries looked up again: registrations %llu, retired %llu, read by a shader %llu, left out %llu; %.0f ms in all; %u IDs read by a shader (%llu MB), %u left out, allocated %llu MB",
-             (unsigned long long)g_pool_calls, (unsigned long long)g_pool_walks, g_pool_walk_ms, (unsigned long long)g_pool_made, (unsigned long long)g_pool_upd_dirty, (unsigned long long)g_pool_upd_ret,
+        MLOG("pool tables: %llu calls, whole walks %llu (%.0f ms), buffers %llu; entries looked up again: registrations %llu, retired %llu (late, deferred behind the unpinning submission %llu), read by a shader %llu, left out %llu; %.0f ms in all; %u IDs read by a shader (%llu MB), %u left out, allocated %llu MB",
+             (unsigned long long)g_pool_calls, (unsigned long long)g_pool_walks, g_pool_walk_ms, (unsigned long long)g_pool_made, (unsigned long long)g_pool_upd_dirty, (unsigned long long)g_pool_upd_ret, (unsigned long long)atomic_load(&g_unpin_late),
              (unsigned long long)g_pool_upd_seen, (unsigned long long)g_pool_upd_left, g_pool_ms, nseen, (unsigned long long)(bseen >> 20), g_pleft.n, (unsigned long long)(g_dev.currentAllocatedSize >> 20)); }
     if (ti < 0) { *out = dummy_buf(); return dummy_buf_gpu(); }
     *out = g_ptab[ti].buf; return g_ptab[ti].gpu;
@@ -9672,7 +9763,7 @@ static void pool_session_reset(void) {
         free(t->obj); res_remove(t->buf); *t = (pool_tab){0}; }
     pthread_mutex_lock(&g_pin_mu);
     for (uint32_t i = 0; i < g_pin.cap; i++) if (g_pin.vals[i]) free(g_pin.vals[i]);
-    nvn_hm_clear(&g_pin, NULL); nvn_hm_clear(&g_pin_ret, NULL); g_pin_nnew = 0;
+    nvn_hm_clear(&g_pin, NULL); nvn_hm_clear(&g_pin_ret, NULL); nvn_hm_clear(&g_unpin, NULL); g_pin_nnew = 0;
     pthread_mutex_unlock(&g_pin_mu);
     atomic_store(&g_ptab_any, 0);
     for (int s = 0; s < 2; s++) pool_dset_clear(&g_pdirty[s]);
@@ -10675,7 +10766,7 @@ static int fz_next(fz_cursor *c, const uint8_t **out, op_hdr *oh, const void **o
                 continue;
             case OP_JUMP: memcpy(&c->p, a, 8); continue;
             case OP_MULTI_DRAW: c->bad = 1; return 0;   // its live draws and their argument addresses are resolved at replay (draw_multi): a lookahead cannot move work across the range (c7ba23df)
-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (c->ret_n >= (int)(sizeof c->ret / sizeof *c->ret)) { c->bad = 1; return 0; }
+            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (nvn_cmd_call_resolve(t, &t) < 0) break; if (c->ret_n >= (int)(sizeof c->ret / sizeof *c->ret)) { c->bad = 1; return 0; }
                 c->ret[c->ret_n++] = c->p + h.size; c->p = (const uint8_t *)t; continue; }
             default: break;
         }
@@ -10780,7 +10871,7 @@ static int ds_scan(const uint8_t *p, ds_st *ds, int depth) {
         switch (h.op) {
             case OP_END: return DS_RET;
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (depth >= 8) return DS_USED;
+            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (nvn_cmd_call_resolve(t, &t) < 0) break; if (depth >= 8) return DS_USED;
                 int r = ds_scan((const uint8_t *)t, ds, depth + 1); if (r != DS_RET) return r; break; }
             case OP_UPDATE_UB: if (ubd_on()) break; return DS_FREE;   // deferred in-pass updates (ubd_on) no longer end the pass: keep scanning, or a later draw in this pass that needs depth would find it unattached
             case OP_SET_RT: case OP_COPY_B2B: case OP_CLEAR_BUF: case OP_COPY_B2T: case OP_COPY_T2B: case OP_COPY_T2T: case OP_CLEAR_TEX: case OP_DISPATCH: case OP_DLSS: return DS_FREE;
@@ -11401,7 +11492,7 @@ static void sdx_walk(const uint8_t *p, int depth) {
         switch (h.op) {
             case OP_END: return;
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); sdx_walk((const uint8_t *)t, depth + 1); break; }
+            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (nvn_cmd_call_resolve(t, &t) >= 0) sdx_walk((const uint8_t *)t, depth + 1); break; }
             case OP_SET_RT: { const p_set_rt *r = set_rt_rec(a, h.size, &g_pp_rt_buf); g_pp_rt = r; g_pp_rtseq = seq; seq_push(&g_rtx_seq, &g_rtx_n, &g_rtx_cap, seq);
                 for (int k = 0; k < r->n && k < 8; k++) if (r->color[k]) sdx_bucket(r->color[k]->serial, 1);
                 if (r->depth) sdx_bucket(r->depth->serial, 1);
@@ -13790,6 +13881,9 @@ static int gmem_uses(NvShader *s) {
 static void gmem_count_draw(NvProg *pr) { g_gmem_draws_all++; for (int i = 0; i < 5; i++) if (gmem_uses(pr->sh[i])) { g_gmem_draws++; break; } }
 
 static void draw(const p_draw *dw, const p_draw_idx *di) {
+    // internal resolution: textures this draw's program holds in image slots go back to 1 before the draw (nvn_rscale_ops.inc rs_pre_draw; may end the open pass). Not on the
+    //   re-entered calls (geometry / mesh inner draws, deferred replays, the on-chip double render): the outer call or the capture already did it, and their pass must stay open
+    if (rs_on() && S.prog && !g_geo_program && !g_mtk.on && !g_defer_replaying && !g_fbc.forcing) rs_pre_draw(prog_get(S.prog));
     if (dw && dw->prim == DM_PRIM_MESH_TASKS && !g_mtk.on) { mesh_tasks_draw(dw); return; }   // NVN2 task / mesh draw: binds its stages and comes back with its pixel stage (nvn_geometry.inc)
     g_udc_precise = 0;   // only this draw's own udc_note_draw may cover its encode (a draw that returned without encoding leaves no stale cover)
     g_udc_lmap = NULL; g_udc_fsfn = 0;   // the output map is this draw's own too: the one a previous (on-chip read / merged) draw used must not judge the next pass's lookahead (pass_color_unwritten) or a geometry / tessellation draw's writes (11-06 TotK: tiled lights black outside the lit tiles)
@@ -14249,6 +14343,9 @@ static void dispatch(const p_dispatch *dp) {
     if (dp->ind) { static int once; if (!once++) MLOG("indirect dispatch: first time (the GPU reads the threadgroup counts from %#llx)", (unsigned long long)dp->ind); }
     NvShader *cs = prog_get(S.cprog)->sh[5];
     if (!cs) { RED_ONCE(28, "the dispatched program has no compute shader (or it is not mapped)"); return; }
+    rs_pre_images(cs);   // internal resolution: scaled textures in this dispatch's image slots go back to 1 before the atomic upgrade and the tensor stand-in below (nvn_rscale_ops.inc)
+    // internal resolution above 1: the stand-in picks its input by storage size (output ÷ input within 1–4) and feeds MetalFX storage sizes: enlarged textures it reads go back to 1 first, as for a real dispatch
+    if (cs->tensor == 1 && rs_up_on()) rs_pre_compute(cs);
     if (cs->tensor == 1) { tensor_standin(cs); return; }   // S2Arm 11-05: the game's own tensor-core upscaling network: not dispatched (nvn_tensor.inc)
     g_gmem_disp_all++; if (gmem_uses(cs)) g_gmem_disp++;   // 原始内存池表动态占比（gmem_count_draw）
     const void *k = (__bridge const void *)cs;
@@ -14257,11 +14354,14 @@ static void dispatch(const p_dispatch *dp) {
     id<MTLComputePipelineState> ps = hm_get_id(cps, ck);
     if ((id)ps == (id)NSNull.null) return;   // its pipeline failed before: built once, reported once (see below)
     if (!ps) {
-        // #884：Metal 编译服务对一条计算管线现编一直不返回，提交线程跟着卡死（开场剧情固定定格）。至多等 DM_NVN_CPSO_WAIT_MS（缺省 10000，0 = 不限，
-        //   同渲染「不能跳过的绘制」上限 DM_NVN_PSO_UNSAFE_WAIT_MS）：等不到就跳过这一次派发、不记失败，后台编完下一次派发直接用（pso_archive.h par_compute_wait）
-        static int64_t cwait = -2; if (cwait == -2) { const char *v = getenv("DM_NVN_CPSO_WAIT_MS"); long ms = v && *v ? strtol(v, NULL, 10) : 10000; cwait = ms > 0 ? (int64_t)ms * 1000000 : -1; }
+        // #884：Metal 编译服务对一条计算管线现编一直不返回，提交线程跟着卡死（开场剧情固定定格）。至多等 DM_NVN_CPSO_WAIT_MS（缺省 60000，0 = 不限）：
+        //   等不到就跳过这一次派发、不记失败，后台编完下一次派发直接用（pso_archive.h par_compute_wait）。缺省原为 10 秒，11-14 改 60 秒（#065090）：309 份诊断里编满 5 秒的
+        //   计算管线最终编好的 18 支，7 支用了 10–60 秒；跳过的那次派发游戏不会重发（D-EVQ3：那支 20.5 秒编好后 18 秒仍不出帧），10 秒跳过把「顿一下」变成整局卡死
+        static int64_t cwait = -2; if (cwait == -2) { const char *v = getenv("DM_NVN_CPSO_WAIT_MS"); long ms = v && *v ? strtol(v, NULL, 10) : 60000; cwait = ms > 0 ? (int64_t)ms * 1000000 : -1; }
         NSError *e = nil; uint64_t bt = bp_now(); int gave_up = 0;
+        t_par_msl_note = (fc ? [@"sampler-emulation variant of " stringByAppendingString:cs->mslnote ?: @"?"] : cs->mslnote).UTF8String; t_par_msl_src = fc ? NULL : cs->mslsrc.fileSystemRepresentation;
         ps = par_compute_wait(fc ? se_fn(cs, fc) : cs->fn, par_ckey(cs, fc), &e, cwait, &gave_up);
+        t_par_msl_note = t_par_msl_src = NULL;
         { uint64_t d_ = bp_now() - bt; g_bp_pso_n++; g_bp_pso_ns += d_; fe_sync_note(d_); }
         if (gave_up) { if (!(cs->logged & (1ull << 40))) { cs->logged |= 1ull << 40; MLOG("【红】 compute pipeline %s%s still compiling after %lld ms: this dispatch skipped (not recorded as failed; used once the background build returns)",
                                                     cs->key, fc ? " (sampler-emulation variant)" : "", (long long)(cwait / 1000000)); } return; }
@@ -14419,6 +14519,59 @@ static void copy_t2b(const p_copy_b2t *c) {
         for (int z = 0; z < nz; z++)
             enc_b_copy_texture_buffer(b, t, layer0 + c->r.zoffset + z, level, MTLOriginMake(c->r.xoffset, c->r.yoffset, 0), MTLSizeMake(c->r.width, c->r.height, 1), (__bridge id<MTLBuffer>)mb, mo + z * img, row, img);
 }
+// internal resolution above 1 (nvn_rscale.inc): a CPU readback of an enlarged storage is scaled back to the game's size with a bilinear filter, as Ryujinx's flush does
+//   (Texture.GetScaledHostTexture(1f, copy) → CopyTo(linear)): each game texel samples at (x + 0.5) × s, at 2 that is the mean of its 2x2 storage texels. scx / scy = the read level's own storage ÷ canvas size (a whole-level copy, as Ryujinx's and rs_rescale's): below level 0 it is not
+//   the setting (65 wide at 1.5: level 1 is 49 storage texels for 32 game texels; by 1.5 the last game texel sampled at 47.25 instead of 48.23 and the last column was missed).
+//   Taking one storage texel would return one of s² samples. ReadTexels runs on the caller's thread, so the copy draw of the submit thread (copy_t2t_draw) cannot be used: a small pass on the old
+//   queue's command buffer, into a scratch texture of the region's size, then a blit into a shared buffer (returned, tightly packed, one image per layer). nil = not done
+//   (the caller falls back to the nearest texel and reports it). Colour formats a render pass can write only (rs_eligible admits no integer formats; depth is read nearest)
+static id<MTLBuffer> rs_read_down(id<MTLTexture> mt, unsigned level, unsigned layer0, const NVNcopyRegion *r, int nz, double scx, double scy, size_t bpb) {
+    static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER; static id<MTLFunction> vf, ff; static id<MTLSamplerState> samp; static NSMutableDictionary<NSNumber *, id> *pso; static int failed;
+    MTLPixelFormat pf = mt.pixelFormat;
+    if (fmt_int_or_ds(pf) || mtl_fmt_block(pf) || !(mt.usage & MTLTextureUsageShaderRead) || r->width <= 0 || r->height <= 0) return nil;
+    id<MTLRenderPipelineState> ps = nil;
+    pthread_mutex_lock(&mu);
+    if (!pso && !failed) {
+        static const char *src = "#include <metal_stdlib>\nusing namespace metal;\n"
+            "vertex float4 vs(uint id [[vertex_id]]) { float2 uv = float2((id << 1) & 2, id & 2); return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1); }\n"
+            // p = the region's origin in storage texels, storage texels per game texel
+            "fragment float4 fs(float4 pos [[position]], texture2d<float> t [[texture(0)]], sampler s [[sampler(0)]], constant float4 &p [[buffer(0)]]) {\n"
+            "  float2 st = p.xy + pos.xy * p.zw; return t.sample(s, st / float2(t.get_width(), t.get_height()), level(0)); }\n";
+        NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(src) options:nil error:&e];
+        vf = [lib newFunctionWithName:@"vs"]; ff = [lib newFunctionWithName:@"fs"];
+        MTLSamplerDescriptor *sd = [MTLSamplerDescriptor new]; sd.minFilter = sd.magFilter = MTLSamplerMinMagFilterLinear; sd.sAddressMode = sd.tAddressMode = MTLSamplerAddressModeClampToEdge;
+        samp = [g_dev newSamplerStateWithDescriptor:sd];
+        if (!vf || !ff || !samp) failed = 1; else pso = [NSMutableDictionary dictionary];
+    }
+    if (pso) { id o = pso[@(pf)];
+        if (!o) { MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new]; pd.vertexFunction = vf; pd.fragmentFunction = ff; pd.colorAttachments[0].pixelFormat = pf;
+            NSError *e = nil; o = [g_dev newRenderPipelineStateWithDescriptor:pd error:&e]; pso[@(pf)] = o ? o : (id)NSNull.null; }   // a failure is remembered too
+        if (o != (id)NSNull.null) ps = o; }
+    pthread_mutex_unlock(&mu);
+    if (!ps) return nil;
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:(NSUInteger)r->width height:(NSUInteger)r->height mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget; td.storageMode = MTLStorageModePrivate;
+    size_t wb = (size_t)r->width * bpb, ib = wb * (size_t)r->height;
+    id<MTLTexture> tmp = [g_dev newTextureWithDescriptor:td]; id<MTLBuffer> out = [g_dev newBufferWithLength:ib * (size_t)nz options:MTLResourceStorageModeShared];
+    if (!tmp || !out) return nil;
+    id<MTLCommandBuffer> cb = q_cb();
+    for (int z = 0; z < nz; z++) {
+        id<MTLTexture> sv = [mt newTextureViewWithPixelFormat:pf textureType:MTLTextureType2D levels:NSMakeRange(level, 1) slices:NSMakeRange(layer0 + (unsigned)r->zoffset + (unsigned)z, 1)];
+        if (!sv) return nil;
+        MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor new];
+        rp.colorAttachments[0].texture = tmp; rp.colorAttachments[0].loadAction = MTLLoadActionDontCare; rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> en = [cb renderCommandEncoderWithDescriptor:rp];
+        float p[4] = {(float)(r->xoffset * scx), (float)(r->yoffset * scy), (float)scx, (float)scy};
+        [en setRenderPipelineState:ps]; [en setFragmentTexture:sv atIndex:0]; [en setFragmentSamplerState:samp atIndex:0]; [en setFragmentBytes:p length:sizeof p atIndex:0];
+        [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3]; [en endEncoding];
+        id<MTLBlitCommandEncoder> b = enc_b_begin(cb);
+        [b copyFromTexture:tmp sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake((NSUInteger)r->width, (NSUInteger)r->height, 1)
+                  toBuffer:out destinationOffset:(NSUInteger)z * ib destinationBytesPerRow:wb destinationBytesPerImage:ib];
+        [b endEncoding];
+    }
+    DM_BLOCK_BEGIN(); int ok = cb_run(cb); DM_BLOCK_END();
+    return ok ? out : nil;
+}
 // CPU texture read (ReadTexels): for packaged textures the pool memory is the ground truth, de-layout and read directly; the rest are read back from the MTLTexture by blit (the caller has already waited for the GPU per NVN rules)
 void nvn_be_read_texels(const tex_t *t, unsigned level, unsigned layer0, const NVNcopyRegion *r, uint8_t *dst, size_t row, size_t img) {
     xv_check(t->serial, level, layer0, "CPU readback");
@@ -14450,7 +14603,14 @@ void nvn_be_read_texels(const tex_t *t, unsigned level, unsigned layer0, const N
     mtl_finish_gpu();
     if (!is3d && bw == 1 && bh == 1 && rs_state(mt) == RS_SCALED) {   // S2Arm internal resolution: read the storage rectangle, then take each game texel's nearest storage texel on the CPU
         double sc = g_rs; long sx = r->xoffset, sy = r->yoffset, sw = r->width, sh = r->height; rs_rect(sc, &sx, &sy, &sw, &sh);   // (this runs on the caller's thread: no copy draw)
-        long lw = (long)MAX(mt.width >> level, 1u), lh = (long)MAX(mt.height >> level, 1u); if (sx + sw > lw) sw = lw - sx; if (sy + sh > lh) sh = lh - sy;
+        long lw = (long)MAX(mt.width >> level, 1u), lh = (long)MAX(mt.height >> level, 1u);
+        if (sc > 1.0 && !mtl_fmt_depth(mt.pixelFormat)) {   // an enlarged storage is scaled back linearly (rs_read_down); depth keeps the nearest texel below, as the depth copies do
+            NSUInteger cw = 0, ch = 0; rs_canvas(mt, level, &cw, &ch);   // this level's own ratio (see rs_read_down)
+            id<MTLBuffer> lb = cw && ch ? rs_read_down(mt, level, layer0, r, nz, (double)lw / (double)cw, (double)lh / (double)ch, (size_t)bpb) : nil;
+            if (lb) { for (int z = 0; z < nz; z++) for (int y = 0; y < r->height; y++) memcpy(dst + z * img + (size_t)y * row, (uint8_t *)lb.contents + ((size_t)z * (size_t)r->height + (size_t)y) * (size_t)r->width * (size_t)bpb, (size_t)r->width * (size_t)bpb); return; }
+            RED_ONCE(190, "internal resolution: ReadTexels of enlarged storage ser=%llu (format %lu) not scaled back linearly: each game texel takes its nearest storage texel", (unsigned long long)t->serial, (unsigned long)mt.pixelFormat);
+        }
+        if (sx + sw > lw) sw = lw - sx; if (sy + sh > lh) sh = lh - sy;
         if (sw <= 0 || sh <= 0) { memset(dst, 0, img * nz); return; }
         size_t swb = (size_t)sw * bpb;
         id<MTLBuffer> sb = [g_dev newBufferWithLength:swb * (size_t)sh * nz options:MTLResourceStorageModeShared];
@@ -14649,6 +14809,7 @@ static void copy_t2t(const p_copy_t2t *c) {
     // S2Arm widen: the same copied the same way between two textures of one game size (11-02 Mario & Sonic Tokyo 2020: each frame copies its widened 1920x1080 canvas, drawn in the
     //   handheld 1280x720 corner, into the unwidened swap-chain image; each side mapped by its own storage turned that into a squeezing copy and the presented image stayed 16:9)
     else if (c->src && c->dst && c->src->d.width == c->dst->d.width && c->src->d.height == c->dst->d.height && !memcmp(&c->sr, &c->dr, sizeof c->sr)) wd_widen_resolve_dst(c->src, c->dst);
+    if (rs_up_on() && !(c->flags & DM_COPY_RESOLVE)) rs_copy_up(c->src, c->dst);   // internal resolution above 1: an enlarged source copied into a window texture not scaled yet enlarges it first (nvn_rscale_ops.inc)
     if ((g_wd_widened || rs_on()) && c->src && c->dst) {
         id<MTLTexture> s = tex_mtl(c->src), d = tex_mtl(c->dst);
         unsigned sl = c->has_sv && c->sv.set_levels ? c->sv.base_level : 0, dl = c->has_dv && c->dv.set_levels ? c->dv.base_level : 0;
@@ -15281,6 +15442,20 @@ void nvn_be_exec(const uint8_t *p) {
             case OP_BEGIN: break;
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
             case OP_CALL: { uint64_t t; memcpy(&t, a, 8);
+                {   // #768338 安全阀 + 探针（hle_nvn.c nvn_cmd_call_target）：目标块已被别的录制复用 → 记现场、跳过这次调用；目标已被覆盖但还在隔离区 → 照常执行，记一行
+                    uint64_t to; int ck = nvn_cmd_call_resolve(t, &to);
+                    if (ck == 2) { static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+                        if (k <= 4 || !(k & (k - 1))) MLOG("command-list call follows the device address: target %#llx was re-recorded at the same command memory, running %#llx (as the device does; %llu so far)",
+                                                           (unsigned long long)t, (unsigned long long)to, (unsigned long long)k);
+                        t = to; ck = 0; }
+                    if (ck < 0) { static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+                        if (k <= 8 || !(k & (k - 1))) MLOG("【红】 command-list call into reused host blocks: target %#llx is in the command-record area but is no recording's handle (its recording was overwritten and the blocks reused): call skipped; caller list %p, depth %d, frame %llu (%llu so far)",
+                                                           (unsigned long long)t, list, g_ret_n - base, (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)k);
+                        break; }
+                    if (ck > 0) { static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+                        if (k <= 8 || !(k & (k - 1))) MLOG("【黄】 command-list call into an overwritten recording still in quarantine: target %#llx (blocks intact, run as recorded); caller list %p, depth %d, frame %llu (%llu so far)",
+                                                           (unsigned long long)t, list, g_ret_n - base, (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)k); }
+                }
                 if (g_ret_n - base >= CALL_DEPTH_MAX || !call_push(p + h.size, list)) {
                     static int red; if (!red++) MLOG("【红】 command-list call nested %d deep (limit %d, or the return stack could not grow): skipped this call; the commands may call back into themselves (first case)", g_ret_n - base, CALL_DEPTH_MAX);
                     break; }
@@ -15428,6 +15603,7 @@ static id<MTLRenderPipelineState> g_blit_pso; static MTLPixelFormat g_blit_fmt;
 static id<MTLSamplerState> g_blit_samp;
 static uint64_t g_present_n;
 uint64_t mtl_present_count(void) { return g_present_n; }   // Actual present count (heat attribution DM_HEAT computes the present frame rate)
+uint64_t s2a_direct_draws(void) { return g_stat_draw; }   // 编码出去的绘制总数（runtime/src/direct_prompt.c「画面没出来」按名字取：起局后一直为 0 = 上屏的全是空帧）
 void mtl_res_snapshot(mtl_res_count *out) {
     memset(out, 0, sizeof *out);
     out->pso = g_pso.n;
@@ -15789,6 +15965,7 @@ void dm_gfx_shot_at(long k, const char *path) {
     pthread_mutex_unlock(&g_shotq_mu);
 }
 // DM_NVN_SHOT_OUT=WIDTHxHEIGHT (for picture quality metrics): the present-frame screenshot instead captures the result "upscaled to this resolution by present_encode", i.e. the picture the player sees on screen; screen=0 (texture dump) is unaffected
+static id<MTLTexture> present_raw_src(id<MTLTexture> src);   // shot reads an enlarged sRGB window texture through it
 static void shot(id<MTLTexture> src, const char *path, int screen, const int crop[4]) {
     static int out_w = -1, out_h;
     if (out_w < 0) {
@@ -15809,12 +15986,25 @@ static void shot(id<MTLTexture> src, const char *path, int screen, const int cro
     if (read.pixelFormat != MTLPixelFormatRGBA8Unorm && read.pixelFormat != MTLPixelFormatRGBA8Unorm_sRGB &&
         read.pixelFormat != MTLPixelFormatBGRA8Unorm && read.pixelFormat != MTLPixelFormatBGRA8Unorm_sRGB) { MLOG("【红】 screenshot does not support format %lu", (unsigned long)read.pixelFormat); return; }
     size_t w = read.width, h = read.height, row = w * 4;
-    id<MTLBuffer> buf = [g_dev newBufferWithLength:row * h options:MTLResourceStorageModeShared];
+    id<MTLBuffer> buf = nil;
+    // internal resolution above 1 (nvn_rscale.inc): an enlarged window texture is saved at the game's size, not the storage's (frame scoring and page matching compare shots of one size):
+    //   the whole storage scaled back linearly (rs_read_down, as ReadTexels of an enlarged storage; the lower-left flip below still applies). Not done = red, no file
+    //   (a storage-sized picture under the same name would be compared as if it were the game's). An sRGB storage is read through its non-sRGB view (present_raw_src): the
+    //   stored bytes are what the unscaled path below writes and what the present and the grab sample, so they are what gets mixed (decoded first, a red / green pair gave 188 for 128)
+    if (screen && read == src && rs_up_on() && rs_state(src) == RS_SCALED) {
+        NSUInteger cw = rs_cw(src), ch = rs_ch(src); NVNcopyRegion r = {0, 0, 0, (int)cw, (int)ch, 1};
+        buf = cw && ch ? rs_read_down(present_raw_src(src), 0, 0, &r, 1, (double)src.width / (double)cw, (double)src.height / (double)ch, 4) : nil;
+        if (!buf) { RED_ONCE(192, "internal resolution: screenshot of the enlarged window texture %lux%lu (format %lu) could not be scaled back to the game's %lux%lu: %s not written", (unsigned long)src.width, (unsigned long)src.height, (unsigned long)src.pixelFormat, (unsigned long)cw, (unsigned long)ch, path); return; }
+        w = cw; h = ch; row = w * 4;
+    }
+    if (!buf) {
+    buf = [g_dev newBufferWithLength:row * h options:MTLResourceStorageModeShared];
     id<MTLCommandBuffer> cb = q_cb();
     id<MTLBlitCommandEncoder> b = [cb blitCommandEncoder];
     [b copyFromTexture:read sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, 1)
               toBuffer:buf destinationOffset:0 destinationBytesPerRow:row destinationBytesPerImage:row * h];
     [b endEncoding]; if (!cb_run(cb)) return;
+    }
     if (screen && read == src && atomic_load_explicit(&g_origin_ll, memory_order_relaxed)) {   // lower-left origin: the window image is stored bottom-up (see g_origin_ll)
         uint8_t *p = buf.contents, *tmp = malloc(row);
         if (tmp) { for (size_t y = 0; y < h / 2; y++) { memcpy(tmp, p + y * row, row); memcpy(p + y * row, p + (h - 1 - y) * row, row); memcpy(p + (h - 1 - y) * row, tmp, row); } free(tmp); } }
@@ -16206,6 +16396,19 @@ static int present_blit_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MTLT
 #include "nvn_present_fx.inc"
 #include "nvn_dlss.inc"   // NVN2 EvaluateDlss → MetalFX temporal upscale
 #include "nvn_tensor.inc"   // Switch 2 tensor-core upscaling networks (HMMA compute) → MetalFX spatial upscale stand-in
+// internal resolution above 1 (nvn_rscale.inc): the anti-aliasing textures of an enlarged window texture. present_aa_prepare sizes its four textures by the crop it is given
+//   (the storage's: s² times the game's, 4 slots; 5120x2880 at 4 is about 200 MB a slot). When the storage is not smaller than the picture's viewport on the target (not an
+//   enlargement: no MetalFX either, fx == nil), it is given a crop of the viewport's size instead: the input copy scales the storage down into it (the same copy, the real crop) and
+//   the anti-aliasing runs at the resolution shown. A storage smaller than the viewport keeps its own size (anti-aliasing before the enlargement, as at 1, and MetalFX's input size).
+//   Sources that are not enlarged get their crop back unchanged
+static const int *rs_aa_crop(id<MTLTexture> src, id<MTLTexture> dst, const int crop[4], NvPresentFX *fx, int tmp[4]) {
+    if (fx || !rs_up_on() || rs_state(src) != RS_SCALED) return crop;
+    NSUInteger w = crop && (crop[2] || crop[3]) ? (crop[2] > 0 ? (NSUInteger)crop[2] : 0) : src.width, h = crop && (crop[2] || crop[3]) ? (crop[3] > 0 ? (NSUInteger)crop[3] : 0) : src.height;
+    if (!w || !h) return crop;   // an invalid crop is reported where it always was
+    pf_vp pv = pf_viewport(dst.width, dst.height, w, h); NSUInteger vw = (NSUInteger)pv.w, vh = (NSUInteger)pv.h;
+    if (!vw || !vh || vw > w || vh > h || (vw == w && vh == h)) return crop;
+    tmp[0] = tmp[1] = 0; tmp[2] = (int)vw; tmp[3] = (int)vh; return tmp;
+}
 // mirror (iOS split-view reflection, may be nil): the final picture drawn a second time into the small reflection drawable,
 //   by the same blit with the same inputs as the one into dst (ios/play_reflection.m s2a_ios_reflection_drawable)
 static int present_encode_slot(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTexture> dst, id<MTLTexture> mirror, const int crop[4], int slot) {
@@ -16215,7 +16418,7 @@ static int present_encode_slot(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<M
     if (!g_present_aa && !fx) return present_blit(cb, src, dst, crop, flip) && (!mirror || present_blit(cb, src, mirror, crop, flip));
     id<MTLTexture> out;
     if (g_present_aa) {
-        NvPresentAA *s = present_aa_prepare(slot, src, crop);
+        int ac[4]; NvPresentAA *s = present_aa_prepare(slot, src, rs_aa_crop(src, dst, crop, fx, ac));   // rs_aa_crop
         if (!s || !present_blit(cb, src, s->input, crop, flip) || !present_aa_encode(cb, s, NO)) return 0;
         out = s->output;
     } else {
@@ -16244,7 +16447,7 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     if (!g_present_aa && !fx) return present_blit_m4(cb, src, dst, crop, g_present_uv[slot], g_present_args, flip) && (!mirror || present_blit_m4(cb, src, mirror, crop, g_present_uv[slot], g_present_args, flip));
     id<MTLTexture> out;
     if (g_present_aa) {
-        NvPresentAA *s = present_aa_prepare(slot, src, crop);
+        int ac[4]; NvPresentAA *s = present_aa_prepare(slot, src, rs_aa_crop(src, dst, crop, fx, ac));   // rs_aa_crop
         if (!s || !present_blit_m4(cb, src, s->input, crop, s->cropUV, s->cropTable, flip) || !present_aa_encode(cb, s, YES)) return 0;
         out = s->output;
     } else {
@@ -16293,6 +16496,12 @@ static void rl_row(const uint8_t *q, NSUInteger w, NSUInteger h, unsigned long l
     for (NSUInteger k = 0; k < ng; k++) fprintf(g_rlf, "%02x", g[k]);
     fputc('\n', g_rlf); fflush(g_rlf); pthread_mutex_unlock(&g_rlmu);
 }
+// 出图补帧（nvn_present_fi.inc）用的三个 Metal 4 包装：补帧有自己一套命令槽，在补帧队列上与出图线程的 g_present_cb 并行编码提交，
+//   重置分配器并开始 / 在指定命令缓冲上开渲染编码器 / 提交一条命令缓冲这三处原先没有包装（enc_r_begin 只开在 g_cb 上）；补帧代码里一律用 id（MTL4 棘轮，11-14）
+API_AVAILABLE(macos(26.0), ios(26.0)) static inline void m4_begin_on(id cb, id alloc) { [(id<MTL4CommandAllocator>)alloc reset]; [cb beginCommandBufferWithAllocator:alloc]; }   // 槽的上一次提交已做完（slot_free）才重置
+API_AVAILABLE(macos(26.0), ios(26.0)) static inline id m4_render_on(id cb, id d) { return [(id<MTL4CommandBuffer>)cb renderCommandEncoderWithDescriptor:d]; }
+API_AVAILABLE(macos(26.0), ios(26.0)) static inline void m4_commit_one(id cb, id o) { id<MTL4CommandBuffer> b[] = {cb}; [g_q4 commit:b count:1 options:o]; }
+#include "nvn_present_fi.inc"   // 出图补帧（没有社区帧率补丁的 30 帧款缺省补到 60，开关按游戏）
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (mtl_gpu_halted()) { atomic_fetch_add_explicit(&g_gpu_refused, 1, memory_order_relaxed); return 0; }   // GPU 安全停：不取画布、不交上屏（调用方按「没交」把票记完成）
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
@@ -16312,16 +16521,24 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     // S2Arm: a crop reaching past the source (10-28 Splatoon 3 direct full screen: the game sets a 2346x1080 crop for a few frames while the swap chain texture is still
     //   1920x1080) is shown as the part inside the source, 16:9 with black bars (pf_crop_fit), instead of dropping the frame with "present crop out of bounds";
     //   once the source covers the crop it is used as given again. Everything below (present, grab, screenshots, fit check, AA) takes the fitted crop
-    int rsc[4]; if (crop && rs_state(src) == RS_SCALED) {   // S2Arm internal resolution: a scaled present source (none expected: display textures are never scaled) takes the crop in storage texels
-        long x = crop[0], y = crop[1], w = crop[2], h = crop[3]; if (!w && !h) { w = (long)rs_cw(src); h = (long)rs_ch(src); }
-        rs_rect(g_rs, &x, &y, &w, &h); rsc[0] = (int)x; rsc[1] = (int)y; rsc[2] = (int)w; rsc[3] = (int)h; crop = rsc; }
-    int fitted[4]; int fit_rc = pf_crop_fit(crop, src.width, src.height, fitted);
+    // internal resolution above 1 (nvn_rscale.inc): window textures are enlarged too, so the present source's storage can be s times the game's size. Everything in game units
+    //   (the game's crop and its fitting, the picture size the full-screen check judges, the windowless grab's size) is taken on the canvas cvw x cvh (= the storage when not scaled:
+    //   nothing changes at 1 or below, where display textures are never scaled); the crop goes to storage texels only after that, for the present encoding, the grab and the
+    //   screenshot's present_encode (as Ryujinx Window.Present: crop × ScaleFactor, left / top down, right / bottom up). It was converted before the fitting, and the sizes below read the storage
+    int rs_src = rs_state(src) == RS_SCALED; NSUInteger cvw = rs_src ? rs_cw(src) : src.width, cvh = rs_src ? rs_ch(src) : src.height;
+    int fitted[4]; int fit_rc = pf_crop_fit(crop, cvw, cvh, fitted);
     { static int last; static uint64_t n;
       if (fit_rc == 1 && (last != 1 || ++n % 600 == 0)) MLOG("present crop %d,%d %dx%d is larger than the source texture %lux%lu: showing %d,%d %dx%d at 16:9 with black bars until the source covers it",
-                              crop[0], crop[1], crop[2], crop[3], (unsigned long)src.width, (unsigned long)src.height, fitted[0], fitted[1], fitted[2], fitted[3]);
-      if (fit_rc != 1 && last == 1) { MLOG("present crop covered by the source texture %lux%lu again: crop used as given", (unsigned long)src.width, (unsigned long)src.height); n = 0; }
+                              crop[0], crop[1], crop[2], crop[3], (unsigned long)cvw, (unsigned long)cvh, fitted[0], fitted[1], fitted[2], fitted[3]);
+      if (fit_rc != 1 && last == 1) { MLOG("present crop covered by the source texture %lux%lu again: crop used as given", (unsigned long)cvw, (unsigned long)cvh); n = 0; }
       last = fit_rc; }
     if (crop && fit_rc >= 0) crop = fitted;
+    // the picture in game units (the crop, else the whole canvas) and the windowless grab's size (the canvas's height, the crop's aspect), before the crop becomes storage texels
+    NSUInteger pcw = crop && (crop[2] || crop[3]) ? (NSUInteger)crop[2] : cvw, pch = crop && (crop[2] || crop[3]) ? (NSUInteger)crop[3] : cvh;
+    CGSize nolayer_sz = crop && crop[2] > 0 && crop[3] > 0 ? CGSizeMake(round((double)crop[2] * cvh / crop[3]), cvh) : CGSizeMake(cvw, cvh);
+    int rsc[4]; if (crop && rs_src) {   // S2Arm internal resolution: a scaled present source takes the crop in storage texels
+        long x = crop[0], y = crop[1], w = crop[2], h = crop[3]; if (!w && !h) { w = (long)cvw; h = (long)cvh; }
+        rs_rect(g_rs, &x, &y, &w, &h); rsc[0] = (int)x; rsc[1] = (int)y; rsc[2] = (int)w; rsc[3] = (int)h; crop = rsc; }
     // DM_NVN_REGLUM=x0,y0,x1,y1:file (normalized coordinates): read back this region on every present and record "present sequence number, present time ns, region mean luminance, subsampled grayscale thumbnail (hex)" (diagnostic: verify that animation speed is independent of frame rate).
     // Does not wait for the GPU and does not disturb frame pacing. Metal 4 with a window: the copy goes into this present's own command buffer, after the present blit and behind the same
     //   queue barrier, so the row is exactly the picture this present showed. A classic-queue command buffer (the only way before 11-06, still used without a window or on Metal 3) is not
@@ -16378,16 +16595,17 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     //   16:9 pages no longer matched (10-26 Mario Kart 8 Deluxe direct widen: main menu mean difference 13.2 against 10). An unwidened 1280x720 crop still gives 1920x1080
     // 无窗口（Mac 局）也判几何：按真机屏的宽高比（16:9 × k ÷ ky，宽屏核心的屏）摆一块虚拟画布交 fit_geom，与真机出图层（host_adapt.m out_aspect）同一口径。
     //   11-02 饥荒：游戏往没放宽的 1920 目标上画，真机 2.17 屏左右留黑边，Mac 普查无窗口局从不判几何、截图又按画面自己的比例出，满屏判「过」（假绿）
-    if (!layer) { NSUInteger icw = crop && (crop[2] || crop[3]) ? (NSUInteger)crop[2] : src.width, ich = crop && (crop[2] || crop[3]) ? (NSUInteger)crop[3] : src.height;
+    if (!layer) { NSUInteger icw = pcw, ich = pch;   // game units (pcw x pch above; was the crop / source size read here)
         float ky = s2a_widen_ky(); fit_geom(16.0 / 9.0 * s2a_widen_k() / (ky > 0 ? ky : 1) * ich, ich, icw, ich); }
-    if (!layer) { if (g_grab_cb) grab_present(src, crop, crop && crop[2] > 0 && crop[3] > 0 ? CGSizeMake(round((double)crop[2] * src.height / crop[3]), src.height) : CGSizeMake(src.width, src.height), ticket); return 0; }
+    if (!layer) { if (g_grab_cb) grab_present(src, crop, nolayer_sz, ticket); return 0; }   // nolayer_sz (above; the same expression on the canvas)
     if (!g_m3 && g_present_layer_resident != layer) { [g_q4 addResidencySet:layer.residencySet]; g_present_layer_resident = layer; }   // the layer's residency set is macOS / iOS 26 on; Metal 3 presents through the command buffer
 #if TARGET_OS_OSX
     if (!layer.displaySyncEnabled) layer.displaySyncEnabled = YES;   // Windowed mode follows the display's vsync to prevent tearing
 #endif
     present_pipeline(layer.pixelFormat);   // Same as the original path: the first frame compiles the pipeline before taking the drawable
-    fit_geom(layer.drawableSize.width, layer.drawableSize.height, crop && (crop[2] || crop[3]) ? (NSUInteger)crop[2] : src.width, crop && (crop[2] || crop[3]) ? (NSUInteger)crop[3] : src.height);
+    fit_geom(layer.drawableSize.width, layer.drawableSize.height, pcw, pch);   // game units (was the crop / source size read here)
     if (g_grab_cb) grab_present(src, crop, layer.drawableSize, ticket);   // Game picture needed by the whole-window screenshot (peek without the lock first; the real take locks inside the function)
+    if (fi_wanted() && !supplied) { if (@available(macOS 26.0, iOS 26.0, *)) { int fr = fi_frame(src, crop, layer, period, ticket); if (fr >= 0) return fr; } }   // 实验：出图补帧接手这一帧
     uint64_t dt0 = now_ns();
     id<CAMetalDrawable> dr = supplied ? supplied : [layer nextDrawable];
     if (!supplied) g_drawable_ns += now_ns() - dt0;

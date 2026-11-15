@@ -129,6 +129,18 @@ static pthread_cond_t g_sp_cv = PTHREAD_COND_INITIALIZER;
 static struct { uint64_t value; int used; } g_ctr[SP_COUNTERS];
 // ev：游戏等的 SystemEventType（0x30 字节）
 static struct { _Alignas(16) uint8_t ev[0x40]; int used, armed; uint64_t hev; cv_sync want; } g_slot[SP_SLOTS];
+static unsigned g_slot_gen;   // 槽表属于哪一局（会话代号）
+// 持 g_sp_mu。槽的 SystemEvent 挂的读端句柄在那一局的句柄表里：进程内重启后句柄表整张关掉、重新编号，旧句柄在新一局里不存在
+//   （11-14 D-VHSE：重启后第一次建同步点事件就复用了上一局缓存的事件，游戏等它 → svc 回 InvalidHandle 0xe401，SDK 中止）。
+//   换局后头一次碰槽表：放掉宿主替旧事件持的那份引用（句柄那份已随句柄表关掉），整张清空，用到时在新一局里重新建、重新挂
+static void sp_slots_for_session_locked(void) {
+    unsigned g = s2a_session_generation ? s2a_session_generation() : 0;
+    if (g == g_slot_gen) return;
+    int n = 0;
+    for (int i = 0; i < SP_SLOTS; i++) { if (g_slot[i].hev) { s2a_event_release(g_slot[i].hev); n++; } memset(&g_slot[i], 0, sizeof g_slot[i]); }
+    if (n) LOG("Switch 2 视频：换局（会话 %u → %u），上一局的 %d 个同步点事件作废，用到时重新建", g_slot_gen, g, n);
+    g_slot_gen = g;
+}
 
 static int sp_reached_locked(const cv_sync *h) {
     if (!h->id_inv && !h->mode && !h->value) return 1;
@@ -179,6 +191,7 @@ static int sp_wait(const cv_sync *h, uint64_t timeout_ns) {
 static uint32_t sp_slot(const void *t) { uint32_t s = *(const uint32_t *)t; if (s >= SP_SLOTS || !g_slot[s].used) die("Switch 2 视频：同步点事件 %p 的槽 %u 不在用", t, s); return s; }
 static Result sp_create(uint32_t *t) {
     pthread_mutex_lock(&g_sp_mu);
+    sp_slots_for_session_locked();
     int s = -1; for (int i = 0; i < SP_SLOTS; i++) if (!g_slot[i].used) { s = i; break; }
     if (s >= 0) { g_slot[s].used = 1; g_slot[s].armed = 0; }
     uint64_t ev = s >= 0 ? g_slot[s].hev : 0;
@@ -920,10 +933,19 @@ static void *cv_worker(void *arg) {
 // 持 mu
 static void cv_drop_inputs(cvdec *d) { while (d->qn) { free(d->q[d->qh].p); d->qh = (d->qh + 1) % d->qcap; d->qn--; } }
 
+static void cv_teardown(cvdec *d, int guest_event);
 static Result cv_init(void *t, int codec, uint32_t w, uint32_t h) {
     w &= 0xffff; h &= 0xffff;
     // H.264 宿主还没接（VideoToolbox 的 H.264 每台苹果设备都有，接上就是硬件解码）：不出假画面，初始化直接失败，游戏的播放库随即中止
     if (codec == CV_H264) { LOG("【红】Switch 2 视频：H.264 解码器（%ux%u）宿主还没接：初始化回失败", w, h); return RES_FAIL; }
+    // 同一块对象没 Finalize 又 Initialize（12 份诊断，0.3.5–0.3.10，时之笛过场 / 玩家开始事件后）：真机 SDK 不中止，照新参数重新初始化。
+    //   原先这里 die（「初始化两次」）。先把旧的宿主解码器收掉（停线程、放缓冲与同步点），游戏对象里的事件不销毁（已归这一次），再按新的建
+    {
+        pthread_mutex_lock(&g_dec_mu); cvdec *old = NULL;
+        for (int i = 0; i < 64; i++) if (g_dec[i] && g_dec[i]->guest == t) { old = g_dec[i]; g_dec[i] = NULL; break; }
+        pthread_mutex_unlock(&g_dec_mu);
+        if (old) { LOG("【黄】Switch 2 视频：解码器 %p 没 Finalize 又初始化：先收掉旧的 %s 解码器，按新的 %ux%u 重建", t, cv_name[old->codec], w, h); cv_teardown(old, 0); }
+    }
     cvdec *d = calloc(1, sizeof *d); if (!d) die("Switch 2 视频：内存不足");
     d->guest = t; d->codec = codec; d->w = (int)w; d->h = (int)h; d->last = -1;
 #if TARGET_OS_OSX
@@ -949,14 +971,21 @@ static Result cv_init(void *t, int codec, uint32_t w, uint32_t h) {
 static void cv_fini(void *t) {
     cvdec *d = cv_of(t);
     pthread_mutex_lock(&g_dec_mu); for (int i = 0; i < 64; i++) if (g_dec[i] == d) g_dec[i] = NULL; pthread_mutex_unlock(&g_dec_mu);
+    cv_teardown(d, 1);
+}
+// 收掉一个宿主解码器（已从 g_dec 摘下）。guest_event：连游戏对象里的 SystemEvent 一起销毁（正常 Finalize）；
+//   0 = 游戏在同一块对象上重新初始化，那块事件已归新的一次所有，只放掉我们这边的引用
+static void cv_teardown(cvdec *d, int guest_event) {
+    void *t = d->guest;
     pthread_mutex_lock(&d->mu); d->quit = 1; pthread_cond_broadcast(&d->cv); pthread_mutex_unlock(&d->mu);
     DM_BLOCK_BEGIN(); pthread_join(d->th, NULL); DM_BLOCK_END();
     cv_reset_codec(d); cv_drop_inputs(d); free(d->q); free(d->vt_u); free(d->vt_v);
     sp_free(d->ctr);
     static void (*destroy)(void *);
-    if (!destroy) destroy = (void (*)(void *))gsym("_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE");
-    // 托管句柄随之关掉
-    destroy((uint8_t *)t + 8);
+    if (guest_event) {
+        if (!destroy) destroy = (void (*)(void *))gsym("_ZN2nn2os18DestroySystemEventEPNS0_15SystemEventTypeE");
+        destroy((uint8_t *)t + 8);   // 托管句柄随之关掉
+    }
     s2a_event_release(d->ready_ev);
     LOG("Switch 2 视频：%s 解码器结束，出帧 %llu；解码 %llu 包，每包平均 %.2f ms、最长 %.2f ms；写进图像每帧平均 %.2f ms（%s）", cv_name[d->codec], (unsigned long long)d->frames, (unsigned long long)d->dec_n,
         d->dec_n ? d->dec_ns / 1e6 / (double)d->dec_n : 0.0, d->dec_max / 1e6, d->wr_n ? d->wr_ns / 1e6 / (double)d->wr_n : 0.0,
