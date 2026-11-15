@@ -168,6 +168,10 @@ VKAPI_ATTR void VKAPI_CALL __wrap_vkGetPhysicalDeviceFormatProperties(VkPhysical
 }
 
 extern uint32_t nvn_gpu_vk_test_push_capacity(nvn_gpu_cmd c, nvn_gpu_stage st);
+extern uint32_t nvn_gpu_vk_test_buf_refs(nvn_gpu_buf b);    // #1194：缓冲现在被几段持有（句柄必须还活着）
+extern uint32_t nvn_gpu_vk_test_cmd_nrefs(nvn_gpu_cmd c);   // #1194：一段命令的引用表现有几条
+extern uint32_t nvn_gpu_vk_test_cmd_refseen_hits(nvn_gpu_cmd c);   // #1194：这一段里备忘命中（直接返回）了几次
+extern void nvn_gpu_vk_test_ref_seen(int on);               // #1194：对照档：0 = 备忘关（每次都走原路径），1 = 产品行为
 extern void nvn_gpu_vk_test_emit_counts(nvn_gpu_cmd c, uint32_t out[9]);   // #708：管线、视口、裁剪、混合常量、模板、深度偏移、顶点缓冲、索引缓冲、push 各录了几次
 extern void nvn_gpu_vk_test_set_fault(int mode);
 extern void nvn_gpu_vk_test_fail_fence(uint64_t signal);
@@ -6452,6 +6456,145 @@ static void c202_stg_pool(void) {
     c202_arm(0, "对照档 nvk_stg_std=0");
 }
 
+// ---- C206（#1194）：段内「已引用句柄」备忘 ----
+// 背景：回放核心每笔绘制都把整张绑定表交给 nvn_gpu_bind，后端对表里每一项 cmd_ref 一次（取 g_mu、查 released、计数 +1、追加引用表），
+// 真机世界场景每帧约 1.7 万次，而同一段里反复绑的是同一批句柄。同一段里引用过的句柄，段一直持有它的一份引用（引用表在段完成时才归还），
+// 再引用只是白付代价；备忘（产品里恒开）把第二次起的引用直接放过去，条件是「本段已成功引用过它、且那之后没有任何句柄被 release」。
+// 用 buf_use（走同一个 cmd_ref）驱动缓冲句柄；对照档靠测试钩子 nvn_gpu_vk_test_ref_seen(0) 把备忘关掉（每次都走原路径），臂间只差这一个变量。
+// 每次引用要么命中备忘（段里的 refseen_hits 加一）、要么追加一条引用表项（报错的除外），所以「命中数 + 引用表条数 = 引用次数」是恒等式。
+// 期望（手算，不取自被测实现；失败段会让时间线进失败终态，所以 ③ 单独一个会话）：
+//  会话一：
+//   ① 同一段对同一个缓冲 buf_use 1000 次：引用表条数 = 缓冲被持有的份数；缺省档 1 / 1、命中 999，对照档 1000 / 1000、命中 0；
+//   ② 再把两个缓冲交替各用 500 次（累计 2000 次引用）：引用表每一条都对应缓冲上的一份持有，所以「引用表条数 = 两个缓冲持有数之和」两档都成立，
+//      「命中数 + 引用表条数 = 2000」两档都成立；对照档恰好 2000 条；缺省档至少 2 条（a、b 各一）、至多 1001 条（a、b 恰好撞槽时每次交替都重记）；
+//   ③ release 其中一个 a（段还持着它，指针有效），先 use 另一个 b（让备忘见到新代号：代号变了必须整表清空，只改代号不清表就会留着 a 的旧项），
+//      再 use a：两档都必须 E_ARG——备忘不能把「release 之后仍在使用」放过去，
+//      报错带「release 之后仍在使用句柄（buf 」与「录制于 nvn_gpu_buf_use:」；失败段完成后：被 release 的缓冲退休恰好 1 次，
+//      另一个缓冲的持有数回到 0（归还次数与引用次数对得上：多记、少记都会让它不为 0 或者让退休次数不对）；
+//      报错的那次不许记进备忘（成功引用之后才写）：报错之后再 use 同一个 a 一次（粘滞错误只留首错，外面看不出差别，所以读命中数），
+//      release 之后这三次引用（b、a、a）的命中数一次都不许增加（两档都是 0：代号变了备忘已清空、报错的又不写）；
+//  会话二：
+//   ④ 同一段里同一个缓冲先用 10 次，release 一个无关的缓冲，再用 10 次：对照档 20 条；缺省档 ≤ 2 条（无关的 release 也让备忘作废、重记一次）；
+//      然后提交成功，段完成后持有数回到 0；
+//   ⑥ 段 A 完成归还之后，同一个缓冲在新段 B 里再引用：段 B 的备忘从空开始、不继承段 A 的：用 5 次 → 缺省档引用表恰好 1 条、持有数恰好 1、命中 4，
+//      对照档 5 条、持有数 5、命中 0；提交、完成后持有数回到 0（段 B 要是继承了段 A 的备忘，第一次引用就直接放过去，持有数是 0，缓冲没人护着）；
+//  会话三：
+//   ⑤ 并发：另一个线程反复建缓冲再 release（每次 release 都让代号加一，回放线程同时在读），本线程录 300 段、每段对同一个缓冲 buf_use 50 次、逐段提交：
+//      全部 OK，段都完成后持有数回到 0（TSan 档下这里也是无竞争的核对）。
+static void c206_wait_refs0(nvn_gpu_buf b, const char *tag, const char *what) {
+    for (int t = 0; t < 500; t++) { if (nvn_gpu_vk_test_buf_refs(b) == 0) return; sleep_ms(10); }
+    CHECK(0, "C206 %s %s：5 秒后缓冲仍被持有 %u 份（期望 0）", tag, what, nvn_gpu_vk_test_buf_refs(b));
+}
+struct c206_thr { atomic_int stop, made; };
+static void *c206_churn(void *p) {
+    struct c206_thr *t = p;
+    for (int n = 0; n < 4000 && !atomic_load(&t->stop); n++) {
+        nvn_gpu_buf b = NULL; nvn_gpu_err e;
+        if (OK(nvn_gpu_buf_create(64, NVN_GPU_MEM_SHARED, NULL, &b, &e)) && b) { nvn_gpu_buf_release(b, NULL, NULL); atomic_fetch_add(&t->made, 1); }
+    }
+    return NULL;
+}
+static void c206_arm(int on, const char *tag) {   // on = 1：产品行为（缺省档）；0：对照档（测试钩子把备忘关掉）
+    nvn_gpu_err e, ce;
+    if (!on) nvn_gpu_vk_test_ref_seen(0);   // 缺省档不碰钩子：核的就是产品缺省值本身（后端静态初值 = 开）
+    // ---- 会话一：① ② ③ ----
+    if (!open_backend()) { nvn_gpu_vk_test_ref_seen(1); return; }
+    {
+        const int retired0 = atomic_load(&g_retired);
+        nvn_gpu_buf a = make_buf(64, NVN_GPU_MEM_SHARED, NULL), b = make_buf(64, NVN_GPU_MEM_SHARED, NULL);
+        nvn_gpu_cmd c = begin_cmd();
+        for (int i = 0; i < 1000; i++) nvn_gpu_buf_use(c, a);
+        const uint32_t n1 = nvn_gpu_vk_test_cmd_nrefs(c), ra1 = nvn_gpu_vk_test_buf_refs(a), want1 = on ? 1u : 1000u;
+        const uint32_t h1 = nvn_gpu_vk_test_cmd_refseen_hits(c);
+        CHECK(n1 == want1 && ra1 == want1, "C206 %s ①：同一缓冲 buf_use 1000 次，引用表条数 / 持有数期望 %u / %u → %u / %u", tag, want1, want1, n1, ra1);
+        CHECK(h1 == (on ? 999u : 0u), "C206 %s ①：同一缓冲 buf_use 1000 次，备忘命中数期望 %u → %u", tag, on ? 999u : 0u, h1);
+        for (int i = 0; i < 1000; i++) nvn_gpu_buf_use(c, (i & 1) ? a : b);
+        const uint32_t n2 = nvn_gpu_vk_test_cmd_nrefs(c), ra2 = nvn_gpu_vk_test_buf_refs(a), rb2 = nvn_gpu_vk_test_buf_refs(b);
+        const uint32_t h2 = nvn_gpu_vk_test_cmd_refseen_hits(c);
+        CHECK(n2 == ra2 + rb2, "C206 %s ②：引用表条数应等于两个缓冲持有数之和：%u vs %u + %u", tag, n2, ra2, rb2);
+        CHECK(on ? (n2 >= 2 && n2 <= 1001) : n2 == 2000, "C206 %s ②：交替各用 500 次后引用表条数期望 %s → %u", tag, on ? "2 ~ 1001" : "2000", n2);
+        CHECK(h2 + n2 == 2000u, "C206 %s ②：每次引用要么命中要么追加一条，命中数 + 引用表条数应为 2000：%u + %u", tag, h2, n2);
+        printf("C206 备忘（%s）：同一缓冲 1000 次 → 引用表 %u 条、命中 %u 次；两缓冲交替各 500 次后共 %u 条、命中 %u 次\n", tag, n1, h1, n2, h2);
+        nvn_gpu_buf_release(a, on_retire, NULL);   // 段还持着 a：指针有效、不会销毁
+        const uint32_t h3 = nvn_gpu_vk_test_cmd_refseen_hits(c);
+        nvn_gpu_buf_use(c, b);                     // 先用别的句柄让备忘「见到」新代号（代号变了必须整表清空，只改代号不清表的话 a 的旧项还在）
+        nvn_gpu_buf_use(c, a);                     // release 之后再用：必须被抓出来，备忘不能放过去
+        nvn_gpu_buf_use(c, a);                     // 报错之后再引用同一个句柄：仍走原路径（报错的那次没有记进备忘；粘滞错误只留首错，外面只能靠命中数看出来）
+        CHECK(nvn_gpu_vk_test_cmd_refseen_hits(c) == h3, "C206 %s ③：release 之后三次引用（b、a、a）的命中数不许增加：%u → %u", tag, h3, nvn_gpu_vk_test_cmd_refseen_hits(c));
+        g_c937_why[0] = 0; __atomic_store_n(&g_c937_ready, 0, __ATOMIC_RELEASE);
+        nvn_gpu_rc r = nvn_gpu_cmd_commit(c, 1, c937_done, NULL, &e);
+        CHECK(r.code == NVN_GPU_E_ARG, "C206 %s ③：release 之后再 use 应 E_ARG，实为 %d", tag, r.code);
+        nvn_gpu_fence_wait(1, 5000000000ull, &e);   // 失败段也走完成回调，回调可能稍后才到
+        for (int i = 0; i < 200 && !__atomic_load_n(&g_c937_ready, __ATOMIC_ACQUIRE); i++) sleep_ms(10);
+        CHECK(__atomic_load_n(&g_c937_ready, __ATOMIC_ACQUIRE), "C206 %s ③：失败段 2 秒内没走完成回调", tag);
+        CHECK(strstr(g_c937_why, "release 之后仍在使用句柄（buf ") && strstr(g_c937_why, "录制于 nvn_gpu_buf_use:"), "C206 %s ③：报错应带类型与录制位置：%s", tag, g_c937_why);
+        CHECK(wait_until(&g_retired, retired0 + 1, 2000), "C206 %s ③：release 过的缓冲在失败段完成后没有退休", tag);
+        sleep_ms(50);
+        CHECK(atomic_load(&g_retired) - retired0 == 1, "C206 %s ③：release 过的缓冲退休次数期望恰好 1 → %d", tag, atomic_load(&g_retired) - retired0);
+        c206_wait_refs0(b, tag, "③ 失败段完成后");
+        nvn_gpu_buf_release(b, NULL, NULL);
+    }
+    CHECK(OK(nvn_gpu_close(5000000000ull, &ce)), "C206 %s 会话一 close：%d %s", tag, ce.rc.code, ce.why);
+    // ---- 会话二：④ ⑥ ----
+    if (!open_backend()) { nvn_gpu_vk_test_ref_seen(1); return; }
+    {
+        nvn_gpu_buf b = make_buf(64, NVN_GPU_MEM_SHARED, NULL), d = make_buf(64, NVN_GPU_MEM_SHARED, NULL);
+        nvn_gpu_cmd c = begin_cmd();
+        for (int i = 0; i < 10; i++) nvn_gpu_buf_use(c, b);
+        nvn_gpu_buf_release(d, NULL, NULL);   // 无关的缓冲（没有任何段用过它，release 即销毁）
+        for (int i = 0; i < 10; i++) nvn_gpu_buf_use(c, b);
+        const uint32_t n = nvn_gpu_vk_test_cmd_nrefs(c), rb = nvn_gpu_vk_test_buf_refs(b);
+        CHECK(n == rb, "C206 %s ④：引用表条数应等于缓冲持有数：%u vs %u", tag, n, rb);
+        CHECK(on ? (n >= 1 && n <= 2) : n == 20, "C206 %s ④：无关 release 前后各用 10 次，引用表条数期望 %s → %u", tag, on ? "1 ~ 2" : "20", n);
+        nvn_gpu_rc r = nvn_gpu_cmd_commit(c, 1, on_done, NULL, &e);
+        CHECK(OK(r), "C206 %s ④ commit：%d %s", tag, r.code, e.why);
+        CHECK(OK(nvn_gpu_fence_wait(1, 5000000000ull, &e)), "C206 %s ④ wait：%s", tag, e.why);
+        c206_wait_refs0(b, tag, "④ 段完成后");
+        // ⑥ 上面那一段（段 A）已完成归还；同一个缓冲在新段 B 里再引用：段 B 的备忘从空开始，不继承段 A 的
+        nvn_gpu_cmd c2 = begin_cmd();
+        for (int i = 0; i < 5; i++) nvn_gpu_buf_use(c2, b);
+        const uint32_t n6 = nvn_gpu_vk_test_cmd_nrefs(c2), r6 = nvn_gpu_vk_test_buf_refs(b), h6 = nvn_gpu_vk_test_cmd_refseen_hits(c2);
+        CHECK(n6 == (on ? 1u : 5u) && r6 == n6, "C206 %s ⑥：新段里同一缓冲 buf_use 5 次，引用表条数 / 持有数期望 %u / %u → %u / %u", tag, on ? 1u : 5u, on ? 1u : 5u, n6, r6);
+        CHECK(h6 == (on ? 4u : 0u), "C206 %s ⑥：新段里备忘命中数期望 %u → %u", tag, on ? 4u : 0u, h6);
+        nvn_gpu_rc r2 = nvn_gpu_cmd_commit(c2, 2, on_done, NULL, &e);
+        CHECK(OK(r2), "C206 %s ⑥ commit：%d %s", tag, r2.code, e.why);
+        CHECK(OK(nvn_gpu_fence_wait(2, 5000000000ull, &e)), "C206 %s ⑥ wait：%s", tag, e.why);
+        c206_wait_refs0(b, tag, "⑥ 新段完成后");
+        nvn_gpu_buf_release(b, NULL, NULL);
+    }
+    CHECK(OK(nvn_gpu_close(5000000000ull, &ce)), "C206 %s 会话二 close：%d %s", tag, ce.rc.code, ce.why);
+    // ---- 会话三：⑤ ----
+    if (!open_backend()) { nvn_gpu_vk_test_ref_seen(1); return; }
+    {
+        nvn_gpu_buf a = make_buf(64, NVN_GPU_MEM_SHARED, NULL);
+        struct c206_thr th; atomic_init(&th.stop, 0); atomic_init(&th.made, 0);
+        pthread_t t; const int started = pthread_create(&t, NULL, c206_churn, &th) == 0;
+        CHECK(started, "C206 %s ⑤：建线程失败", tag);
+        for (int i = 0; i < 2000 && atomic_load(&th.made) < 20; i++) sleep_ms(1);   // 等对面真的转起来，再开始录
+        int bad = 0; uint64_t fence = 1;
+        for (int k = 0; k < 300; k++) {
+            nvn_gpu_cmd c = begin_cmd();
+            if (!c) { bad++; break; }
+            for (int i = 0; i < 50; i++) nvn_gpu_buf_use(c, a);
+            if (!OK(nvn_gpu_cmd_commit(c, fence++, on_done, NULL, &e))) bad++;
+        }
+        atomic_store(&th.stop, 1);
+        if (started) pthread_join(t, NULL);
+        CHECK(bad == 0, "C206 %s ⑤：300 段里 %d 段录 / 提交失败（期望 0）", tag, bad);
+        CHECK(OK(nvn_gpu_fence_wait(fence - 1, 20000000000ull, &e)), "C206 %s ⑤ wait：%s", tag, e.why);
+        c206_wait_refs0(a, tag, "⑤ 全部段完成后");
+        printf("C206 并发（%s）：录制期间对面建 / release 了 %d 个缓冲\n", tag, atomic_load(&th.made));
+        nvn_gpu_buf_release(a, NULL, NULL);
+    }
+    CHECK(OK(nvn_gpu_close(5000000000ull, &ce)), "C206 %s 会话三 close：%d %s", tag, ce.rc.code, ce.why);
+    nvn_gpu_vk_test_ref_seen(1);
+}
+static void c206_ref_seen(void) {
+    c206_arm(1, "缺省档");
+    c206_arm(0, "对照档（测试钩子关备忘）");
+    printf("C206 段内已引用句柄备忘：重复引用只记一次 / release 之后再用照样报错且报错的不进备忘 / 无关 release 作废备忘 / 归还次数对得上 / 新段不继承旧段的备忘 / 并发无竞争，缺省与对照两档已核对\n");
+}
+
 // ---- C88：驱动管线缓存落盘与读回（#822）----
 // 契约（nvn_backend.h open_desc.cache_dir）：给了目录，后端收尾时把驱动的管线缓存写进去，下一局开会话读回来喂给驱动；
 // NULL = 不落盘。缓存只是加速不是前提：文件坏了 / 驱动不收旧数据 / 目录写不了，会话照常开、管线照常建、close 照常返回 OK。
@@ -7925,6 +8068,13 @@ int main(int argc, char **argv) {
         s2a_vk_device_destroy(&g_dev, 1);
         return g_fail ? 1 : 0;
     }
+    if (getenv("S2A_TEST_C206_ONLY")) {   // 开发时只跑 C206（段内已引用句柄备忘；run.sh 不设这个变量）
+        memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
+        c206_ref_seen();
+        printf("nvn_gpu Vulkan 后端 C206 单跑：%s（%d 处不符）\n", g_fail ? "红" : "绿", g_fail);
+        s2a_vk_device_destroy(&g_dev, 1);
+        return g_fail ? 1 : 0;
+    }
     if (getenv("S2A_TEST_C205_ONLY") && argc > 1) {   // 开发时只跑 C205（图形管线散列表；run.sh 不设这个变量）
         memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
         c205_all(argv[1]);
@@ -8326,6 +8476,7 @@ int main(int argc, char **argv) {
     c201_fb_scan(1);
     CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C201 close：%d %s", e18.rc.code, e18.why);
     c202_stg_pool();   // 缺省档与对照档各自开 / 关会话（围栏号从各自会话重新算）
+    c206_ref_seen();   // C206 段内已引用句柄备忘：缺省档与对照档各三个会话
 
     c205_all(argv[1]);   // C205 图形管线散列表：每个臂自己一个会话
 

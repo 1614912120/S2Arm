@@ -178,6 +178,9 @@ struct nvn_gpu_cmd_s {
     char why[192];
     struct vk_ref *refs;
     uint32_t nrefs, refcap;
+    uint64_t *refseen;               // 本段已引用句柄的备忘（#1194）：直接映射，槽里 = 句柄指针 | 类型；第一次引用时懒分配，随段释放
+    uint64_t refseen_epoch;          // 备忘建表（或上次清空）时的 g_rel_epoch；与现在不一致就整表作废
+    uint32_t refseen_hits;           // 本段备忘命中的次数（只给宿主用例读：nvn_gpu_vk_test_cmd_refseen_hits）
     struct vk_staging *staging;
     uint32_t nstaging, scap;
     struct nvn_gpu_buf_s *arena;
@@ -804,11 +807,40 @@ static void ref_drop(void *obj, int type) {
     }
 }
 
+// 段内「已引用句柄」备忘（#1194）。回放核心每笔绘制都把整张绑定表交给 nvn_gpu_bind，表里每一项各 cmd_ref 一次：取 g_mu、查 released、
+// 计数 +1、追加引用表，段完成时再逐项 unref 一遍。真机世界场景每帧 1.7 万次取锁（每笔 13–16 次），而相邻几百笔绑的是同一批句柄。
+// 同一段里同一个句柄只要引用过一次，段就一直持有它的一份引用（引用表在段完成时才归还）——再引用多少次，都不改「它什么时候能销毁」。
+// 所以第二次起可以直接返回，条件是：①本段已成功引用过它；②那之后没有任何句柄被 release 过（release 才会让 released 变真，
+// 这是原路径里唯一会让同一个句柄第二次引用结果不同的事）。②用全局 release 代号判：每次 release（buf / tex / view / samp，都已持 g_mu）加一，
+// 备忘记着建表时的代号，对不上就整表清空，之后的引用走原路径（release 之后仍在使用照旧报粘滞 E_ARG）。
+// 备忘里的句柄本段都持着引用，不会被销毁，也就没有「地址复用给新句柄、误命中」的可能。直接映射：撞槽只是多走一次原路径。
+// 没有用户开关，备忘恒开；宿主用例的对照档靠测试钩子 nvn_gpu_vk_test_ref_seen（文件末）把它关掉，让每次都走原路径。
+enum { REF_SEEN_BITS = 10, REF_SEEN_N = 1 << REF_SEEN_BITS };
+static uint64_t g_rel_epoch;                 // 有句柄被 release 的次数（持 g_mu 加；回放线程无锁读）
+static int g_ref_seen = 1;                   // 恒 1；只有测试钩子会改（改的时候没有会话在录制）
+static uint64_t g_ref_n, g_ref_hit;          // 读数（nvk_gputime 开着才计）：进 cmd_ref_at 的次数 / 备忘命中次数
+static inline void rel_epoch_bump(void) { __atomic_fetch_add(&g_rel_epoch, 1, __ATOMIC_RELEASE); }   // 调用方持 g_mu，紧跟在 released = 1 之后
 // 录制点（函数名 + 行号）随报错带出：「release 之后仍在使用」只在真机长局里出现（#937），
 // 光凭一句话分不清是哪类句柄、哪条录制路径，普查报告里这一行就要能定位。
 #define cmd_ref(c, obj, type) cmd_ref_at((c), (obj), (type), __func__, __LINE__)
 static void cmd_ref_at(struct nvn_gpu_cmd_s *c, void *obj, int type, const char *fn, int line) {
     if (!obj) return;
+    uint64_t tag = 0, ep = 0;
+    unsigned slot = 0;
+    if (g_ref_seen) {
+        ep = __atomic_load_n(&g_rel_epoch, __ATOMIC_ACQUIRE);
+        tag = (uint64_t)(uintptr_t)obj | (uint64_t)type;   // 句柄来自 malloc，16 字节对齐，低 4 位空着放类型（1..4）
+        slot = (unsigned)(((uint32_t)((uintptr_t)obj >> 4) * 2654435761u) >> (32 - REF_SEEN_BITS));
+        if (c->refseen) {
+            if (c->refseen_epoch != ep) { memset(c->refseen, 0, REF_SEEN_N * sizeof *c->refseen); c->refseen_epoch = ep; }
+            else if (c->refseen[slot] == tag) {
+                c->refseen_hits++;
+                if (g_draw_tm) { __atomic_fetch_add(&g_ref_n, 1, __ATOMIC_RELAXED); __atomic_fetch_add(&g_ref_hit, 1, __ATOMIC_RELAXED); }
+                return;
+            }
+        }
+    }
+    if (g_draw_tm) __atomic_fetch_add(&g_ref_n, 1, __ATOMIC_RELAXED);
     gmu_lock_rt();
     if (ref_released(obj, type)) {   // release 之后再录制使用 = 契约违规（粘滞 E_ARG）
         pthread_mutex_unlock(&g_mu);
@@ -835,6 +867,15 @@ static void cmd_ref_at(struct nvn_gpu_cmd_s *c, void *obj, int type, const char 
     c->refs[c->nrefs].obj = obj;
     c->refs[c->nrefs].type = type;
     c->nrefs++;
+    if (g_ref_seen) {
+        // 表的代号就是进函数时读到的 ep（进来时表已存在的话上面已经对齐到 ep）：进函数之后若有句柄被 release，代号已经变了，
+        // 下一次进来会发现对不上、整表清空。这一项本身是持锁检查通过之后才记的（检查时它若已被 release，上面已经报错返回了）。
+        if (!c->refseen) {
+            c->refseen = calloc(REF_SEEN_N, sizeof *c->refseen);   // 分配不到就不备忘，每次走原路径，答案不变
+            c->refseen_epoch = ep;
+        }
+        if (c->refseen) c->refseen[slot] = tag;
+    }
 }
 
 // 调用方持 g_mu。
@@ -1076,6 +1117,7 @@ static void finish_cmd(struct nvn_gpu_cmd_s *c, int executed) {
     }
     seg_give_cmd(c->pool, c->cb);
     free(c->refs);
+    free(c->refseen);
     free(c->staging);
     free(c);
 }
@@ -1559,6 +1601,7 @@ nvn_gpu_rc nvn_gpu_open(const nvn_gpu_open_desc *d, nvn_gpu_err *err) {
         g_cv_ready = 1;
     }
     fill_caps(&g, d);
+    g_ref_n = g_ref_hit = 0;
     if (pthread_create(&g.worker, NULL, worker_main, &g) != 0)
         return fail(err, NVN_GPU_E_DEVICE, "worker 线程创建失败");
     g.worker_started = 1;
@@ -1902,6 +1945,7 @@ void nvn_gpu_buf_release(nvn_gpu_buf bh, nvn_gpu_retired_fn retired, void *user)
     pthread_mutex_lock(&g_mu);
     if (!b->released) {
         b->released = 1;
+        rel_epoch_bump();
         b->retired = retired;
         b->retired_user = user;
         if (b->refs == 0) queue_retire_locked(&g, b);
@@ -3858,6 +3902,22 @@ void nvn_gpu_vk_test_emit_counts(nvn_gpu_cmd ch, uint32_t out[9]) {
     for (int i = 0; i < 9; i++) out[i] = c && i < ES_KINDS ? c->es_count[i] : 0;
 }
 
+// 测试读数（#1194）：缓冲句柄现在被几段持有（refs）/ 一段命令的引用表现有几条。只给宿主用例读：句柄必须还活着（没 release 或还被段引用着）。
+uint32_t nvn_gpu_vk_test_buf_refs(nvn_gpu_buf bh) {
+    struct nvn_gpu_buf_s *b = bh;
+    if (!b) return 0;
+    pthread_mutex_lock(&g_mu);
+    const uint32_t n = (uint32_t)b->refs;
+    pthread_mutex_unlock(&g_mu);
+    return n;
+}
+uint32_t nvn_gpu_vk_test_cmd_nrefs(nvn_gpu_cmd ch) { struct nvn_gpu_cmd_s *c = ch; return c ? c->nrefs : 0; }
+// 这一段里 cmd_ref 命中备忘（直接返回）的次数：每次引用要么命中、要么追加一条引用表项（报错的除外），宿主用例拿它核恒等式，
+// 也靠它看出「报错的那次被记进了备忘」（报错之后再引用同一句柄，命中数不许动）。
+uint32_t nvn_gpu_vk_test_cmd_refseen_hits(nvn_gpu_cmd ch) { struct nvn_gpu_cmd_s *c = ch; return c ? c->refseen_hits : 0; }
+// 对照档：0 = 备忘关（每次都走原路径），1 = 产品行为。只在没有会话在录制的时候改。
+void nvn_gpu_vk_test_ref_seen(int on) { g_ref_seen = on != 0; }
+
 // Test-only observation of the real allocation; never reads or writes push bytes.
 uint32_t nvn_gpu_vk_test_push_capacity(nvn_gpu_cmd ch, nvn_gpu_stage st) {
     struct nvn_gpu_cmd_s *c = ch;
@@ -4834,6 +4894,7 @@ void nvn_gpu_tex_release(nvn_gpu_tex th) {
     pthread_mutex_lock(&g_mu);
     if (!t->released) {
         t->released = 1;
+        rel_epoch_bump();
         if (t->refs == 0) destroy_tex_locked(&g, t);
     }
     pthread_mutex_unlock(&g_mu);
@@ -5010,6 +5071,7 @@ void nvn_gpu_view_release(nvn_gpu_view vh) {
     pthread_mutex_lock(&g_mu);
     if (!v->released) {
         v->released = 1;
+        rel_epoch_bump();
         if (v->refs == 0) destroy_view_locked(&g, v);
     }
     pthread_mutex_unlock(&g_mu);
@@ -5184,6 +5246,7 @@ void nvn_gpu_samp_release(nvn_gpu_samp sh) {
     pthread_mutex_lock(&g_mu);
     if (!s->released) {
         s->released = 1;
+        rel_epoch_bump();
         if (s->refs == 0) destroy_samp_locked(&g, s);
     }
     pthread_mutex_unlock(&g_mu);
