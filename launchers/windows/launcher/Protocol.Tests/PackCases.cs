@@ -176,8 +176,6 @@ public static class PackCases
             "request: devCert needs no game and never carries the password");
         // 装到 iPhone 的方式 / 更新 iPhone 上的 S2Arm（v0.3.0，install.install_mode_job / update_phone）：属于这台电脑 / 这台手机，不带 gameId；
         //   都带随包资源（Impactor），installUpdate 还要组装容器，同 install 带预编壳
-        check(PackJobClient.Operations.Contains("installMode") && PackJobClient.Operations.Contains("installUpdate"),
-            "request: installMode / installUpdate are launcher operations");
         var mode = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "installMode", "",
             new Dictionary<string, object?> { ["mode"] = "device" }), "win-5");
         check((string?)mode["mode"] == "device" && !mode.ContainsKey("gameId") && !mode.ContainsKey("shellDir") &&
@@ -186,15 +184,14 @@ public static class PackCases
             new Dictionary<string, object?> { ["acceptStale"] = true }), "win-6");
         check(update["acceptStale"] is true && !update.ContainsKey("gameId") && (string?)update["shellDir"] == Path.GetFullPath(paths.Shell) &&
               (string?)update["resources"] == Path.GetFullPath(AppContext.BaseDirectory), "request: installUpdate needs no game, carries acceptStale, shell and resources");
-        check(PackJobClient.Operations.Contains("delete"), "request: delete (remove the whole game, saves kept) is a launcher operation since library layout v3");
-        // #1149：App 里每个发出去的操作名（PackRequest("…") 字面量）都得在白名单里——漏一个，请求在进引擎前就被拒（S 级优化升级页一进就卡死）
+        // 没有前端操作白名单（11-15）：引擎不认识的操作照样发出去，引擎回失败结果，界面拿到的是一条带文字的失败，不是异常（#1149 卡死的根）
         {
-            var app = Path.Combine(Path.GetDirectoryName(SourceFile())!, "..", "App");
-            var appOps = Directory.GetFiles(app, "*.cs").SelectMany(f => System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(f), "PackRequest\\(\"([A-Za-z]+)\"")
-                .Select(m => m.Groups[1].Value)).Distinct().ToList();
-            var missing = appOps.Where(o => !PackJobClient.Operations.Contains(o)).ToList();
-            check(appOps.Contains("sgradeScan") && appOps.Contains("community") && missing.Count == 0,
-                $"request: every operation the App sends is whitelisted (sent {appOps.Count}, missing: {string.Join(",", missing)})");
+            var odd = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "noSuchOperation", "G"), "win-8");
+            check((string?)odd["operation"] == "noSuchOperation", "request: an operation the engine does not know is passed through, not refused in the launcher");
+            var r = new JobEventReader("win-8", "noSuchOperation");
+            r.Accept("""{"schema":1,"jobId":"win-8","taskId":"win-8","operation":"noSuchOperation","seq":1,"type":"result","state":"failed","message":"不支持的任务类型。","result":{},"diagnostics":[]}""");
+            var rep = r.Finish(1);
+            check(!rep.Succeeded && rep.Message == "不支持的任务类型。", "result: engine refusal of an unknown operation comes back as a failure with its text (the page shows it, no exception, no resend)");
             var scan = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "sgradeScan", ""), "win-7");
             check((string?)scan["operation"] == "sgradeScan" && !scan.ContainsKey("gameId") &&
                   (string?)scan["resources"] == Path.GetFullPath(AppContext.BaseDirectory),
@@ -202,7 +199,6 @@ public static class PackCases
         }
         foreach (var (operation, extra, label) in new (string, Dictionary<string, object?>?, string)[]
         {
-            ("launch", null, "request: operations outside export / install / remove / library layout refused (Windows does not run games)"),
             ("install", new() { ["gameId"] = "other" }, "request: extra fields cannot replace the envelope")
         })
         {

@@ -73,12 +73,8 @@ public sealed class JobEventReader(string jobId, string operation)
 /// </summary>
 public static class PackJobClient
 {
-    public static readonly IReadOnlySet<string> Operations =
-        new HashSet<string>(StringComparer.Ordinal) { "export", "ipa", "installCheck", "install", "installRemove", "installRestore", "installMode", "installUpdate", "customize",
-            "moveGame", "relinkGame", "forgetGame", "clean", "delete", "spaceFree", "devCert",
-            // 金手指页（CheatsPage：community / communitySave）与「S 级优化升级」页（sgradeScan）：0.4.0 页面上了、这里漏了，
-            //   请求在进引擎前就被下面拒掉（#1149：S 级页一进就抛、页面重绘又发，UI 线程卡死）。App 里发的每个操作名都要在这里（Protocol.Tests 扫源码核对）
-            "community", "communitySave", "sgradeScan" };
+    // 操作名不在前端设白名单（11-15 jhz：「自己给自己设套儿、增加卡点」——0.4.0 漏登记两页，请求进引擎前就被拒，#1149 卡死）：
+    //   请求原样交给引擎，引擎不认识的操作自己回失败结果（pack/jobs/main.py「不支持的任务类型。」），界面把它当普通失败显示成文字
 
     /// <param name="Secrets">Environment variables for this one job process only (the developer certificate password,
     /// pack/jobs/devcert.py); never written into the request file, and main.run_request drops them from its environment first.</param>
@@ -88,7 +84,6 @@ public static class PackJobClient
     /// <summary>The request body the backend reads (pure; unit-tested).</summary>
     public static Dictionary<string, object?> Payload(Request request, string jobId)
     {
-        if (!Operations.Contains(request.Operation)) throw new ArgumentException("Unsupported pack operation.", nameof(request));
         // The developer certificate and the install mode belong to this computer, installUpdate to the phone (install.update_phone): no game.
         // export 的游戏在计划里（plan.items，ExportStream），信封上不带
         var perGame = request.Operation is not ("devCert" or "installMode" or "installUpdate" or "export" or "sgradeScan");
