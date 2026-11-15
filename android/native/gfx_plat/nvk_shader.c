@@ -819,7 +819,7 @@ static struct entry *work_run(const struct work_snap *s, int background) {
             atomic_fetch_add_explicit(&g_n_offline, 1, memory_order_relaxed);
         }
     }
-    if (!bytes && cdir && 0 /* 测试：不读盘缓存 */ &&
+    if (!bytes && cdir && !nvn_plat_flag("no_disk_cache", 0) &&
         s2a_program_cache_load(cdir, s->identity, &bytes, &len, NULL, why, sizeof why) == 0)
         atomic_fetch_add_explicit(&g_n_cache, 1, memory_order_relaxed);
     if (!bytes && libpack_fetch(s->identity, (const uint8_t (*)[8])s->keys, s->nst, NULL, s->lp_ok, &s->pc, &bytes, &len)) {
@@ -921,7 +921,7 @@ static struct entry *warm_work_run(const struct nvk_prog_rec *rec, int nst) {
         }
     }
     const int had_bytes = bytes != NULL;
-    if (!bytes && cdir && 0 /* 测试：不读盘缓存 */ &&
+    if (!bytes && cdir && !nvn_plat_flag("no_disk_cache", 0) &&
         s2a_program_cache_load(cdir, rec->identity, &bytes, &len, NULL, why, sizeof why) == 0)
         atomic_fetch_add_explicit(&g_n_cache, 1, memory_order_relaxed);
     // 出包预编库：清单记着每阶段键，预热带直接按键取（新装的游戏第一局没有跨局缓存，靠的就是这一份）
@@ -1478,7 +1478,7 @@ static int resolve_compute_slow(const struct rp_prog **out, const struct s2a_dir
             struct s2a_offline_program op = {0};
             if (s2a_offline_library_fetch(root, &oq, &op, why, sizeof why) == S2A_OFFLINE_HIT) { bytes = op.bytes; len = op.len; atomic_fetch_add_explicit(&g_n_offline, 1, memory_order_relaxed); }
         }
-        if (!bytes && cdir && 0 && s2a_program_cache_load(cdir, rq.identity, &bytes, &len, NULL, why, sizeof why) == 0) atomic_fetch_add_explicit(&g_n_cache, 1, memory_order_relaxed);
+        if (!bytes && cdir && !nvn_plat_flag("no_disk_cache", 0) && s2a_program_cache_load(cdir, rq.identity, &bytes, &len, NULL, why, sizeof why) == 0) atomic_fetch_add_explicit(&g_n_cache, 1, memory_order_relaxed);
         // 出包预编库：口径同图形那条（跨局缓存之后、现编之前；同一句柄、同一张不可用表）。键 = 计算阶段 8 字节控制键 rp_S.skey[5]
         struct entry *lpe = NULL;
         if (!bytes && libpack_fetch(rq.identity, NULL, 0, rp_S.skey[5], 1, &pc, &bytes, &len)) {
