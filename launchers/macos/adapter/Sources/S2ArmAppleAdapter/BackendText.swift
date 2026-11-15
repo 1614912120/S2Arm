@@ -49,8 +49,10 @@ public enum BackendText {
         return Dictionary(items.compactMap { i in i["id"].map { ($0, i) } }, uniquingKeysWith: { a, _ in a })
     }()
 
+    /// 这门语言还没翻的键回落英文（11-14 i18n 打底：加新语言可以逐键补，不会露出 [键名]）；键本身不存在才显示 [键名]
     public static func launcherText(_ id: String, language: String) -> String {
-        launcherItems[id]?[language] ?? "[\(id)]"
+        guard let item = launcherItems[id] else { return "[\(id)]" }
+        return item[language] ?? item["en"] ?? "[\(id)]"
     }
 
     /// 报错页统一的一句「故障报修」指引（11-13）：文字只在共享规格 report.hint 一处，{button} 换成顶栏按钮名 report.button（Windows SharedText.ReportHint 同一取法）

@@ -131,7 +131,7 @@ struct FreeSpaceView: View {
         .tint(LauncherPalette.cream)
     }
 
-    private func storage(_ id: String) -> String { BackendText.launcherText("storage." + id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func storage(_ id: String) -> String { BackendText.launcherText("storage." + id, language: loc.lang.sharedCode) }
 
     private func binding(_ id: String) -> Binding<Bool> {
         Binding(get: { chosen.contains(id) }, set: { on in if on { chosen.insert(id) } else { chosen.remove(id) } })

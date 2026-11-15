@@ -7370,5 +7370,33 @@
  {
   "source": "导出诊断包，手动发到 GitHub 帖子或群里；网络恢复后也可以再点一次「故障报修」。",
   "en": "Export the diagnostics package and post it to the GitHub issue or group yourself; once the network is back you can also click \"Report a problem\" again."
+ },
+ {
+  "source": "没有能出的游戏",
+  "en": "No games can be built"
+ },
+ {
+  "source": "正在出包",
+  "en": "A build is already running"
+ },
+ {
+  "source": "批次清单组不出来",
+  "en": "Could not put the batch list together"
+ },
+ {
+  "source": "批次脚本起不来",
+  "en": "The batch script did not start"
+ },
+ {
+  "source": "建批次失败",
+  "en": "Could not create the batch"
+ },
+ {
+  "source": "批次脚本没有回应",
+  "en": "The batch script did not respond"
+ },
+ {
+  "source": "没有勾选要删除的项。",
+  "en": "Nothing is selected to delete."
  }
 ]

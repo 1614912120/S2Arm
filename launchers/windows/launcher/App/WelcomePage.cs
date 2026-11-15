@@ -130,9 +130,9 @@ public sealed partial class EnvironmentWindow
 
     private string EnvironmentSummary()
     {
-        var lines = new List<string> { T("welcome.win.envcopy.title"), "", T("welcome.win.envcopy.app").Replace("{0}", AppVersion),
-            T("welcome.win.envcopy.system").Replace("{0}", System.Runtime.InteropServices.RuntimeInformation.OSDescription), "" };
-        lines.AddRange((report?.Checks ?? []).Where(c => c.Status != "ok").Select(c => T("welcome.win.envcopy.check")
+        var lines = new List<string> { T("envcopy.title"), "", T("envcopy.app").Replace("{0}", AppVersion),
+            T("envcopy.system").Replace("{0}", System.Runtime.InteropServices.RuntimeInformation.OSDescription), "" };
+        lines.AddRange((report?.Checks ?? []).Where(c => c.Status != "ok").Select(c => T("envcopy.check")
             .Replace("{0}", c.Name).Replace("{1}", c.Status).Replace("{2}", c.Code ?? "-").Replace("{3}", c.Message)));
         lines.Add(""); lines.Add(diagnostics);
         return string.Join("\n", lines).Replace(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "~");

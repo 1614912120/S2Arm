@@ -107,7 +107,7 @@ struct LaunchSettingsSheet: View {
     @State private var saving = false
     @State private var loaded = false
 
-    private var lang: String { loc.lang == .zh ? "zh-Hans" : "en" }
+    private var lang: String { loc.lang.sharedCode }
     private func t(_ id: String) -> String { BackendText.launcherText(id, language: lang) }
     private var gameName: String { model.games.first { $0.id == gameID }?.name ?? gameID }
 
@@ -283,7 +283,7 @@ struct CrashPrompt: Identifiable {
 struct CrashPromptHost: View {
     @ObservedObject var model: S2ArmLauncherModel
     @EnvironmentObject var loc: Localizer
-    private func t(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func t(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
     var body: some View {
         let p = model.crashPrompt
         Color.clear.frame(width: 0, height: 0)

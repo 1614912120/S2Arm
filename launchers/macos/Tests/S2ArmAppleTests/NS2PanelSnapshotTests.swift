@@ -17,7 +17,7 @@ import XCTest
     /// 面板：蓝牙手柄照工具栏那样交给分配整理（自动排进玩家位）
     static func panel(_ c: NS2LauncherController, _ systems: SystemControllers, _ zh: Bool) -> Switch2ProConnectionPopover {
         c.updateSystem(systems.presentKeys)
-        return Switch2ProConnectionPopover(controller: c, systems: systems, simplifiedChinese: zh)
+        return Switch2ProConnectionPopover(controller: c, systems: systems, lang: zh ? "zh" : "en")
     }
     private func controller(kind: Int, players: Int, kinds: [Int]? = nil) -> NS2LauncherController {
         let c = Self.isolated()
@@ -42,12 +42,12 @@ import XCTest
         XCTAssertEqual(ControllerIcon.player(kind: 4), .pairHead)
         XCTAssertEqual(ControllerIcon.systemPlayer(.gen1Right), .gen1RightSideways, "一代单只也横着画")
         XCTAssertEqual(ControllerIcon.systemPlayer(.gen1Pair), .gen1Pair)
-        XCTAssertEqual(single.title(simplifiedChinese: true), "Joy-Con 2 (L)")
+        XCTAssertEqual(single.title(lang: "zh"), "Joy-Con 2 (L)")
         let pair = controller(kind: 4, players: 1, kinds: [4])
-        XCTAssertEqual(pair.title(simplifiedChinese: true), "Joy-Con 2 (L + R)")
+        XCTAssertEqual(pair.title(lang: "zh"), "Joy-Con 2 (L + R)")
         let split = controller(kind: 3, players: 2, kinds: [3, 2])
-        XCTAssertEqual(split.title(simplifiedChinese: true), "2 个 Switch 2 手柄", "两只各一位：标题写手柄数量（玩家在列表里）")
-        XCTAssertEqual(split.title(simplifiedChinese: false), "2 Switch 2 controllers")
+        XCTAssertEqual(split.title(lang: "zh"), "2 个 Switch 2 手柄", "两只各一位：标题写手柄数量（玩家在列表里）")
+        XCTAssertEqual(split.title(lang: "en"), "2 Switch 2 controllers")
         XCTAssertEqual(split.playerKinds, [3, 2], "玩家列表：P1 右只、P2 左只（照连接程序报的顺序）")
         XCTAssertEqual(pair.playerKinds, [4], "一对合成一位：P1 是一对")
         XCTAssertEqual(NS2LauncherController.playerKinds(from: ["kind": 4]), [4], "旧连接程序没报 kinds：用 kind 当 P1")
@@ -69,10 +69,10 @@ import XCTest
             (.notConnected, "未连接", "连接"), (.searching, "搜索中", "停止"), (.connecting, "连接中", "停止"), (.connected, "已连接", "断开"),
             (.inUse, "游戏使用中", "断开"), (.failed, "连接失败", "重新连接"), (.bluetoothUnavailable, "蓝牙不可用", "重新连接")]
         for (status, text, button) in expect {
-            XCTAssertEqual(C.statusText(status, simplifiedChinese: true), text)
-            XCTAssertEqual(C.mainButton(status, simplifiedChinese: true), button)
+            XCTAssertEqual(C.statusText(status, lang: "zh"), text)
+            XCTAssertEqual(C.mainButton(status, lang: "zh"), button)
         }
-        XCTAssertEqual(C.statusText(.inUse, simplifiedChinese: false), "In use by game")
+        XCTAssertEqual(C.statusText(.inUse, lang: "en"), "In use by game")
         XCTAssertEqual(C.dotColor(.inUse), C.dotColor(.connected), "游戏使用中是绿点（原先灰点）")
 
         func make(_ code: Int?, kind: Int = 0, phase: C.Phase? = nil) -> C {
@@ -90,7 +90,7 @@ import XCTest
             try snapshot(name + "_zh", Self.panel(c, SystemControllers(pads: []), true))
         }
         XCTAssertNil(ControllerIcon.header(kind: make(5).kind, players: 1), "失败：型号未知 → 虚线图")
-        XCTAssertEqual(make(5).title(simplifiedChinese: true), "Switch 手柄")
+        XCTAssertEqual(make(5).title(lang: "zh"), "Switch 手柄")
     }
 
     // 系统手柄（#520 F，UI 稿 system.html）：分类、去重、混用时的玩家顺序；图示全套另存一张（含稿里没有、待定的 Xbox / 一代右只 / 其他）

@@ -39,7 +39,7 @@ struct SGradeCard: View {
 
     var body: some View {
         SGradeCardView(match: match, failed: failed, zh: loc.lang == .zh, on: Binding(get: { model.sgradeOn(gameID) }, set: { model.setSgrade(gameID, $0) })) {
-            BackendText.launcherText("export.sgrade." + $0, language: loc.lang == .zh ? "zh-Hans" : "en") }
+            BackendText.launcherText("export.sgrade." + $0, language: loc.lang.sharedCode) }
             .task(id: gameID) {
                 match = nil; failed = false
                 if let r = try? await model.saveJob("patchMatch", gameID: gameID) { let m = PatchMatch(r); match = m; if m.total == 0, !m.port, m.others.isEmpty, !m.build.isEmpty { nothing() } } else { failed = true }

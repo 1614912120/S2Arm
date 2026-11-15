@@ -29,8 +29,10 @@ public sealed class SharedText
     /// 报错页统一的「故障报修」指引（11-13）：report.hint 里的 {button} 换成顶栏按钮名 report.button（Mac BackendText.reportHint 同一取法）
     public string ReportHint(string language) => Get("report.hint", language).Replace("{button}", Get("report.button", language));
 
+    /// <summary>这门语言还没翻的键回落英文（11-14 i18n 打底，同 Mac BackendText.launcherText）；键本身不存在才显示「[键]」。</summary>
     public string Get(string key, string language) =>
-        texts.TryGetValue(key, out var value) && value.TryGetValue(language, out var text) ? text : $"[{key}]";
+        !texts.TryGetValue(key, out var value) ? $"[{key}]"
+        : value.TryGetValue(language, out var text) || value.TryGetValue("en", out text) ? text : $"[{key}]";
 
     private void ReadLauncher(JsonElement launcher)
     {

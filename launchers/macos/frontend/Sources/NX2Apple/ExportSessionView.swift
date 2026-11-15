@@ -580,17 +580,20 @@ struct ExportSessionView: View {
     /// 剩余：一分钟以上只写到分（倒数时不让秒数跳），「约 6 分钟」/「6 min」。
     private func duration(_ seconds: Double, exact: Bool = false) -> String {
         let s = max(0, Int(seconds.rounded()))
-        let zh = loc.lang == .zh
-        if s >= 3600 {
-            let h = s / 3600, m = s % 3600 / 60
-            return zh ? "\(h) 小时 \(m) 分" : "\(h)h \(m)m"
+        return Self.duration(seconds: s, exact: exact, language: loc.lang.sharedCode)
+    }
+
+    /// 时长的写法在共享文案表 duration.*（两端同一份，跟随界面语言）：{0} {1} 是数字
+    static func duration(seconds s: Int, exact: Bool, language: String) -> String {
+        func f(_ id: String, _ a: Int, _ b: Int = 0) -> String {
+            BackendText.launcherText("duration." + id, language: language).replacingOccurrences(of: "{0}", with: "\(a)").replacingOccurrences(of: "{1}", with: "\(b)")
         }
+        if s >= 3600 { return f("hm", s / 3600, s % 3600 / 60) }
         if s >= 60 {
             let m = exact ? s / 60 : Int((Double(s) / 60).rounded(.up)), r = s % 60
-            if exact { return zh ? "\(m) 分 \(r) 秒" : "\(m)m \(r)s" }
-            return zh ? "\(m) 分钟" : "\(m) min"
+            return exact ? f("ms", m, r) : f("m", m)
         }
-        return zh ? "\(s) 秒" : "\(s)s"
+        return f("s", s)
     }
 
     private func time(_ date: Date) -> String {
