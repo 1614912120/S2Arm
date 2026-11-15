@@ -23,6 +23,12 @@ final class BackendTextTests: XCTestCase {
                        "Apple device support not found. Checked: local usbmux port 127.0.0.1:27015: not reachable; Apple Mobile Device Service: stopped; Apple Devices (Store version): not installed")
     }
 
+    /// 出包前空间预算提示：外层句式 → 分项按「；」拆开逐项翻（11-14 i18n：分项分隔由「，」改「；」）
+    func testSpaceBudgetWarningTranslates() {
+        XCTAssertEqual(BackendText.translate("磁盘空间不够：游戏存放位置所在的盘这次出包预计要 106 GB（解包 12 GB；单一 IMG 边写边腾解包、不另占；直连着色器上限 4 GB），现在只剩 48 GB。已按你的选择仍然继续。", language: "en"),
+                       "Not enough disk space: on the drive where the games are stored this build needs about 106 GB (Unpack 12 GB; single IMG written while freeing the unpacked files, no extra space; direct shaders up to 4 GB), but only 48 GB is left. Continuing anyway, as you chose.")
+    }
+
     func testWholeSentenceAndSharedLabels() {
         XCTAssertEqual(BackendText.translate("游戏已停止。", language: "en"), "Game stopped.")
         XCTAssertEqual(BackendText.translate("游戏库所在磁盘", language: "en"), "Library Drive")

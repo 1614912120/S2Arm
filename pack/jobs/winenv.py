@@ -928,7 +928,7 @@ def check(request, *, probe=None):
 def render(report):
     heading = "环境就绪" if report["ready"] else "环境未就绪"  # 非玩家句
     return heading + "\n" + "\n".join(
-        f"[{c['status']}] {c['name']}：{c['message']}（要求来源：{c['source']}）" for c in report["checks"])
+        f"[{c['status']}] {c['name']}：{c['message']}（要求来源：{c['source']}）" for c in report["checks"])  # 非玩家句
 
 
 def main(argv=None):

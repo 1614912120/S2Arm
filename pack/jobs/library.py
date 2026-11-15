@@ -86,7 +86,7 @@ def _scene_text(summary, block, budget=DIAGNOSTIC_LOG_SCENE):
     used = sum(len(x) + 1 for x in keep)
     for t in threads:
         if t is first: continue
-        if used + len(t[0]) + 1 > budget - 200: keep.append(f"[现场] …（还有线程略去：现场块 {len(text)} 字节超出保留上限）".encode()); break
+        if used + len(t[0]) + 1 > budget - 200: keep.append(f"[现场] …（还有线程略去：现场块 {len(text)} 字节超出保留上限）".encode()); break  # 非玩家句
         keep.append(t[0]); used += len(t[0]) + 1
     keep += [x for x in block[-1:] if _Scene.END in x]
     return b"\n".join(keep)
@@ -1287,13 +1287,14 @@ def space_budget(c, game):
     keep = getattr(c, "r", {}).get("followUp") is True   # 同一款接着还要出别的平台：解包留着，写 IMG 不边写边删（ipa.to_img）
     copy_need = pack_need_bytes(packages, unpacked=unpacked, image=image, clones=clones, links=links, keep_unpack=keep) - direct_need
     img_extra = image and (keep or unpacked)
+    # 分项之间用「；」：两端翻译按「；」拆开逐项翻（BackendText.translate），用「，」会整串翻不了（11-14 i18n）
     unpack_note = f"解包 {'已在盘上' if unpacked else _gb(size * 11 // 10)}" + \
-        (f"，单一 IMG {_gb(size)}" if img_extra else "，单一 IMG 边写边腾解包、不另占" if image else "") + \
-        (f"，{fmt.upper()} 盘不能克隆、资源包另占 {_gb(size * 11 // 10)}" if clones is False else "") + \
-        (f"，{fmt.upper()} 盘建不了目录链接、另占 {_gb(2 * (size * 11 // 10))}" if not links else "")
+        (f"；单一 IMG {_gb(size)}" if img_extra else "；单一 IMG 边写边腾解包、不另占" if image else "") + \
+        (f"；{fmt.upper()} 盘不能克隆、资源包另占 {_gb(size * 11 // 10)}" if clones is False else "") + \
+        (f"；{fmt.upper()} 盘建不了目录链接、另占 {_gb(2 * (size * 11 // 10))}" if not links else "")
     direct_note = f"直连着色器上限 {_gb(direct_need)}"
     if loc.stat().st_dev == cache.stat().st_dev:
-        parts = [("library", loc, copy_need + direct_need, f"{unpack_note}，{direct_note}")]
+        parts = [("library", loc, copy_need + direct_need, f"{unpack_note}；{direct_note}")]
     else:
         parts = [("library", loc, copy_need, unpack_note), ("cache", cache, direct_need, direct_note)]
     volumes = []
@@ -1340,9 +1341,9 @@ def require_fat32_fits(c, game, loc):
     size = pack_input_bytes(selected_packages(game))
     if size <= FAT32_FILE_LIMIT:
         return
-    drives = "、".join(f"{root}（{fmt}，剩余 {_gb(free)}）" for root, fmt, free in ntfs_drives()[:4])
-    raise Failure(f"这款游戏的 iPhone 资源包要写成一个约 {_gb(size)} 的文件，存放位置所在的 FAT32 盘单个文件最多 4 GB：在出包页「存放位置」换到 NTFS 格式的盘"
-                  + (f"（这台电脑上可用：{drives}）" if drives else "（这台电脑上没找到 NTFS 盘：接上一块 NTFS 盘，或把一块盘格式化成 NTFS——会清空那块盘）") + "，再出包。",
+    drives = "、".join(f"{root}（{fmt}，剩余 {_gb(free)}）" for root, fmt, free in ntfs_drives()[:4])  # 非玩家句
+    raise Failure(f"这款游戏的 iPhone 资源包要写成一个约 {_gb(size)} 的文件，存放位置所在的 FAT32 盘单个文件最多 4 GB：在出包页「存放位置」换到 NTFS 格式的盘"  # 非玩家句
+                  + (f"（这台电脑上可用：{drives}）" if drives else "（这台电脑上没找到 NTFS 盘：接上一块 NTFS 盘，或把一块盘格式化成 NTFS——会清空那块盘）") + "，再出包。",  # 非玩家句
                   code="fat32_file_too_large")
 
 
@@ -1380,17 +1381,17 @@ def check_pack_space(c, game, *, compiler_policy=None):
         where = "" if len(budget["volumes"]) == 1 else ("游戏存放位置所在的盘" if v["role"] == "library" else "工具缓存所在的盘")
         # 分项（#746：原先只给一个大数，玩家不知道为什么从 48 GB 跳到 106 GB、该清什么）
         note = f"（{v['note']}）" if v.get("note") else ""
-        head = f"磁盘空间不够：{where}这次出包预计要 {need / 1e9:.0f} GB{note}，现在只剩 {free / 1e9:.0f} GB。"
+        head = f"磁盘空间不够：{where}这次出包预计要 {need / 1e9:.0f} GB{note}，现在只剩 {free / 1e9:.0f} GB。"  # 非玩家句
         if override:
             if reclaim:   # 失败页说过「仍然继续会先删掉它」：旧包和新包同时在盘上的那段是峰值的一部分，先删才腾得出来
                 _rm(c, layout.root_of(c, game["id"].upper()), layout.ios_pack(c, game["id"].upper()))
-                c.diagnostic(head + f"已按你的选择先删掉这款上一次的 iPhone 包，腾出 {_gb(reclaim)}。", code="disk_full", severity="warning")
+                c.diagnostic(head + f"已按你的选择先删掉这款上一次的 iPhone 包，腾出 {_gb(reclaim)}。", code="disk_full", severity="warning")  # 非玩家句
                 continue
-            c.diagnostic(head + "已按你的选择仍然继续。", code="disk_full", severity="warning")
+            c.diagnostic(head + "已按你的选择仍然继续。", code="disk_full", severity="warning")  # 非玩家句
             continue
         # 预估只当提示、不拦（不许堵门，11-14 定：预估偏保守，玩家盘可能其实够）：记一条警告照常开工；真写满时写盘报 ENOSPC，那才停、归 disk_full
-        c.diagnostic(head + "这是预估，照常开工；真写满时会停下，释放空间后重试即可。"
-                     + (f"这款上一次的 iPhone 包（{_gb(reclaim)}）出完会被新包换掉。" if reclaim else ""), code="disk_full", severity="warning")
+        c.diagnostic(head + "这是预估，照常开工；真写满时会停下，释放空间后重试即可。"  # 非玩家句
+                     + (f"这款上一次的 iPhone 包（{_gb(reclaim)}）出完会被新包换掉。" if reclaim else ""), code="disk_full", severity="warning")  # 非玩家句
 
     return budget
 
@@ -1433,7 +1434,7 @@ def _wait_probe(c, what, probe, poll):
     t = threading.Thread(target=run, daemon=True); t0 = time.monotonic(); t.start()
     while not t.join(poll) and t.is_alive():
         c.check()
-        c.emit(message=f"在等系统的文件访问授权：{what}（已等 {int(time.monotonic() - t0)} 秒）。"
+        c.emit(message=f"在等系统的文件访问授权：{what}（已等 {int(time.monotonic() - t0)} 秒）。"  # 非玩家句
                        "请在系统弹出的「允许访问」对话框里点「允许」；看不到对话框就把它从别的窗口后面切出来")
     return box.get("err")
 
@@ -1451,7 +1452,7 @@ def wait_writable(c, path, poll=5.0):
     if isinstance(e, PermissionError):
         if os.name == "nt":   # D-4MAH：Windows 没有「系统设置 › 隐私与安全性」，下一步见 errors.WINDOWS_RECOVERY
             raise Failure(f"系统不让 S2Arm 往游戏库所在的磁盘写（{path}）", code="permission_denied")
-        raise Failure(f"系统不让 S2Arm 往游戏库所在的磁盘写（{path}）：到「系统设置 › 隐私与安全性 › 文件与文件夹」"
+        raise Failure(f"系统不让 S2Arm 往游戏库所在的磁盘写（{path}）：到「系统设置 › 隐私与安全性 › 文件与文件夹」"  # 非玩家句
                       "（外接盘看「可移除的宗卷」）里打开 S2Arm，再点一次", code="permission_denied")
     if e is not None:
         raise e
@@ -1480,7 +1481,7 @@ def wait_readable(c, paths, poll=5.0):
             if isinstance(e, PermissionError):
                 if os.name == "nt":   # D-4MAH：同上，Windows 的下一步见 errors.WINDOWS_RECOVERY
                     raise Failure(f"系统不让 S2Arm 读 {path.name}（{path.parent}）", code="input_permission")
-                raise Failure(f"系统不让 S2Arm 读 {path.name}（{path.parent}）：到「系统设置 › 隐私与安全性 › 文件与文件夹」"
+                raise Failure(f"系统不让 S2Arm 读 {path.name}（{path.parent}）：到「系统设置 › 隐私与安全性 › 文件与文件夹」"  # 非玩家句
                               "或「完全磁盘访问权限」里打开 S2Arm，再点一次", code="input_permission")
             raise Failure(f"读不了游戏文件 {path.name}：{e}", code="input_unreadable")
 
@@ -2672,7 +2673,7 @@ def space_free(c):
     want = c.r.get("parts")
     ids = {k for k, _, _ in SPACE_PARTS}
     if not isinstance(want, list) or not want or any(p not in ids for p in want):
-        raise Failure("要删除的部件不对：只能选" + "、".join(t for _, t, _ in SPACE_PARTS) + "。")
+        raise Failure("要删除的部件不对：只能选" + "、".join(t for _, t, _ in SPACE_PARTS) + "。")  # 非玩家句
     with c.lock("execution"), c.lock():
         gid = c.game()["id"]
         c.begin("释放空间")

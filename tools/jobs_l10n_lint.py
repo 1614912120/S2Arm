@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """作业层玩家句要有翻译（11-14 i18n 第四批）：pack/jobs 只说中文原句，两端显示时按对照表翻（Mac / Windows 同一份
-launchers/macos/adapter/Sources/S2ArmAppleAdapter/Resources/Localizable.json，加上共享体验表 experience.v1.json 的 zh-Hans 句）。
+launchers/macos/adapter/Sources/S2ArmAppleAdapter/Resources/Localizable.json，加上共享体验表 experience.v1.json 里状态 / 结局 / 画面模式 / 阶段名几类）。
 这里扫 pack/jobs/*.py（不含 tests/）里含中文的字符串字面量与 f-string，对照表里查不到的就是「英文界面会露中文」。
 
 - 整句查；f-string 的 {表达式} 当 {0} 占位，对照表里带 {N} 的句式能套上也算；按「\\n」「；」拆开每段都查得到也算（同 BackendText.translate）。
@@ -28,18 +28,17 @@ BASELINE = "tools/jobs_l10n_baseline.json"
 def known(root):
     sources = {e["source"] for e in json.loads((root / TABLE).read_text(encoding="utf-8"))}
 
-    def walk(o):
-        if isinstance(o, dict):
-            if isinstance(o.get("zh-Hans"), str):
-                sources.add(o["zh-Hans"])
-            for v in o.values():
-                walk(v)
-        elif isinstance(o, list):
-            for v in o:
-                walk(v)
+    # 共享体验表只取两端翻译时真用的那几类（同 BackendText.sharedEntries / Windows BackendText）：
+    #   states 里 running / failed 的标题、event_map.terminal_results 的 job.succeeded / job.cancelled、pack_graphics_mode.labels、stage_labels
     shared = root / SHARED
     if shared.exists():
-        walk(json.loads(shared.read_text(encoding="utf-8")))
+        spec = json.loads(shared.read_text(encoding="utf-8"))
+        picked = [s.get("title") for s in spec.get("states", []) if isinstance(s, dict) and s.get("id") in ("running", "failed")]
+        results = (spec.get("event_map") or {}).get("terminal_results") or {}
+        picked += [(results.get(k) or {}).get("title") for k in ("job.succeeded", "job.cancelled")]
+        picked += list(((spec.get("pack_graphics_mode") or {}).get("labels") or {}).values())
+        picked += list((spec.get("stage_labels") or {}).values())
+        sources.update(t["zh-Hans"] for t in picked if isinstance(t, dict) and isinstance(t.get("zh-Hans"), str))
     patterns = [re.compile(r"\A" + re.sub(r"\\\{\d+\\\}", "(.+?)", re.escape(s)) + r"\Z", re.S)
                 for s in sources if re.search(r"\{\d+\}", s)]
     return sources, patterns
@@ -49,7 +48,7 @@ def covered(text, sources, patterns):
     if text in sources or any(p.match(text) for p in patterns):
         return True
     parts = [x for x in re.split(r"[\n；]", text) if x.strip()]
-    return len(parts) > 1 and all(covered(x, sources, patterns) for x in parts)
+    return parts != [text] and bool(parts) and all(covered(x, sources, patterns) for x in parts)   # 拆开有变化（含「；」开头的拼句片段）且每段都翻得了
 
 
 def literals(path):

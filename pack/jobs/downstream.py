@@ -63,23 +63,23 @@ def load(path=None, c=None):
         print(f"【黄】下游方案登记表读不了，按没有下游方案处理：{e}", file=sys.stderr)
         return {}
     if data.get("schema") != 1:
-        raise SchemeError("下游方案登记表 schema 不是 1")
+        raise SchemeError("下游方案登记表 schema 不是 1")  # 非玩家句
     out, seen = {}, {}
     for s in data.get("schemes", []):
         miss = [k for k in REQUIRED if k not in s]
         if miss:
-            raise SchemeError(f"下游方案 {s.get('id', '?')} 缺字段：{'、'.join(miss)}")
+            raise SchemeError(f"下游方案 {s.get('id', '?')} 缺字段：{'、'.join(miss)}")  # 非玩家句
         if len(s["bundle"].get("commit", "")) != 40:
-            raise SchemeError(f"下游方案 {s['id']} 的提交号要写全 40 位")
+            raise SchemeError(f"下游方案 {s['id']} 的提交号要写全 40 位")  # 非玩家句
         for t in s["titleIds"]:
             t = t.upper()
             if len(t) != 16 or any(ch not in "0123456789ABCDEF" for ch in t):
-                raise SchemeError(f"下游方案 {s['id']} 的程序号格式不对：{t}")
+                raise SchemeError(f"下游方案 {s['id']} 的程序号格式不对：{t}")  # 非玩家句
             if t in seen:
-                raise SchemeError(f"程序号 {t} 登记了两个下游方案：{seen[t]}、{s['id']}")
+                raise SchemeError(f"程序号 {t} 登记了两个下游方案：{seen[t]}、{s['id']}")  # 非玩家句
             seen[t] = s["id"]
         if s["id"] in out:
-            raise SchemeError(f"下游方案 id 重复：{s['id']}")
+            raise SchemeError(f"下游方案 id 重复：{s['id']}")  # 非玩家句
         out[s["id"]] = s
     return out
 
@@ -118,7 +118,7 @@ def eligibility(scheme, game, lang="zh"):
     if lang == "en":
         now = f"you imported {have}" if up else "you have not imported an update"
         return False, f"{scheme['name']} supports update {want} only, and {now}. Import update {want} to choose it"
-    return False, f"{scheme['name']} 只支持 {want} 更新，{f'你导入的是 {have}' if up else '你还没导入更新'}。导入 {want} 更新后可选"
+    return False, f"{scheme['name']} 只支持 {want} 更新，{f'你导入的是 {have}' if up else '你还没导入更新'}。导入 {want} 更新后可选"  # 非玩家句
 
 
 def describe(c, game, schemes=None):
@@ -211,7 +211,7 @@ def fetch_bundle(c, scheme, progress=None):
                         if progress and total:
                             progress(done, total)
                 if file_sha256(part) != b["sha256"]:
-                    last = "校验不对"; part.unlink(missing_ok=True); continue
+                    last = "校验不对"; part.unlink(missing_ok=True); continue  # 非玩家句
                 os.replace(part, z); break
             except OSError as e:   # urllib 的网络错误都是 OSError 子类
                 last = str(e); part.unlink(missing_ok=True)
@@ -262,8 +262,8 @@ def _check_exefs(scheme, extraction):
         f = Path(extraction) / "exefs" / name
         if not f.is_file() or file_sha256(f) != want:
             disp = scheme["needs"].get("updateDisplay", "")
-            raise Failure(f"解包出的游戏程序 {name} 不是 {scheme['name']} 要的那一版{f'（{disp}）' if disp else ''}，做不出来。"
-                          f"导入 {disp or '对应版本的'} 更新后再导出。", code="downstream_ineligible")
+            raise Failure(f"解包出的游戏程序 {name} 不是 {scheme['name']} 要的那一版{f'（{disp}）' if disp else ''}，做不出来。"  # 非玩家句
+                          f"导入 {disp or '对应版本的'} 更新后再导出。", code="downstream_ineligible")  # 非玩家句
 
 
 def out_dir(c, gid, scheme):
@@ -290,7 +290,7 @@ def build_ios(c, game, scheme):
     bundle = fetch.join()
     ms.enter(c, "ipa")
     ipa = out / f"{scheme['id']}.ipa"
-    pack = out / f"{scheme['id']}资源包"
+    pack = out / f"{scheme['id']}资源包"  # 非玩家句
     ipa.unlink(missing_ok=True)
     env = dict(c.env(), DM_ROOT=str(out / "work"), D2RM_S2ARM_PACK=str(pack), PYTHONUTF8="1")
     c.run([sys.executable, bundle / "src" / t["tool"], bundle / "shell.zip", extraction, ipa], logs / "downstream-ios.log", env)
@@ -336,7 +336,7 @@ def install_ios(c, game, scheme):
         r = subprocess.run(["/usr/bin/ditto", "-x", "-k", rec["ipa"], str(stage)], capture_output=True, text=True)
         app = next((stage / "Payload").glob("*.app"), None)
         if r.returncode or not app:
-            raise Failure("解不开 iPhone 包：" + (r.stderr.strip()[-200:] or rec["ipa"]), code="job_failed")
+            raise Failure("解不开 iPhone 包：" + (r.stderr.strip()[-200:] or rec["ipa"]), code="job_failed")  # 非玩家句
         info = app / "Info.plist"
         pl = plistlib.loads(info.read_bytes()); pl["CFBundleIdentifier"] = bid
         if c.r.get("displayName"):   # 可选：主屏显示名（手测时与手机上同名的别的包区分开）；缺省用下游包自己的
@@ -354,11 +354,11 @@ def install_ios(c, game, scheme):
             if e.code != "tool_exit":
                 raise
             from errors import tool_reason
-            raise Failure("签名没成：" + tool_reason(log), code=inst.classify(log.read_text(errors="replace")[-8000:] if log.is_file() else "")) from e
+            raise Failure("签名没成：" + tool_reason(log), code=inst.classify(log.read_text(errors="replace")[-8000:] if log.is_file() else "")) from e  # 非玩家句
         c.begin("装到 iPhone", 3, 4)
         rc, _, err = devicectl(c, "device", "install", "app", "--device", dev["id"], str(app), timeout=1800)
         if rc:
-            raise Failure("装不上 iPhone：" + (err.strip()[-2000:] or f"devicectl 退出 {rc}"), code=inst.classify(err, default="device_install_failed"))
+            raise Failure("装不上 iPhone：" + (err.strip()[-2000:] or f"devicectl 退出 {rc}"), code=inst.classify(err, default="device_install_failed"))  # 非玩家句
     finally:
         shutil.rmtree(stage, ignore_errors=True)
     c.begin("把游戏资源推进 iPhone（只推变了的文件；第一次要几分钟）", 4, 4)

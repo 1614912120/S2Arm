@@ -62,11 +62,11 @@ def fetch_rcodesign(dest, side, cache=None):
         try:
             urllib.request.urlretrieve(RCODESIGN_DOWNLOAD + name, tmp)
         except OSError as e:
-            raise SystemExit(f"【红】取不到 {RCODESIGN_DOWNLOAD + name}（{e}）：在能连 GitHub 的机器上下好放进 {cache}（或用 S2A_RCODESIGN_CACHE 指过去）再打")
+            raise SystemExit(f"【红】取不到 {RCODESIGN_DOWNLOAD + name}（{e}）：在能连 GitHub 的机器上下好放进 {cache}（或用 S2A_RCODESIGN_CACHE 指过去）再打")  # 非玩家句
         os.replace(tmp, src)
     got = _h.sha256(src.read_bytes()).hexdigest()
     if got != want:
-        raise SystemExit(f"【红】{src} 的 SHA-256 是 {got}，钉的是 {want}：不是 apple-codesign {RCODESIGN_VERSION} 官方发布件，拒打")
+        raise SystemExit(f"【红】{src} 的 SHA-256 是 {got}，钉的是 {want}：不是 apple-codesign {RCODESIGN_VERSION} 官方发布件，拒打")  # 非玩家句
     dest.mkdir(parents=True, exist_ok=True)
     top = name.rsplit(".tar.gz", 1)[0].rsplit(".zip", 1)[0]
     for inner, out in ((member, member), ("COPYING", "LICENSE-apple-codesign-MPL-2.0.txt")):
