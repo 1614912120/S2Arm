@@ -455,9 +455,9 @@ static int emit_real_request(const char *profile_path, const char *closure, cons
     external_profile[pn] = 0; snprintf(external_closure, sizeof external_closure, "%s", closure);
     struct s2a_jv profile_obj = {external_profile, pn}, hash_field;
     if (s2a_jv_obj_find(profile_obj, "profileHash", &hash_field) || s2a_jv_str(hash_field, external_profile_hash, sizeof external_profile_hash)) return 1;
-    // GS 整链（--emit-real）：生成的请求要与 vk/t_replay_gs 在 lavapipe 上发出的逐字节相同；lavapipe 有 VK_EXT_depth_clip_control，
+    // GS 整链（--emit-real 及其复用变体）：生成的请求要与 vk/t_replay_gs 在 lavapipe 上发出的逐字节相同；lavapipe 有 VK_EXT_depth_clip_control，
     //   有这项能力时现编不改写 z（nvk_shader.c fill_facts），所以这里同样报有（设备没有时 t_replay_gs 的逐字节比对会直接红）
-    fake_depth_clip = tbuf == 0;
+    fake_depth_clip = tbuf == 0 || tbuf >= 3;   // GS 整链的基准（0）、执行复用（3）、三种宽松输入（4–6）同一口径，内容才可比；贴图缓冲链（1 / 2）不变
     rp_state_reset(); rp_shader_reset(); s2a_source_clear();
     uint8_t keys[3][8];
     for (unsigned st = 0; st < 3; st++) {
