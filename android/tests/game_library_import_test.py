@@ -268,11 +268,11 @@ public class ImportProbe {
    demand(refused&&refusal.contains("no game package"),"folder without a package not refused: "+refusal);
    library.registerInPlace(root.resolve("shared/S2Arm/Games").toFile());done(q);
    demand(!refused,"parent folder of an in-place package refused: "+refusal);
-   // 没开「所有文件访问」时真失败：报错里带这个真原因（PlayerError 归 NO_ALL_FILES = E115 / E116）
+   // 没开「所有文件访问」时真失败：报错里带这个真原因（PlayerError 归 NO_ALL_FILES = E130 / E131，合 main 后的资源号）
    android.os.Environment.allFiles=false;
    library.registerInPlace(root.resolve("shared/missing").toFile());done(q);
    android.os.Environment.allFiles=true;
-   demand(refused&&refusal.startsWith("PLAYER_ERR [E101, E115, E116, All files access is off"),"missing permission not named: "+refusal);
+   demand(refused&&refusal.startsWith("PLAYER_ERR [E101, E130, E131, All files access is off"),"missing permission not named: "+refusal);
    // 选择器树文档 id → 路径（规则照 Swap2-Native PathUtil）
    File primary=new File("/storage/emulated/0");
    demand("/storage/emulated/0/S2Arm/Games".equals(GameLibrary.inPlacePath("primary:S2Arm/Games",primary)),"primary tree path");
