@@ -1684,6 +1684,8 @@ static NSString *lan_warning(void) {
 @property(strong) S2AMacInputGuide *inputGuide;
 @property(strong) NSMenuItem *controllerStatus;
 @property BOOL ns2ReconnectPending;
+@property BOOL ns2RelayWasReady;   // 本局 Switch 2 手柄（Pro / Joy-Con 2）真连上过，断开时才提示
+@property ns2_kind ns2RelayReadyKind;   // 连上时的型号（断开后读不到），横幅标题用
 @property NSRect windowedFrame;   // 进全屏前的窗口位置大小，退全屏时放回
 @end
 static __weak S2AMacDelegate *g_delegate;
@@ -1711,6 +1713,8 @@ static __weak S2AMacDelegate *g_delegate;
     ns2_status controller = s2a_mac_ns2_status();
     if (controller == NS2_STATUS_READY) {
         self.ns2ReconnectPending = YES;
+        self.ns2RelayWasReady = YES;
+        self.ns2RelayReadyKind = s2a_mac_ns2_kind();
     }
     const char *relay = getenv("S2A_NS2_SOCKET");
     BOOL relayMode = relay && *relay;
@@ -1718,7 +1722,12 @@ static __weak S2AMacDelegate *g_delegate;
     if (self.ns2ReconnectPending && s2a_mac_ns2_relay_due(controller, relay)) s2a_mac_ns2_connect();
     if (self.ns2ReconnectPending && (controller == NS2_STATUS_ERROR || controller == NS2_STATUS_DISCONNECTED)) {
         if (relayMode) {
-            // 通道断开不弹横幅（每次都打断游戏）；菜单状态行照常显示，重连后自动接回
+            // 只在本局真连上过 Switch 2 手柄、之后断开时提示一次（接回后复位）；
+            //   没有 / 没连 Switch 2 手柄（用别的蓝牙手柄）时通道转来的「未连接」不算断开，不提示
+            if (self.ns2RelayWasReady) {
+                [self.banner showTitle:@(s2a_mac_ns2_kind_name(self.ns2RelayReadyKind)) body:@"S2Arm 手柄连接已中断；重新连接后游戏会自动接回。" accept:nil decline:nil seconds:12];
+                self.ns2RelayWasReady = NO;
+            }
             // S2Arm may be starting a fresh helper; keep trying the stable relay socket.
             s2a_mac_ns2_connect();
         } else {
