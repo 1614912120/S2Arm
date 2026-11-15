@@ -8141,6 +8141,7 @@ static void c207_all(const char *dir) {
     c207_diag_readers(dir);
     CHECK(OK(nvn_gpu_close(5000000000ull, &e)), "C207 close：%d %s", e.rc.code, e.why);
     printf("C207 诊断读数互不清零：近 300 帧读数与逐笔读数各自读增量、不清零共享累加器，已核对\n");
+}
 
 // 上屏 EASU 开关夹具：单独进程跑一次，先关后开各呈现一次。
 // 为什么单独：nvn_gpu_surface 是进程级单例，且提交信号序列由 C71 占着；

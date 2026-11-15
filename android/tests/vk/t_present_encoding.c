@@ -89,7 +89,7 @@ static void probe_readback(VkQueue q, VkImage image) {
     CHECK(vkQueueSubmit(q,1,&si,f)==VK_SUCCESS,"probe submit");
     CHECK(vkWaitForFences(d,1,&f,VK_TRUE,5000000000ull)==VK_SUCCESS,"probe wait");
     uint8_t *data=NULL; CHECK(vkMapMemory(d,mem,0,bytes,0,(void **)&data)==VK_SUCCESS,"probe map");
-    uint64_t bad=0; unsigned first=0;
+    uint64_t bad=0; unsigned first=0, fx=0, fy=0;
     for(uint32_t y=0;y<probe_extent.height;y++) for(uint32_t x=0;x<probe_extent.width;x++) {
         int inside=!probe_bars || (x>=40 && x<280 && y>=20 && y<160);
         unsigned want=inside?probe_value:0, alpha=inside?(probe_alpha255?255:128):255;
@@ -102,11 +102,11 @@ static void probe_readback(VkQueue q, VkImage image) {
             if (probe_format == VK_FORMAT_B8G8R8A8_UNORM) { unsigned tmp=rgb[0];rgb[0]=rgb[2];rgb[2]=tmp; }
         }
         int mismatch=abs((int)p[0]-(int)rgb[0])>1 || abs((int)p[1]-(int)rgb[1])>1 || abs((int)p[2]-(int)rgb[2])>1 || p[3]!=alpha;
-        if(mismatch && !bad) first=p[0];
+        if(mismatch && !bad) { first=p[0]; fx=x; fy=y; }
         bad+=mismatch;probe_pixels++;
     }
     probe_cases++;probe_bad+=bad;
-    printf("PRESENT_PIXELS case=%u format=%d expected=%u firstBad=%u bad=%llu bars=%u\n",probe_cases,(int)probe_format,probe_value,first,(unsigned long long)bad,probe_bars);
+    printf("PRESENT_PIXELS case=%u format=%d expected=%u firstBad=%u at=%u,%u bad=%llu bars=%u\n",probe_cases,(int)probe_format,probe_value,first,fx,fy,(unsigned long long)bad,probe_bars);
     vkUnmapMemory(d,mem);vkDestroyFence(d,f,NULL);vkDestroyCommandPool(d,pool,NULL);vkDestroyBuffer(d,b,NULL);vkFreeMemory(d,mem,NULL);
 }
 VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentKHR(VkQueue q,const VkPresentInfoKHR *pi) {

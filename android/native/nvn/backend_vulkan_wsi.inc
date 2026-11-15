@@ -362,9 +362,16 @@ static int wsi_compose_blit(struct nvn_gpu_cmd_s *c, struct nvn_gpu_surface_s *s
 // 返回 1 = 已录制；0 = 不适用（调用方回落 wsi_compose_blit；此处已下发的 UNDEFINED 屏障对后者无害）。
 static int wsi_compose_easu(struct nvn_gpu_cmd_s *c, struct nvn_gpu_surface_s *s, uint32_t idx,
                             const nvn_gpu_present_desc *d, int encode) {
-    wsi_swap_barrier(c->cb, s->images[idx], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 0,
-                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                     VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+    // 整张图先清黑：渲染通道的 CLEAR 只作用于渲染区，dst 之外的边框得自己清（与 blit 路径同一个黑）。
+    wsi_swap_barrier(c->cb, s->images[idx], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    VkClearColorValue black; memset(&black, 0, sizeof black); black.float32[3] = 1.0f;
+    if (nvn_plat_flag("nvk_bars", 0)) { black.float32[0] = 1.0f; black.float32[2] = 1.0f; }
+    VkImageSubresourceRange whole = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(c->cb, s->images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &whole);
+    wsi_swap_barrier(c->cb, s->images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
     if (!easu_compose(c, s->images[idx], s->extent, 0, s->format, d->src, d->crop, d->dst, d->flip_y, s->gen, encode))
         return 0;
     wsi_swap_barrier(c->cb, s->images[idx], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -467,9 +474,11 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
     { int up = nvn_plat_flag("nvk_upscale", 0);
       int elig = up ? easu_eligible(st, s->format) : 0;
       { static int seen = -1; int now = up * 2 + elig;   // 只在「开关 × 适用」变化时记一行
-        if (now != seen) { seen = now;
-          nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", "上屏放大读数：开关=%d 适用=%d（源格式=%d 交换链=%d）", up, elig, (int)st->format, (int)s->format); } }
-      if (elig) upscaled = wsi_compose_easu(c, s, idx, d, encode); }
+        if (now != seen) { seen = now; char b[160];
+          snprintf(b, sizeof b, "上屏放大读数：开关=%d 适用=%d（源格式=%d 交换链=%d）", up, elig, (int)st->format, (int)s->format);
+          nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); } }
+      if (elig) { upscaled = wsi_compose_easu(c, s, idx, d, encode);
+        if (!upscaled) nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", "上屏放大：这次不适用，回落缩放拷贝"); } }
     int ok = upscaled ? 1 : wsi_compose_blit(c, s, idx, st, d, &fp, encode, target);
     // 内部段：摘出活动表，自己提交（等取图信号量、发呈现信号量），交给完成线程只做回收
     pthread_mutex_lock(&g_mu);
@@ -482,8 +491,9 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
     if (r == VK_SUCCESS) r = vkCreateFence(g.d, &fi, NULL, &fence);
     pthread_mutex_lock(&g_submit_mu);
     if (r == VK_SUCCESS) {
-        VkPipelineStageFlags wait_stage = upscaled ? VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-                                                   : VK_PIPELINE_STAGE_TRANSFER_BIT;
+        VkPipelineStageFlags wait_stage = upscaled
+            ? (VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)   // 先清场再画
+            : VK_PIPELINE_STAGE_TRANSFER_BIT;
         VkSubmitInfo si; memset(&si, 0, sizeof si);
         VkCommandBuffer cbs[2];
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO; si.commandBufferCount = submit_cbs(c, cbs); si.pCommandBuffers = cbs;

@@ -115,7 +115,8 @@ static int easu_module(const uint32_t *words, size_t bytes, VkShaderModule *out)
     return vkCreateShaderModule(g.d, &ci, NULL, out) == VK_SUCCESS;
 }
 
-// 调用者持 g_easu_mu。渲染通道只带一个颜色附件、开时清黑（目标矩形外因此是黑的），
+// 调用者持 g_easu_mu。渲染通道只带一个颜色附件、开时清黑。
+// 注意 LOAD_OP_CLEAR 只作用于渲染区：渲染区之外的边框由调用方先整张清黑。
 // 首末布局都用 COLOR_ATTACHMENT_OPTIMAL：present 自己负责 UNDEFINED→附件、附件→PRESENT。
 static int easu_pipelines_locked(VkFormat fmt) {
     if (g_easu.failed) return 0;
