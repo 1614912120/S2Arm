@@ -215,6 +215,33 @@ static void span_note(void) {   // s2a_mem_span_now 在 svc_mem.c、mtl_present_
     fprintf(f, "%llu\n", (unsigned long long)now); fclose(f);
     if (!rename(t, p)) rec = now;
 }
+// 低区耗尽死的局也记跨度（#1143，11-15 iPhone 读数）：多款容器里一款没有记录时按它自己的标准布局算（75964 MB），窗口一点不缩、下方只留 3 GiB 给宿主；
+//   这款加载中几秒内低区碰底（pthread_create / 着色器库映射失败，最大空洞 6 MB）死在首帧前，心跳（10 秒一次、出图满 300 次才记）一次都赶不上，
+//   永远学不到、永远死。改为崩溃那一刻低区确实碰底（最大空洞 < 64 MB）就把本局已碰到的跨度记下——这是它「至少要这么多」的下界，下一局窗口按它缩、其余给宿主；
+//   碰得更高就再记大（心跳 / 下次崩溃都比大才写），缩过头布局放不下走起局自愈（s2a_window_span_widen）。别的原因早死（低区没碰底）不记，同 11-12 那条。
+//   崩溃处理里只用 open / read / write / close / rename：路径和取跨度的函数在 C# 初始化后预先备好（s2a_window_span_arm，host_main.c 调）
+#define SPAN_CRASH_LOW (64ull << 20)
+int s2a_window_span_crash_worth(uint64_t low_largest) { return low_largest < SPAN_CRASH_LOW; }   // 纯函数，t_vawin_learned 测
+static char g_span_crash_p[1024], g_span_crash_t[1100];
+static uint64_t (*g_span_crash_f)(void);
+void s2a_window_span_arm(void) {
+    char p[1024]; if (!span_path(p, sizeof p, 0)) return;
+    { char d[1024]; snprintf(d, sizeof d, "%s", p); char *sl = strrchr(d, '/'); if (sl) { *sl = 0; mkdir(d, 0755); } }
+    g_span_crash_f = (uint64_t (*)(void))dlsym(RTLD_DEFAULT, "s2a_mem_span_now");
+    snprintf(g_span_crash_t, sizeof g_span_crash_t, "%s.tmp", p); snprintf(g_span_crash_p, sizeof g_span_crash_p, "%s", p);
+}
+uint64_t s2a_window_span_crash(uint64_t low_largest) {   // 返回记下的跨度（没记 = 0）
+    if (!g_span_crash_p[0] || !g_span_crash_f || !s2a_window_span_crash_worth(low_largest)) return 0;
+    uint64_t now = g_span_crash_f(), rec = 0; if (!now) return 0;
+    char b[32]; int fd = open(g_span_crash_p, O_RDONLY);
+    if (fd >= 0) { ssize_t n = read(fd, b, sizeof b - 1); close(fd); for (ssize_t i = 0; i < n && b[i] >= '0' && b[i] <= '9'; i++) rec = rec * 10 + (uint64_t)(b[i] - '0'); }
+    if (now <= rec) return 0;
+    char d[24]; int k = (int)sizeof d; d[--k] = '\n'; uint64_t v = now; do { d[--k] = (char)('0' + v % 10); v /= 10; } while (v && k > 0);
+    fd = open(g_span_crash_t, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (fd < 0) return 0;
+    ssize_t w = write(fd, d + k, sizeof d - (size_t)k); close(fd);
+    if (w != (ssize_t)(sizeof d - (size_t)k) || rename(g_span_crash_t, g_span_crash_p)) return 0;
+    return now;
+}
 static uint64_t env_mb(const char *k, uint64_t def) { const char *v = getenv(k); return (v && *v ? strtoull(v, NULL, 10) : def) << 20; }
 static int g_ctr;
 static uint64_t g_ctr_pool;   // 多款容器：包内各款应用池的最大值（构造期还没选游戏，文件后备按最大的判）

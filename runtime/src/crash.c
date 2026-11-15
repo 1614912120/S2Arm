@@ -354,6 +354,7 @@ static void crash_other_wait(int sig) {
 //   处理函数里本信号是屏蔽的，先放开再抛；万一没结束（不该发生）照旧 _exit(128 + sig)。
 //   读退出码的地方：shell 里被信号结束的 $? 仍是 128 + sig；作业层 Context.run 把 Python 的负返回码折回 128 + sig（pack/jobs/core.py）
 static int g_crash_quiet;   // s2a_crash_install 时取（信号处理里不读环境）：native.h s2a_crash_quiet
+__attribute__((weak)) uint64_t s2a_window_span_crash(uint64_t low_largest) { (void)low_largest; return 0; }   // vawin.c 强定义：低区碰底死的局记跨度（#1143）
 __attribute__((weak)) void s2a_guest_run_mark_crash(void) {}   // runtime/src/vawin.c 强定义：「在跑」标记改写成 crash（闪退不算死于内存，#909）
 static void crash_reraise(int sig) {
     s2a_guest_run_mark_crash();
@@ -493,7 +494,9 @@ static void on_crash(int sig, siginfo_t *si, void *ctx) {
     fault_region_note(sig, si, uc);
     reg_objects(uc);
     { uint64_t ht, hl, fs, fh; int fn; s2a_low_holes(&ht, &hl); s2a_fd_usage(&fn, &fs, &fh);   // 资源耗尽类崩溃先看这两样：低区地址 / 文件句柄
-      LOG("崩溃时余量：低区空洞合计 %llu MB、最大一块 %llu MB；文件句柄已开 %d 个，软上限 %llu、硬上限 %llu", (unsigned long long)(ht >> 20), (unsigned long long)(hl >> 20), fn, (unsigned long long)fs, (unsigned long long)fh); }
+      LOG("崩溃时余量：低区空洞合计 %llu MB、最大一块 %llu MB；文件句柄已开 %d 个，软上限 %llu、硬上限 %llu", (unsigned long long)(ht >> 20), (unsigned long long)(hl >> 20), fn, (unsigned long long)fs, (unsigned long long)fh);
+      uint64_t sp = s2a_window_span_crash(hl);   // 低区碰底死的局记下已碰到的跨度（vawin.c，#1143）
+      if (sp) LOG("低区碰底：本局已碰到的地址跨度 %llu MB 记为本款学到的跨度，下一局窗口按它缩、其余给宿主", (unsigned long long)(sp >> 20)); }
     s2a_lowva_crash_note();   // 低区账（各家账面、保留量、拦不到的）
     { void s2a_vm_low(const char *); s2a_vm_low("崩溃时"); }   // 低区地址耗尽类崩溃（Metal / spirv_cross / 暂存缓冲）看当时谁占着
     { void s2a_guest_va_report(const char *); s2a_guest_va_report("崩溃时"); }   // 窗口里游戏真映射了多少、落在哪
