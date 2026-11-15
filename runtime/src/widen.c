@@ -517,10 +517,15 @@ static void widen_load_stream(module_t *m, const char *dir, const char *path, FI
                 uint32_t z = *(const uint32_t *)(m->base + o);
                 if ((z & 0xffe0001f) == ((fl ? 0xd2a00000u : 0xd2800000u) | (s->word & 31))) { lo = fl ? ((z >> 5) & 0xffff) << 16 : (z >> 5) & 0xffff; have = 1; break; }
                 if (si < 0 && (z & 31) == (s->word & 31)) break; }
-            if (!have) LOG("【红】宽屏：%s+%#x %s 找不到配对的 MOVZ，低半按 0", m->name, s->off, kname(s->kind));
             for (int i = 0; i < 8; i++) if (fl ? fh == (float)k_hcls[i] : imm == k_hcls[i]) c = i;
-            if (s->on && c >= 0) hv = fl ? fbits((float)scale_h(k_hcls[c])) : (uint32_t)scale_h(k_hcls[c]);
-            else if (s->on) LOG("【红】宽屏：%s+%#x %s 高 %g 不是 16:9 档高，按原值", m->name, s->off, kname(s->kind), fl ? (double)fh : (double)imm);
+            // 找不到搭档（0.4.0 起搭档那条让给社区补丁、被换成补丁开关跳转，满屏开关开不开都认不出，#1180）：整格保持原值、不放大。
+            //   扫描器只在 (宽, 高) 是同一 16:9 档时出 f2h / i2h（graphics/widen/scan/wide_scan.py CLS，与 k_cls / k_hcls 同序），原宽 = 高所在档的宽；
+            //   原来按 0 写低半 → 交换链宽 0 → 黑屏
+            if (!have && c >= 0) { lo = fl ? fbits((float)k_cls[c]) : k_cls[c]; have = 2; LOG("宽屏：%s+%#x %s 找不到配对的 MOVZ，按档位原宽 %u、高不改", m->name, s->off, kname(s->kind), k_cls[c]);
+                if (s->on) { s->on = 0; non--; g_hsize--; } }   // 没真放大：不算启用的显示高度点（宿主据此判游戏自己出高图）
+            if (!have) LOG("【红】宽屏：%s+%#x %s 找不到配对的 MOVZ，高也不是 16:9 档，低半按 0", m->name, s->off, kname(s->kind));
+            if (s->on && c >= 0 && have == 1) hv = fl ? fbits((float)scale_h(k_hcls[c])) : (uint32_t)scale_h(k_hcls[c]);
+            else if (s->on && have == 1) LOG("【红】宽屏：%s+%#x %s 高 %g 不是 16:9 档高，按原值", m->name, s->off, kname(s->kind), fl ? (double)fh : (double)imm);
             *slot = (uint64_t)hv << 32 | lo;
         }
         else if (s->kind == 5 && s->on) {   // f32：16:9 浮点分辨率表的锚点（1920.0, 1080.0）。表里各档（如 960×540 … 3840×2160）一起按屏幕宽放大：
