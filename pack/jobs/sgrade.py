@@ -102,8 +102,10 @@ def scan(c):
         where, exefs = find_program(c, g)
         bid = (exefs / "main").read_bytes()[0x40:0x48].hex().upper() if exefs else ""
         pats = local_patches(c, gid, bid) if bid else {}
-        games.append(dict(id=gid, name=g.get("name") or gid, program=where, build=bid, patches=pats, total=sum(pats.values()),
-                          iphone=iphone, mac=mac, off=info.get("sgradeOff") is True))
+        import patches as _p   # 维护者 11-15「两者合成一套」：没社区满屏补丁、这一版在宽屏已验证名单 → 满屏算我方通用满屏
+        own = not pats.get("widescreen") and _p.own_widen(c, gid, bid)
+        games.append(dict(id=gid, name=g.get("name") or gid, program=where, build=bid, patches=pats, total=sum(pats.values()) + (1 if own else 0),
+                          ownWiden=bool(own), iphone=iphone, mac=mac, off=info.get("sgradeOff") is True))
     found = [x for x in games if x["program"] != "none"]
     return dict(games=games, found=len(found), upgradable=sum(1 for x in found if x["total"] and not x["off"]),
                 noPatch=sum(1 for x in found if not x["total"]), missing=len(games) - len(found))

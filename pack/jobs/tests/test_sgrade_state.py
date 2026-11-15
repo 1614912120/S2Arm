@@ -95,6 +95,17 @@ class SgradeStateTests(unittest.TestCase):
         finally:
             sgrade._match = real
 
+    def test_own_widen_counts_for_card_badge_upgrade(self):
+        # 维护者 11-15「两者合成一套」：这一版在宽屏已验证名单 → patches.own_widen 真（出包页 / 升级页用）；包里带 widen_verified.tsv 就亮金色 S。期望手写
+        import patches, library
+        vt = self.c.engine / "graphics/widen/tables/verified.tsv"; vt.parent.mkdir(parents=True, exist_ok=True)
+        vt.write_text("# x\n" + GID + "\t" + "aa" * 16 + "\tcensus\tapple\t2026-11-15\tx\n0100000000000001\t" + "bb" * 16 + "\tcensus\tandroid\t2026-11-15\tx\n")
+        self.assertEqual((patches.own_widen(self.c, GID, "AAAAAAAAAAAAAAAA"), patches.own_widen(self.c, GID, "CCCCCCCCCCCCCCCC"),
+                          patches.own_widen(self.c, "0100000000000001", "BBBBBBBBBBBBBBBB"), patches.own_widen(self.c, GID, "")), (True, False, False, False))
+        self.assertFalse(library.sgrade_badge(self.c, GID, self.img))      # 包里什么都没有
+        (self.img / "widen_verified.tsv").write_text("x\n")
+        self.assertTrue(library.sgrade_badge(self.c, GID, self.img))       # 只有我方通用满屏也亮
+
 
 if __name__ == "__main__":
     unittest.main()
