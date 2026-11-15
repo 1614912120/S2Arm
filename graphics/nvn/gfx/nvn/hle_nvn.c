@@ -1739,7 +1739,7 @@ void *s2a_cmd_arena_map(uint64_t len) __attribute__((weak));
 void s2a_cmd_arena_unmap(void *p, uint64_t len) __attribute__((weak));
 static void *sh_chunk_map(void) {
     void *t = s2a_cmd_arena_map ? s2a_cmd_arena_map(SH_CHUNK) : NULL; if (t) return t;
-    void *m = mmap(NULL, SH_CHUNK, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    void *m = mmap(NULL, SH_CHUNK, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, S2A_VMTAG_FD(S2A_VMTAG_HOST), 0);
     return m == MAP_FAILED ? NULL : m;
 }
 static void sh_chunk_unmap(void *m) { if (s2a_cmd_arena_unmap) s2a_cmd_arena_unmap(m, SH_CHUNK); else munmap(m, SH_CHUNK); }
@@ -4170,7 +4170,7 @@ static _Atomic uint64_t g_vsh_pages;   // copied host pages alive in all virtual
 static void *vpool_mmap(uint64_t len) {
     static uint64_t hole = ~0ull; if (hole == ~0ull) { const char *e = getenv("S2A_VPOOL_HOLE_MB"); hole = e && *e ? strtoull(e, NULL, 0) << 20 : 0; }
     if (hole && len > hole) { errno = ENOMEM; return MAP_FAILED; }
-    return mmap(NULL, len, PROT_NONE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    return mmap(NULL, len, PROT_NONE, MAP_ANON | MAP_PRIVATE, S2A_VMTAG_FD(S2A_VMTAG_VPOOL), 0);   // 带标签：低区按标签合计认得出（#7c1a0f）
 }
 // 虚拟池的整段预留记进低区账（#1143：马车世界 iPhone 开局 11 个池预留 1368 MB，宿主 3 GB 一分钟内耗光，原先全算「拦不到的」）。
 //   只记账、不设限（不走 acquire）：预留失败照旧逐次减半；账本取不到（单测 / 回放 / 安卓）就不记

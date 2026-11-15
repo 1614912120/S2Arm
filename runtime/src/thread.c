@@ -2780,7 +2780,7 @@ uint32_t s2a_event_dup_read(uint64_t ev) {
 uint32_t s2a_shmem_create(uint64_t size, void **host) {
     if (!size) return 0;
     shmem_t *sm = calloc(1, sizeof *sm); sm->size = size; sm->refs = 1; sm->owned = 1;
-    sm->buf = mmap(NULL, (size + 0x3FFF) & ~0x3FFFull, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);   // MAP_SHARED：vm_remap 别名到游戏地址后同一批物理页
+    sm->buf = mmap(NULL, (size + 0x3FFF) & ~0x3FFFull, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, S2A_VMTAG_FD(S2A_VMTAG_SHMEM), 0);   // MAP_SHARED：vm_remap 别名到游戏地址后同一批物理页
     if (sm->buf == MAP_FAILED) die("共享内存后备 mmap %#llx", (unsigned long long)size);
     glock(); uint32_t h = h_new(S2A_OBJ_SHMEM, sm, 0);
     if (h) { sm->next = g_shmem; g_shmem = sm; } pthread_mutex_unlock(&G);
