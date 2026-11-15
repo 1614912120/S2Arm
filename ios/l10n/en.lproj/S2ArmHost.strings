@@ -35,14 +35,14 @@
 "common.ok" = "OK";
 "common.settings" = "Settings";
 "cpatch.footer" = "Changes take effect the next time you start the game.";
-"cpatch.footer.fps" = "Items marked “Follows 60 FPS” turn on and off with the 60 FPS switch in Settings. Changes take effect the next time you start the game.";
+"cpatch.footer.fps" = "Items marked “Follows Frame Rate” turn on and off with the Frame Rate switch in Settings. Changes take effect the next time you start the game.";
 "cpatch.group.fps" = "Frame rate";
 "cpatch.state.on" = "On";
 "cpatch.state.off" = "Off";
 "cpatch.group.gfx" = "Graphics";
 "cpatch.group.widescreen" = "Full screen";
 "cpatch.item.detail" = "%@\n%@ · License %@%@";
-"cpatch.item.followsFps" = " · Follows 60 FPS";
+"cpatch.item.followsFps" = " · Follows Frame Rate";
 "cpatch.item.followsFullscreen" = " · Follows Full screen";
 "cpatch.license.none" = "Not stated";
 "cpatch.notice" = "Full screen and higher frame rates add load and use more power in exchange for a better experience; turn them on as you like on lower-end devices.";
