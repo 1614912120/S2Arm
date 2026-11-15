@@ -32,26 +32,26 @@ import NXLauncher
         for zh in [true, false] {
             for phase in [NS2LauncherController.Phase.off, .scanning, .connecting, .failed] {
                 controller.setPhaseForTesting(phase)
-                let view = Switch2ProConnectionPopover(controller: controller, systems: systems, simplifiedChinese: zh)
+                let view = Switch2ProConnectionPopover(controller: controller, systems: systems, lang: zh ? "zh" : "en")
                 XCTAssertEqual(view.connectionSections, [.init(source: .system, title: "DualSense Wireless Controller", status: .connected)],
                                "Switch 的 \(phase) 不能在 DualSense 上显示失败或生成第二个连接卡片")
-                XCTAssertEqual(controller.title(simplifiedChinese: zh), "DualSense Wireless Controller")
+                XCTAssertEqual(controller.title(lang: zh ? "zh" : "en"), "DualSense Wireless Controller")
                 XCTAssertEqual(controller.buttonStatus, "已连接")
             }
             controller.apply(status: 4, ["status": 4, "kind": 1, "players": 1, "devices": [["kind": 1, "id": "fixture-switch"]]])
-            let mixed = Switch2ProConnectionPopover(controller: controller, systems: systems, simplifiedChinese: zh)
+            let mixed = Switch2ProConnectionPopover(controller: controller, systems: systems, lang: zh ? "zh" : "en")
             XCTAssertEqual(mixed.connectionSections, [.init(source: .switchRelay, title: "Switch 2 Pro", status: .connected),
                 .init(source: .system, title: "DualSense Wireless Controller", status: .connected)], "混连时分别显示真实来源")
             controller.setPhaseForTesting(.handedOff)
-            XCTAssertEqual(Switch2ProConnectionPopover(controller: controller, systems: systems, simplifiedChinese: zh).connectionSections.first?.status, .inUse)
+            XCTAssertEqual(Switch2ProConnectionPopover(controller: controller, systems: systems, lang: zh ? "zh" : "en").connectionSections.first?.status, .inUse)
             controller.apply(status: 0, ["status": 0, "kind": 0, "devices": []])
             controller.setPhaseForTesting(.off)
             let another = NSObject()
             let two = SystemControllers(pads: systems.pads + [.init(id: ObjectIdentifier(another), name: "DualSense Wireless Controller", family: .playstation)])
-            let multiple = Switch2ProConnectionPopover(controller: controller, systems: two, simplifiedChinese: zh)
+            let multiple = Switch2ProConnectionPopover(controller: controller, systems: two, lang: zh ? "zh" : "en")
             XCTAssertEqual(multiple.connectionSections, [.init(source: .system,
                 title: zh ? "2 个蓝牙手柄" : "2 Bluetooth controllers", status: .connected)], "两只同名设备不能按名字误合并")
-            let empty = Switch2ProConnectionPopover(controller: controller, systems: SystemControllers(pads: []), simplifiedChinese: zh)
+            let empty = Switch2ProConnectionPopover(controller: controller, systems: SystemControllers(pads: []), lang: zh ? "zh" : "en")
             XCTAssertEqual(empty.connectionSections, [.init(source: .switchRelay,
                 title: zh ? "Switch 手柄" : "Switch Controller", status: .notConnected)], "空闲的 Switch 卡片不能借用系统手柄名称")
         }
@@ -70,7 +70,7 @@ import NXLauncher
                 let systems = SystemControllers(pads: [.init(id: ObjectIdentifier(pad), name: name, family: .playstation)])
                 controller.updateSystem(systems.presentKeys)
                 let navigation = LauncherPadNavigation()
-                let host = NSHostingView(rootView: Switch2ProConnectionPopover(controller: controller, systems: systems, simplifiedChinese: zh)
+                let host = NSHostingView(rootView: Switch2ProConnectionPopover(controller: controller, systems: systems, lang: zh ? "zh" : "en")
                     .environment(\.padControls, navigation))
                 let size = host.fittingSize
                 let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: 100, y: 100), size: size), styleMask: [.borderless], backing: .buffered, defer: false)

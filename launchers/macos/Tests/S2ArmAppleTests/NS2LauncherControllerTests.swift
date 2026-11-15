@@ -16,7 +16,7 @@ final class NS2LauncherControllerTests: XCTestCase {
         // 连接通知从主队列交给模型；不接管手柄的输入回调。
         await Task.yield()
         await Task.yield()
-        XCTAssertEqual(controller.title(simplifiedChinese: true), "DualSense Wireless Controller (test)")
+        XCTAssertEqual(controller.title(lang: "zh"), "DualSense Wireless Controller (test)")
         XCTAssertEqual(controller.buttonStatus, "已连接")
         XCTAssertEqual(controller.buttonColor, .systemGreen)
         XCTAssertFalse(controller.detail.contains("SYNC"))
@@ -35,7 +35,7 @@ final class NS2LauncherControllerTests: XCTestCase {
         let controller = NS2LauncherController(socketURL: URL(fileURLWithPath: "/tmp/s2arm-controller-test.sock"),
                                               systemControllers: { [pad] }, notifications: NotificationCenter())
         controller.startIfEnabled()
-        XCTAssertEqual(controller.title(simplifiedChinese: true), "DualSense Wireless Controller")
+        XCTAssertEqual(controller.title(lang: "zh"), "DualSense Wireless Controller")
         XCTAssertEqual(controller.buttonStatus, "已连接")
         controller.gameDidStart()
         controller.gameDidExit()
@@ -53,11 +53,11 @@ final class NS2LauncherControllerTests: XCTestCase {
         let notifications = NotificationCenter()
         let controller = NS2LauncherController(socketURL: URL(fileURLWithPath: "/tmp/s2arm-controller-test.sock"),
                                               systemControllers: { connected }, notifications: notifications)
-        XCTAssertEqual(controller.title(simplifiedChinese: false), "DualSense Wireless Controller")
+        XCTAssertEqual(controller.title(lang: "en"), "DualSense Wireless Controller")
         notifications.post(name: .GCControllerDidDisconnect, object: dualSense)
         await Task.yield()
         await Task.yield()
-        XCTAssertEqual(controller.title(simplifiedChinese: false), "Xbox Wireless Controller")
+        XCTAssertEqual(controller.title(lang: "en"), "Xbox Wireless Controller")
         XCTAssertEqual(controller.buttonStatus, "已连接")
         connected = [xbox] // 枚举仍包含本次断开的设备，不能靠快照假定它还连着。
         notifications.post(name: .GCControllerDidDisconnect, object: xbox)
@@ -68,16 +68,16 @@ final class NS2LauncherControllerTests: XCTestCase {
         notifications.post(name: NSApplication.didBecomeActiveNotification, object: nil)
         await Task.yield()
         await Task.yield()
-        XCTAssertEqual(controller.title(simplifiedChinese: false), "DualSense Wireless Controller")
+        XCTAssertEqual(controller.title(lang: "en"), "DualSense Wireless Controller")
     }
 
     func testTitleFollowsKind() {
-        XCTAssertEqual(NS2LauncherController.title(kind: 2, simplifiedChinese: true), "Joy-Con 2 (L)")
-        XCTAssertEqual(NS2LauncherController.title(kind: 3, simplifiedChinese: false), "Joy-Con 2 (R)")
-        XCTAssertEqual(NS2LauncherController.title(kind: 4, simplifiedChinese: true), "Joy-Con 2 (L + R)")
-        XCTAssertEqual(NS2LauncherController.title(kind: 1, simplifiedChinese: true), "Switch 2 Pro")
-        XCTAssertEqual(NS2LauncherController.title(kind: 0, simplifiedChinese: true), "Switch 手柄")
-        XCTAssertEqual(NS2LauncherController.title(kind: 0, simplifiedChinese: false), "Switch Controller")
+        XCTAssertEqual(NS2LauncherController.title(kind: 2, lang: "zh"), "Joy-Con 2 (L)")
+        XCTAssertEqual(NS2LauncherController.title(kind: 3, lang: "en"), "Joy-Con 2 (R)")
+        XCTAssertEqual(NS2LauncherController.title(kind: 4, lang: "zh"), "Joy-Con 2 (L + R)")
+        XCTAssertEqual(NS2LauncherController.title(kind: 1, lang: "zh"), "Switch 2 Pro")
+        XCTAssertEqual(NS2LauncherController.title(kind: 0, lang: "zh"), "Switch 手柄")
+        XCTAssertEqual(NS2LauncherController.title(kind: 0, lang: "en"), "Switch Controller")
     }
 
     func testKindFromStatusLine() throws {
@@ -134,7 +134,7 @@ final class NS2LauncherControllerTests: XCTestCase {
         await Task.yield()
         await Task.yield()
         XCTAssertTrue(controller.hasSystemController)
-        XCTAssertEqual(controller.title(simplifiedChinese: true), "Bare pad (test)")
+        XCTAssertEqual(controller.title(lang: "zh"), "Bare pad (test)")
         XCTAssertEqual(controller.buttonStatus, "已连接")
         XCTAssertEqual(controller.buttonColor, .systemGreen)
         notifications.post(name: .GCControllerDidDisconnect, object: pad)

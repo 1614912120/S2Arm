@@ -9,7 +9,7 @@ import NXModel
 import NXLauncher
 import S2ArmAppleAdapter
 
-private func sx(_ loc: Localizer, _ id: String) -> String { BackendText.launcherText("export.sign." + id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+private func sx(_ loc: Localizer, _ id: String) -> String { BackendText.launcherText("export.sign." + id, language: loc.lang.sharedCode) }
 
 struct DevCertRow: View {
     @ObservedObject var model: S2ArmLauncherModel

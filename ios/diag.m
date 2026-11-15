@@ -5,7 +5,7 @@
 //   包：S2Arm-诊断-<月日>-<时分>.zip（英文界面 S2Arm-diag-…；同一分钟再导出加 -2），压缩后 ≤ 30 MB：
 //       manifest.json、logs/host.log + logs/host-<起局时刻>.log（本局 + 机上归档的最近 9 局；单份超 8 MB 只留头 2 MB + 尾 6 MB）、
 //       logs/frames.tsv、logs/threads.txt、logs/unpack.log（有就放）、metrickit/*.json（MetricKit 崩溃 / 卡顿诊断原样 JSON）、
-//       shaders/*（现编着色器的输入：编到一半进程没了留下的 .inflight.*、翻译器报错留下的 .fail.*，有就放）、
+//       shaders/*（现编着色器的输入：编到一半进程没了留下的 .inflight.*、翻译器报错留下的 .fail.*、编了 5 秒还没完的管线的 .slow.metal 源，有就放）、
 //       diagrun/*.png（诊断局的出图与颜色目标，总量 ≤ 20 MB）、pso/<程序号>.tsv（本机管线记录，只有着色器键，总量 ≤ 8 MB）。
 //   脱敏：App 数据目录 / 安装目录换成 <APP> / <BUNDLE>，设备名、UDID 去掉；存档（bis/user/save）、资源包、密钥都不放。
 //   交出（11-13 起）：入口②③④是「上传给开发者」——传到 diag.s2arm.com，玩家拿到短码、只复制短码；上传失败退回系统分享面板（AirDrop / 存到文件 / 微信）。
@@ -228,6 +228,17 @@ static NSURL *build_zip(NSUInteger cap, BOOL slim, NSString **err) {
                 [fm createDirectoryAtPath:[W stringByAppendingPathComponent:@"shaders"] withIntermediateDirectories:YES attributes:nil error:nil];
                 if ([d writeToFile:[W stringByAppendingPathComponent:rel] atomically:NO]) { [files addObject:@{@"path": rel, @"bytes": @(d.length), @"truncated": @NO}]; ns++; }
             } } }
+    // 编了 5 秒还没完的管线的 MSL 源（#065090，pso_archive.h par_slow_keep_src 留的 <键>.slow.metal，一局至多 4 份）：判大计算核拆分有没有覆盖到。
+    //   文本，过脱敏（add）；每份至多 4 MB；多款容器 games/<游戏号>/wire/<游戏号>/shaders 与单款包 wire/<程序号>/shaders 都找，放 shaders/<程序号>_<原名>
+    {   NSMutableArray *sds = [NSMutableArray array]; NSString *G = [D stringByAppendingPathComponent:@"games"], *Wd = [D stringByAppendingPathComponent:@"wire"];
+        for (NSString *gid in [fm contentsOfDirectoryAtPath:G error:nil]) [sds addObject:@[gid, [[[[G stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"wire"] stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"shaders"]]];
+        for (NSString *gid in [fm contentsOfDirectoryAtPath:Wd error:nil]) [sds addObject:@[gid, [[Wd stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"shaders"]]];
+        int nk = 0;
+        for (NSArray *sd in sds) for (NSString *f in [[fm contentsOfDirectoryAtPath:sd[1] error:nil] sortedArrayUsingSelector:@selector(compare:)]) {
+            if (nk >= 8 || ![f hasSuffix:@".slow.metal"]) continue;
+            [fm createDirectoryAtPath:[W stringByAppendingPathComponent:@"shaders"] withIntermediateDirectories:YES attributes:nil error:nil];
+            add([sd[1] stringByAppendingPathComponent:f], [NSString stringWithFormat:@"shaders/%@_%@", file_safe(sd[0]), f], 4u << 20); nk++;
+        } }
     // 诊断局（#438，settings.m s2a_ios_apply_diag_run）的读数：单款包 Documents/diagrun/、多款容器各款 games/<游戏号>/diagrun/ 里的 PNG
     //   （出图画面与颜色目标，渲染出来的图、不含游戏数据和个人信息，原样带走）。单张超过 4 MB 跳过、总量至多 20 MB（整包 ≤ 30 MB，给日志留地方），放 diagrun/<游戏号>_<原名>
     {   NSMutableArray *dirs = [NSMutableArray arrayWithObject:@[@"app", [D stringByAppendingPathComponent:@"diagrun"]]];
@@ -628,7 +639,7 @@ void s2a_diag_menu_hold(uint64_t press) {
         if (s2a_pad_plus_press() == press) s2a_diag_open_menu();
     });
 }
-// 上局死在前台、当时开着金手指 / 玩家开的未验证社区补丁（ios/game_options.m s2a_ios_crash_suspects）：自动关掉、横幅告诉玩家（11-13 维护者改定：不问）。
+// 上局死在前台、当时开着金手指 / 社区补丁（ios/game_options.m s2a_ios_crash_suspects，v0.4.1 起只取最可疑的一层）：自动关掉、横幅告诉玩家（11-13 维护者改定：不问）。
 //   多款容器在游戏库点开始时已处理（app.m crash_auto_off，社区补丁要在装载前关），这里只剩单款壳：金手指关了马上生效（服务层每秒重载），补丁下次启动生效。
 //   关掉了什么不另弹横幅，交给紧接着的诊断询问一并说（s2a_diag_prompt）
 NSArray<NSDictionary *> *s2a_ios_crash_suspects(void);
@@ -660,7 +671,9 @@ void s2a_diag_attach(UIViewController *vc) {
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         check_toggle();
         // 真机自动化（S2A_OPEN_SETTINGS 测试开关在）每局都是被强杀收尾的，上次异常退出的提示会挡住要截的设置页：只在这时不问（玩家给不了这个环境变量）
-        if (prev == S2A_SESMARK_FG) { crash_auto_off(); if (!getenv("S2A_OPEN_SETTINGS")) s2a_diag_prompt(S2AL(@"diag.prompt.abnormalExit")); }
+        if (prev == S2A_SESMARK_FG) crash_auto_off();
+        { void s2a_ios_crash_session_begin_single(int); s2a_ios_crash_session_begin_single(prev != S2A_SESMARK_FG); }   // 单款壳：关完再记这局开着的（v0.4.1，game_options.m）
+        if (prev == S2A_SESMARK_FG && !getenv("S2A_OPEN_SETTINGS")) s2a_diag_prompt(S2AL(@"diag.prompt.abnormalExit"));
       }); }
 }
 // 进后台 / 回前台（app.m 生命周期通知，主线程）：改写会话标记，在后台被划掉 / 被系统回收不算异常

@@ -36,9 +36,21 @@ struct s2a_vk_device {
     int timeline_semaphore_enabled;
     int index_type_uint8_enabled;
     int draw_indirect_count_enabled; // KHR extension actually enabled, both entry points present
+    // #977：VK_EXT_vertex_attribute_divisor 的 vertexAttributeInstanceRateDivisor 已启用（实例除数大于 1 要它）；
+    // max_vertex_attrib_divisor 是设备上限（未启用时为 0）。
+    int vertex_divisor_enabled;
+    uint32_t max_vertex_attrib_divisor;
     PFN_vkCmdDrawIndirectCountKHR draw_indirect_count;
     PFN_vkCmdDrawIndexedIndirectCountKHR draw_indexed_indirect_count;
     int shader_draw_parameters_enabled;
+    // VK_KHR_sampler_mirror_clamp_to_edge 已启用：采样器可用 MIRROR_CLAMP_TO_EDGE（实例按 1.1 建，用不到 1.2 核心里的同名特性）。
+    int sampler_mirror_clamp_enabled;
+    // VK_EXT_custom_border_color 已启用且 customBorderColors 特性开着：CLAMP_TO_BORDER 的采样器可用任意边框色（#976）。
+    // custom_border_without_format：customBorderColorWithoutFormat 也开着，建采样器时可以不给视图格式。
+    // custom_border_max：maxCustomBorderColorSamplers，同时存活的自定义边框色 VkSampler 个数上限。
+    int custom_border_enabled;
+    int custom_border_without_format;
+    uint32_t custom_border_max;
     // 0 = 没有校准扩展；1 = VK_KHR_calibrated_timestamps；2 = VK_EXT_calibrated_timestamps。
     // GPU 时间戳换算到游戏时钟需要用它求 GPU 域与 CLOCK_MONOTONIC 的偏移。
     int calibrated_timestamps;

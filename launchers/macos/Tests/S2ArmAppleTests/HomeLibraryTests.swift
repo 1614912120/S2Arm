@@ -104,8 +104,10 @@ import LauncherPadBridge
         try await Task.sleep(for: .milliseconds(180))
         model.gamepad.focus("card." + String(format: "%016X", 19))
         model.gamepad.handle(.confirm)
+        XCTAssertNil(runner.lastLaunch, "A 只选中当前游戏，不能同时启动")
+        model.gamepad.handle(.submit)
         for _ in 0..<50 where runner.lastLaunch == nil { try await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertEqual(runner.lastLaunch, String(format: "%016X", 19), "A 必须启动当前焦点游戏")
+        XCTAssertEqual(runner.lastLaunch, String(format: "%016X", 19), "R2 必须启动当前选中的游戏")
         try await Task.sleep(for: .milliseconds(80))
         model.session = JobSession(kind: .play, gameID: firstID, name: "Fixture")
         model.gamepad.handle(.back)

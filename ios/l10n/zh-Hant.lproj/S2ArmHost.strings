@@ -32,14 +32,14 @@
 "common.ok" = "好";
 "common.settings" = "設定";
 "cpatch.footer" = "變更會在下次啟動遊戲時生效";
-"cpatch.footer.fps" = "標示「跟隨 60 幀開關」的項目會隨上方的 60 幀開關一起開關。變更會在下次啟動遊戲時生效";
+"cpatch.footer.fps" = "標「跟隨幀率開關」的項隨設定頁裡的「幀率」一起開關。改動下次啟動遊戲生效";
 "cpatch.group.fps" = "幀率";
 "cpatch.state.on" = "已開";
 "cpatch.state.off" = "已關";
 "cpatch.group.gfx" = "畫面";
 "cpatch.group.widescreen" = "滿屏";
 "cpatch.item.detail" = "%@\n%@ · 授權 %@%@";
-"cpatch.item.followsFps" = " · 跟隨 60 幀開關";
+"cpatch.item.followsFps" = " · 跟隨幀率開關";
 "cpatch.license.none" = "未聲明";
 "cpatch.notice" = "滿屏和高幀率會增加負載和耗電量，換取更好的遊玩體驗；低階裝置請依需要開關。";
 "cpatch.tag.unverified" = "社群 · 未經驗證";
@@ -187,6 +187,8 @@
 "vpad.menu.holdLock.note" = "按住 2 秒鎖定，只對這款遊戲";
 "vpad.menu.hud" = "效能浮層";
 "vpad.menu.hud.note" = "在右上角顯示幀率和記憶體";
+"vpad.menu.fi" = "補幀";
+"vpad.menu.fi.note" = "30 幀補到 60 幀，更順但操作稍慢一點；切換當場生效";
 "vpad.menu.manageLayouts" = "匯入 / 匯出 / 另存配置…";
 "vpad.menu.ns2pro" = "啟用 Switch 2 Pro 手把";
 "vpad.menu.pad" = "手把與體感";
@@ -465,6 +467,9 @@
 "settings.language.zhHans" = "简体中文";
 "settings.language.zhHant" = "繁體中文";
 "settings.language.en" = "English";
+"settings.language.ja" = "日本語";
+"settings.language.es" = "Español";
+"settings.language.fr" = "Français";
 "settings.language.restart" = "關閉 S2Arm 再重新開啟後生效。";
 "settings.gameLanguage" = "遊戲語言";
 "settings.gameLanguage.system" = "跟隨系統";

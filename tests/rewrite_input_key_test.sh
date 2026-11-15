@@ -10,6 +10,7 @@ import hashlib
 import os
 from pathlib import Path
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -69,9 +70,21 @@ class RewriteInputKey(unittest.TestCase):
     def key(self, data=None):
         output = Path(self.env['S2A_STAGE_KEYS'])
         output.unlink(missing_ok=True)
-        result = subprocess.run(['bash', str(ROOT / 'pack/stage_rewrite.sh'), 'fixture'],
-                                env=dict(self.env, S2A_ROOT_CUR=str(data or self.data)),
-                                capture_output=True, text=True, timeout=30)
+        # 阶段自成进程组：超时只杀 bash 的话，它起的 Python 还在往临时目录写依赖记录，清理时撞上（Directory not empty）把真原因盖掉；超时整组杀掉再报
+        process = subprocess.Popen(['bash', str(ROOT / 'pack/stage_rewrite.sh'), 'fixture'],
+                                   env=dict(self.env, S2A_ROOT_CUR=str(data or self.data)),
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
+        try:
+            stdout, stderr = process.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            # 经 tools/safe_killpg.sh 杀整组（全仓约定：不绕开它给进程组发信号；带命令行标记，防进程号被回收后误杀）
+            marker = subprocess.run(['/bin/ps', '-ww', '-o', 'command=', '-p', str(process.pid)], capture_output=True, text=True).stdout.strip()[:64]
+            if marker:
+                subprocess.run(['/bin/bash', '-c', 'source "$1"; safe_killpg "$2" "$3" "$4"', 'rik-timeout', str(ROOT / 'tools/safe_killpg.sh'),
+                                'KILL', str(process.pid), marker], capture_output=True, text=True)
+            process.communicate()
+            raise
+        result = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertTrue(output.exists(), 'real root_stage_done did not publish the requested key')
         rows = output.read_text().splitlines()

@@ -15,6 +15,7 @@
 static BOOL guide_preview;
 void s2a_host_shutdown(const char *why) { (void)why; if (guide_preview) exit(0); abort(); }
 void s2a_clock_catchup(void) {}   // 游戏日历补时（runtime/src/os.c，Mac 唤醒通知调）在这里不测
+void s2a_heartbeat_mac(void) {}   // Mac 心跳（macos/heartbeat_mac.c，前端 10 秒定时器调）在这里不测
 uint64_t now_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }   // 宿主单调时钟（runtime/src/os.c）：前台焦点计时用（#965 起 front_mac.m 引用），给真时钟
 // 生命周期桩（接口 v2.15，缺口扫描族 1）：记下前端报的焦点 / 睡眠、客机冻结与时钟原因 3 的开关次数
 static int stub_focus = 1, stub_suspend, stub_sleep, stub_freeze_on, stub_freeze_off, stub_clock3_on, stub_clock3_off;
@@ -498,19 +499,45 @@ static void test_capture_key_order(void) {
 }
 
 // 审计 P2-63：多个控制器时取最近有输入的扩展手柄；没有扩展手柄档的（遥控器等）跳过。假对象只答 active_pad 用到的两个方法
+@class FakeController;
 @interface FakePad : NSObject
 @property double lastEventTimestamp;
 @property(copy) void (^valueChangedHandler)(GCExtendedGamepad *, GCControllerElement *);
+@property(weak) FakeController *controller;
 @end
 @implementation FakePad
 @end
 @interface FakeController : NSObject
 @property(strong) FakePad *extendedGamepad;
 @property(strong) dispatch_queue_t handlerQueue;
+@property(strong) id motion;
 @end
 @implementation FakeController
 @end
-static FakeController *fake_controller(FakePad *pad) { FakeController *c = [FakeController new]; c.extendedGamepad = pad; return c; }
+static FakeController *fake_controller(FakePad *pad) { FakeController *c = [FakeController new]; c.extendedGamepad = pad; pad.controller = c; return c; }
+@interface FakeProSensor : NSObject
+@property BOOL sensorsRequireManualActivation, hasRotationRate, hasGravityAndUserAcceleration, sensorsActive;
+@end
+@implementation FakeProSensor
+@end
+static void test_pro_sensor_control(void) {
+    FakePad *pad = [FakePad new]; FakeController *c = fake_controller(pad);
+    FakeProSensor *m = [FakeProSensor new]; m.sensorsRequireManualActivation = YES; m.hasRotationRate = YES; c.motion = m;
+    atomic_store(&g_motion_wanted, 1);
+    sample_motion((GCExtendedGamepad *)pad);
+    expect(m.sensorsActive, "Pro public sensor control is requested even without separated gravity / usable calibrated samples");
+    expect(!g_motion_known, "uncalibrated Pro data still uses the existing raw sample path, not fabricated GC values");
+    atomic_store(&g_motion_wanted, 0); sample_motion(nil);
+    expect(!m.sensorsActive, "motion disable releases public Pro sensor request");
+    sample_motion(nil);
+    GCController *old = pad_owner[1]; pad_owner[1] = (GCController *)c;
+    atomic_store(&g_motion_wanted, 1); sample_slot_motion(NULL);
+    expect(m.sensorsActive && !g_slot_motion_known[1], "P2 sensor control also stays independent of calibrated sample availability");
+    atomic_store(&g_motion_wanted, 0); sample_slot_motion(NULL);
+    expect(!m.sensorsActive, "P2 motion disable releases its public request");
+    pad_owner[1] = old;
+    puts("Mac Pro motion: public activation independent of calibrated sample capability passed");
+}
 static void test_active_pad(void) {
     FakePad *old = [FakePad new], *recent = [FakePad new]; old.lastEventTimestamp = 10; recent.lastEventTimestamp = 20;
     NSArray *list = @[fake_controller(nil), fake_controller(old), fake_controller(recent)];
@@ -1196,8 +1223,32 @@ int main(int argc, const char **argv) {
     expect(s2a_hid_pad_hat_bits(0, 0, 7) == (1u << 13) && s2a_hid_pad_hat_bits(3, 0, 7) == ((1u << 15) | (1u << 14)) &&
            s2a_hid_pad_hat_bits(8, 0, 7) == 0 && s2a_hid_pad_hat_bits(1, 1, 8) == (1u << 13), "HID pad hat switch to d-pad bits");
     // 轴：0..65535 中点约 0；Y 反向（HID 向下为正）
+    // 接不接（#934 11-15）：名字带 Pro Controller 就接，任天堂原厂 0x057e 也接（macOS 27 上原厂一代 Pro 手柄系统认不出）；别的手柄名不接
+    expect(s2a_hid_pad_wants("Pro Controller", 0x057e) && s2a_hid_pad_wants("PowerA Wireless Pro Controller", 0) &&
+           !s2a_hid_pad_wants("Xbox Wireless Controller", 0x045e) && !s2a_hid_pad_wants(NULL, 0), "HID pad fallback takes Pro Controllers, Nintendo's own too");
     expect(s2a_hid_pad_axis(0, 0, 65535, 0) == -32767 && s2a_hid_pad_axis(65535, 0, 65535, 0) == 32767 &&
            s2a_hid_pad_axis(0, 0, 65535, 1) == 32767 && abs(s2a_hid_pad_axis(32768, 0, 65535, 0)) <= 1, "HID pad axis normalisation");
+    {   // Switch Pro 协议（#934 11-15：PowerA 简易模式量程不对、摇杆慢五六倍；改发子命令切 0x30 完整报告）。期望全部手算：
+        //   摇杆：中心 2048、行程 ±1600 → 3648 满、448 满负、2848 半程（800 / 1600 × 32767 = 16383.5 → 16383）
+        expect(s2a_pro_axis(2048, 2048, 1600, 1600) == 0 && s2a_pro_axis(3648, 2048, 1600, 1600) == 32767 && s2a_pro_axis(448, 2048, 1600, 1600) == -32767 &&
+               s2a_pro_axis(2848, 2048, 1600, 1600) == 16383 && s2a_pro_axis(4095, 2048, 1600, 1600) == 32767, "Pro stick 12-bit normalisation by calibration");
+        //   校准：两个 12 位值 (a, b) 打成 3 字节 = a 低 8 位 | a 高 4 位 + b 低 4 位 | b 高 8 位。左 = 上行程 (0x5A0, 0x5B0)、中心 (0x7F0, 0x810)、下行程 (0x5C0, 0x5D0)；
+        //   右 = 中心 (0x800, 0x7E0)、下行程 (0x600, 0x610)、上行程 (0x620, 0x630)
+        const uint8_t cal[18] = {0xA0, 0x05, 0x5B, 0xF0, 0x07, 0x81, 0xC0, 0x05, 0x5D, 0x00, 0x08, 0x7E, 0x00, 0x06, 0x61, 0x20, 0x06, 0x63};
+        s2a_pro_cal l, r; int ok = s2a_pro_cal_parse(cal, &l, &r);
+        expect(ok && l.cx == 0x7F0 && l.cy == 0x810 && l.xmax == 0x5A0 && l.ymax == 0x5B0 && l.xmin == 0x5C0 && l.ymin == 0x5D0 &&
+               r.cx == 0x800 && r.cy == 0x7E0 && r.xmax == 0x620 && r.ymax == 0x630 && r.xmin == 0x600 && r.ymin == 0x610, "Pro factory stick calibration (left / right field orders differ)");
+        uint8_t blank[18]; memset(blank, 0xFF, sizeof blank); s2a_pro_cal keep; s2a_pro_cal_default(&keep);
+        expect(!s2a_pro_cal_parse(blank, &keep, &keep) && keep.cx == 2048, "Pro calibration left unwritten keeps the default");
+        //   0x30 报告：A + ZR（字节 3 = 0x88）、+（字节 4 = 0x02）、上 + L（字节 5 = 0x42）；左摇杆 (3648, 2048) = 40 0E 80，右摇杆 (448, 3648) = C0 01 E4
+        const uint8_t rep[12] = {0x30, 0, 0, 0x88, 0x02, 0x42, 0x40, 0x0E, 0x80, 0xC0, 0x01, 0xE4};
+        s2a_pro_cal d; s2a_pro_cal_default(&d); uint32_t bt = 0; int16_t ax[4] = {0};
+        expect(s2a_pro_parse(rep, sizeof rep, &d, &d, &bt, ax) == 1 && bt == ((1u << 0) | (1u << 9) | (1u << 10) | (1u << 13) | (1u << 6)) &&
+               ax[0] == 32767 && ax[1] == 0 && ax[2] == -32767 && ax[3] == 32767, "Pro 0x30 report: buttons and sticks");
+        uint8_t simple[12]; memcpy(simple, rep, sizeof simple); simple[0] = 0x3F;
+        expect(s2a_pro_parse(simple, sizeof simple, &d, &d, &bt, ax) == 0, "Pro parser leaves the simple HID report (0x3F) to the element path");
+        expect(s2a_pro_player_lights(0) == 0x1 && s2a_pro_player_lights(1) == 0x3 && s2a_pro_player_lights(3) == 0xF, "Pro player lights: first n lit for player n");
+    }
     char relayPath[96];
     snprintf(relayPath, sizeof relayPath, "/tmp/s2arm-motion-%d.sock", getpid());
     struct sockaddr_un relayAddress = {.sun_family = AF_UNIX};
@@ -1228,7 +1279,13 @@ int main(int argc, const char **argv) {
     s2a_pad_motion ns2Motion = {0};
     for (int attempt = 0; attempt < 100 && !s2a_pad_read_motion(&ns2Motion); attempt++) usleep(1000);
     expect(ns2Motion.host_timestamp_us == 1234 && ns2Motion.gyro_x == 90 && ns2Motion.acceleration_z == 1,
-           "Switch 2 Pro motion reaches shared Mac six-axis entry");
+            "Switch 2 Pro motion reaches shared Mac six-axis entry");
+    {
+        FakePad *p=[FakePad new]; FakeController *c=fake_controller(p);
+        FakeProSensor *m=[FakeProSensor new]; m.sensorsRequireManualActivation=YES; m.hasRotationRate=YES; c.motion=m;
+        sample_motion((GCExtendedGamepad *)p);
+        expect(!m.sensorsActive,"NS2 lead transport does not activate an unrelated system motion source");
+    }
     // #520 A：游戏不用单只样式（扮 Pro）时，单只右 Joy-Con 的六轴在游戏端转成横握视角：(ax, az) → (−az, ax)、(gx, gz) → (−gz, gx)
     s2a_mac_ns2_set_game_style(1 << 0);
     expect(s2a_pad_read_motion(&ns2Motion) && ns2Motion.gyro_x == 0 && ns2Motion.gyro_z == 90 && ns2Motion.acceleration_x == -1 && ns2Motion.acceleration_z == 0,
@@ -1403,6 +1460,7 @@ int main(int argc, const char **argv) {
         if (argc == 2 && !strcmp(argv[1], "--guide-preview")) { guide_preview = YES; s2a_front_run(NULL); return 0; }
         test_shared_input_config();
         test_active_pad();
+        test_pro_sensor_control();
         test_pad_slots();
         // 同一个真实前端实现：通用 attach 先发布层，detach 先通知再清层；
         // 直连只发布/清层，不通知尚未初始化且不应初始化的通用 NxGal。

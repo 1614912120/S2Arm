@@ -25,7 +25,7 @@ struct WelcomeView: View {
 
     private static let appleTools: Set<String> = ["xcode", "metal", "ios_platform", "apple_team"]   // 检查项稳定 id（剃刀 M11）
 
-    private var language: String { loc.lang == .zh ? "zh-Hans" : "en" }
+    private var language: String { loc.lang.sharedCode }
     private func w(_ id: String) -> String { BackendText.launcherText("welcome." + id, language: language) }
     private func check(_ id: String) -> ToolCheck? { model.checks.first { $0.id == id } }
 

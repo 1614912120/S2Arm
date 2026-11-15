@@ -230,7 +230,6 @@ package enum LauncherHeroAction {
     package static let iconSlot: CGFloat = 28
     package static let iconSpacing: CGFloat = 8
     package static let labelWidth = width - 2 * horizontalPadding - iconSlot - iconSpacing
-    package static let minimumScale: CGFloat = 0.7
 }
 
 package struct LauncherHeroActionLabel: View {
@@ -241,12 +240,13 @@ package struct LauncherHeroActionLabel: View {
     package var body: some View {
         HStack(spacing: LauncherHeroAction.iconSpacing) {
             Image(systemName: symbol).frame(width: LauncherHeroAction.iconSlot)
-            Text(title).lineLimit(1).minimumScaleFactor(LauncherHeroAction.minimumScale)
+            Text(title).lineLimit(1).fixedSize()
         }
         .font(.manrope(18, .bold))
         .foregroundStyle(.black)
         .padding(.horizontal, LauncherHeroAction.horizontalPadding)
-        .frame(width: LauncherHeroAction.width, height: LauncherHeroAction.height)
+        // 最小这么宽、字长就撑宽（11-14 加日 / 西 / 法：固定宽 + 缩字仍放不下，被截成「Installer sur l'iPh…」）
+        .frame(minWidth: LauncherHeroAction.width, minHeight: LauncherHeroAction.height, maxHeight: LauncherHeroAction.height)
         .background(LauncherPalette.cream, in: Capsule())
     }
 }

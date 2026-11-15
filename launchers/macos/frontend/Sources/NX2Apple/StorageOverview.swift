@@ -14,7 +14,7 @@ struct GameSizesList: View {
     let sizes: GameSizes
     var compact = false
 
-    private func t(_ id: String) -> String { BackendText.launcherText("library.sizes." + id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func t(_ id: String) -> String { BackendText.launcherText("library.sizes." + id, language: loc.lang.sharedCode) }
 
     static func rows(_ s: GameSizes) -> [(id: String, bytes: Int64)] {
         [("imageMac", s.imageMac), ("imageIos", s.imageIos), ("saves", s.saves), ("cache", s.cache), ("sources", s.sources)]
@@ -43,7 +43,7 @@ struct StorageOverviewSection: View {
     @ObservedObject var model: S2ArmLauncherModel
     @EnvironmentObject var loc: Localizer
 
-    private func t(_ id: String) -> String { BackendText.launcherText("storage." + id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func t(_ id: String) -> String { BackendText.launcherText("storage." + id, language: loc.lang.sharedCode) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
@@ -68,7 +68,7 @@ struct StorageOverviewSection: View {
                         if part.id != o.shared.last?.id { CardDivider() }
                     }
                 }
-                CardGroup(t("games"), footnote: BackendText.launcherText("library.sizes.sourcesNote", language: loc.lang == .zh ? "zh-Hans" : "en")) {
+                CardGroup(t("games"), footnote: BackendText.launcherText("library.sizes.sourcesNote", language: loc.lang.sharedCode)) {
                     ForEach(o.games) { g in
                         // 游戏名和设置行共用同一条文字起始线。
                         HStack(alignment: .top, spacing: LauncherTheme.Space.medium) {

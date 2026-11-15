@@ -53,7 +53,7 @@ struct LauncherView: View {
     }
 
     /// What the host's own messages use: the launch job takes zh-Hans or en.
-    var uiLanguage: String { loc.lang == .zh ? "zh-Hans" : "en" }
+    var uiLanguage: String { loc.lang.sharedCode }
 
     var body: some View {
         presentedContent
@@ -232,7 +232,7 @@ struct LauncherView: View {
                 PhoneUpdateButton(model: model, language: uiLanguage)
                 phonePill
                 ControllerToolbarButton(controller: model.controller, show: $showController,
-                                        simplifiedChinese: loc.lang == .zh)
+                                        lang: loc.lang.code)
                 updateButton
                 messagesButton
                 Button { installFor = nil; model.goToLibrary() } label: {
@@ -499,11 +499,10 @@ private struct ControllerToolbarButton: View {
     @ObservedObject var controller: NS2LauncherController
     @StateObject private var systems = SystemControllers()   // 系统手柄（PS5 / Xbox / 一代 Joy-Con…），面板「玩家」列表一起列（#520 F）
     @Binding var show: Bool
-    let simplifiedChinese: Bool
+    let lang: String   // 界面语言代码（Lang.code）
 
     private var toolbarStatus: String {
-        controller.hasSystemController ? (simplifiedChinese ? "已连接" : "Connected")
-            : NS2LauncherController.statusText(controller.status, simplifiedChinese: simplifiedChinese)
+        NS2LauncherController.statusText(controller.hasSystemController ? .connected : controller.status, lang: lang)
     }
     var body: some View {
         Button { show.toggle() } label: {
@@ -512,11 +511,11 @@ private struct ControllerToolbarButton: View {
             }
         }
         .controllerButtonStyle(ConsoleIconButtonStyle())
-        .help(controller.title(simplifiedChinese: simplifiedChinese) + "：" + toolbarStatus)   // #901：顶栏提示写实际手柄名
-        .accessibilityLabel(controller.title(simplifiedChinese: simplifiedChinese) + "：" + toolbarStatus)
+        .help(controller.title(lang: lang) + "：" + toolbarStatus)   // #901：顶栏提示写实际手柄名
+        .accessibilityLabel(controller.title(lang: lang) + "：" + toolbarStatus)
         .controllerID("top.controller")
         .popover(isPresented: $show, arrowEdge: .bottom) {
-            Switch2ProConnectionPopover(controller: controller, systems: systems, simplifiedChinese: simplifiedChinese)
+            Switch2ProConnectionPopover(controller: controller, systems: systems, lang: lang)
         }
         // 蓝牙手柄接上 / 断开：分配跟着整理（新连上的自动排进玩家位，#520 E）
         .onReceive(systems.$pads) { pads in controller.updateSystem(SystemControllers.keys(for: pads)) }

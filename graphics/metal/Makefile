@@ -4,12 +4,13 @@
 # tests/<名>_stubs.m 存在时一并链入该单测（块合入前的临时桩，强定义盖过 gal_weak.m 的弱缺省）。
 # ROOT 可由调用方在命令行给无空格别名（tools/nospace.sh；10-25 路径带空格）：下面所有绝对路径都从 ROOT 拼，不再用 abspath / CURDIR（会解析回带空格的真路径）
 ROOT  := $(abspath ../..)
-# Xcode 按用户机器（10-25，不写死版本）：指定 S2A_DEVELOPER_DIR > 环境里的 DEVELOPER_DIR（tools/toolchain.sh 解析后导出）> xcode-select；
+# Xcode 按用户机器（10-25，不写死版本）：指定 S2A_DEVELOPER_DIR > 环境里的 DEVELOPER_DIR（tools/toolchain.sh 解析后导出）> tools/toolchain.sh 当场解析（缺省装着的最新 Xcode，同根 Makefile）> xcode-select；
+#   11-14：原先单独 make -C graphics/metal 时跳过 toolchain.sh 直接退到 xcode-select（本机指 Xcode 26.6），metal-tt 出的 Metal 3 归档 macOS 27 运行时认不得（test-m3 / test-m3archive 全未命中）
 #   先在 include 之前记下环境值——toolchain.env 里那行不当缺省（make 里文件内赋值会盖过环境变量）。赋值行不带行尾注释：注释前的空格会进值
 _S2A_ENV_DD := $(DEVELOPER_DIR)
 include $(ROOT)/tools/toolchain.env
 # 前端 / 玩家机器用 S2A_DEVELOPER_DIR 指自己的 Xcode（同 tools/toolchain.sh，#49）：不设 = toolchain.env 那套（10-23 Spare-host 全新机器实测：Makefile 不认，没装 27.1 的机器着色器键算不出）
-DEVELOPER_DIR := $(or $(S2A_DEVELOPER_DIR),$(_S2A_ENV_DD),$(shell xcode-select -p 2>/dev/null))
+DEVELOPER_DIR := $(or $(S2A_DEVELOPER_DIR),$(_S2A_ENV_DD),$(shell S2A_TC_QUIET=1 bash -c '. "$$1" > /dev/null && printf %s "$$DEVELOPER_DIR"' _ $(ROOT)/tools/toolchain.sh 2>/dev/null),$(shell xcode-select -p 2>/dev/null))
 export DEVELOPER_DIR MACOSX_DEPLOYMENT_TARGET   # iOS 下限只在 IOS_FLAGS 里显式用（见 tools/toolchain.sh）
 OUT   := $(ROOT)/build/gal
 # 配方失败就删掉它已写出的目标（10-25 门禁「首跑红、重跑绿」：t_fbrp_lib.sh 先写出 fbr.tsv、后面的合编核对才失败，

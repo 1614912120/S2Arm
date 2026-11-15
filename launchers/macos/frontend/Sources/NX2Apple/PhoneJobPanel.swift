@@ -19,7 +19,7 @@ struct PhoneJobPanel: View {
     var notes: [String] = []
     @State private var showDetails = false
 
-    private var language: String { loc.lang == .zh ? "zh-Hans" : "en" }
+    private var language: String { loc.lang.sharedCode }
     /// 共用体验表的文案；查不到（不该发生，单测守着）退回 fallback，不把键名上屏
     private func t(_ id: String, _ fallback: String = "") -> String {
         let s = BackendText.launcherText(id, language: language)
@@ -290,9 +290,8 @@ struct PhoneJobPanel: View {
 
     /// 「1 分 5 秒」「45 秒」/「1 min 5 s」
     static func duration(_ seconds: Double, language: String) -> String {
-        let s = max(0, Int(seconds.rounded())), m = s / 60, r = s % 60
-        if language == "en" { return m > 0 ? "\(m) min \(r) s" : "\(r) s" }
-        return m > 0 ? "\(m) 分 \(r) 秒" : "\(r) 秒"
+        let s = max(0, Int(seconds.rounded()))
+        return ExportSessionView.duration(seconds: s, exact: true, language: language)   // 同出包页一套写法（共享文案表 duration.*）
     }
 }
 

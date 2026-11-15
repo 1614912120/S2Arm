@@ -79,6 +79,12 @@ struct EnvironmentView: View {
                     }
                     InstallModeCard(model: model)   // 装到 iPhone 的方式（v0.3.0：签名 / 安装入口收在这一处）
                     let failing = model.checks.filter { !$0.ok }
+                    if !failing.isEmpty || model.environmentError != nil {
+                        CopyReportButton(model: model, gameID: nil, operations: nil,
+                                         fallback: ([s("envcopy.title"), s("envcopy.system").replacingOccurrences(of: "{0}", with: ProcessInfo.processInfo.operatingSystemVersionString), model.environmentError.map(loc.backend) ?? ""]
+                                                   + failing.map { s("envcopy.line").replacingOccurrences(of: "{0}", with: loc.backend($0.name)).replacingOccurrences(of: "{1}", with: loc.backend($0.message)) }).joined(separator: "\n"))
+                        ReportHint()
+                    }
                     ForEach(ordered(failing), id: \.self) { group in
                         let items = failing.filter { groupOf($0) == group }
                         CardGroup(groupName(group)) {
@@ -175,7 +181,7 @@ struct EnvironmentView: View {
         do { try model.setCloudFolder(url) } catch { model.reportFailure("s2arm.fail.cloudFolder", error) }   // 剃刀 M13：失败报原因，不再停在旧值像没反应
     }
 
-    private func s(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func s(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
 
     private func chooseLibrary() {
         let panel = NSOpenPanel()

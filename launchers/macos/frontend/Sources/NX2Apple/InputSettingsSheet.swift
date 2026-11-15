@@ -39,7 +39,7 @@ struct InputSettingsSheet: View {
         self.gameID = gameID
     }
 
-    private var language: String { loc.lang == .zh ? "zh-Hans" : "en" }
+    private var language: String { loc.lang.sharedCode }
     private func t(_ id: String) -> String { BackendText.launcherText("input." + id, language: language) }
 
     /// 要绑的键已经给了别的功能（v0.3.1：原先存成冲突、保存键置灰，玩家被挡住）：先问「改给这个功能？」，确认就解开旧绑定再绑（摇杆两边互换方向），
@@ -81,8 +81,8 @@ struct InputSettingsSheet: View {
                             }
                         }
                     }
-                    CardGroup(loc.lang == .zh ? "Switch 2 Pro 背键" : "Switch 2 Pro back buttons",
-                              footnote: loc.lang == .zh ? "按游戏保存，下次启动生效，原有按键仍可使用" : "Saved per game for the next launch, with the original buttons still available") {
+                    CardGroup(t("backButtons.title"),
+                              footnote: t("backButtons.note")) {
                         ForEach(["GL", "GR"], id: \.self) { side in
                             CardRow(side) {
                                 LauncherDropdown(options: [("", t("unbound"))] + Array(zip(InputConfig.padCodes, InputConfig.targets.prefix(16))).map { ($0.0, names.target($0.1)) },

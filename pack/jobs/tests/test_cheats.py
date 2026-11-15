@@ -135,6 +135,78 @@ class CheatsTests(unittest.TestCase):
         self.assertEqual([(x["kind"], x["key"], x["name"]) for x in cheats.crashed(self.c, self.game)], [("patch", "widescreen:A1", "满屏 A")])
         self.assertEqual(community.load_launch(self.c, GID)["patches"], {"gfx:B1": False, "widescreen:A1": False})
 
+    def _fps_pack(self):
+        from layout import image_mac
+        tsv = image_mac(self.c, GID) / "cpatch.tsv"; tsv.parent.mkdir(parents=True, exist_ok=True)
+        tsv.write_text("编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\nfps:F1\tmain\t0\tfps\t120 帧\tMIT\to/r\t\t1\t120\t\t\n", encoding="utf-8")
+
+    def test_crash_turns_off_fps_patches_too(self):
+        # 帧率补丁跟「60 帧 / 帧率」开关走、不在 packed_patches 里：包里有帧率补丁、开关没关时崩了 → 开关一并关、通知列「帧率」（kind fps）。期望手写
+        self._fps_pack()
+        cheats.note_crash(self.c, self.game)
+        self.assertIs(community.load_launch(self.c, GID)["settings"].get("fps60"), False)
+        self.assertEqual([x["kind"] for x in cheats.crashed(self.c, self.game)], ["fps"])
+
+    def test_stall_marker_turns_fps_off_once(self):
+        # 停帧救场（runtime cpatch.c 写 S2A_DOCS/cpatch_stall_off）：收局读到 → 「帧率」写关、通知列 fps、标记删掉；没标记 → 不动。期望手写
+        docs = self.t / "docs"; docs.mkdir()
+        self.assertFalse(cheats.note_stall(self.c, self.game, docs))
+        (docs / "cpatch_stall_off").write_text("fps\n")
+        self.assertTrue(cheats.note_stall(self.c, self.game, docs))
+        self.assertFalse((docs / "cpatch_stall_off").exists())
+        self.assertIs(community.load_launch(self.c, GID)["settings"].get("fps60"), False)
+        self.assertEqual([x["kind"] for x in cheats.crashed(self.c, self.game)], ["fps"])
+
+    def _two_patches(self, verified_b):
+        from layout import image_mac
+        tsv = image_mac(self.c, GID) / "cpatch.tsv"; tsv.parent.mkdir(parents=True, exist_ok=True)
+        head = "编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式"
+        tsv.write_text(head + f"\nwidescreen:A1\tmain\t0\twidescreen\t满屏 A\tMIT\to/r\t\t1\t\t\t\ngfx:B1\tmain\t1\tgfx\t画面 B\tMIT\to/r\t\t{verified_b}\t\t\t\n"
+                       "fps:F1\tmain\t2\tfps\t60 帧\tMIT\to/r\t\t1\t60\t\t\n", encoding="utf-8")
+        self.d.mkdir(parents=True, exist_ok=True)
+        (self.d / f"{BID}.txt").write_text(TEXT)
+
+    def _on(self):
+        launch = community.load_launch(self.c, GID)
+        cheats_on = sorted(it["key"] for it in cheats.listing(self.c, self.game)["items"] if it["enabled"])
+        return cheats_on, sorted(k for k in ("widescreen:A1", "gfx:B1") if launch["patches"].get(k) is not False), launch["settings"].get("fps60", True) is not False
+
+    def test_crash_turns_off_only_what_was_newly_turned_on(self):
+        # v0.4.1：上次好好收局时开着 A1、B1、帧率；这局新开一条金手指后崩了 → 只关那条金手指，补丁与帧率不动。期望手写
+        self._two_patches(1)
+        cheats.note_good(self.c, self.game)
+        cheats.save(self.c, self.game, {f"{BID}.txt/Gold x2": True})
+        cheats.note_crash(self.c, self.game)
+        self.assertEqual(self._on(), ([], ["gfx:B1", "widescreen:A1"], True))
+        self.assertEqual([(x["kind"], x["name"]) for x in cheats.crashed(self.c, self.game)], [("cheat", "Gold x2")])
+
+    def test_crash_escalates_unverified_then_all(self):
+        # 没有新开的：先关没验过的（B1 缺省开 = 0、金手指），再崩才全关（验过的 A1、帧率）。期望手写
+        self._two_patches(0)
+        cheats.save(self.c, self.game, {f"{BID}.txt/Gold x2": True})
+        cheats.note_good(self.c, self.game)
+        cheats.note_crash(self.c, self.game)                                        # 第 1 次：和上次收局一样，没有新开的 → 没验过的
+        self.assertEqual(self._on(), ([], ["widescreen:A1"], True))
+        cheats.note_crash(self.c, self.game)                                        # 第 2 次：剩下的都验过 → 全关
+        self.assertEqual(self._on(), ([], [], False))
+        self.assertEqual(sorted(x["kind"] for x in cheats.crashed(self.c, self.game)), ["fps", "patch"])
+
+    def test_crash_without_good_record_and_all_verified_turns_all_off(self):
+        # 从没好好收过局（第一次开就崩）、开着的都验过 → 全关（与原做法一致）。期望手写
+        self._two_patches(1)
+        cheats.note_crash(self.c, self.game)
+        self.assertEqual(self._on(), ([], [], False))
+
+    def test_crash_turns_off_adaptive_fullscreen_switch(self):
+        # 11-15 候选自测：自适应满屏一族（wsauto:）跟「满屏」开关、不在 packed_patches 里，原先崩了不关。现在算一条 kind fs，关 = 满屏开关写关。期望手写
+        from layout import image_mac
+        tsv = image_mac(self.c, GID) / "cpatch.tsv"; tsv.parent.mkdir(parents=True, exist_ok=True)
+        tsv.write_text("编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\n"
+                       "wsauto:ab12:w\tmain\t0\twidescreen\t自适应满屏\tMIT\to/r\t\t0\t\t\t\nwsauto:ab12:n\tmain\t1\twidescreen\t自适应满屏\tMIT\to/r\t\t0\t\t\t\n", encoding="utf-8")
+        cheats.note_crash(self.c, self.game)
+        self.assertIs(community.load_launch(self.c, GID)["settings"].get("widescreen"), False)
+        self.assertEqual([x["kind"] for x in cheats.crashed(self.c, self.game)], ["fs"])
+
     def test_crash_with_nothing_on_records_nothing(self):
         cheats.note_crash(self.c, self.game)
         self.assertEqual(cheats.crashed(self.c, self.game), [])

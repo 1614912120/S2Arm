@@ -36,7 +36,7 @@ public sealed partial class EnvironmentWindow
             if (job.Report.Succeeded && job.Report.Result.ValueKind == JsonValueKind.Object) sgradeScan = job.Report.Result.Clone();
             else sgradeScanError = job.Report.Message.Length > 0 ? job.Report.Message : job.Report.State;
         }
-        catch (Exception error) when (error is LibraryProtocolException or IOException or UnauthorizedAccessException or InvalidOperationException or OperationCanceledException)
+        catch (Exception error)   // 任何失败都要落成错误文字：页面渲染时见「没结果、没在查、没错误」就再发，漏掉一类异常 = 无限重发卡死 UI（#1149）
         { sgradeScanError = error.Message; }
         finally { sgradeScanning = false; Dispatcher.UIThread.Post(Render); }
     }

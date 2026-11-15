@@ -125,10 +125,26 @@ static int run_mark_path(char *out, size_t n) {
     char p[1024]; if (!mem_peak_path(p, sizeof p)) return 0;
     char *sl = strrchr(p, '/'); if (!sl) return 0; *sl = 0; snprintf(out, n, "%s/running", p); return 1;
 }
-int s2a_guest_run_died(void) { char p[1100]; struct stat st; return run_mark_path(p, sizeof p) && !stat(p, &st); }
+// 11-15（#909）：闪退不再算「死于内存」。我们的崩溃处理（crash.c crash_reraise）在按信号死之前把标记改写成「crash」：内存上限是系统 SIGKILL，
+//   收不到信号、标记仍是 pid → 照旧开；标记写着 crash = 上一局是我们自己崩的（坏访问 / abort），与内存无关，不强制开、按实测判。
+//   #909 iPhone 17 Pro Max：10 局里 2 局因上一局闪退被强制开，开着的局每 10 秒写闪存 2.7–3.4 GB、一局累计 21.9 GB，关着的局整局 19–34 MB
+static char g_run_mark[1100];   // 本局写过的标记路径（崩溃处理里只能用异步信号安全的调用，路径事先存好）
+int s2a_guest_run_died(void) {
+    char p[1100], b[8] = {0}; if (!run_mark_path(p, sizeof p)) return 0;
+    int fd = open(p, O_RDONLY); if (fd < 0) return 0;
+    ssize_t n = read(fd, b, sizeof b - 1); close(fd);
+    return !(n >= 5 && !memcmp(b, "crash", 5));
+}
+int s2a_guest_run_crashed(void) { char p[1100]; struct stat st; return run_mark_path(p, sizeof p) && !stat(p, &st) && !s2a_guest_run_died(); }   // 只给日志说原因
+void s2a_guest_run_mark_crash(void) {   // 异步信号安全：open / write / close
+    if (!g_run_mark[0]) return;
+    int fd = open(g_run_mark, O_WRONLY | O_TRUNC); if (fd < 0) return;
+    ssize_t w = write(fd, "crash\n", 6); (void)w; close(fd);
+}
 void s2a_guest_run_mark(int running) {
     char p[1100]; if (!run_mark_path(p, sizeof p)) return;
-    if (!running) { unlink(p); return; }
+    if (!running) { unlink(p); g_run_mark[0] = 0; return; }
+    snprintf(g_run_mark, sizeof g_run_mark, "%s", p);
     { char d[1100]; snprintf(d, sizeof d, "%s", p); char *sl = strrchr(d, '/'); if (sl) { *sl = 0; mkdir(d, 0755); } }
     FILE *f = fopen(p, "w"); if (f) { fprintf(f, "%d\n", (int)getpid()); fclose(f); }
 }
@@ -278,6 +294,7 @@ static void guest_file_attach_(void) {
     if (ballast) { room = room > ballast ? room - ballast : 1; LOG("【黄】测试压舱：文件后备判定按余量少 %llu MB 算（S2A_TEST_BALLAST_MB，装模块前才真占）", (unsigned long long)(ballast >> 20)); }
     uint64_t margin = env_mb("S2A_GUEST_FILE_MARGIN_MB", 512), seen = s2a_guest_mem_seen(), host = env_mb("S2A_GUEST_FILE_HOST_MB", 2048), phys = phys_mem();
     int died = room && s2a_guest_run_died(), low = 0;
+    if (room && s2a_guest_run_crashed()) LOG("客体内存文件后备：上一局在前台闪退（我们的崩溃处理记过现场，不是被内存上限杀），不强制开、按实测判");
     char pp0[1024]; int known = mem_peak_path(pp0, sizeof pp0);   // 多款容器还没选游戏：池是容器缺省、读不到本款记录，先不判（装游戏前按本款再判）
     int on = s2a_guest_file_wanted6(e, known || (e && *e) ? pool : 0, room, phys, seen, host, margin, died, &low);
     char pp[1024]; int late = !on && !(e && *e) && room && !mem_peak_path(pp, sizeof pp);   // 多款容器还没选游戏：装游戏前按本款再判
@@ -358,6 +375,7 @@ int s2a_guest_file_retry(void) {
           if (!pool) { uint64_t (*poolf)(void) = (uint64_t (*)(void))dlsym(RTLD_DEFAULT, "s2a_app_pool"); pool = poolf ? poolf() : 0; } }
         int died = s2a_guest_run_died(), low = 0;
         int on = s2a_guest_file_wanted6(NULL, pool, g_gfile_room0, phys, seen, host, margin, died, &low);
+        if (s2a_guest_run_crashed()) LOG("客体内存文件后备：上一局在前台闪退（我们的崩溃处理记过现场，不是被内存上限杀），不强制开、按实测判");
         LOG("客体内存文件后备（装游戏前按本款再判）：%s——%s；本款应用内存池 %llu MB、起局时离单进程内存上限还剩 %llu MB、物理内存 %llu MB、宿主估计 %llu MB、本机本款实测峰值 %llu MB（0 = 没有）",
             on ? "开" : "关", tier_why(on, low, seen, died), (unsigned long long)(pool >> 20), (unsigned long long)(g_gfile_room0 >> 20), (unsigned long long)(phys >> 20),
             (unsigned long long)(host >> 20), (unsigned long long)(seen == UINT64_MAX ? 0 : seen >> 20));
@@ -922,7 +940,7 @@ typedef struct { uint64_t a, n; } tl_seg;
 static pthread_mutex_t g_tl_mu = PTHREAD_MUTEX_INITIALIZER;
 static tl_seg g_tl_free[TL_MAXSEG]; static int g_tl_nfree;
 static uint64_t g_tl_base, g_tl_size, g_tl_used, g_tl_peak, g_tl_segfull;
-static struct { uint64_t live, peak, n, fb_n, fb_bytes; } g_tl_u[S2A_TAIL_NUSER];
+static struct { uint64_t live, peak, n, fb_n, fb_bytes, fb_live, fb_peak; } g_tl_u[S2A_TAIL_NUSER];   // fb_live / fb_peak：退回低区的那部分此刻在用 / 峰值（#0d51a7）
 static const char *const g_tl_uname[S2A_TAIL_NUSER] = {"Metal 缓冲", "Ryujinx 内存块", "线程栈", "信号备用栈", "写跟踪页表", "托管大块暂存"};
 static int tail_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("S2A_TAIL"); v = !(e && *e == '0'); } return v; }
 static int tl_map(uint64_t a, uint64_t n, int prot, int user) {   // user < 0 = 还回（PROT_NONE、不打标签）
@@ -952,13 +970,20 @@ void *s2a_tail_map(uint64_t len, int user, int prot) {
     if (!r) { g_tl_u[user].fb_n++; g_tl_u[user].fb_bytes += n; }
     pthread_mutex_unlock(&g_tl_mu);
     if (r || only) return r;
-    void *p = mmap(NULL, len, prot, MAP_PRIVATE | MAP_ANON, -1, 0);   // 退回：普通匿名映射（落低区）
-    return p == MAP_FAILED ? NULL : p;
+    // 退回：普通匿名映射（落低区）。照样打这个使用者的标签、记在用量（#0d51a7：窗口尾部没接管的款每一笔都走这里，原先不带标签，
+    //   低区按标签合计里全算「标签 0」、低区账里全算「拦不到的」——长局低区从 2 GB 缩到 12 MB 时看不出是谁）
+    void *p = mmap(NULL, len, prot, MAP_PRIVATE | MAP_ANON, VM_MAKE_TAG(S2A_TAIL_TAG0 + user), 0);
+    if (p == MAP_FAILED) return NULL;
+    pthread_mutex_lock(&g_tl_mu); g_tl_u[user].fb_live += n; if (g_tl_u[user].fb_live > g_tl_u[user].fb_peak) g_tl_u[user].fb_peak = g_tl_u[user].fb_live; pthread_mutex_unlock(&g_tl_mu);
+    return p;
 }
 void s2a_tail_unmap(void *p, uint64_t len, int user) {   // 尾部里的映射回 PROT_NONE 并还进空闲表；不在尾部的（退回路径给的）照常 munmap
     if (!p || !len) return;
-    if (!s2a_tail_has(p)) { munmap(p, len); return; }
     user &= ~S2A_TAIL_ONLY; if (user < 0 || user >= S2A_TAIL_NUSER) user = 0;
+    if (!s2a_tail_has(p)) {   // 退回路径给的（落低区）：照常 munmap，扣落低区在用量
+        uint64_t m = (len + TL_PAGE - 1) & ~(TL_PAGE - 1); munmap(p, len);
+        pthread_mutex_lock(&g_tl_mu); g_tl_u[user].fb_live = g_tl_u[user].fb_live >= m ? g_tl_u[user].fb_live - m : 0; pthread_mutex_unlock(&g_tl_mu);
+        return; }
     uint64_t a = (uint64_t)p, n = (len + TL_PAGE - 1) & ~(TL_PAGE - 1);
     pthread_mutex_lock(&g_tl_mu);
     tl_map(a, n, PROT_NONE, -1);
@@ -975,14 +1000,17 @@ void s2a_tail_unmap(void *p, uint64_t len, int user) {   // 尾部里的映射�
 // 尾部账一行：接管、已用 / 剩余 / 最大空闲块、峰值；按使用者：在用 / 峰值 / 次数 / 退回（次数、字节）
 void s2a_tail_note(char *o, size_t cap) {
     pthread_mutex_lock(&g_tl_mu);
-    if (!g_tl_size) { snprintf(o, cap, "窗口尾部分配：未接管（%s）", tail_on() ? "尾部为 0 或窗口没占到" : "S2A_TAIL=0 应急关"); pthread_mutex_unlock(&g_tl_mu); return; }
-    uint64_t big = 0; for (int i = 0; i < g_tl_nfree; i++) if (g_tl_free[i].n > big) big = g_tl_free[i].n;
-    int k = snprintf(o, cap, "窗口尾部分配：接管 %llu MB，已用 %.1f MB、剩余 %.1f MB（最大空闲块 %.1f MB、空闲段 %d）、峰值 %.1f MB",
-                     (unsigned long long)(g_tl_size >> 20), g_tl_used / 1048576.0, (g_tl_size - g_tl_used) / 1048576.0, big / 1048576.0, g_tl_nfree, g_tl_peak / 1048576.0);
+    int k;
+    if (!g_tl_size) k = snprintf(o, cap, "窗口尾部分配：未接管（%s），各使用者全部落低区", tail_on() ? "尾部为 0 或窗口没占到" : "S2A_TAIL=0 应急关");
+    else { uint64_t big = 0; for (int i = 0; i < g_tl_nfree; i++) if (g_tl_free[i].n > big) big = g_tl_free[i].n;
+        k = snprintf(o, cap, "窗口尾部分配：接管 %llu MB，已用 %.1f MB、剩余 %.1f MB（最大空闲块 %.1f MB、空闲段 %d）、峰值 %.1f MB",
+                     (unsigned long long)(g_tl_size >> 20), g_tl_used / 1048576.0, (g_tl_size - g_tl_used) / 1048576.0, big / 1048576.0, g_tl_nfree, g_tl_peak / 1048576.0); }
+    // 按使用者：尾部里在用 / 峰值 / 次数，退回低区的次数、累计字节与此刻在用 / 峰值（未接管时只有后者）
     for (int u = 0; u < S2A_TAIL_NUSER && k > 0 && (size_t)k < cap; u++)
         if (g_tl_u[u].n || g_tl_u[u].fb_n)
-            k += snprintf(o + k, cap - k, "；%s 在用 %.1f MB 峰值 %.1f MB 共 %llu 次、退回低区 %llu 次 %.1f MB", g_tl_uname[u], g_tl_u[u].live / 1048576.0,
-                          g_tl_u[u].peak / 1048576.0, (unsigned long long)g_tl_u[u].n, (unsigned long long)g_tl_u[u].fb_n, g_tl_u[u].fb_bytes / 1048576.0);
+            k += snprintf(o + k, cap - k, "；%s 在用 %.1f MB 峰值 %.1f MB 共 %llu 次、退回低区 %llu 次 %.1f MB（落低区在用 %.1f MB 峰值 %.1f MB）", g_tl_uname[u], g_tl_u[u].live / 1048576.0,
+                          g_tl_u[u].peak / 1048576.0, (unsigned long long)g_tl_u[u].n, (unsigned long long)g_tl_u[u].fb_n, g_tl_u[u].fb_bytes / 1048576.0,
+                          g_tl_u[u].fb_live / 1048576.0, g_tl_u[u].fb_peak / 1048576.0);
     if (g_tl_segfull && k > 0 && (size_t)k < cap) snprintf(o + k, cap - k, "；空闲段表满丢地址 %llu 次", (unsigned long long)g_tl_segfull);
     pthread_mutex_unlock(&g_tl_mu);
 }
@@ -1159,7 +1187,9 @@ void s2a_low_tags(char *out, size_t cap) {
     }
     int o = snprintf(out, cap, "按标签（含尾部）：文件页 %llu MB", (unsigned long long)(file >> 20));
     for (int r = 0; r < 6 && o > 0 && (size_t)o < cap; r++) { int m = -1; for (int i = 0; i < NTAG; i++) if (bytag[i] && (m < 0 || bytag[i] > bytag[m])) m = i; if (m < 0) break;
-        o += snprintf(out + o, cap - (size_t)o, "、标签 %d %llu MB", m, (unsigned long long)(bytag[m] >> 20)); bytag[m] = 0; }
+        if (m >= S2A_TAIL_TAG0 && m < S2A_TAIL_TAG0 + S2A_TAIL_NUSER) o += snprintf(out + o, cap - (size_t)o, "、%s（标签 %d）%llu MB", g_tl_uname[m - S2A_TAIL_TAG0], m, (unsigned long long)(bytag[m] >> 20));
+        else o += snprintf(out + o, cap - (size_t)o, "、标签 %d %llu MB", m, (unsigned long long)(bytag[m] >> 20));
+        bytag[m] = 0; }
 }
 
 // 低区文件映射按目录合计单独打（低区账骤降时调；10-26 巫师3 测试设备1：文件页 60 秒涨约 400 MB，只在 C# 初始化后列过一次、崩溃时宿主自己崩了没打出来，

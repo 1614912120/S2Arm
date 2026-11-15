@@ -56,7 +56,7 @@ def shared_redact():
 #   玩家点过「仍然继续」只打一次黄。
 #   先前按编批库总量 × 3 估（790efd9ec）：3 是拿 du 推的，du 把 APFS 克隆的解包内容重复算，且占盘大头在翻译阶段、编批库前就已发生。
 #   模块级函数、按 getattr 读上下文：stage_progress 也被只带进度字段的替身对象调用（tests/progress_test.sh 启动器读端）
-DIRECT_SPACE_COUNTERS = ("直连库·翻译与收尾", "直连库·编批库（MB）")
+DIRECT_SPACE_COUNTERS = ("直连库·翻译与收尾", "直连库·编批库（MB）")  # 非玩家句
 DIRECT_SPACE_EVERY_S = 10
 DIRECT_SPACE_MIN_FRACTION = 0.05
 DIRECT_SPACE_MIN_SPENT = 256 << 20
@@ -116,12 +116,12 @@ def direct_space_recheck(context, counters, now=None):
         role, need, free, spent = short
         where = "游戏存放位置所在的盘" if role == "library" else "工具缓存所在的盘"
         gb = lambda n: f"{n / 1e9:.0f} GB"
-        head = (f"磁盘空间不够：编译着色器这一步（{name.split('·')[-1]}）照现在的进度还要再占约 {gb(need)}，"
+        head = (f"磁盘空间不够：编译着色器这一步（{name.split('·')[-1]}）照现在的进度还要再占约 {gb(need)}，"  # 非玩家句
                 f"{where}只剩 {gb(free)}（已完成 {c['done']} / {c['total']}，这段已用掉 {gb(spent)}）。")
         # 按进度外推只当提示、不拦（不许堵门，11-14 定）：每单只提示一次，照常编；中途真写满时写盘报 ENOSPC，那才停、归 disk_full
         if not getattr(context, "_direct_space_warned", False):
             context._direct_space_warned = True
-            context.diagnostic(head + "这是按进度估的，照常继续；中途真写满会停下报错，游戏原件和存档不受影响。", "disk_full", severity="warning")
+            context.diagnostic(head + "这是按进度估的，照常继续；中途真写满会停下报错，游戏原件和存档不受影响。", "disk_full", severity="warning")  # 非玩家句
         return
 
 
@@ -236,7 +236,7 @@ def replace_retrying(tmp, path):
             time.sleep(delay)
 
 
-REWRITE_FAILED_LOG = re.compile(r"改写 \S+ 失败.*?日志 ([^）\n]+?\.log)")
+REWRITE_FAILED_LOG = re.compile(r"改写 \S+ 失败.*?日志 ([^）\n]+?\.log)")  # 非玩家句
 REWRITE_DIGEST_LINES = 400
 
 
@@ -257,10 +257,10 @@ def write_rewrite_digest(source, target):
                 other.append(line)
     target.parent.mkdir(parents=True, exist_ok=True)
     with open(target, "w", encoding="utf-8", newline="\n") as f:
-        f.write(f"改写缺口共 {total} 条，按类别：\n")
+        f.write(f"改写缺口共 {total} 条，按类别：\n")  # 非玩家句
         f.writelines(f"{n}\t{k}\n" for k, n in sorted(counts.items(), key=lambda kv: -kv[1])[:60])
-        f.write("\n--- 非缺口行 ---\n"); f.writelines(l + "\n" for l in other)
-        f.write("\n--- 前若干条缺口 ---\n"); f.writelines(l + "\n" for l in gaps)
+        f.write("\n--- 非缺口行 ---\n"); f.writelines(l + "\n" for l in other)  # 非玩家句
+        f.write("\n--- 前若干条缺口 ---\n"); f.writelines(l + "\n" for l in gaps)  # 非玩家句
 
 
 def atomic(path, value):
@@ -558,7 +558,7 @@ def record_sources(sources):
         row = dict(row)
         text = row.get("diagnostic") or ""
         if len(text) > IMPORT_RECORD_SOURCE_DIAGNOSTIC:
-            marker = "\n…[已省略中间部分]…\n"
+            marker = "\n…[已省略中间部分]…\n"  # 非玩家句
             keep = IMPORT_RECORD_SOURCE_DIAGNOSTIC - len(marker)
             text = text[:keep // 4] + marker + text[len(text) - (keep - keep // 4):]
         if len(text) > budget:
@@ -588,7 +588,7 @@ def describe_holder(info):
     if not info:
         return "另一个任务"
     op = OPERATION_NAMES.get(info.get("operation"), info.get("operation") or "另一个任务")
-    return op + (" · " + info["gameId"] if info.get("gameId") else "") + ("（任务 " + str(info["taskId"]) + "）" if info.get("taskId") else "")
+    return op + (" · " + info["gameId"] if info.get("gameId") else "") + ("（任务 " + str(info["taskId"]) + "）" if info.get("taskId") else "")  # 非玩家句
 
 
 class Context:
@@ -666,7 +666,7 @@ class Context:
                     "pack/nx_unpack/nx_unpack.csproj", "tools/safe_killpg.sh")
         missing = [p for p in required if not (self.engine / p).is_file()]
         if missing:
-            raise Failure("请选择完整的 S2Arm 源码目录，缺少：" + "、".join(missing), code="engine_incomplete")
+            raise Failure("请选择完整的 S2Arm 源码目录，缺少：" + "、".join(missing), code="engine_incomplete")  # 非玩家句
 
     def require_library(self):
         marker = read(self.library / ".s2arm-library.json", {})
@@ -692,7 +692,7 @@ class Context:
         wait = getattr(self, "lock_wait", LOCK_WAIT_S) if wait is None else wait
         def waiting(info, waited):
             try:
-                self.emit("progress", "在等「" + describe_holder(info) + "」结束…", phase="waiting_lock", holder=info)
+                self.emit("progress", "在等「" + describe_holder(info) + "」结束…", phase="waiting_lock", holder=info)  # 非玩家句
             except Exception:   # 进度发不出去（作业已在收尾 / 测试里的裸上下文）不影响排队
                 pass
         try:
@@ -700,7 +700,7 @@ class Context:
                 yield
         except filelock.Busy as busy:
             raise Failure("另一个任务正在使用游戏库，请稍后重试。", code="library_busy", holder=busy.holder,
-                          internal=f"等了 {wait:g} 秒，游戏库{name}锁仍被占：{describe_holder(busy.holder)}（{json.dumps(busy.holder, ensure_ascii=False)}）") from None
+                          internal=f"等了 {wait:g} 秒，游戏库{name}锁仍被占：{describe_holder(busy.holder)}（{json.dumps(busy.holder, ensure_ascii=False)}）") from None  # 非玩家句
 
     @contextlib.contextmanager
     def idle(self, name="execution"):
@@ -866,7 +866,7 @@ class Context:
                 self._activity_counters = {}
             self._activity_counters[name] = c
             last = c
-            if total >= 20 or name.startswith("直连库·"):
+            if total >= 20 or name.startswith("直连库·"):  # 非玩家句
                 fine = c
         if last is not None:
             main = fine or last
@@ -885,7 +885,7 @@ class Context:
         active = data is not None and data["stage"] == main["name"]
         counters = []
         for c in getattr(self, "_counters", {}).values():
-            if (c["total"] < 20 and not c["name"].startswith("直连库·")) or c["done"] >= c["total"]:
+            if (c["total"] < 20 and not c["name"].startswith("直连库·")) or c["done"] >= c["total"]:  # 非玩家句
                 continue
             # Only elapsed time advances during a long batch, never its MB numerator.
             t = time.time() if pulse and c["name"] == main["name"] else c["t"]
@@ -896,7 +896,7 @@ class Context:
             message += "（" + activity.describe(data) + "）"
             activity.sent()
         # 编批库的计数是源码 MB（Build.cs Ticker「直连库·编批库（MB）」）：单位照实写，原先一律「项」，界面显示「1894 / 64490 项」（#944）
-        unit = "MB" if main["name"].endswith("（MB）") else "项"
+        unit = "MB" if main["name"].endswith("（MB）") else "项"  # 非玩家句
         self.emit(message=message, done=main["done"], total=main["total"], unit=unit, counters=counters,
                   **({"activity": data} if active else {}))
 
@@ -1112,7 +1112,9 @@ class Context:
         # 3 和 4 都是「作业 PATH 只有 Runtime + 系统目录」的便携运行环境。4 起不再带 oead / GNU timeout；
         # 旧 schema 3 仍走这条 PATH（构建侧 build_app 会因 schema / runtimeDeps 不符而重打，不在这里改 PATH）。
         if read(runtime / "versions.json", {}).get("runtimeSchema") in (3, 4):
-            env.update(DOTNET_ROOT=str(runtime / "dotnet"), DOTNET_MULTILEVEL_LOOKUP="0",
+            # DOTNET 一并固定成自带的（#441 D-NDRE）：只设 DOTNET_ROOT / PATH 时，translator/dmsh_chain.py 等按「DOTNET → ~/.dotnet/dotnet → PATH」找，
+            #   玩家自己在 ~/.dotnet 装了别的版本就抢在前面，.NET 10 的翻译器跑不起来、出库前核工具失败（同 ipa.py 设 DOTNET 的口径）
+            env.update(DOTNET=str(runtime / "dotnet" / "dotnet"), DOTNET_ROOT=str(runtime / "dotnet"), DOTNET_MULTILEVEL_LOOKUP="0",
                        S2A_PREBUILT_TOOLS=str(self.engine / "Binaries/Prepare"))
             paths = [str(runtime / "python/bin"), str(runtime / "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
             # App 自带的 C 改写器（pack/rewriter.py 核源码指纹，与引擎不符时不用）：玩家机器零安装
@@ -1137,10 +1139,10 @@ class Context:
         try:
             left = reap_session(process.pid)
         except Exception as error:   # 收尾动作：自己出错不改变任务结果，记一行
-            out.write(f"[s2a] 【黄】收本阶段工具会话的残留进程时出错：{self.redact(error)}\n")
+            out.write(f"[s2a] 【黄】收本阶段工具会话的残留进程时出错：{self.redact(error)}\n")  # 非玩家句
             return
         if left:
-            out.write(f"[s2a] 收掉本阶段工具会话里的残留进程 {len(left)} 个：{'、'.join(left[:8])}\n")
+            out.write(f"[s2a] 收掉本阶段工具会话里的残留进程 {len(left)} 个：{'、'.join(left[:8])}\n")  # 非玩家句
             out.flush()
 
     def stop_child(self, process, out, term_wait):
@@ -1160,7 +1162,7 @@ class Context:
         except subprocess.TimeoutExpired:
             message = (f"{self.stage or '这一步'}的进程收到结束信号后 {term_wait + 5} 秒仍未退出：卡在系统内核里"
                        "（常见于内存不够时等换页的磁盘读，或等显卡驱动），系统处理完后会自行结束。")
-            out.write(f"[s2a] 【红】{message}\n")
+            out.write(f"[s2a] 【红】{message}\n")  # 非玩家句
             out.flush()
             self.diagnostic(message, "child_unkillable")
             return False
@@ -1191,7 +1193,7 @@ class Context:
                                  "s2arm-cancel", str(helper), sig, str(process.pid), marker],
                                 capture_output=True, text=True, timeout=5, check=False)
         if result.returncode and process.poll() is None:
-            raise Failure("无法停止本任务进程组：" + self.redact(result.stderr))
+            raise Failure("无法停止本任务进程组：" + self.redact(result.stderr))  # 非玩家句
 
     def stop(self):
         self.cancelled = True
@@ -1225,7 +1227,7 @@ class Context:
                 if not Path(cwd or self.engine).is_dir():
                     raise FileNotFoundError(errno.ENOENT, "working directory does not exist", str(cwd or self.engine)) from error
                 if error.errno == errno.ENOENT and Path(cwd or self.engine).is_dir():
-                    raise Failure("任务所需的工具无法启动：" + args[0], code="tool_missing") from error
+                    raise Failure("任务所需的工具无法启动：" + args[0], code="tool_missing") from error  # 非玩家句
                 raise
             self.children.add(p)
             try:
@@ -1265,7 +1267,7 @@ class Context:
                         except Exception:
                             satisfied = False   # 判据自己出错不影响工具运行，只当还没就绪
                         if satisfied:
-                            out.write("[s2a] 产物已就绪，提前结束本阶段工具。\n")
+                            out.write("[s2a] 产物已就绪，提前结束本阶段工具。\n")  # 非玩家句
                             out.flush()
                             break
                     if deadline and time.monotonic() > deadline:

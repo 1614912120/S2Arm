@@ -25,7 +25,7 @@ def retention_policy():
         if value is None:
             return default
         if not re.fullmatch(r'[0-9]+', value) or int(value) < minimum:
-            raise ValueError(name + ' 必须是至少 ' + str(minimum) + ' 的整数')
+            raise ValueError(name + ' 必须是至少 ' + str(minimum) + ' 的整数')  # 非玩家句
         return int(value)
     return dict(keep_titles=integer('S2A_COMPILER_CACHE_KEEP_TITLES', KEEP_TITLES, 1),
                 min_free_bytes=integer('S2A_COMPILER_CACHE_MIN_FREE_BYTES', MIN_FREE_BYTES, 0))
