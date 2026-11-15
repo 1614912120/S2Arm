@@ -1820,19 +1820,22 @@ class ExportPhoneTests(unittest.TestCase):
         (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
         out = self.c.library / install.EXPORT_DIRS["zh"]
         wrote = self._count_writes()
-        self._export(dict(gameId=A))
+        r = self._export(dict(gameId=A))
         self.assertEqual(sorted(wrote), sorted(["甲.img", "甲 着色器更新包.img", "乙.img", "乙 着色器更新包.img"]))
+        self.assertEqual((sorted(r["fresh"]), r["reused"]), (["乙.img", "甲.img"], 0), "第一次导出：全是新写的，完成页不点名")
         first = {p.name: p.read_bytes() for p in out.iterdir() if p.suffix == ".img"}
         self._library((A, "甲"), (B, "乙"), (C, "丙")); self._img(C, b"S2AIMG01-c")
-        wrote.clear(); self._export(dict(gameId=C))
+        wrote.clear(); r = self._export(dict(gameId=C))
         self.assertEqual(sorted(wrote), sorted(["丙.img", "丙 着色器更新包.img"]))
+        self.assertEqual((r["fresh"], r["reused"]), (["丙.img"], 2), "完成页点名「.img 只要拷 丙.img」，其余 2 款沿用")
         for name, data in first.items():
             self.assertEqual((out / name).read_bytes(), data, name)
         # 乙的资源包里有文件变了（重新打过 iPhone 包）：乙重写，甲照旧沿用
         f = next(p for p in layout.ios_pack(self.c, B).rglob("*") if p.is_file())
         st = f.stat(); os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
-        wrote.clear(); self._export(dict(gameId=A))
+        wrote.clear(); r = self._export(dict(gameId=A))
         self.assertEqual(sorted(wrote), sorted(["乙.img", "乙 着色器更新包.img"]))
+        self.assertEqual((r["fresh"], r["reused"]), (["乙.img"], 2))
 
     def test_export_rewrites_when_link_fails(self):
         """建不了硬链接（exFAT 等）：照常重写，导出照样成功"""
@@ -1844,6 +1847,7 @@ class ExportPhoneTests(unittest.TestCase):
         with um.patch("os.link", side_effect=OSError(45, "Operation not supported")):
             r = self._export(dict(gameId=A))
         self.assertEqual((r["exported"], sorted(wrote)), (True, sorted(["甲.img", "甲 着色器更新包.img"])))
+        self.assertEqual((r["fresh"], r["reused"]), (["甲.img"], 0), "硬链接建不了照常重写：算新写，完成页照实点名")
 
     def test_export_replaces_whole_folder(self):
         """再导出一次：文件夹整个换新（上次的、玩家放进去的别的文件都不在了）"""

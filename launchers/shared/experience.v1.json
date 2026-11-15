@@ -1306,6 +1306,8 @@
       {"id": "phone.status.running.export", "zh-Hans": "导出中", "en": "Exporting"},
       {"id": "phone.headline.export", "zh-Hans": "导出好了", "en": "Exported"},
       {"id": "phone.done.export", "zh-Hans": "已放进文件夹「{0}」", "en": "Saved to the folder “{0}”"},
+      {"id": "phone.done.export.fresh", "zh-Hans": ".img 只要拷这次新写的：{0}。其余 {1} 款和上次导出的一样，手机上已有就不用再拷。", "en": ".img files to copy this time: {0}. The other {1} are the same as last export; no need to copy them again if they're already on your phone."},
+      {"id": "phone.done.export.same", "zh-Hans": "各款 .img 都和上次导出的一样，手机上已有就不用再拷。", "en": "Every .img is the same as last export; no need to copy them again if they're already on your phone."},
       {"id": "phone.stat.size", "zh-Hans": "大小", "en": "Size"},
       {"id": "phone.fact.export", "zh-Hans": "用你的签名工具装 S2Arm.ipa，再用「文件」App 把 .img 放进 S2Arm 里的「放这里导入」文件夹。详细步骤见文件夹里的「怎么装到 iPhone.txt」。", "en": "Install S2Arm.ipa with your signing tool, then use the Files app to put the .img files into the “Import Here” folder inside S2Arm. Step-by-step notes are in the folder (怎么装到 iPhone.txt)."},
       {"id": "phone.fact.export_skipped", "zh-Hans": "这几款这次没导出（要按新版重新「打 iPhone 包」）：{0}", "en": "Not in this export (rebuild them for iPhone first): {0}"},
