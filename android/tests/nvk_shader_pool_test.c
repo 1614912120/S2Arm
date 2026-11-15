@@ -28,7 +28,8 @@ static int checks, failures, compiler_calls, diag_enabled, diag_lines, diag_quer
 static unsigned fake_array_count;
 static int separate_fixture;
 static int fake_gs_success, fake_gs_result_mode, gs_loads[6], fake_geometry_enabled = 1;
-static int fake_gs_fact_deps, fact_reuse_disabled;
+static int fake_gs_fact_deps;
+static int fixture_depth_zero, fixture_origin_lower_left, shader_load_count, shader_release_count;
 static int fake_cs_success, cs_loads;
 int g_s2a_logfd = 2;
 static const char *fake_compile_error;
@@ -47,7 +48,6 @@ static uint8_t gs_keys[6][8], gs_stages[6], gs_keys_ok;
 void nvn_plat_safepoint(void) {}
 int nvn_plat_flag(const char *name, int dflt) {
     if (!strcmp(name, "nvk_texpool_log")) { diag_queries++; return diag_enabled; }
-    if (!strcmp(name, "nvk_shader_fact_cache") && fact_reuse_disabled) return 0;
     return dflt;
 }
 void nvn_plat_log(int level, const char *cls, const char *text) {
@@ -65,8 +65,8 @@ void nvn_plat_log(int level, const char *cls, const char *text) {
     if (level == NVN_PLAT_LOG_INFO && !strcmp(cls, "shader") && strstr(text, "texture_pool_request_reject"))
         snprintf(last_request_reason, sizeof last_request_reason, "%s", text);
 }
-int rp_depth_zero(void) { return 0; }
-int rp_origin_lower_left(void) { return 0; }
+int rp_depth_zero(void) { return fixture_depth_zero; }
+int rp_origin_lower_left(void) { return fixture_origin_lower_left; }
 // 此夹具只登记一个起点为 0 的池；空池也按真实 nvn_dpool_base 返回 0。
 int nvn_dpool_base(const void *pool, int tex) { (void)pool; (void)tex; return 0; }
 uint64_t nvn_ga2ca(uint64_t address) { return address; }
@@ -174,13 +174,13 @@ s2a_direct_compile_fn s2a_direct_bound_compile_any(void) { return fake_compile; 
 nvn_gpu_rc nvn_gpu_shader_load(const nvn_gpu_shader_src *s, nvn_gpu_shader *o, nvn_gpu_err *e) {
     (void)e;
     if (fake_gs_success && (unsigned)s->stage < 6) {
-        gs_loads[s->stage]++; *o = (nvn_gpu_shader)(uintptr_t)(s->stage + 1); return (nvn_gpu_rc){NVN_GPU_OK};
+        shader_load_count++; gs_loads[s->stage]++; *o = (nvn_gpu_shader)(uintptr_t)(s->stage + 1); return (nvn_gpu_rc){NVN_GPU_OK};
     }
     if (fake_array_count) { *o = (nvn_gpu_shader)(uintptr_t)1; return (nvn_gpu_rc){NVN_GPU_OK}; }
     if (fake_cs_success && s->stage == NVN_GPU_SH_CS) { cs_loads++; *o = (nvn_gpu_shader)(uintptr_t)7; return (nvn_gpu_rc){NVN_GPU_OK}; }
     CHECK(0, "unexpected shader load"); return (nvn_gpu_rc){NVN_GPU_E_UNSUPPORTED};
 }
-void nvn_gpu_shader_release(nvn_gpu_shader s) { (void)s; }
+void nvn_gpu_shader_release(nvn_gpu_shader s) { if (s) shader_release_count++; }
 static void wr(uint8_t *p, unsigned x) { p[0]=x; p[1]=x>>8; p[2]=x>>16; p[3]=x>>24; }
 static void wr64(uint8_t *p, uint64_t x) { for (int i = 0; i < 8; i++) p[i] = (uint8_t)(x >> (8 * i)); }
 static void bind_pools(int n);
@@ -446,12 +446,15 @@ static int emit_real_request(const char *profile_path, const char *closure, cons
     for (unsigned st = 0; st < 3; st++) { gs_stages[st] = (uint8_t)st; memcpy(gs_keys[st], keys[st], 8); }
     gs_keys_ok = 7; p_bind_program_id bind = {&gs_program, gs_program.serial, 0x1f, 0};
     if (!rp_state_op(OP_BIND_PROGRAM, &bind, sizeof bind + 8)) return 1;
-    bind_pools(tbuf && tbuf != 3 ? 100 : 7);
-    if (tbuf && tbuf != 3) { separate_fixture = 3; bind_separate(1, 0, 1, 77); }
+    bind_pools(tbuf == 1 || tbuf == 2 ? 100 : 7);
+    if (tbuf == 1 || tbuf == 2) { separate_fixture = 3; bind_separate(1, 0, 1, 77); }
     if (tbuf == 2 || tbuf == 3) { fake_compile_file = output; fake_gs_success = 1; nvn_unimpl_reset(); memset(gs_loads, 0, sizeof gs_loads); }
     else capture_output = output;
+    if (tbuf == 4) rp_S.tex[0][0] = 99;
+    if (tbuf == 6) rp_S.ubo[5][15].size = 16;
     compiler_calls = 0;
     struct rp_shader_req q = {0}; q.prim = 0; q.rt_count = 1; q.rt_format[0] = NVN_FORMAT_RGBA8;
+    if (tbuf == 5) { q.rt_count=2; q.rt_format[1]=NVN_FORMAT_RGBA8; }
     const struct rp_prog *prog = NULL; int rc = rp_shader_resolve(&q, &prog);
     if (tbuf == 3) {
         CHECK(!rc && prog && compiler_calls == 1, "real compiler result loads for dependency reuse");
@@ -460,8 +463,8 @@ static int emit_real_request(const char *profile_path, const char *closure, cons
         CHECK(!rp_shader_resolve(&q, &prog) && prog == first && compiler_calls == 1,
               "real compiler dependency trace permits unused texture reuse");
         rp_S.ubo[0][15].size = 16;
-        CHECK(!rp_shader_resolve(&q, &prog) && prog == first && compiler_calls == 1,
-              "real compiler without QueryConstantBufferUse reuses unqueried UBO mask");
+        CHECK(!rp_shader_resolve(&q, &prog) && prog != first && compiler_calls == 2,
+              "real compiler active-stage UBO mask remains strict without dependency queries");
         fprintf(stderr, "real compiler dependency reuse: checks=%d failures=%d\n", checks, failures);
         return failures != 0;
     }
@@ -531,23 +534,40 @@ static void graphics_fact_reuse_test(void) {
     rp_S.ubo[0][15].size = 16;
     CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 4, "active UBO change still recompiles under fact reuse");
     rp_S.ubo[1][15].size = 16;
-    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 4, "unqueried active-stage UBO mask reuses program");
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 5, "unqueried active-stage UBO mask remains strict");
     q.rt_count = 1; q.rt_format[0] = NVN_FORMAT_RGBA8;
-    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 4, "attachment count alone does not split shader identity");
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 5, "attachment count alone does not split shader identity");
     q.rt_format[0] = NVN_FORMAT_R32UI;
-    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 5, "changed compiler output numeric type recompiles");
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 6, "changed compiler output numeric type recompiles");
     for (int mode = 0; mode <= 5; mode++) if (mode != 1) {
         rp_shader_reset(); fake_gs_fact_deps = mode; compiler_calls = 0; rp_S.tex[0][3] = 0;
         CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 1, "unsupported dependency fixture resolves");
         rp_S.tex[0][3] = 77;
         CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 2, "unsupported dependency metadata preserves exact identity: mode=%d", mode);
     }
-    rp_shader_reset(); fake_gs_fact_deps = 1; fact_reuse_disabled = 1; compiler_calls = 0;
+    rp_shader_reset(); fake_gs_fact_deps = 1; compiler_calls = shader_load_count = shader_release_count = 0;
     rp_S.tex[0][3] = 0;
-    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 1, "disabled reuse initial compile");
-    rp_S.tex[0][3] = 77;
-    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 2, "runtime opt-out restores exact identity");
-    fact_reuse_disabled = 0;
+    CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 1, "reset strict-state fixture");
+#define STRICT_GFX(label, change) do { int before=compiler_calls; change; CHECK(!rp_shader_resolve(&q,&p) && compiler_calls==before+1, "strict graphics state: " label); } while (0)
+    STRICT_GFX("depth mode", fixture_depth_zero=1);
+    STRICT_GFX("Y negate", fixture_origin_lower_left=1);
+    STRICT_GFX("alpha comparison", rp_S.color.alpha_func=2);
+    STRICT_GFX("alpha reference", rp_S.alpha_ref=0.5f);
+    STRICT_GFX("alpha coverage", rp_S.ms.a2c=1);
+    STRICT_GFX("alpha coverage dither", rp_S.ms.a2c_dither=1);
+    STRICT_GFX("dual source", rp_S.blend[0].src_rgb=0x10);
+    STRICT_GFX("vertex numeric type", rp_S.nattr=1; rp_S.attr[0].fmt=NVN_FORMAT_R32UI);
+    STRICT_GFX("output numeric type", q.rt_format[0]=NVN_FORMAT_RGBA8);
+#undef STRICT_GFX
+    const struct rp_prog *last=p; int before=compiler_calls;
+    rp_S.tex[0][3]=77;
+    CHECK(!rp_shader_resolve(&q,&p) && p==last && compiler_calls==before,"alias reuse before reset");
+    rp_shader_reset();
+    CHECK(shader_release_count==shader_load_count,"owned shaders released once despite aliases: %d/%d",shader_release_count,shader_load_count);
+    CHECK(!rp_shader_resolve(&q,&p) && compiler_calls==before+1,"reset clears aliases and dependency index before next resolve");
+    rp_shader_reset();
+    CHECK(shader_release_count==shader_load_count,"second session releases each shader once");
+    fixture_depth_zero=fixture_origin_lower_left=0;
     fake_gs_success = fake_gs_fact_deps = 0; separate_fixture = 0; fake_reg_changes = 1;
     rp_shader_reset(); rp_state_reset();
 }
@@ -601,6 +621,12 @@ int main(int argc, char **argv) {
         for (size_t i = 0; i < n; i++) printf("%02x", bytes[i]);
         putchar('\n'); return 0;
     }
+    if (argc == 6 && !strcmp(argv[1], "--emit-reuse-texture"))
+        return emit_real_request(argv[2], argv[3], argv[4], argv[5], 4);
+    if (argc == 6 && !strcmp(argv[1], "--emit-reuse-rt"))
+        return emit_real_request(argv[2], argv[3], argv[4], argv[5], 5);
+    if (argc == 6 && !strcmp(argv[1], "--emit-reuse-inactive"))
+        return emit_real_request(argv[2], argv[3], argv[4], argv[5], 6);
     if (argc == 6 && !strcmp(argv[1], "--execute-reuse"))
         return emit_real_request(argv[2], argv[3], argv[4], argv[5], 3);
     if (argc == 6 && (!strcmp(argv[1], "--emit-real") || !strcmp(argv[1], "--emit-real-tbuf") || !strcmp(argv[1], "--execute-tbuf")))

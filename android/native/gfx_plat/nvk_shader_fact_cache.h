@@ -6,11 +6,8 @@
  * In this shape HasDirectTextureFact is invariant and TrySeparateC2 is false.
  * Separate tables, buffer facts, arrays and unknown dependency sources retain
  * the exact identity path. Query results select whole facts, not guessed fields. */
-static int g_fact_cache_enabled = -1;
 
 static int fact_cache_shape(const struct s2a_input_identity *id) {
-    if (g_fact_cache_enabled < 0) g_fact_cache_enabled = nvn_plat_flag("nvk_shader_fact_cache", 1);
-    if (!g_fact_cache_enabled) return 0;
     unsigned stages = id->stage_mask == 1 ? 1 : id->stage_mask == 3 ? 2 : id->stage_mask == 7 ? 3 : 0;
     if (!stages || id->texture_count != (int)(stages * 32)) return 0;
     for (unsigned st = 0; st < stages; st++) for (unsigned slot = 0; slot < 32; slot++) {
@@ -28,8 +25,8 @@ static int fact_cache_hash(const struct s2a_input_identity *id, const uint32_t m
     /* rt_count is native bookkeeping; the compiler receives all eight output
      * types, which remain in the identity regardless of attachment count. */
     graphics.rt_count = 0; selected.gfx = &graphics;
-    for (unsigned st = 0; st < 6; st++)
-        if (!mask || !(mask[3] & (1u << st))) selected.ubo_use[st] = 0;
+    // Active-stage UBO masks remain strict even when no query is recorded.
+    // fill_facts already omits stages not submitted to the compiler.
     selected.texture_count = 0; selected.textures = tex;
     if (mask) for (int i = 0; i < id->texture_count; i++)
         if (mask[i / 32] & (1u << (i % 32))) tex[selected.texture_count++] = id->textures[i];
@@ -128,7 +125,6 @@ static void fact_cache_keep(const struct s2a_input_identity *id, const uint8_t b
 }
 
 static void fact_cache_reset(void) {
-    g_fact_cache_enabled = -1;
     for (uint32_t i = 0; i < g_fact_variants.cap; i++) {
         struct fact_variant *v = g_fact_variants.vals[i];
         while (v) { struct fact_variant *next = v->next; free(v); v = next; }

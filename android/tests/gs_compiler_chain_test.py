@@ -71,3 +71,21 @@ subprocess.run([str(out/'parse'),str(out/'compiled/program.json'),str(out)], che
 print('PASS: original Maxwell -> production v2 request -> real compiler -> production result parser (synthetic enabled profile; no Vulkan draw)')
 
 subprocess.run([sys.executable,str(root/'android/tests/nvk_shader_pool_test.py'),'--execute-reuse',str(out/'profile.json'),closure,str(source_dir),str(out/'compiled/program.json')], check=True)
+
+# Each relaxed input is changed alone, then compiled independently. Only transport
+# metadata (requestId) may differ; executable content and dependency trace must be
+# byte-for-byte equal, including SPIR-V, layout, and queried specialization facts.
+canonical = lambda value: json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+expected = canonical(json.loads((out/'compiled/program.json').read_text())['content'])
+for variant in ('texture', 'rt', 'inactive'):
+    request = out/('reuse-' + variant + '.json')
+    result_dir = out/('reuse-' + variant)
+    subprocess.run([sys.executable,str(root/'android/tests/nvk_shader_pool_test.py'),
+                    '--emit-reuse-' + variant,str(out/'profile.json'),closure,str(source_dir),str(request)], check=True)
+    changed = json.loads(request.read_text()) != req
+    assert changed == (variant == 'texture'), 'only texture changes submitted compiler facts: ' + variant
+    subprocess.run(['dotnet','run','--no-build','-c','Release','--project',str(cli),'--','compile',
+                    '--request',str(request),'--output',str(result_dir)], check=True)
+    actual = canonical(json.loads((result_dir/'program.json').read_text())['content'])
+    assert actual == expected, 'compiler content changed for relaxed input: ' + variant
+    print('PASS: independently compiled content byte-for-byte equal: ' + variant)

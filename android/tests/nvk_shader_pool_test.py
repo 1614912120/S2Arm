@@ -84,7 +84,7 @@ def main():
         assert before_lines[1] == after_lines[1], 'legacy S2AI1 bytes changed'
         print(f'legacy request and canonical identity byte-for-byte unchanged versus {base_sha}')
         return 0
-    if len(sys.argv) == 6 and sys.argv[1] in ('--emit-real', '--emit-real-tbuf', '--execute-tbuf', '--emit-compute-tbuf', '--execute-compute-tbuf'):
+    if len(sys.argv) == 6 and sys.argv[1] in ('--emit-reuse-texture', '--emit-reuse-rt', '--emit-reuse-inactive', '--emit-real', '--emit-real-tbuf', '--execute-tbuf', '--emit-compute-tbuf', '--execute-compute-tbuf'):
         result = run('emit-real', original, args=sys.argv[1:])
         sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)
         return result.returncode
@@ -206,12 +206,23 @@ def main():
         assert result.returncode and 'unqueried combined texture reuses compiled program' in result.stderr, result.stderr
         print('PASS: disabling dependency reuse fails the production-producer regression')
         return 0
+    if sys.argv[1:] == ['--withdraw-fact-reset']:
+        text = original.read_text()
+        assert text.count('    fact_cache_reset();') == 1
+        path = out/'fact-reset-withdraw.c'
+        path.write_text(text.replace('    fact_cache_reset();', '    (void)fact_cache_reset;'))
+        base.append('-I'+str(native/'gfx_plat'))
+        result = run('fact-reset-withdraw', path)
+        assert result.returncode and 'reset clears aliases and dependency index' in result.stderr, result.stderr
+        print('PASS: keeping stale dependency indexes across reset fails the production-producer regression')
+        return 0
     if sys.argv[1:] == ['--withdraw-inactive-ubo']:
         text = original.read_text()
         before = 'for (int st = 0; st < nst; st++) { uint32_t m = 0;'
         assert text.count(before) == 1
         path = out/'inactive-ubo-withdraw.c'
         path.write_text(text.replace(before, 'for (int st = 0; st < 6; st++) { uint32_t m = 0;'))
+        base.append('-I'+str(native/'gfx_plat'))
         result = run('inactive-ubo-withdraw', path)
         assert result.returncode and 'inactive stage UBO keeps graphics identity' in result.stderr, result.stderr
         print('PASS: restoring inactive UBO identity fails the production-producer regression')
