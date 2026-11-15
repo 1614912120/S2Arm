@@ -343,6 +343,56 @@ static void crash_reraise(int sig) {
     raise(sig);
     _exit(128 + sig);
 }
+// ---------- 写监视（S2A_WRITE_WATCH=<游戏地址>:<字节数>[,…]，#016fde；诊断，缺省关，至多 4 处）----------
+// 对这些地址所在的 16 KB 页设只读；有人写到页内就缺页：写的地址落在监视区间（含前 8 字节，覆盖跨进区间的宽写）里就记一行
+//   （第几次、线程、pc / lr 的模块偏移、区间里当前的 16 字节）并打回溯；不在区间只计数。随后放开这一页让这条写重执行，
+//   后台线程约 1 ms 后重新设只读（窗口里别的写会漏，析构 / 重置这类少见写照抓）。页还没映射时后台每 1 ms 试一次。
+//   用途：游戏堆分配确定的款，把「谁、在哪条指令上改了这个对象」直接抓出来（织梦岛 0x70f78af0c8 的包装对象被提前析构）
+enum { WW_MAX = 4, WW_LOG = 32 };
+static struct { uint64_t a, n; _Atomic int armed, said; _Atomic uint64_t hits, other; } g_ww[WW_MAX]; static int g_nww;
+static void *ww_thread(void *arg) {
+    (void)arg; pthread_setname_np("s2a-write-watch");
+    for (;;) {
+        for (int i = 0; i < g_nww; i++) {
+            if (atomic_load(&g_ww[i].armed)) continue;
+            uint64_t pg = g_ww[i].a & ~0x3FFFull; uint8_t b;
+            if (!mem_read(pg, &b, 1) || mprotect((void *)(uintptr_t)pg, 0x4000, PROT_READ)) continue;
+            atomic_store(&g_ww[i].armed, 1);
+            if (!atomic_exchange(&g_ww[i].said, 1)) LOG("写监视：%#llx（%llu 字节）所在页已设只读", (unsigned long long)g_ww[i].a, (unsigned long long)g_ww[i].n);
+        }
+        usleep(1000);
+    }
+    return NULL;
+}
+static void ww_start(void) {
+    const char *e = getenv("S2A_WRITE_WATCH"); if (!e || !*e) return;
+    for (const char *s = e; s && *s && g_nww < WW_MAX; ) {
+        unsigned long long a = 0, n = 8; if (sscanf(s, "%llx:%llu", &a, &n) >= 1 && a) { g_ww[g_nww].a = a; g_ww[g_nww].n = n ? n : 8; g_nww++; }
+        s = strchr(s, ','); if (s) s++;
+    }
+    pthread_t t; if (g_nww && !pthread_create(&t, NULL, ww_thread, NULL)) pthread_detach(t);
+}
+static int ww_fault(void *ctx, uint64_t fa, int w) {
+    if (!g_nww || !w) return 0;
+    for (int i = 0; i < g_nww; i++) {
+        uint64_t pg = g_ww[i].a & ~0x3FFFull;
+        if ((fa & ~0x3FFFull) != pg || !atomic_load(&g_ww[i].armed)) continue;
+        if (fa + 8 > g_ww[i].a && fa < g_ww[i].a + g_ww[i].n) {
+            uint64_t k = atomic_fetch_add(&g_ww[i].hits, 1) + 1;
+            if (k <= WW_LOG) {
+                ucontext_t *uc = ctx; uint64_t pc = uc->uc_mcontext->__ss.__pc, lr = uc->uc_mcontext->__ss.__lr, cur[2] = {0, 0};
+                char bp[160], bl[160], tn[32] = ""; where(pc, bp, sizeof bp); where(lr, bl, sizeof bl); mem_read(g_ww[i].a, cur, sizeof cur); pthread_getname_np(pthread_self(), tn, sizeof tn);
+                LOG("【红】写监视 %#llx 第 %llu 次被写：写 %#llx，线程 %s，pc %s lr %s；写前区间内 %016llx %016llx；回溯：", (unsigned long long)g_ww[i].a, (unsigned long long)k,
+                    (unsigned long long)fa, tn[0] ? tn : "?", bp, bl, (unsigned long long)cur[0], (unsigned long long)cur[1]);
+                s2a_backtrace(uc->uc_mcontext->__ss.__fp);
+            }
+        } else atomic_fetch_add(&g_ww[i].other, 1);
+        atomic_store(&g_ww[i].armed, 0);
+        mprotect((void *)(uintptr_t)pg, 0x4000, PROT_READ | PROT_WRITE);
+        return 1;
+    }
+    return 0;
+}
 static void (*g_dsh_crash_dump)(void);   // graphics/nvn/host/dsh_miss.inc s2a_dsh_crash_dump：现编时崩溃，落盘正在编的那支输入；装信号时 dlsym 取一次（信号处理里不调 dlsym），只链运行时的单测取不到 = 空
 static void on_crash(int sig, siginfo_t *si, void *ctx) {
     // 先给 16 KB 写跟踪（graphics/track）认领：游戏 / 原生层写到被写保护的游戏页，跟踪模块记脏、放开后返回重执行那条指令。
@@ -363,6 +413,7 @@ static void on_crash(int sig, siginfo_t *si, void *ctx) {
           if (ec == 0x26 && (gate || module_of((void *)pc0)) && s2a_emul_sp_unaligned(ctx)) { atomic_fetch_add_explicit(&g_sp_unaligned, 1, memory_order_relaxed); return; } }
         if (ec == 0x24 || ec == 0x25) {
             int w = (int)(esr >> 6 & 1); uint64_t pc = ((ucontext_t *)ctx)->uc_mcontext->__ss.__pc;
+            if (ww_fault(ctx, (uint64_t)si->si_addr, w)) return;   // 写监视（S2A_WRITE_WATCH，诊断）：记下写的人后放开重执行
             { uint64_t bp = atomic_load(&g_esb_page), fa0 = (uint64_t)si->si_addr;   // 拦写模拟自测页（见 s2a_emul_store_bench）
               if (bp && w && (fa0 & ~0x3FFFull) == bp) { uint8_t *wa = s2a_alias_page_rw(bp); if (wa && s2a_emul_store(ctx, fa0, wa + (fa0 & 0x3FFF), NULL, NULL, NULL)) return; } }
             // 远端（far.c，乙布局）：别名区伸出宿主窗口那段一碰即缺页，在影子上代执行这条访存并记点
@@ -446,6 +497,7 @@ void s2a_crash_install(void) {
     int sigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE, SIGABRT};   // SIGABRT：die() 与 C# FailFast 都走 abort，要现场
     g_dsh_crash_dump = (void (*)(void))dlsym(RTLD_DEFAULT, "s2a_dsh_crash_dump");
     g_crash_quiet = s2a_crash_quiet();
+    ww_start();
     for (size_t i = 0; i < sizeof sigs / sizeof *sigs; i++) {
         int e = plat_fault_install(sigs[i], on_crash, PLAT_FAULT_ONSTACK);
         if (e) LOG("【红】崩溃：安装信号 %d 失败 errno=%d", sigs[i], e);

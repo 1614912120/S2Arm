@@ -141,6 +141,29 @@ int main(void) {
       eq("⑥ 落在映射块、块起止就是那一页", 1, strstr(out, "落在映射块") != NULL && strstr(out, blk) != NULL);
       eq("⑥ 权限 当前 r-- / 最大 rwx", 1, strstr(out, "权限 当前 r-- / 最大 rwx") != NULL);
       munmap((void *)ro, 0x4000); }
+    // ⑦ 写监视（S2A_WRITE_WATCH，#016fde）：子进程对一块可写页里 +0x40 起 16 字节设监视，装好后：写区间内（+0x48）、写同页区间外（+0x200）、
+    //   等后台重新设只读后再写区间内（+0x40）。期望按构造写死：三次写都真写进去（子进程核对后退 0，不崩）；区间内两次各记一行（第 1、2 次，
+    //   写的地址照写），区间外那次不记；没有第 3 次
+    { char path[] = "/tmp/t_crash_ww_XXXXXX"; int fd = mkstemp(path);
+      volatile uint64_t *pg = mmap(NULL, 0x4000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+      char env[64]; snprintf(env, sizeof env, "%llx:16", (unsigned long long)(uintptr_t)(pg + 8));
+      pid_t c = fork();
+      if (c == 0) {
+          g_s2a_logfd = fd; setenv("S2A_WRITE_WATCH", env, 1); s2a_crash_install();
+          usleep(50000); pg[9] = 0x1111;
+          usleep(20000); pg[0x40] = 0x2222;
+          usleep(20000); pg[8] = 0x3333;
+          usleep(20000); _exit(pg[9] == 0x1111 && pg[0x40] == 0x2222 && pg[8] == 0x3333 ? 0 : 3);
+      }
+      int ws = 0; waitpid(c, &ws, 0);
+      static char out[65536]; lseek(fd, 0, SEEK_SET); ssize_t k = read(fd, out, sizeof out - 1); out[k > 0 ? k : 0] = 0; close(fd); unlink(path);
+      char w1[96], w2[96]; snprintf(w1, sizeof w1, "第 1 次被写：写 %#llx", (unsigned long long)(uintptr_t)(pg + 9)); snprintf(w2, sizeof w2, "第 2 次被写：写 %#llx", (unsigned long long)(uintptr_t)(pg + 8));
+      eq("⑦ 写监视：三次写都写进去、子进程正常退出", 1, WIFEXITED(ws) && WEXITSTATUS(ws) == 0);
+      eq("⑦ 页设只读那一行", 1, strstr(out, "所在页已设只读") != NULL);
+      eq("⑦ 区间内第 1 次（+0x48）记下", 1, strstr(out, w1) != NULL);
+      eq("⑦ 区间内第 2 次（重新设只读后 +0x40）记下", 1, strstr(out, w2) != NULL);
+      eq("⑦ 区间外那次不记、没有第 3 次", 1, strstr(out, "第 3 次被写") == NULL);
+      munmap((void *)pg, 0x4000); }
     if (bad) { printf("✗ t_crash：%d/%d 项不符\n", bad, n); return 1; }
     printf("✓ t_crash：%d 项崩溃现场全符（回溯好链、坏指针不二次缺页、未映射起点、两段式第一段先落盘、两线程同时崩两份现场都在、调用点反查导入名）\n", n);
     return 0;
