@@ -191,6 +191,8 @@ def win_oneclick(c, oneclick, extraction, fonts, out, events, log, env, line, so
         return
     ipa, pack = Path(res["ipa"]), Path(res["pack"])
     kuan = ipa.stem
+    if not ipa.is_file() and re.search(r"[\\/]S2A[\\/]j[\\/]", str(ipa), re.I):   # 回报的还是短路径入口（子进程退出时已拆）：报明确原因，不报 WinError 3（诊断#0e3bd5）
+        raise Failure(f"出包已完成，但回报的 ipa 路径还在临时短路径入口下、入口已随出包进程退出拆掉，拷不到：{ipa}。请把这条报错和诊断一起发给我们。")
     shutil.copy2(ipa, out / (kuan + ".ipa"))
     c.run([os.sys.executable, c.engine / "pack/oneclick/deliver_pack.py", pack, out / (kuan + "资源包")], log, env)
     with open(events, "a", encoding="utf-8") as f:   # 末条 result 指向交付件（ipa.build 只认 out 下的包）

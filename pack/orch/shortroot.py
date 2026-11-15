@@ -72,7 +72,7 @@ def junction_targets(paths):
 def to_long(path, table):
     """短路径 → 玩家路径（界面、日志、产物里的联接目标都用它）"""
     text = str(path)
-    low = ntpath.normcase(text)
+    low = ntpath.normcase(text)   # normcase：不分大小写、/ 一律当 \
     for _, long, short in table:
         key = ntpath.normcase(short)
         if low == key or low.startswith(key + "\\"):
