@@ -73,7 +73,7 @@ public sealed class JobEventReader(string jobId, string operation)
 /// </summary>
 public static class PackJobClient
 {
-    // 操作名不在前端设白名单（11-15 jhz：「自己给自己设套儿、增加卡点」——0.4.0 漏登记两页，请求进引擎前就被拒，#1149 卡死）：
+    // 操作名不在前端设白名单（11-15：前端清单是自己给自己加的卡点——0.4.0 漏登记两页，请求进引擎前就被拒，#1149 卡死）：
     //   请求原样交给引擎，引擎不认识的操作自己回失败结果（pack/jobs/main.py「不支持的任务类型。」），界面把它当普通失败显示成文字
 
     /// <param name="Secrets">Environment variables for this one job process only (the developer certificate password,
