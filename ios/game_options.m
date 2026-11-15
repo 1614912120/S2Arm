@@ -189,12 +189,15 @@ NSArray<NSDictionary *> *s2a_ios_crash_suspects_for(NSString *gid) {
     for (NSDictionary *e in s2a_ios_cheat_entries(dir)) if ([con containsObject:e[@"key"]]) [out addObject:@{@"kind": @"cheat", @"key": e[@"key"], @"name": e[@"name"]}];
     // 社区补丁：开着的都算（11-13 起没选过 = 默认开，不再只算玩家自己开的）；帧率补丁跟 60 帧开关，开着就把「60 帧」算进去（关掉 = 关 60 帧）
     NSUserDefaults *d = s2a_ios_settings_defaults_for(gid);
-    NSArray<S2ACPatchGroup *> *groups = patch_groups(gid); NSSet *pon = S2ACPatchEnabled(groups, d); BOOL fps = NO, fpsVerified = NO;
+    NSArray<S2ACPatchGroup *> *groups = patch_groups(gid); NSSet *pon = S2ACPatchEnabled(groups, d); BOOL fps = NO, fpsVerified = NO, fam = NO, famVerified = NO;
     for (S2ACPatchGroup *g in groups) for (S2ACPatchItem *it in g.items) {
         if (it.followsFps60) { fps = YES; fpsVerified |= it.defaultOn; }
+        else if (it.followsFullscreen) { fam = YES; famVerified |= it.defaultOn; }   // 自适应满屏一族跟满屏开关：并成一条「满屏」，关 = 关开关（原先逐份从列表里删，开关仍显示开）
         else if ([pon containsObject:it.ident]) [out addObject:@{@"kind": @"patch", @"key": it.ident, @"name": it.title, @"verified": @(it.defaultOn)}];
     }
     if (fps && s2a_ios_fps60_on_for(gid)) [out addObject:@{@"kind": @"fps", @"key": @"fps60", @"name": S2AL(@"cpatch.group.fps"), @"verified": @(fpsVerified)}];
+    BOOL fsOn = NO; if (fam && !s2a_ios_fullscreen_state(gid, &fsOn) && fsOn)
+        [out addObject:@{@"kind": @"fs", @"key": @"fullscreen", @"name": S2AL(@"cpatch.group.widescreen"), @"verified": @(famVerified)}];
     return out;
 }
 // 只关出事的那份（v0.4.1，规则 ios/cpatch_model.m S2ACrashNarrow）：每局开始记下这局开着的（S2ACrashSessionOn），上一局好好收局的那份升为 S2ACrashGoodOn；
@@ -217,6 +220,7 @@ void s2a_ios_crash_turn_off_for(NSString *gid, NSArray<NSDictionary *> *items) {
     for (NSDictionary *it in items) {
         if ([it[@"kind"] isEqual:@"cheat"]) { [con removeObject:it[@"key"]]; cheats = YES; }
         else if ([it[@"kind"] isEqual:@"fps"]) s2a_ios_set_fps60_for(gid, NO);
+        else if ([it[@"kind"] isEqual:@"fs"]) s2a_ios_set_fullscreen(gid, NO);
         else { if (!groups) groups = patch_groups(gid); S2ACPatchSetEnabled(groups, s2a_ios_settings_defaults_for(gid), it[@"key"], NO); }
     }
     if (cheats) s2a_ios_cheats_write_enabled(dir, con);

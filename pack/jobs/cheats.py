@@ -235,8 +235,11 @@ def _on_now(c, game):
     patches = sorted(it["id"] for it in community.packed_patches(c, gid) if data["patches"].get(it["id"]) is not False)
     # 帧率补丁（编号 fps:）跟「60 帧」开关走、不在 packed_patches 里：包里有帧率补丁且开关没关 → 算一条（iOS 同口径，ios/game_options.m s2a_ios_crash_suspects_for）
     fps = bool(community.fps_levels(c, gid)) and data["settings"].get("fps60", True) is not False
-    on = [("cheat", k) for k in keys] + [("patch", k) for k in patches] + ([("fps", "fps60")] if fps else [])
-    return on, community.verified_patches(c, gid), data
+    # 自适应满屏一族（编号 wsauto:）跟「满屏」开关走、也不在 packed_patches 里（11-15 候选自测：崩了没关它）：有这一族且开关没关 → 算一条，关 = 关满屏开关（iOS 同口径）
+    fams, fam_verified = community.adaptive_patches(c, gid)
+    fs = bool(fams) and data["settings"].get("widescreen", True) is not False
+    on = [("cheat", k) for k in keys] + [("patch", k) for k in patches] + ([("fps", "fps60")] if fps else []) + ([("fs", "fullscreen")] if fs else [])
+    return on, community.verified_patches(c, gid) | ({"fullscreen"} if fam_verified else set()), data
 
 
 def narrow(on, good, verified):
@@ -266,18 +269,21 @@ def note_crash(c, game):
     keys = [k for t, k in off if t == "cheat"]
     patches = [k for t, k in off if t == "patch"]
     fps = ("fps", "fps60") in off
+    fs = ("fs", "fullscreen") in off
     known = {it["key"] for it in listing(c, game)["items"]}
     if keys:
         save(c, game, {k: False for k in keys if k in known})
-    if patches or fps:
+    if patches or fps or fs:
         for k in patches:
             data["patches"][k] = False
         if fps:
             data["settings"]["fps60"] = False
+        if fs:
+            data["settings"]["widescreen"] = False
         import community
         atomic(community.launch_path(c, gid), data)
     d.mkdir(parents=True, exist_ok=True)
-    atomic(d / "crashed.json", {"cheats": keys, "patches": patches, "fps": fps, "at": int(time.time()), "off": True})
+    atomic(d / "crashed.json", {"cheats": keys, "patches": patches, "fps": fps, "fullscreen": fs, "at": int(time.time()), "off": True})
 
 
 # 停帧救场（11-14 维护者）：局内画面停住时社区帧率补丁开着，运行时当场关掉（runtime/src/cpatch.c s2a_cpatch_stall_rescue）并在 S2A_DOCS 下写 cpatch_stall_off。
@@ -299,12 +305,13 @@ def note_stall(c, game, docs):
 
 
 def crashed(c, game):
-    """→ [{kind: cheat | patch, key, name}]：上次异常退出时开着、已经关掉的几条；没记录 = []"""
+    """→ [{kind: cheat | patch | fps | fs, key, name}]：上次异常退出时开着、已经关掉的几条；没记录 = []"""
     r = read(cheats_dir(c, game["id"].upper(), create=False) / "crashed.json", {}) or {}
     labels = {it["id"]: it["label"] for it in __import__("community").packed_patches(c, game["id"].upper())} if r.get("patches") else {}
     return [dict(kind="cheat", key=k, name=k.split("/", 1)[-1]) for k in r.get("cheats", [])] + \
            [dict(kind="patch", key=k, name=labels.get(k, k)) for k in r.get("patches", [])] + \
-           ([dict(kind="fps", key="fps60", name="")] if r.get("fps") else [])
+           ([dict(kind="fps", key="fps60", name="")] if r.get("fps") else []) + \
+           ([dict(kind="fs", key="fullscreen", name="")] if r.get("fullscreen") else [])
 
 
 def answer_crash(c, game, choice):

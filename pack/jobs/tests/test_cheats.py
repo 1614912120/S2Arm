@@ -197,6 +197,16 @@ class CheatsTests(unittest.TestCase):
         cheats.note_crash(self.c, self.game)
         self.assertEqual(self._on(), ([], [], False))
 
+    def test_crash_turns_off_adaptive_fullscreen_switch(self):
+        # 11-15 候选自测：自适应满屏一族（wsauto:）跟「满屏」开关、不在 packed_patches 里，原先崩了不关。现在算一条 kind fs，关 = 满屏开关写关。期望手写
+        from layout import image_mac
+        tsv = image_mac(self.c, GID) / "cpatch.tsv"; tsv.parent.mkdir(parents=True, exist_ok=True)
+        tsv.write_text("编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\n"
+                       "wsauto:ab12:w\tmain\t0\twidescreen\t自适应满屏\tMIT\to/r\t\t0\t\t\t\nwsauto:ab12:n\tmain\t1\twidescreen\t自适应满屏\tMIT\to/r\t\t0\t\t\t\n", encoding="utf-8")
+        cheats.note_crash(self.c, self.game)
+        self.assertIs(community.load_launch(self.c, GID)["settings"].get("widescreen"), False)
+        self.assertEqual([x["kind"] for x in cheats.crashed(self.c, self.game)], ["fs"])
+
     def test_crash_with_nothing_on_records_nothing(self):
         cheats.note_crash(self.c, self.game)
         self.assertEqual(cheats.crashed(self.c, self.game), [])
