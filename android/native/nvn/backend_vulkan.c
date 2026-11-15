@@ -5748,8 +5748,25 @@ void nvn_gpu_blit(nvn_gpu_cmd ch, nvn_gpu_view sv, const NVNcopyRegion *sr, nvn_
     VkFormatProperties fs, fd; s2a_vk_format_properties(g.phys, s->format, &fs); s2a_vk_format_properties(g.phys, d->format, &fd);
     if (!(fs.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_SRC_BIT) || !(fd.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT) ||
         (linear && !(fs.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))) { set_sticky(c, NVN_GPU_E_UNSUPPORTED, "blit：设备不支持这对格式（%d → %d，线性 %d）", (int)s->format, (int)d->format, linear); return; }
+    // copy_region 的非正宽高有「整张」含义，不能直接把反向区域交给它。
+    NVNcopyRegion normalized = *sr;
+    int flip_x = sr->width < 0, flip_y = sr->height < 0;
+    // 不扩展同图自拷贝；不同 NVN 身份可能仍别名到同一个后端图像。
+    if ((flip_x || flip_y) && s == d) { set_sticky(c, NVN_GPU_E_UNSUPPORTED, "blit：同图镜像没接"); return; }
+    if (flip_x || flip_y) {
+        int64_t x = sr->xoffset, y = sr->yoffset, w = sr->width, h = sr->height;
+        if (flip_x) { x += w; w = -w; }
+        if (flip_y) { y += h; h = -h; }
+        if (x < 0 || y < 0 || x > INT32_MAX || y > INT32_MAX || w <= 0 || h <= 0 ||
+            w > INT32_MAX || h > INT32_MAX || sr->zoffset || sr->depth != 1 || dr->width <= 0 || dr->height <= 0 ||
+            s->target == NVN_TEXTURE_TARGET_3D || d->target == NVN_TEXTURE_TARGET_3D) {
+            set_sticky(c, NVN_GPU_E_ARG, "blit 反向源区域非法"); return;
+        }
+        normalized.xoffset = (int)x; normalized.yoffset = (int)y;
+        normalized.width = (int)w; normalized.height = (int)h;
+    }
     VkOffset3D so, dof; VkExtent3D se, de;
-    if (copy_region(s, sv->base_level, sr, &so, &se) || copy_region(d, dv->base_level, dr, &dof, &de) || sv->base_layer >= s->layers || dv->base_layer >= d->layers) { set_sticky(c, NVN_GPU_E_ARG, "blit 区域越界"); return; }
+    if (copy_region(s, sv->base_level, &normalized, &so, &se) || copy_region(d, dv->base_level, dr, &dof, &de) || sv->base_layer >= s->layers || dv->base_layer >= d->layers) { set_sticky(c, NVN_GPU_E_ARG, "blit 区域越界"); return; }
     full_barrier(c);
     image_barrier(c, s, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
     image_barrier(c, d, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
@@ -5757,6 +5774,8 @@ void nvn_gpu_blit(nvn_gpu_cmd ch, nvn_gpu_view sv, const NVNcopyRegion *sr, nvn_
     ib.srcSubresource = (VkImageSubresourceLayers){s->aspect, sv->base_level, sv->base_layer, 1};
     ib.dstSubresource = (VkImageSubresourceLayers){d->aspect, dv->base_level, dv->base_layer, 1};
     ib.srcOffsets[0] = so; ib.srcOffsets[1] = (VkOffset3D){so.x + (int32_t)se.width, so.y + (int32_t)se.height, 1};
+    if (flip_x) { int32_t x = ib.srcOffsets[0].x; ib.srcOffsets[0].x = ib.srcOffsets[1].x; ib.srcOffsets[1].x = x; }
+    if (flip_y) { int32_t y = ib.srcOffsets[0].y; ib.srcOffsets[0].y = ib.srcOffsets[1].y; ib.srcOffsets[1].y = y; }
     ib.dstOffsets[0] = dof; ib.dstOffsets[1] = (VkOffset3D){dof.x + (int32_t)de.width, dof.y + (int32_t)de.height, 1};
     vkCmdBlitImage(c->cb, s->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, d->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &ib, linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
     image_barrier(c, s, VK_IMAGE_LAYOUT_GENERAL);
