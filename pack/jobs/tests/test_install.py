@@ -1774,6 +1774,34 @@ class ExportPhoneTests(unittest.TestCase):
         self.assertEqual(r["exportBytes"], sum(p.stat().st_size for p in out.iterdir()))
         self.assertEqual([p.name for p in self.c.library.iterdir() if p.name.startswith(".export-")], [])   # 临时目录收干净
 
+    def test_export_leaves_out_games_of_another_address_space_type(self):
+        """#1132：游戏库里有一款地址空间类型不同（甲、丙类型 3，乙类型 1）：点甲导出只带甲、丙，乙这次不带、点名 container_incompatible，
+        不再整次报「放不进同一个 App」；不点（导出新版 S2Arm）按款数多的那类（类型 3）"""
+        A, B, C = self.A, self.B, self.C
+        self._library((A, "甲"), (B, "乙"), (C, "丙"))
+        for g, data in ((A, b"S2AIMG01-a"), (B, b"S2AIMG01-b"), (C, b"S2AIMG01-c")):
+            self._img(g, data)
+        for g, t in ((A, 3), (B, 1), (C, 3)):   # 头 +0x0C 位 1–3 = 地址空间类型
+            (layout.ios_kit(self.c, g) / "main.npdm").write_bytes(b"META" + bytes(8) + bytes([t << 1]) + bytes(0x80))
+        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
+        r = self._export(dict(gameId=A))
+        self.assertEqual((r["games"], r["skipped"]), ([A, C], ["乙"]))
+        warn = [d for d in self.c.job.get("diagnostics", []) if d["code"] == "container_incompatible"]
+        self.assertEqual(len(warn), 1); self.assertIn("乙", warn[0]["summary"])
+        r = self._export(dict(gameId=B))
+        self.assertEqual((r["games"], r["skipped"]), ([B], ["甲", "丙"]))
+
+    def test_export_skips_games_removed_from_library(self):
+        """#1132：从游戏库删掉的款（library.remove 只置 hidden）导出时不再带上、也不算「没放进」"""
+        A, B = self.A, self.B
+        self._library((A, "甲"), (B, "乙"))
+        self._img(A, b"S2AIMG01-a"); self._img(B, b"S2AIMG01-b")
+        cat = self.c.catalog(); cat["games"][1]["hidden"] = True; self.c.catalog = lambda: cat
+        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
+        r = self._export(dict(gameId=A))
+        self.assertEqual((r["games"], r["skipped"]), ([A], []))
+        self.assertEqual([d for d in self.c.job.get("diagnostics", []) if "已从游戏库删除" in d.get("summary", "")], [])   # 导出前就不带：不出「已从游戏库删除」这类提醒
+
     def test_export_replaces_whole_folder(self):
         """再导出一次：文件夹整个换新（上次的、玩家放进去的别的文件都不在了）"""
         self._library((self.A, "甲")); self._img(self.A, b"S2AIMG01-a")
