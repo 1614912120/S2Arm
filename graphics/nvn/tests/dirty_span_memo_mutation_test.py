@@ -132,9 +132,8 @@ pool_other = ['graphics/nvn/tests/t_nvn_replay.c', 'graphics/nvn/tests/nvn_clear
 pool_flags = [*compile_flags, '-std=c11', '-D_DEFAULT_SOURCE', '-Werror',
               *('-I' + str(ROOT / x) for x in ('.', 'graphics/nvn/gfx/nvn', 'graphics/nvn/gfx/nvn/include', 'graphics/nvn/gfx/tex', 'graphics/nvn/replay'))]
 pool_objs = []
-# 回放核心对平台 / 后端可选件的弱引用：苹果 ld 默认不认未定义弱符号，按 runtime/tests/mk/nvn_replay.mk 的 NVN_REPLAY_WEAK_SYMS 逐个 -U（同一张表，不另抄）
-_weak = re.search(r'^NVN_REPLAY_WEAK_SYMS\s*:=\s*(.*)$', (ROOT / 'runtime/tests/mk/nvn_replay.mk').read_text(encoding='utf-8'), re.M)
-pool_link = ['-Wl,-U,_' + s for s in (_weak.group(1).split() if _weak else [])] if sys.platform == 'darwin' else []
+# 回放核心对平台 / 后端可选件的弱引用：苹果 ld 默认不认未定义弱符号，逐个允许缺；清单只从源码登记生成（tools/weak_link_decl.py flags replay）
+pool_link = subprocess.run([sys.executable, str(ROOT / 'tools/weak_link_decl.py'), 'flags', 'replay'], check=True, capture_output=True, text=True).stdout.split() if sys.platform == 'darwin' else []
 
 
 def pool_build_others():

@@ -9,6 +9,7 @@
 #include "nvn_plat.h"     // nvn_plat_flag（debug.s2a.*）
 #include "rp_shader.h"    // rp_shader_prog_borrow/return / struct rp_prog
 #include "nvn_plat.h"     // 已有；nvn_plat_log / nvn_plat_flag
+// 弱链接[pipedemand]：s2a_fu_rt_reset（nvn_first_use.c 提供；android/tools/nvn_vk_pipe_demand_test.sh 不链它）
 void s2a_fu_rt_reset(void) __attribute__((weak));   // 首用 fresh/seen 历史清表（nvn_first_use.c；弱引用，宿主缺实现就跳过）
 
 #define DEM_MAX NVK_PP_MAX

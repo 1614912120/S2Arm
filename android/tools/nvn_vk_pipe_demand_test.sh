@@ -11,7 +11,7 @@ incs=(-I "$repo/android/tests/vkhost" -I "$repo/android/tests/hostvk" -I "$repo/
       -I "$repo/graphics/nvn/third_party/vulkan-headers/include" -I "$repo/graphics/nvn/replay")
 srcs=("$repo/android/tests/nvn_vk_pipe_demand_test.c" "$repo/android/native/nvn/nvn_vk_pipe_demand.c" "$repo/android/native/nvn/nvn_pipe_pend.c")
 # s2a_fu_rt_reset 是弱引用（nvn_first_use.c，本测不链）：ELF 认未定义弱符号，苹果 ld 要逐个放行
-weak=(); [ "$(uname -s)" = Darwin ] && weak=(-Wl,-U,_s2a_fu_rt_reset)
+weak=(); [ "$(uname -s)" = Darwin ] && read -r -a weak <<< "$(python3 "$repo/tools/weak_link_decl.py" flags pipedemand)"   # 清单从源码登记生成（nvn_vk_pipe_demand.c「弱链接[pipedemand]」）
 "$cc" -std=gnu11 -O1 -g -pthread -Wall -Wextra -Werror "${incs[@]}" -o "$tmp/t" "${srcs[@]}" "${weak[@]}"
 "$tmp/t"
 "$cc" -std=gnu11 -O1 -g -pthread -fsanitize=address -fno-omit-frame-pointer "${incs[@]}" -o "$tmp/ta" "${srcs[@]}" "${weak[@]}"

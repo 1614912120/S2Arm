@@ -7,10 +7,9 @@ NVN_REPLAY_DIR := graphics/nvn/replay
 NVN_REPLAY_CORE := $(NVN_REPLAY_DIR)/rp_exec.c $(NVN_REPLAY_DIR)/rp_copy_t2b.c $(NVN_REPLAY_DIR)/rp_clear_tex.c $(NVN_REPLAY_DIR)/rp_state.c $(NVN_REPLAY_DIR)/rp_entry.c $(NVN_REPLAY_DIR)/rp_res.c $(NVN_REPLAY_DIR)/rp_buf.c $(NVN_REPLAY_DIR)/rp_pass.c $(NVN_REPLAY_DIR)/rp_present.c $(NVN_REPLAY_DIR)/rp_draw.c $(NVN_REPLAY_DIR)/nvn_unimpl.c \
   graphics/nvn/gfx/nvn/nvn_tex.c graphics/nvn/gfx/tex/nvn_deswizzle.c
 # 回放核心对平台 / 后端的可选件写的是弱引用（缺实现 = 地址为空、走不到调用）。ELF 链接器认未定义弱符号，苹果 ld 默认不认：
-#   逐个列名允许缺（-U），不用 dynamic_lookup 一刀切——真漏掉的强符号照样链接红。新增弱引用要补进这张表
-NVN_REPLAY_WEAK_SYMS := nvk_fu_frame_ms nvk_fu_item_ms nvk_fu_unsafe_ms nvk_pipe_warm_note_prog nvn_gpu_stats nvn_vk_pipe_demand_kick nvn_vk_pipe_demand_mark nvn_vk_pipe_demand_marks nvn_vk_pipe_demand_on nvn_vk_pipe_demand_wait s2a_fu_budget_left_ms s2a_fu_budget_spend s2a_fu_rt_fresh_now s2a_fu_rt_mark_fresh s2a_fu_rt_mark_seen s2a_fu_rt_seen_steady s2a_fu_wait_decide
+#   逐个列名允许缺，不用 dynamic_lookup 一刀切——真漏掉的强符号照样链接红。放行清单只从源码登记生成（「// 弱链接[replay]：符号」，见 tools/weak_link_decl.py）
 ifeq ($(shell uname -s),Darwin)
-NVN_REPLAY_WEAK := $(foreach s,$(NVN_REPLAY_WEAK_SYMS),-Wl,-U,_$(s))
+NVN_REPLAY_WEAK := $(shell python3 tools/weak_link_decl.py flags replay)
 endif
 NVN_REPLAY_SCAN = perl -0pe 's\#/\*.*?\*/\#\#gs; s\#//[^\n]*\#\#g' $(NVN_REPLAY_DIR)/rp_*.c $(NVN_REPLAY_DIR)/rp_*.h $(NVN_REPLAY_DIR)/nvn_unimpl.c $(NVN_REPLAY_DIR)/nvn_unimpl.h $(NVN_REPLAY_DIR)/nvn_plat.h
 .PHONY: native-test-nvn_replay

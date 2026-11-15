@@ -14,6 +14,9 @@
 #include <stdio.h>
 #include <string.h>
 
+// 弱链接登记（tools/weak_link_decl.py，场合 replay = 回放核心宿主单测）：后端 / 首用模块的可选件，缺实现时地址为空、走不到调用
+// 弱链接[replay]：nvn_gpu_stats
+
 enum { PT_RING = 256 };
 static pthread_mutex_t g_pmu = PTHREAD_MUTEX_INITIALIZER;
 static nvn_gpu_surface g_surf; static int g_hz;

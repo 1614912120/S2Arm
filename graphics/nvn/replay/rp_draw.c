@@ -21,6 +21,23 @@
 #include <string.h>
 #include <time.h>
 
+// 弱链接登记（tools/weak_link_decl.py，场合 replay = 回放核心宿主单测）：后端 / 首用模块的可选件，缺实现时地址为空、走不到调用
+// 弱链接[replay]：nvk_fu_frame_ms
+// 弱链接[replay]：nvk_fu_item_ms
+// 弱链接[replay]：nvk_fu_unsafe_ms
+// 弱链接[replay]：nvk_pipe_warm_note_prog
+// 弱链接[replay]：nvn_vk_pipe_demand_kick
+// 弱链接[replay]：nvn_vk_pipe_demand_mark
+// 弱链接[replay]：nvn_vk_pipe_demand_marks
+// 弱链接[replay]：nvn_vk_pipe_demand_on
+// 弱链接[replay]：nvn_vk_pipe_demand_wait
+// 弱链接[replay]：s2a_fu_budget_left_ms
+// 弱链接[replay]：s2a_fu_budget_spend
+// 弱链接[replay]：s2a_fu_rt_fresh_now
+// 弱链接[replay]：s2a_fu_rt_mark_seen
+// 弱链接[replay]：s2a_fu_rt_seen_steady
+// 弱链接[replay]：s2a_fu_wait_decide
+
 // SupportBuffer 里现在要填的字段（翻译器产物的布局；其余保持 0）
 enum { SB_RENDER_SCALE = 192, SB_S2A_FLAGS = 1392, SB_S2A_POINT = 1408, SB_RENDER_SCALE_Y = 1440, SB_RENDER_SCALE_COUNT = 73 };
 // 驱动常量段 c0 的合成布局（着色器从它读存储缓冲描述符表、最大点径、base instance）
