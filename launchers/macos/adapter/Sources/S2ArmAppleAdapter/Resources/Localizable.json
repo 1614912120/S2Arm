@@ -7594,5 +7594,289 @@
  {
   "source": "上传服务没收下这份诊断包（{0}）。",
   "en": "The upload service didn't accept this diagnostic package ({0})."
+ },
+ {
+  "source": "出包件",
+  "en": "Build components"
+ },
+ {
+  "source": "Impactor（签名装机）",
+  "en": "Impactor (signing and install)"
+ },
+ {
+  "source": "官方Windows Metal编译器",
+  "en": "Official Windows Metal compiler"
+ },
+ {
+  "source": "Apple移动设备支持",
+  "en": "Apple Mobile Device Support"
+ },
+ {
+  "source": "Apple USB设备能力",
+  "en": "Apple USB device access"
+ },
+ {
+  "source": "anisette来源",
+  "en": "anisette source"
+ },
+ {
+  "source": "目标卷空间",
+  "en": "Space on the target drive"
+ },
+ {
+  "source": "游戏库所在位置",
+  "en": "Library location"
+ },
+ {
+  "source": "Windows 64位宿主",
+  "en": "64-bit Windows"
+ },
+ {
+  "source": "Python钉版清单",
+  "en": "Python pinned requirements"
+ },
+ {
+  "source": "找不到或无法执行所需工具；请人工检查安装、执行权限与系统策略后重查。",
+  "en": "A required tool is missing or can't run. Check the installation, permissions and system policy, then check again."
+ },
+ {
+  "source": "只读探测未完成（权限、超时、输出或要求格式）；不能判为可用。",
+  "en": "The read-only check didn't finish (permissions, timeout, output or format), so it can't be counted as working."
+ },
+ {
+  "source": "没找到 Impactor。",
+  "en": "Impactor not found."
+ },
+ {
+  "source": "现装 {0}，实测过的是 {1}。",
+  "en": "Installed: {0}. Tested with: {1}."
+ },
+ {
+  "source": "有 Impactor {0}，缺同版本命令行 plumesign（同一发布页单独下载，放到 Impactor 同目录）。",
+  "en": "Impactor {0} is installed, but the matching plumesign command-line tool is missing (download it separately from the same release page and put it in the Impactor folder)."
+ },
+ {
+  "source": "未取得有效Apple metal version。 由用户在 https://developer.apple.com/download/ 人工取得官方工具；本工具不下载。",
+  "en": "Couldn't get a valid Apple metal version. Download the official tools yourself from https://developer.apple.com/download/; S2Arm doesn't download them."
+ },
+ {
+  "source": "{0}；与测试版本 {1} 不同，仅需重编。",
+  "en": "{0}; differs from the tested {1}, only a rebuild is needed."
+ },
+ {
+  "source": "本机usbmux端口可连接（老式Apple移动设备支持或商店版Apple Devices均可）；只证明驱动就绪，不证明USB设备能力。",
+  "en": "The local usbmux port is reachable (either the classic Apple Mobile Device Support or the Store version of Apple Devices). This shows the driver is ready, not that USB devices work."
+ },
+ {
+  "source": "Apple服务未运行；请人工检查官方安装与服务。查过：{0}",
+  "en": "The Apple service isn't running. Check the official installation and the service. Checked: {0}"
+ },
+ {
+  "source": "已装Apple设备支持但本机usbmux端口不通：打开一次Apple Devices（或重启电脑）让后台服务起来后再查。查过：{0}",
+  "en": "Apple device support is installed, but the local usbmux port isn't reachable. Open Apple Devices once (or restart the PC) so the background service starts, then check again. Checked: {0}"
+ },
+ {
+  "source": "没找到Apple设备支持。查过：{0}",
+  "en": "Apple device support not found. Checked: {0}"
+ },
+ {
+  "source": "本机usbmux端口 127.0.0.1:27015：连不上",
+  "en": "local usbmux port 127.0.0.1:27015: not reachable"
+ },
+ {
+  "source": "服务 Apple Mobile Device Service：{0}",
+  "en": "Apple Mobile Device Service: {0}"
+ },
+ {
+  "source": "没装（商店版 Apple Devices 不注册这个服务，属正常）",
+  "en": "not installed (normal: the Store version of Apple Devices doesn't register this service)"
+ },
+ {
+  "source": "读不到",
+  "en": "can't read"
+ },
+ {
+  "source": "商店版 Apple Devices：{0}",
+  "en": "Apple Devices (Store version): {0}"
+ },
+ {
+  "source": "已装（{0}）",
+  "en": "installed ({0})"
+ },
+ {
+  "source": "没装",
+  "en": "not installed"
+ },
+ {
+  "source": "读不到安装登记",
+  "en": "can't read the install record"
+ },
+ {
+  "source": "已停止",
+  "en": "stopped"
+ },
+ {
+  "source": "正在启动",
+  "en": "starting"
+ },
+ {
+  "source": "正在停止",
+  "en": "stopping"
+ },
+ {
+  "source": "在运行",
+  "en": "running"
+ },
+ {
+  "source": "正在继续",
+  "en": "resuming"
+ },
+ {
+  "source": "正在暂停",
+  "en": "pausing"
+ },
+ {
+  "source": "已暂停",
+  "en": "paused"
+ },
+ {
+  "source": "驱动尚未就绪，未列举USB设备；不能判为可用。",
+  "en": "The driver isn't ready, so USB devices weren't listed; can't be counted as working."
+ },
+ {
+  "source": "只读清单已发现USB设备；不等配对、信任、签名或装机成功。",
+  "en": "A USB device was found in the read-only list. This doesn't mean pairing, trust, signing or install will succeed."
+ },
+ {
+  "source": "只读清单没有USB设备；网络设备不替代USB，能力仍未核实。",
+  "en": "No USB device in the read-only list. Network devices don't count as USB, so USB access is still unverified."
+ },
+ {
+  "source": "自建来源协议尚未交付；不登录、不生成、不发网络健康请求或自动公共回退。",
+  "en": "Self-hosted sources aren't supported yet. Nothing signs in, generates data, sends health requests or falls back to a public source automatically."
+ },
+ {
+  "source": "未知anisette来源。",
+  "en": "Unknown anisette source."
+ },
+ {
+  "source": "公共来源必须由用户显式选择。",
+  "en": "A public source has to be chosen explicitly by you."
+ },
+ {
+  "source": "用户显选公共备选；不等可信/健康/生成验证。",
+  "en": "You chose a public fallback. Trust, health and generation haven't been verified."
+ },
+ {
+  "source": "anisette端点格式不可核实，不得含凭据或隐式选择服务。",
+  "en": "The anisette endpoint format can't be verified. It must not contain credentials or pick a service implicitly."
+ },
+ {
+  "source": "已检测到官方iCloud安装，来源local；不等登录或anisette生成能力验证。",
+  "en": "Official iCloud is installed (source: local). Sign-in and anisette generation haven't been verified."
+ },
+ {
+  "source": "未检出足够的官方iCloud安装身份；仅代表已查询范围，不代表整机不存在。",
+  "en": "Couldn't confirm an official iCloud installation. This covers only the places checked, not the whole PC."
+ },
+ {
+  "source": "未检出足够的官方iCloud安装身份；仅代表已查询范围，不代表整机不存在。 自建来源协议未交付，不自动公共回退。",
+  "en": "Couldn't confirm an official iCloud installation. This covers only the places checked, not the whole PC. Self-hosted sources aren't supported yet, and there is no automatic public fallback."
+ },
+ {
+  "source": "未提供出包计划预算。",
+  "en": "No build space budget was provided."
+ },
+ {
+  "source": "缺catalog，无法按gameId选包。",
+  "en": "No catalog, so packages can't be picked by gameId."
+ },
+ {
+  "source": "缺gameId，无法从catalog选包。",
+  "en": "No gameId, so packages can't be picked from the catalog."
+ },
+ {
+  "source": "catalog中未找到gameId，不能计算该游戏的出包预算。",
+  "en": "The gameId isn't in the catalog, so this game's build space can't be calculated."
+ },
+ {
+  "source": "gameId没有可选包，尚无完整出包预算。",
+  "en": "There are no packages to pick for this gameId, so there's no full build space budget yet."
+ },
+ {
+  "source": "按共用选包与出包计划规则计算；压缩包按已登记内容大小，不读取包正文。",
+  "en": "Calculated with the shared package and build-plan rules; archives are counted by their recorded content size without reading them."
+ },
+ {
+  "source": "按调用者给定的出包计划预算比较；不足时请腾出目标卷空间或选择其它目录。",
+  "en": "Compared with the requested build space budget. If it's short, free up space on the target drive or choose another folder."
+ },
+ {
+  "source": "Windows宿主已识别。",
+  "en": "Windows recognized."
+ },
+ {
+  "source": "此宿主不是64位Windows；WSL夹具不等Windows实测。",
+  "en": "This isn't 64-bit Windows; a WSL fixture doesn't count as a real Windows test."
+ },
+ {
+  "source": "所选解释器版本 {0}；要求至少 {1}，不符时请人工安装满足版本的Python并明确选择该解释器。",
+  "en": "Selected interpreter version {0}; at least {1} is required. If it doesn't match, install a suitable Python yourself and select that interpreter."
+ },
+ {
+  "source": "{0}；要求 {1}。缺失/不符时对所选解释器人工执行 pip install -r {2}。",
+  "en": "{0}; requires {1}. If it's missing or different, run pip install -r {2} with the selected interpreter."
+ },
+ {
+  "source": "无法导入",
+  "en": "can't import"
+ },
+ {
+  "source": "版本未能核实",
+  "en": "version couldn't be verified"
+ },
+ {
+  "source": "实际 {0}",
+  "en": "installed {0}"
+ },
+ {
+  "source": "S2Arm 自带的 Python 没能运行：{0}。",
+  "en": "S2Arm's bundled Python couldn't run: {0}."
+ },
+ {
+  "source": "缺少系统运行库（退出码 0x{0}）；请安装 Microsoft Visual C++ 运行库后重新检查",
+  "en": "a system runtime is missing (exit code 0x{0}); install the Microsoft Visual C++ Redistributable, then check again"
+ },
+ {
+  "source": "退出码 {0}：{1}",
+  "en": "exit code {0}: {1}"
+ },
+ {
+  "source": "没有错误输出",
+  "en": "no error output"
+ },
+ {
+  "source": "找不到或无法执行所选工具",
+  "en": "The selected tool is missing or can't run"
+ },
+ {
+  "source": "文件不在或被系统拦住，常见原因是没有完整解压或被杀毒软件隔离",
+  "en": "the file is missing or blocked by the system; usually the download wasn't fully extracted or antivirus quarantined it"
+ },
+ {
+  "source": "只读探测超时",
+  "en": "The read-only check timed out"
+ },
+ {
+  "source": "{0} 秒内没有运行完，常见原因是杀毒软件在扫描第一次运行的文件",
+  "en": "didn't finish within {0} seconds; usually antivirus is scanning a file that runs for the first time"
+ },
+ {
+  "source": "环境检查错误码合同无法核实，未回落到通用任务错误。",
+  "en": "The environment check's error-code contract couldn't be verified; not falling back to a generic task error."
+ },
+ {
+  "source": "请求配置不可读或格式错误，未执行出包操作。",
+  "en": "The request settings can't be read or are malformed; nothing was built."
  }
 ]

@@ -17,6 +17,12 @@ final class BackendTextTests: XCTestCase {
                        "Uploading diagnostics didn't finish within 90 seconds (the network is too slow or the connection stalled), so it was stopped. You can export a diagnostic package and send it to us yourself.")
     }
 
+    /// Windows 环境检查「Apple 移动设备支持」：句式 → 「；」拆段 → 每段再套句式（11-14 i18n 第四批 winenv）
+    func testAppleDriverCheckedListTranslates() {
+        XCTAssertEqual(BackendText.translate("没找到Apple设备支持。查过：本机usbmux端口 127.0.0.1:27015：连不上；服务 Apple Mobile Device Service：已停止；商店版 Apple Devices：没装", language: "en"),
+                       "Apple device support not found. Checked: local usbmux port 127.0.0.1:27015: not reachable; Apple Mobile Device Service: stopped; Apple Devices (Store version): not installed")
+    }
+
     func testWholeSentenceAndSharedLabels() {
         XCTAssertEqual(BackendText.translate("游戏已停止。", language: "en"), "Game stopped.")
         XCTAssertEqual(BackendText.translate("游戏库所在磁盘", language: "en"), "Library Drive")
