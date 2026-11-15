@@ -519,6 +519,12 @@ int main(void) {
         CHECK(sh(c) == 0, "⑭c 造完整包");
         CHECK(s2a_img_scan(D6) == 1, "⑭c 完整包认领");
         char g6[1500]; snprintf(g6, sizeof g6, "%s/games/0100ABCD00000008", D6);
+        { // ⑭d 本体认领了还没解开时放更新包：不套、不报错、原样留着（诊断#fe33c2：套到一半被解开时的目录整理删掉 → ENOENT）；解开后下一次扫描再套（见下面 ⑭c）
+          snprintf(c, sizeof c, "python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/先到的更新包.img' --gid 0100abcd00000008 --pack-id img801 > /dev/null"
+                   " && printf '\002' | dd of='%s/放这里导入/先到的更新包.img' bs=1 seek=8 conv=notrunc 2>/dev/null", R, D, D6, D6);
+          CHECK(sh(c) == 0, "⑭d 造更新包");
+          CHECK(s2a_img_scan(D6) == 0 && !s2a_img_scan_code()[0], "⑭d 本体没解开：更新包不套、不给失败码（实际 %s「%s」）", s2a_img_scan_code(), s2a_img_scan_failure());
+          snprintf(c, sizeof c, "test -e '%s/放这里导入/先到的更新包.img' && rm '%s/放这里导入/先到的更新包.img'", D6, D6); CHECK(sh(c) == 0, "⑭d 更新包原样留着"); }
         CHECK(s2a_pack_apply(g6) == 0, "⑭c 完整包解开");
         snprintf(c, sizeof c, "test \"$(cat '%s/资源包/shaders/a.metallib')\" = x", g6); CHECK(sh(c) == 0, "⑭c 完整包解出 a.metallib = x");
         snprintf(c, sizeof c, "python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/某游戏 着色器更新包.img' --gid 0100abcd00000008 --pack-id img801 > /dev/null"
