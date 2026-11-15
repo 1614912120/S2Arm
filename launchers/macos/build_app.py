@@ -212,16 +212,25 @@ def main():
     expected = dict(line.split("==") for line in (ROOT / "launchers/macos/requirements-runtime.txt").read_text().splitlines() if "==" in line and not line.startswith("#"))
     versions = json.loads((runtime / "versions.json").read_text()) if (runtime / "versions.json").is_file() else {}
     # Runtime 跨次复用：schema、依赖指纹或 C 改写器源码变了都要重收。
-    # schema 3 的目录仍带 oead 和 GNU timeout，requirements 版本对得上也不许复用。
+    # schema 3 的目录仍带 oead 和 GNU timeout，schema 4 的仍带 .NET 运行时（5 起出包工具全为引擎 Binaries/ 里的 NativeAOT 单文件，不再带），
+    # requirements 版本对得上也不许复用。
     # 按包导入（不把 pack/ 目录放进模块路径：那样 pack/pack.py 会顶替 pack 包，后面 bundle_engine.write_manifest 的 from pack.shell import 报
     #   「'pack' is not a package」，11-07 本机打 App 实测）
     os.sys.path.insert(0, str(ROOT))
     from pack import rewriter
-    if (versions.get("runtimeSchema") != 4 or versions.get("runtimeDeps") != runtime_deps_fingerprint()
-            or versions.get("rewriter") != rewriter.source_digest()
-            or any(versions.get(name) != version for name, version in expected.items())
-            or any(not (runtime / "bin" / name).is_file() for _, name in TOOLS)):   # 工具表加了新命令（10-26 bash / spirv-cross / glslangValidator）旧运行环境也要重打
-        subprocess.run([os.sys.executable, str(ROOT / "launchers/macos/bundle_runtime.py")], env=env, check=True)
+
+    if (
+        versions.get("runtimeSchema") != 5
+        or versions.get("runtimeDeps") != runtime_deps_fingerprint()
+        or versions.get("rewriter") != rewriter.source_digest()
+        or any(versions.get(name) != version for name, version in expected.items())
+        or any(not (runtime / "bin" / name).is_file() for _, name in TOOLS)
+    ):  # 工具表加了新命令（10-26 bash / spirv-cross / glslangValidator）旧运行环境也要重打
+        subprocess.run(
+            [os.sys.executable, str(ROOT / "launchers/macos/bundle_runtime.py")],
+            env=env,
+            check=True,
+        )
     verify_portable_runtime(runtime)
     shutil.copytree(runtime, resources / "Runtime", symlinks=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     seal_runtime(resources)   # 预编 .pyc 签进包 + 内置 Python 关写字节码：运行时谁调都写不进包（Engine 在 bundle 里写清单前预编）

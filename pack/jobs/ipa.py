@@ -12,7 +12,6 @@ import contextlib
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import tempfile
@@ -232,8 +231,8 @@ def _build(c):
     tgt = None if os.name == "nt" else resolve_target(c)
     # E：出包第一步读设备窗口，提示窗口大小与需求（只提示，不中止）
     if tgt: _iml_device_hint(c, tgt, gid)
-    # 发版应用（请求带 engineBundle）与 Windows：C# 件随发版预编（Binaries/Prepare）、iOS 壳随包（Resources/Shell，内含 NativeAOT C# 库），
-    #   只要随包 .NET 运行时（Context.env 已设）；只有源码树开发构建才现出壳、要外部 SDK
+    # 发版应用（请求带 engineBundle）与 Windows：C# 件随发版预编（Binaries/Prepare，Mac 全为 NativeAOT 单文件）、iOS 壳随包（Resources/Shell，内含 NativeAOT C# 库），
+    #   运行不要任何 .NET（Windows 侧仍带随包 .NET 运行时，另案）；只有源码树开发构建才现出壳、要外部 SDK
     packaged = os.name == "nt" or bool(c.r.get("engineBundle"))
     home, exe = (None, None) if packaged else dotnet_sdk()
     if not exe and not packaged:
@@ -271,7 +270,7 @@ def _build(c):
         kuan = oneclick_kuan(c, gid)
         if os.name != "nt" and not (out / "roots" / (kuan + "@现行")).exists():   # Windows 机上没有 Mac 包可克隆
             seed_from_sibling(c, game, out / "roots", kuan)
-        # 出 iPhone 包：平台换成 iOS；.NET 用已确认的外部 SDK（App 内置的只是运行时）
+        # 出 iPhone 包：平台换成 iOS；.NET 只在源码树现编 C#（壳 / iOS 库）时用已确认的外部 SDK（发版应用全用随包预编，运行不要 .NET）
         for name in tuple(env):
             if name.startswith('DOTNET_ROOT_'):
                 env.pop(name)
@@ -282,14 +281,18 @@ def _build(c):
         identity_file = logs / "save-identity.json"
         identity_file.write_text(json.dumps(save_identity(game), ensure_ascii=False), encoding="utf-8")
         env["S2A_SAVE_IDENTITY"] = str(identity_file)
-        if packaged and os.name != "nt":   # Mac 发版应用：随包壳（pack/ipa.sh 见 S2A_SHELL 就不现出壳）+ 应用自带读取器（同 build.py：dotnet 跑 dll 包一层可执行壳）
+        # Mac 发版应用：随包壳（pack/ipa.sh 见 S2A_SHELL 就不现出壳）+ 应用自带读取器（同 build.py：NativeAOT 单文件，直接可执行）
+        if packaged and os.name != "nt":
             from toolchain import reader
-            nxu = logs / "nx_unpack"
-            nxu.write_text("#!/bin/sh\nexec dotnet " + shlex.quote(str(reader(c))) + ' "$@"\n'); nxu.chmod(0o755)
-            env.update(S2A_SHELL=str(bundled_shell(c)), S2A_NX_UNPACK=str(nxu))
+
+            env.update(S2A_SHELL=str(bundled_shell(c)), S2A_NX_UNPACK=str(reader(c)))
         if exe:
-            env.update(DOTNET=str(exe), DOTNET_ROOT=str(home), DOTNET_MULTILEVEL_LOOKUP="0",
-                       PATH=os.pathsep.join(dict.fromkeys([str(exe.parent), str(home), env["PATH"]])))
+            env.update(
+                DOTNET=str(exe),
+                DOTNET_ROOT=str(home),
+                DOTNET_MULTILEVEL_LOOKUP="0",
+                PATH=os.pathsep.join(dict.fromkeys([str(exe.parent), str(home), env["PATH"]])),
+            )
         state = {}
         # 出包与装机重叠（installAfter，pack/jobs/early.py）：开工前认账号与设备，旁路完成就先装 App、先推大头资源，与直连库编译并行
         if c.r.get("installAfter") and os.name != "nt":   # Windows：出完再装（install.install 的 Windows 分支），不做出包期间早装

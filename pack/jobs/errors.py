@@ -79,7 +79,7 @@ RECOVERY = {
                                "并关掉对游戏库文件夹的杀毒实时扫描或云同步，或把游戏库换到另一块盘。",
     "ios_platform_missing": "在设置里点「iOS 平台组件」的「一键下载」（苹果官方，约 8 GB），下完自动重新检查后重试；也可以打开 Xcode → 设置 → Components 装上与 Xcode 配套的 iOS 平台。",
     "ios_platform_unregistered": "iOS 平台组件已经下载，只是还没注册到模拟器：点「重新检查」再试；不用重复下载（约 8 GB）。还不行就在 Xcode → 设置 → Components 里确认这一项，或重启这台 Mac 后再点「重新检查」。",
-    "dotnet_unavailable": "重新安装完整的 S2Arm，恢复内置运行时后点「重新检查」。",
+    "dotnet_unavailable": "重新安装完整的 S2Arm，然后点「重新检查」。",
     "dotnet_sdk_missing": "在「设置」的环境检查中安装 .NET 10 SDK，完成后重新检查，再打 iPhone 包。",
     "reader_unavailable": "重新安装完整的 S2Arm，然后重新导入游戏。",
     "engine_incomplete": "重新安装完整的 S2Arm，然后点「重新检查」。",
@@ -586,7 +586,9 @@ def build_tool_failure(args, milestone, log):
         elif script == "refresh.sh":
             # 只采用本次 refresh 的终止红行（日志末条红行），不允许 host/unpack/sign 等上一条命令的标签参与本次归因。
             phase = refresh_stop_phase(reason) or "refresh"
-    elif executable == "dotnet" and milestone == "unpack":
+    elif (
+        executable == "nx_unpack" and milestone == "unpack"
+    ):  # 读取器现为自包含单文件直执行（原先经 dotnet 跑 dll，executable 是 dotnet）
         phase = "unpack"
     code, why = classify_failure(phase, log)
     # 上屏只放玩家话术；阶段 / rc / 构建号 / 红行原文进 internal → 诊断 detail（「复制错误摘要」带走）；机读事实进 facts（前端按字段显示）

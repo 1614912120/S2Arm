@@ -235,14 +235,30 @@ class JobsTests(unittest.TestCase):
         base = self.package("base"); game = self.game(packages=[base])
         calls = []
         def run(args, log=None, env=None, cwd=None, on_line=None, timeout=None, ok_codes=(0,)):
-            args = [str(a) for a in args]; self.c.last_rc = 0
-            if "--npdm-isa" in args: Path(log).write_text("aarch64\n"); return
-            calls.append(args); x = Path(args[3])
-            for f, b in (("exefs/main.npdm", b"npdm"), ("ctl/control.nacp", b"nacp"), ("romfs/a.bin", b"a")):
-                (x / f).parent.mkdir(parents=True, exist_ok=True); (x / f).write_bytes(b)
-        logs = self.root / "logs"; logs.mkdir()
-        import milestones as ms; ms.plan(self.c, 1, "build_dual")
-        with um.patch.object(toolchain, "reader", return_value="reader.dll"), um.patch.object(self.c, "run", run):
+            args = [str(a) for a in args]
+            self.c.last_rc = 0
+            if "--npdm-isa" in args:
+                Path(log).write_text("aarch64\n")
+                return
+            calls.append(args)
+            x = Path(args[2])  # 解包目标在 args[2]（读取器直接执行，不再带 dotnet 前缀）
+            for f, b in (
+                ("exefs/main.npdm", b"npdm"),
+                ("ctl/control.nacp", b"nacp"),
+                ("romfs/a.bin", b"a"),
+            ):
+                (x / f).parent.mkdir(parents=True, exist_ok=True)
+                (x / f).write_bytes(b)
+
+        logs = self.root / "logs"
+        logs.mkdir()
+        import milestones as ms
+
+        ms.plan(self.c, 1, "build_dual")
+        with (
+            um.patch.object(toolchain, "reader", return_value="reader.dll"),
+            um.patch.object(self.c, "run", run),
+        ):
             x1 = build.ensure_extract(self.c, game, [base], {}, logs)
             x2 = build.ensure_extract(self.c, game, [base], {}, logs)
             self.assertEqual((x1, x2, len(calls)), (layout.build_dir(self.c, "0100000000000000") / "extract",) * 2 + (1,))
@@ -320,14 +336,29 @@ class JobsTests(unittest.TestCase):
         base = self.package("base"); dlc = dict(self.package("dlc", tid="0100000000001001", sha="d" * 64)); game = self.game(packages=[base, dlc])
         rows = {"v": "1\t0100000000001001\t0\t-1\t0\n"}
         def run(args, log=None, env=None, cwd=None, on_line=None, timeout=None, ok_codes=(0,)):
-            args = [str(a) for a in args]; self.c.last_rc = 0
-            if "--npdm-isa" in args: Path(log).write_text("aarch64\n"); return
-            x = Path(args[3])
-            for f, b in (("exefs/main.npdm", b"npdm"), ("ctl/control.nacp", b"nacp"), ("aoc.tsv", ("idx\ttid\tver\tfiles\tbytes\n" + rows["v"]).encode())):
-                (x / f).parent.mkdir(parents=True, exist_ok=True); (x / f).write_bytes(b)
-        logs = self.root / "logs"; logs.mkdir()
-        import milestones as ms; ms.plan(self.c, 1, "build_dual")
-        with um.patch.object(toolchain, "reader", return_value="reader.dll"), um.patch.object(self.c, "run", run):
+            args = [str(a) for a in args]
+            self.c.last_rc = 0
+            if "--npdm-isa" in args:
+                Path(log).write_text("aarch64\n")
+                return
+            x = Path(args[2])  # 解包目标在 args[2]（读取器直接执行，不再带 dotnet 前缀）
+            for f, b in (
+                ("exefs/main.npdm", b"npdm"),
+                ("ctl/control.nacp", b"nacp"),
+                ("aoc.tsv", ("idx\ttid\tver\tfiles\tbytes\n" + rows["v"]).encode()),
+            ):
+                (x / f).parent.mkdir(parents=True, exist_ok=True)
+                (x / f).write_bytes(b)
+
+        logs = self.root / "logs"
+        logs.mkdir()
+        import milestones as ms
+
+        ms.plan(self.c, 1, "build_dual")
+        with (
+            um.patch.object(toolchain, "reader", return_value="reader.dll"),
+            um.patch.object(self.c, "run", run),
+        ):
             x = build.ensure_extract(self.c, game, [base, dlc], {}, logs)
             self.assertTrue((x.parent / "extract-checkpoint.json").is_file(), "仅授权行不该挡住本体的完整准备")
             d = [y for y in self.c.job["diagnostics"] if y["code"] == "aoc_missing"]

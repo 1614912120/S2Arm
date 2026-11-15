@@ -1065,8 +1065,18 @@ def inspect(c, source, icon_dir, keyfile=None, *, source_id=None):
     # NCZ 解压临时文件落游戏库那块盘（#612：Windows 上游戏库在别的盘、系统盘只剩百来 MB 时，读取器缺省写 %TEMP%，导入报空间不足）
     scratch = tempfile.TemporaryDirectory(prefix=".s2a-inspect-", dir=c.library if c.library.is_dir() else c.private)
     try:
-        c.run(["dotnet", toolchain.reader(c), keyfile, "--inspect", source, icon_dir, f"--temp-dir={scratch.name}"],
-              c.logs / log_name, on_line=lines.append)
+        c.run(
+            [
+                toolchain.reader(c),
+                keyfile,
+                "--inspect",
+                source,
+                icon_dir,
+                f"--temp-dir={scratch.name}",
+            ],
+            c.logs / log_name,
+            on_line=lines.append,
+        )
     except Failure as error:
         if error.code not in ("tool_exit", "job_failed"):
             raise
