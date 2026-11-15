@@ -9,7 +9,7 @@ NVN_REPLAY_CORE := $(NVN_REPLAY_DIR)/rp_exec.c $(NVN_REPLAY_DIR)/rp_copy_t2b.c $
 # 回放核心对平台 / 后端的可选件写的是弱引用（缺实现 = 地址为空、走不到调用）。ELF 链接器认未定义弱符号，苹果 ld 默认不认：
 #   逐个列名允许缺，不用 dynamic_lookup 一刀切——真漏掉的强符号照样链接红。放行清单只从源码登记生成（「// 弱链接[replay]：符号」，见 tools/weak_link_decl.py）
 ifeq ($(shell uname -s),Darwin)
-NVN_REPLAY_WEAK := $(shell python3 tools/weak_link_decl.py flags replay)
+NVN_REPLAY_WEAK = $(shell python3 tools/weak_link_decl.py flags replay)   # 用到才求值（= 不是 :=）：本文件随 runtime 总 make 引入，iOS 出壳也会读到这行；立即求值会让出壳去扫安卓源码（壳输入表外 112 个文件）
 endif
 NVN_REPLAY_SCAN = perl -0pe 's\#/\*.*?\*/\#\#gs; s\#//[^\n]*\#\#g' $(NVN_REPLAY_DIR)/rp_*.c $(NVN_REPLAY_DIR)/rp_*.h $(NVN_REPLAY_DIR)/nvn_unimpl.c $(NVN_REPLAY_DIR)/nvn_unimpl.h $(NVN_REPLAY_DIR)/nvn_plat.h
 .PHONY: native-test-nvn_replay
