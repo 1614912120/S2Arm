@@ -130,9 +130,10 @@ public sealed partial class EnvironmentWindow
 
     private string EnvironmentSummary()
     {
-        var lines = new List<string> { "S2Arm 环境检查未通过", "", "S2Arm：" + AppVersion,
-            "系统：" + System.Runtime.InteropServices.RuntimeInformation.OSDescription, "" };
-        lines.AddRange((report?.Checks ?? []).Where(c => c.Status != "ok").Select(c => $"{c.Name}（{c.Status}，{c.Code ?? "-"}）：{c.Message}"));
+        var lines = new List<string> { T("envcopy.title"), "", T("envcopy.app").Replace("{0}", AppVersion),
+            T("envcopy.system").Replace("{0}", System.Runtime.InteropServices.RuntimeInformation.OSDescription), "" };
+        lines.AddRange((report?.Checks ?? []).Where(c => c.Status != "ok").Select(c => T("envcopy.check")
+            .Replace("{0}", c.Name).Replace("{1}", c.Status).Replace("{2}", c.Code ?? "-").Replace("{3}", c.Message)));
         lines.Add(""); lines.Add(diagnostics);
         return string.Join("\n", lines).Replace(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "~");
     }

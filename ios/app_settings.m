@@ -427,9 +427,10 @@ static UILabel *textLabel(UIFontTextStyle style) {
         } identifier:@"settings.gameLanguage"];
     }
     if (group == 7) {   // 界面语言（11-13 维护者）：跟随系统 / 简 / 繁 / 英，存 S2AUILanguageKey；重开 App 生效（ios/app.m 起进程时设本 App 的 AppleLanguages）
-        NSArray *values = @[@"system", @"zh-Hans", @"zh-Hant", @"en"];
+        NSArray *values = @[@"system", @"zh-Hans", @"zh-Hant", @"en", @"ja", @"es", @"fr"];   // 11-14 加日 / 西 / 法
         NSString *cur = [NSUserDefaults.standardUserDefaults stringForKey:S2AUILanguageKey]; NSInteger selected = cur ? (NSInteger)[values indexOfObject:cur] : 0; if (selected == NSNotFound) selected = 0;
-        return [self dropdown:S2AL(@"settings.language") labels:@[S2AL(@"settings.language.system"), S2AL(@"settings.language.zhHans"), S2AL(@"settings.language.zhHant"), S2AL(@"settings.language.en")]
+        return [self dropdown:S2AL(@"settings.language") labels:@[S2AL(@"settings.language.system"), S2AL(@"settings.language.zhHans"), S2AL(@"settings.language.zhHant"), S2AL(@"settings.language.en"),
+                                                                    S2AL(@"settings.language.ja"), S2AL(@"settings.language.es"), S2AL(@"settings.language.fr")]
                      selected:selected enabled:^BOOL(NSInteger i) { (void)i; return YES; } choose:^(NSInteger i) {
             if (i == selected) return;
             if (i == 0) [NSUserDefaults.standardUserDefaults removeObjectForKey:S2AUILanguageKey]; else [NSUserDefaults.standardUserDefaults setObject:values[i] forKey:S2AUILanguageKey];

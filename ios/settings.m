@@ -31,10 +31,16 @@ static void apply_environment(const char *name, NSString *value) {
 // Metal 性能浮层的系统键（11-13 维护者实机：iPad mini / iPadOS 27.2 上 Metal 框架初始化时读 MetalForceHudEnabled，只多存这个键 = 冷启动出面板，
 //   删掉就没有；我们的开关键 MetalHUDForceEnabled（Settings.bundle / 设置页）它不认，MTL_HUD_ENABLED 是进程起来后才设、对系统建设备太晚）。
 //   开关打开就往 App 自己的偏好里写系统键、关掉就删（两种拼法都在：我们的键作界面状态照旧），下次冷启动 Metal 读到。只在值不同时写，免得自己触发变更通知再写
+//   写 / 删会在本线程同步发变更通知、又回到这里：系统键来自删不掉的域（LiveContainer 下 / 启动参数 / 注册缺省）时删完还读得到，
+//   没有这道重入闸就无限递归撑爆线程栈（#1148：v0.4.0 LiveContainer 里一开游戏就闪退，栈是 本函数 ← 通知 ← 本函数 …）
 static void metal_hud_mirror(NSUserDefaults *d) {
+    static _Thread_local int busy;
+    if (busy) return;
+    busy = 1;
     BOOL on = [d boolForKey:@"MetalHUDForceEnabled"];
     if (on && ![d boolForKey:@"MetalForceHudEnabled"]) { [d setBool:YES forKey:@"MetalForceHudEnabled"]; fprintf(stderr, "[S2A 画面设置] Metal 性能浮层：写系统键 MetalForceHudEnabled（下次冷启动生效）\n"); }
     else if (!on && [d objectForKey:@"MetalForceHudEnabled"]) { [d removeObjectForKey:@"MetalForceHudEnabled"]; fprintf(stderr, "[S2A 画面设置] Metal 性能浮层：删系统键 MetalForceHudEnabled（下次冷启动生效）\n"); }
+    busy = 0;
 }
 void s2a_ios_apply_overlay_settings(NSUserDefaults *defaults) {
     metal_hud_mirror(defaults);

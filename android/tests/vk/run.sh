@@ -51,20 +51,35 @@ if [ "$mode" = "--shown-only" ] && [ -z "${S2A_VULKAN_IMAGE_ID:-}" ]; then
     cp -R "$(dirname "$header_dir")/vk_video" "$repo/build/c883-ndk/"
 fi
 # Isolated production replay indirect test. Exit before every legacy test path.
-if [ "$mode" = "--indirect-core" ]; then
-    out="$repo/build/vk-indirect-core"; mkdir -p "$out/shaders"
+# --zero-attr-core（#977）：同一套真 rp_draw + 真后端，跑零属性用例 t_replay_zero_attr.c。
+if [ "$mode" = "--indirect-core" ] || [ "$mode" = "--zero-attr-core" ]; then
+    if [ "$mode" = "--indirect-core" ]; then
+        core_test=t_replay_indirect; core_shaders=(replay_null_storage.vert replay_front_face.vert solid_green.frag quad.vert quad.frag count_args.comp replay_drv0.vert replay_drv0.frag replay_drv0_args.comp)
+    else
+        core_test=t_replay_zero_attr; core_shaders=(zattr.vert quad.frag)
+    fi
+    out="$repo/build/vk-${mode#--}"; mkdir -p "$out/shaders"
     glslc_bin=${GLSLC:-glslc}
     : "${S2A_LAVAPIPE_ICD:?set S2A_LAVAPIPE_ICD for isolated replay test}"
     : "${S2A_VK_LAYER_DIR:?set S2A_VK_LAYER_DIR for isolated replay test}"
-    for shader in replay_front_face.vert solid_green.frag quad.vert quad.frag count_args.comp replay_drv0.vert replay_drv0.frag replay_drv0_args.comp; do
+    for shader in "${core_shaders[@]}"; do
         "$glslc_bin" --target-env=vulkan1.1 "$repo/android/tests/vk/shaders/$shader" -o "$out/shaders/$shader.spv"
     done
+    "$glslc_bin" --target-env=vulkan1.1 "$repo/android/native/nvn/blit_shaders/fullscreen.vert" -o "$out/shaders/depth_state.vert.spv"
     inc=(); for d in android/tests/vkhost graphics/nvn/third_party/vulkan-headers/include graphics/nvn graphics/nvn/replay graphics/nvn/gfx/nvn graphics/nvn/gfx/nvn/include android/native android/native/nvn android/native/direct runtime/include; do inc+=(-I "$repo/$d"); done
-    src=("$repo/android/tests/vk/t_replay_indirect.c")
+    src=("$repo/android/tests/vk/$core_test.c")
     for f in graphics/nvn/replay/rp_draw.c graphics/nvn/replay/rp_buf.c graphics/nvn/replay/rp_state.c graphics/nvn/replay/nvn_unimpl.c android/native/nvn/backend_vulkan.c android/native/direct/vk_device.c android/native/direct/gs_path.c android/native/capprobe/capprobe_host.c android/native/nvn/nvn_vk_format.c graphics/nvn/gfx/nvn/nvn_fmt_expand.c android/native/nvn/nvn_vk_bcdec.c android/native/nvn/nvn_vk_driver_cache.c android/native/direct/sha256.c; do src+=("$repo/$f"); done
-    cc -D_POSIX_C_SOURCE=200809L -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -DS2A_ANDROID_VK_BACKEND_NVN_VK=1 "${inc[@]}" "${src[@]}" -Wl,--gc-sections -Wl,--wrap=nvn_gpu_draw -lvulkan -lpthread -lm -o "$out/replay-indirect"
+    cc -D_POSIX_C_SOURCE=200809L -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -DS2A_ANDROID_VK_BACKEND_NVN_VK=1 "${inc[@]}" "${src[@]}" -Wl,--gc-sections -Wl,--wrap=nvn_gpu_draw -lvulkan -lpthread -lm -o "$out/$core_test"
     export VK_ICD_FILENAMES="$S2A_LAVAPIPE_ICD" VK_LAYER_PATH="$S2A_VK_LAYER_DIR" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
-    exec "$out/replay-indirect" "$out/shaders"
+    set +e
+    "$out/$core_test" "$out/shaders" 2>&1 | tee "$out/run.log"
+    rc=${PIPESTATUS[0]}
+    set -e
+    if [ "$rc" -ne 0 ] || grep -qE 'Validation Error|VUID-' "$out/run.log"; then
+        echo "【红】隔离回放用例失败或有 Vulkan 校验错误（rc=${rc}）" >&2
+        exit 1
+    fi
+    exit 0
 fi
 if [ "$(uname -s)" = Darwin ]; then
     export S2A_VULKAN_CACHE="$repo/build/vulkan-cache"
@@ -139,7 +154,7 @@ export TMPDIR="$repo/build/vk-tests"
 out=$(mktemp -d "$TMPDIR/s2a-nvn-vk.XXXXXX")
 trap 'rm -rf "$out"' EXIT
 mkdir -p "$out/shaders"
-for s in count_args.comp logic_float.frag logic_uint.frag logic_float_mrt.frag logic_uint_mrt.frag gs_probe.vert gs_probe.geom gs_probe.frag gs_tstrip.vert gs_tstrip.geom gs_tstrip.frag tri.vert tri.frag tri_combined.frag tri3.vert tri_solid.frag tri_invert.frag solid_green.frag solid_blue.frag out1_green.frag tex_u.frag quad.vert quad.frag inst.vert point.vert quad2.frag arr.frag cube.frag cubearr.frag tex3d.frag comp.comp pushc.frag pushc.comp tbuf.comp itbuf.comp itbuf_unknown.comp itbuf_unknown_read.comp img.comp tsamp.comp arr2.frag separate.vert separate.frag; do
+for s in count_args.comp logic_float.frag logic_uint.frag logic_float_mrt.frag logic_uint_mrt.frag gs_probe.vert gs_probe.geom gs_probe.frag gs_tstrip.vert gs_tstrip.geom gs_tstrip.frag tri.vert tri.frag tri_combined.frag tri3.vert tri_solid.frag tri_invert.frag solid_green.frag solid_blue.frag out1_green.frag tex_u.frag quad.vert quad.frag inst.vert div.vert point.vert cube_at.comp quad2.frag arr.frag cube.frag cubearr.frag tex3d.frag comp.comp pushc.frag pushc.comp tbuf.comp itbuf.comp itbuf_unknown.comp itbuf_unknown_read.comp img.comp tsamp.comp arr2.frag separate.vert samp_at.comp samp_at_i.comp samp_at_u.comp separate.frag; do
     "$glslc" --target-env=vulkan1.1 "$repo/android/tests/vk/shaders/$s" -o "$out/shaders/$s.spv"
 done
 
@@ -153,32 +168,44 @@ inc=(-I "$repo/android/tests/vkhost"
      -I "$repo/android/native/nvn"
      -I "$repo/android/native/direct"
      -I "$repo/runtime/include")
-# #978 游戏屏障对通道外的计算派发生效（真 rp_dispatch / rp_buf / 后端，开同步校验）：
-#   --dispatch-barrier      传输写 → 游戏屏障 → 派发读：读回 i*6，同步校验 0 条；
-#   --dispatch-barrier-neg  检测器负控：不发游戏屏障，同步校验必须报写后读冒险（原始日志不回显、只报条数，留在 build/978-tests/）。
-if [ "$mode" = "--dispatch-barrier" ] || [ "$mode" = "--dispatch-barrier-neg" ]; then
+# 计算派发前的屏障（#978 与其跟帖；真 rp_dispatch / rp_buf / 后端，开同步校验；臂的含义见 t_replay_dispatch_barrier.c 文件头）：
+#   --dispatch-barrier      传输写 → 游戏屏障 → 派发：读回 i*6，同步校验 0 条；
+#   --dispatch-barrier-neg  检测器负控：测试钩子关掉后端派发前那道屏障、也不发游戏屏障，同步校验必须报写后读冒险；
+#   --xfer-dispatch         不发游戏屏障的四臂（none / resync / xseg / dd）：同步校验 0 条、读回 i*6，派发前后端自己补了屏障、连续派发之间 0 道。
+# 原始日志不回显、只报条数（容器会把日志里的校验报错当成失败），留在 build/978-tests/。
+if [ "$mode" = "--dispatch-barrier" ] || [ "$mode" = "--dispatch-barrier-neg" ] || [ "$mode" = "--xfer-dispatch" ]; then
     "$glslc" --target-env=vulkan1.1 "$repo/android/tests/vk/shaders/bar_double.comp" -o "$out/shaders/bar_double.comp.spv"
     src=("$repo/android/tests/vk/t_replay_dispatch_barrier.c")
     for f in graphics/nvn/replay/rp_draw.c graphics/nvn/replay/rp_buf.c graphics/nvn/replay/rp_state.c graphics/nvn/replay/nvn_unimpl.c android/native/nvn/backend_vulkan.c android/native/direct/vk_device.c android/native/direct/gs_path.c android/native/capprobe/capprobe_host.c android/native/nvn/nvn_vk_format.c graphics/nvn/gfx/nvn/nvn_fmt_expand.c android/native/nvn/nvn_vk_bcdec.c android/native/nvn/nvn_vk_driver_cache.c android/native/direct/sha256.c; do src+=("$repo/$f"); done
-    cc -D_POSIX_C_SOURCE=200809L -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -DS2A_ANDROID_VK_BACKEND_NVN_VK=1 "${inc[@]}" "${src[@]}" -Wl,--gc-sections -lvulkan -lpthread -lm -o "$out/dispatch-barrier"
-    arm=barrier; if [ "$mode" = "--dispatch-barrier-neg" ]; then arm=none; fi
-    set +e
-    VK_DRIVER_FILES="$icd" VK_LAYER_PATH="$layer" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_LAYER_VALIDATE_SYNC=1 \
-        timeout 120 "$out/dispatch-barrier" "$out/shaders" "$arm" > "$out/db-log" 2>&1
-    rc=$?
-    set -e
-    mkdir -p "$repo/build/978-tests"; cp "$out/db-log" "$repo/build/978-tests/${mode#--}.log"
-    raw=$(grep -c 'SYNC-HAZARD-READ-AFTER-WRITE' "$out/db-log" || true)
-    other=$(grep -E 'Validation Error|VUID-|SYNC-HAZARD-' "$out/db-log" | grep -vc 'SYNC-HAZARD-READ-AFTER-WRITE' || true)
-    grep -E '^(device: |dispatch-barrier )' "$out/db-log" || true
-    echo "同步校验：写后读冒险 $raw 条，其余报错 $other 条；rc=$rc"
-    grep -q '^device: llvmpipe' "$out/db-log" || { echo '【红】不是 lavapipe 设备' >&2; exit 1; }
-    if [ "$arm" = barrier ]; then
-        if [ "$rc" -ne 0 ] || [ "$raw" -ne 0 ] || [ "$other" -ne 0 ]; then echo '【红】传输写 → 游戏屏障 → 派发读：读回或同步校验不对' >&2; exit 1; fi
-        echo '【绿】传输写 → 游戏屏障 → 派发读：读回 i*6，同步校验 0 条'; exit 0
-    fi
-    if [ "$raw" -lt 1 ] || [ "$other" -ne 0 ]; then echo '【红】负控未击中：不发游戏屏障时同步校验没报写后读冒险' >&2; exit 1; fi
-    echo 'PASS: 负控：不发游戏屏障时同步校验报写后读冒险'; exit 0
+    cc -D_POSIX_C_SOURCE=200809L -std=c11 -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -ffunction-sections -fdata-sections -DS2A_ANDROID_VK_BACKEND_NVN_VK=1 "${inc[@]}" "${src[@]}" -Wl,--gc-sections -Wl,--wrap=vkGetDeviceProcAddr -lvulkan -lpthread -lm -o "$out/dispatch-barrier"
+    mkdir -p "$repo/build/978-tests"
+    db_red=0
+    db_arm() {   # $1 臂；$2 期望的写后读冒险：0 或 hit（≥1）；$3 额外的屏障数判据（awk 表达式，变量 before / between），可空
+        local arm=$1 want=$2 cond=${3:-} rc raw other line before between
+        set +e
+        VK_DRIVER_FILES="$icd" VK_LAYER_PATH="$layer" VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation VK_LAYER_VALIDATE_SYNC=1 \
+            timeout 120 "$out/dispatch-barrier" "$out/shaders" "$arm" > "$out/db-$arm.log" 2>&1
+        rc=$?
+        set -e
+        cp "$out/db-$arm.log" "$repo/build/978-tests/$arm.log"
+        raw=$(grep -c 'SYNC-HAZARD-READ-AFTER-WRITE' "$out/db-$arm.log" || true)
+        other=$(grep -E 'Validation Error|VUID-|SYNC-HAZARD-' "$out/db-$arm.log" | grep -vc 'SYNC-HAZARD-READ-AFTER-WRITE' || true)
+        line=$(grep '^dispatch-barrier ' "$out/db-$arm.log" || true)
+        before=$(printf '%s\n' "$line" | sed -n 's/.*barriers_before_dispatch=\([0-9]*\).*/\1/p'); between=$(printf '%s\n' "$line" | sed -n 's/.*barriers_between_dispatches=\([0-9]*\).*/\1/p')
+        echo "臂 ${arm}：写后读冒险 $raw 条、其余报错 $other 条、rc=${rc}；${line#dispatch-barrier }"
+        grep -q '^device: llvmpipe' "$out/db-$arm.log" || { echo "  【红】臂 $arm 不是 lavapipe 设备" >&2; db_red=1; return; }
+        if [ "$other" -ne 0 ] || [ -z "$line" ]; then echo "  【红】臂 ${arm}：其余报错或没跑完" >&2; db_red=1; return; fi
+        if [ "$want" = hit ]; then [ "$raw" -ge 1 ] || { echo "  【红】臂 ${arm}：负控未击中（同步校验没报写后读冒险）" >&2; db_red=1; }; return; fi
+        if [ "$rc" -ne 0 ] || [ "$raw" -ne 0 ]; then echo "  【红】臂 ${arm}：读回或同步校验不对" >&2; db_red=1; return; fi
+        if [ -n "$cond" ] && ! awk -v before="${before:-x}" -v between="${between:-x}" "BEGIN{exit !($cond)}"; then echo "  【红】臂 ${arm}：屏障数不符（要 ${cond}）" >&2; db_red=1; fi
+    }
+    case "$mode" in
+        --dispatch-barrier) db_arm barrier 0 ;;
+        --dispatch-barrier-neg) db_arm none-nobar hit 'before == 0' ;;
+        --xfer-dispatch) db_arm none 0 'before == 1'; db_arm resync 0 'before >= 2'; db_arm xseg 0 'before == 1'; db_arm dd 0 'before == 1 && between == 0' ;;
+    esac
+    if [ "$db_red" -ne 0 ]; then echo "【红】$mode" >&2; exit 1; fi
+    echo "【绿】$mode"; exit 0
 fi
 if [ "$mode" = "--shown-only" ]; then
     [ -f "$repo/build/c883-ndk/vulkan/vulkan_core.h" ] || { echo 'NDK 29 Vulkan headers not staged' >&2; exit 2; }
@@ -419,6 +446,10 @@ if ! grep -q "C907 保留路径管线缓存落盘：已核对" "$out/log"; then
     echo "【红】没跑到 C907（停局保留会话时的管线缓存落盘）" >&2
     exit 1
 fi
+if ! grep -q "C205 图形管线散列表：增长 / 多次翻倍 / 增长失败沿用旧表 / 逐字节逐字段 / 先比散列 / 两条退路已核对" "$out/log"; then
+    echo "【红】没跑到 C205（图形管线散列表：增长重排、起始 16 桶多次翻倍、增长分配失败沿用旧表、散列覆盖每个字节 / 字段、先比存下的散列、两条退路）" >&2
+    exit 1
+fi
 bad=$(grep -cE "Validation Error|VUID-" "$out/log" || true)
 if [ "$bad" -ne 0 ]; then
     echo "【红】validation 报错 $bad 条：" >&2
@@ -479,6 +510,17 @@ for dq in 0 1; do
         exit 1
     fi
 done
+
+# 零属性（#977）：着色器读了但没设格式的顶点属性，核心补全 0 属性；修前校验层报这个输入没有来源。
+set +e
+S2A_LAVAPIPE_ICD="$icd" S2A_VK_LAYER_DIR="$layer" GLSLC="$glslc" timeout 300 bash "$repo/android/tests/vk/run.sh" --zero-attr-core 2>&1 | tee "$out/log_zero_attr"
+rc=${PIPESTATUS[0]}
+set -e
+bad=$(grep -cE "Validation Error|VUID-" "$out/log_zero_attr" || true)
+if [ "$rc" -ne 0 ] || [ "$bad" -ne 0 ] || ! grep -q "zero-attr cases2 pixel-failures0" "$out/log_zero_attr"; then
+    echo "【红】零属性隔离用例（#977）：rc=${rc}，validation 报错 $bad 条" >&2
+    exit 1
+fi
 
 # BC1–BC7 compute 解码逐像素用例（#1199）：16 格式 × 2 尺寸 + 反证；同一 validation 环境。
 # S2A_BCDEC_HOST_TEST 使 S2A_VK_BC_DECODE=force 在主机用例里生效（等同 debug 构建门）。

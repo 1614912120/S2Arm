@@ -57,7 +57,7 @@ struct DownstreamPromptHost: View {
     var body: some View {
         Color.clear.frame(width: 0, height: 0)
             .sheet(item: Binding(get: { model.downstreamPromptFor.map(Target.init) }, set: { if $0 == nil { model.downstreamPromptFor = nil } })) { target in
-                DownstreamConfirmSheet(model: model, gameID: target.id, zh: loc.lang == .zh)
+                DownstreamConfirmSheet(model: model, gameID: target.id, zh: loc.cjkPunctuation)
             }
     }
 }

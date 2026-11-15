@@ -16,14 +16,21 @@ final class SystemControllers: ObservableObject {
     @Published private(set) var pads: [Pad] = []
     /// 按设备看到的一代 Joy-Con（D2：几套都分得开，Gen1HIDWatcher）
     @Published private(set) var gen1: [PlayerAssignment.Gen1Device] = []
+    /// 接着的 HID 手柄名（HIDFallbackPads）；面板列 fallback（GameController 认不出、宿主按 HID 兜底读的，#1151）
+    @Published private(set) var hidNames: [String] = []
+    var fallback: [String] { HIDFallbackPads.listed(hid: hidNames, system: pads.map(\.name)) }
     private var observers: [NSObjectProtocol] = []
     private var gen1Watcher: Gen1HIDWatcher?
+    private var hidWatcher: HIDFallbackPads?
 
     init(observe: Bool = true) {
         guard observe else { return }
         let watcher = Gen1HIDWatcher()
         watcher.observe { [weak self] devices in Task { @MainActor in self?.gen1 = devices } }
         gen1Watcher = watcher
+        let hid = HIDFallbackPads()
+        hid.observe { [weak self] names in Task { @MainActor in self?.hidNames = names } }
+        hidWatcher = hid
         let center = NotificationCenter.default
         // 蓝牙手柄接上 / 断开、启动器回到前台（后台接上的、启动前就配对连着的那几只，框架要到活跃才补齐）都重对一次
         for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect, NSApplication.didBecomeActiveNotification] {
@@ -44,7 +51,7 @@ final class SystemControllers: ObservableObject {
     }
 
     /// 单测：直接给一组手柄（不碰 GameController）
-    init(pads: [Pad], gen1: [PlayerAssignment.Gen1Device] = []) { self.pads = pads; self.gen1 = gen1 }
+    init(pads: [Pad], gen1: [PlayerAssignment.Gen1Device] = [], hidNames: [String] = []) { self.pads = pads; self.gen1 = gen1; self.hidNames = hidNames }
 
     /// 分配中认一代 Joy-Con 的手势：(设备 id, 0 左只 / 1 右只, 手势)；nil 停
     func watchGen1(_ onGesture: ((String, Int, Int) -> Void)?) {

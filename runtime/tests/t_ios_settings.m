@@ -107,6 +107,12 @@ int main(int argc, char **argv) {
             [d setBool:NO forKey:@"MetalHUDForceEnabled"]; s2a_ios_apply_overlay_settings(d);
             check([d objectForKey:@"MetalForceHudEnabled"] == nil, @"Metal 浮层：开关关 → 系统键删掉");
             [d removePersistentDomainForName:suite]; unsetenv("MTL_HUD_ENABLED");
+            // #1148：系统键来自删不掉的域（这里用注册缺省模拟 LiveContainer 下的情形）、开关关着时，任何偏好变更都不许「删 → 通知 → 再删」无限递归撑爆栈
+            NSUserDefaults *std = NSUserDefaults.standardUserDefaults; BOOL was = [std boolForKey:@"MetalHUDForceEnabled"];
+            [std setBool:NO forKey:@"MetalHUDForceEnabled"]; [std registerDefaults:@{@"MetalForceHudEnabled": @YES}];
+            [std setInteger:1 forKey:@"t_ios_settings.hud.poke"];   // 发一次变更通知；没有重入闸这里就栈溢出崩掉
+            check([std objectForKey:@"MetalForceHudEnabled"] != nil, @"Metal 浮层：系统键删不掉（注册缺省）时变更通知不递归、进程还活着");
+            [std removeObjectForKey:@"t_ios_settings.hud.poke"]; [std setBool:was forKey:@"MetalHUDForceEnabled"]; [std registerDefaults:@{@"MetalForceHudEnabled": @NO}];
         }
         {   // 开发设施开关（settings.m s2a_dev_plist_from，os.c s2a_dev_on 按名字取）：有键回 1，"0" 开头为关；没有键 / 非字符串 / 空串回 0（= 没有这个键）
             int s2a_dev_plist_from(NSDictionary *info, int *on); int on = -1;

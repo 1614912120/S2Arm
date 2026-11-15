@@ -123,7 +123,7 @@ import XCTest
         }
         XCTAssertEqual(missing, [], "缺文案")
         XCTAssertEqual(PhoneJobPanel.duration(65, language: "zh-Hans"), "1 分 5 秒")
-        XCTAssertEqual(PhoneJobPanel.duration(45, language: "en"), "45 s")
+        XCTAssertEqual(PhoneJobPanel.duration(45, language: "en"), "45s")
     }
 
     /// 同 JobSessionView.statusText / 标题行

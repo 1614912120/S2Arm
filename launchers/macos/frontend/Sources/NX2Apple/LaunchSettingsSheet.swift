@@ -107,7 +107,7 @@ struct LaunchSettingsSheet: View {
     @State private var saving = false
     @State private var loaded = false
 
-    private var lang: String { loc.lang == .zh ? "zh-Hans" : "en" }
+    private var lang: String { loc.lang.sharedCode }
     private func t(_ id: String) -> String { BackendText.launcherText(id, language: lang) }
     private var gameName: String { model.games.first { $0.id == gameID }?.name ?? gameID }
 
@@ -279,12 +279,13 @@ struct CrashPrompt: Identifiable {
     let uiLanguage: String?
     let names: [String]
     static let fpsName = "\u{1}fps"   // 帧率补丁那条的占位名，显示时换成界面语言的「帧率」（export.sgrade.cat.fps）
+    static let fullscreenName = "\u{1}fs"   // 满屏开关那条的占位名，显示时换成「满屏」（export.sgrade.cat.widescreen）
 }
 
 struct CrashPromptHost: View {
     @ObservedObject var model: S2ArmLauncherModel
     @EnvironmentObject var loc: Localizer
-    private func t(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func t(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
     var body: some View {
         let p = model.crashPrompt
         Color.clear.frame(width: 0, height: 0)
@@ -292,7 +293,7 @@ struct CrashPromptHost: View {
                    isPresented: Binding(get: { model.crashPrompt != nil }, set: { if !$0, model.crashPrompt?.id == p?.id { model.crashPrompt = nil } })) {
                 Button(t("crash.cheats.ok"), role: .cancel) { model.crashPrompt = nil }
             } message: {
-                Text(t("crash.cheats.body").replacingOccurrences(of: "{0}", with: (p?.names ?? []).map { $0 == CrashPrompt.fpsName ? t("export.sgrade.cat.fps") : $0 }.joined(separator: loc.lang == .zh ? "、" : ", ")))
+                Text(t("crash.cheats.body").replacingOccurrences(of: "{0}", with: (p?.names ?? []).map { $0 == CrashPrompt.fpsName ? t("export.sgrade.cat.fps") : $0 == CrashPrompt.fullscreenName ? t("export.sgrade.cat.widescreen") : $0 }.joined(separator: loc.t("s2arm.punct.list"))))
             }
     }
 }

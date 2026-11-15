@@ -88,6 +88,23 @@ class RewriteRefreshTests(unittest.TestCase):
         self.assertEqual((k / "sdk.patched.bin").read_bytes(), b"old-sdk", "没命中的模块一个字节不动")
         self.assertEqual(self.info["0100A"]["ios"], {"shellId": "s1", "pack": "p1", "rewriterId": "rid-new", "mainBid": ""}, "记下改写器指纹，原有字段保留")
 
+    def test_sgrade_rewrite_needs_no_symlink_privilege(self):
+        # #1153：Windows 没开开发者模式建目录软链 WinError 1314，每款都「补丁打入失败」；改写根里的 exefs 要是真目录、内容同原件
+        import patches
+        def refuse(*a, **k):
+            raise OSError(1314, "客户端没有所需的特权。")
+        class Stop(Exception):
+            pass
+        work = self.tmp / "work"; work.mkdir()
+        kit = self.tmp / "kitx"; kit.mkdir()
+        with patch.object(os, "symlink", side_effect=refuse), patch.object(Path, "symlink_to", side_effect=refuse), \
+             patch.object(patches, "fetch", side_effect=Stop):
+            with self.assertRaises(Stop):
+                rr.sgrade_rewrite(self.c, {"id": "0100a"}, kit, self.exefs, "ios", work)
+        got = work / "root" / "exefs"
+        self.assertTrue(got.is_dir() and not got.is_symlink())
+        self.assertEqual(sorted(p.name for p in got.iterdir()), sorted(p.name for p in self.exefs.iterdir()))
+
     def test_unaffected_game_keeps_kit_but_is_marked_checked(self):
         updated, kits = self.run_refresh(["0100A"], hits=[])
         self.assertEqual(updated, [])

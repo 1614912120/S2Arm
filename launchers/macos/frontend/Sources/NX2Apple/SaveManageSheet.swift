@@ -74,7 +74,7 @@ struct SaveManageSheet: View {
     /// 别的作业（一局、出包、导入……）在跑，或弹窗自己在跑：存档动作先不让点。
     private var blocked: Bool { model.busy || state.busy }
 
-    private func t(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func t(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {

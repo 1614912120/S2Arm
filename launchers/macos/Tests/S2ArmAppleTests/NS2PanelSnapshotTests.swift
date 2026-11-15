@@ -17,7 +17,7 @@ import XCTest
     /// 面板：蓝牙手柄照工具栏那样交给分配整理（自动排进玩家位）
     static func panel(_ c: NS2LauncherController, _ systems: SystemControllers, _ zh: Bool) -> Switch2ProConnectionPopover {
         c.updateSystem(systems.presentKeys)
-        return Switch2ProConnectionPopover(controller: c, systems: systems, simplifiedChinese: zh)
+        return Switch2ProConnectionPopover(controller: c, systems: systems, lang: zh ? "zh" : "en")
     }
     private func controller(kind: Int, players: Int, kinds: [Int]? = nil) -> NS2LauncherController {
         let c = Self.isolated()
@@ -42,12 +42,12 @@ import XCTest
         XCTAssertEqual(ControllerIcon.player(kind: 4), .pairHead)
         XCTAssertEqual(ControllerIcon.systemPlayer(.gen1Right), .gen1RightSideways, "一代单只也横着画")
         XCTAssertEqual(ControllerIcon.systemPlayer(.gen1Pair), .gen1Pair)
-        XCTAssertEqual(single.title(simplifiedChinese: true), "Joy-Con 2 (L)")
+        XCTAssertEqual(single.title(lang: "zh"), "Joy-Con 2 (L)")
         let pair = controller(kind: 4, players: 1, kinds: [4])
-        XCTAssertEqual(pair.title(simplifiedChinese: true), "Joy-Con 2 (L + R)")
+        XCTAssertEqual(pair.title(lang: "zh"), "Joy-Con 2 (L + R)")
         let split = controller(kind: 3, players: 2, kinds: [3, 2])
-        XCTAssertEqual(split.title(simplifiedChinese: true), "2 个 Switch 2 手柄", "两只各一位：标题写手柄数量（玩家在列表里）")
-        XCTAssertEqual(split.title(simplifiedChinese: false), "2 Switch 2 controllers")
+        XCTAssertEqual(split.title(lang: "zh"), "2 个 Switch 2 手柄", "两只各一位：标题写手柄数量（玩家在列表里）")
+        XCTAssertEqual(split.title(lang: "en"), "2 Switch 2 controllers")
         XCTAssertEqual(split.playerKinds, [3, 2], "玩家列表：P1 右只、P2 左只（照连接程序报的顺序）")
         XCTAssertEqual(pair.playerKinds, [4], "一对合成一位：P1 是一对")
         XCTAssertEqual(NS2LauncherController.playerKinds(from: ["kind": 4]), [4], "旧连接程序没报 kinds：用 kind 当 P1")
@@ -69,10 +69,10 @@ import XCTest
             (.notConnected, "未连接", "连接"), (.searching, "搜索中", "停止"), (.connecting, "连接中", "停止"), (.connected, "已连接", "断开"),
             (.inUse, "游戏使用中", "断开"), (.failed, "连接失败", "重新连接"), (.bluetoothUnavailable, "蓝牙不可用", "重新连接")]
         for (status, text, button) in expect {
-            XCTAssertEqual(C.statusText(status, simplifiedChinese: true), text)
-            XCTAssertEqual(C.mainButton(status, simplifiedChinese: true), button)
+            XCTAssertEqual(C.statusText(status, lang: "zh"), text)
+            XCTAssertEqual(C.mainButton(status, lang: "zh"), button)
         }
-        XCTAssertEqual(C.statusText(.inUse, simplifiedChinese: false), "In use by game")
+        XCTAssertEqual(C.statusText(.inUse, lang: "en"), "In use by game")
         XCTAssertEqual(C.dotColor(.inUse), C.dotColor(.connected), "游戏使用中是绿点（原先灰点）")
 
         func make(_ code: Int?, kind: Int = 0, phase: C.Phase? = nil) -> C {
@@ -90,7 +90,7 @@ import XCTest
             try snapshot(name + "_zh", Self.panel(c, SystemControllers(pads: []), true))
         }
         XCTAssertNil(ControllerIcon.header(kind: make(5).kind, players: 1), "失败：型号未知 → 虚线图")
-        XCTAssertEqual(make(5).title(simplifiedChinese: true), "Switch 手柄")
+        XCTAssertEqual(make(5).title(lang: "zh"), "Switch 手柄")
     }
 
     // 系统手柄（#520 F，UI 稿 system.html）：分类、去重、混用时的玩家顺序；图示全套另存一张（含稿里没有、待定的 Xbox / 一代右只 / 其他）
@@ -119,6 +119,29 @@ import XCTest
         try snapshot("system_gen1_zh", Self.panel(c, S(pads: gen1), true))
         try snapshot("system_long_zh", Self.panel(c, S(pads: [edge, S.Pad(id: ObjectIdentifier(NSObject()), name: "Xbox Wireless Controller", family: .xbox)]), true))
         try snapshot("system_only_en", Self.panel(Self.isolated(), S(pads: [edge]), false))
+        // #1151：真机上只连着系统手柄时，控制器自己也认到它（systemControllerName）。面板顶部是 Switch 2 手柄那一块，
+        //   不能借系统手柄的名字（原先写「DualSense Wireless Controller · 未连接」，下面系统手柄块又写「已连接」，同一只两种状态），
+        //   长名也不能把整块撑出面板宽度（原先标题 fixedSize，左边图标和「玩家」被裁）
+        for zh in [true, false] {
+            let real = NS2LauncherController(socketURL: URL(fileURLWithPath: "/tmp/s2arm-panel-test.sock"),
+                                             store: UserDefaults(suiteName: "s2arm-panel-test-" + UUID().uuidString),
+                                             orderFile: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json"),
+                                             systemControllers: { [NamedSystemController("DualSense Wireless Controller")] }, notifications: NotificationCenter())
+            real.startIfEnabled()
+            let dualsense = S.Pad(id: ObjectIdentifier(NSObject()), name: "DualSense Wireless Controller", family: .playstation)
+            try snapshot(zh ? "system_real_zh" : "system_real_en", Self.panel(real, S(pads: [dualsense]), zh))
+            XCTAssertEqual(real.title(lang: zh ? "zh" : "en"), "DualSense Wireless Controller", "顶栏按钮照旧写系统手柄的真名（#901）")
+            XCTAssertEqual(real.switch2Title(lang: zh ? "zh" : "en"), zh ? "Switch 手柄" : "Switch Controller", "面板顶部只讲 Switch 2 手柄")
+        }
+        // #1151 ①：HID 兜底手柄（GameController 认不出，宿主 hid_pad.m 按 HID 读）面板也列。认法同宿主：名字带「Pro Controller」、大小写不敏感，
+        //   GameController 已列出的同名不重复，别的 HID 手柄（键号各家不同、宿主不接）不列
+        XCTAssertEqual(HIDFallbackPads.listed(hid: ["Lic Pro Controller", "Generic USB Joystick", "PRO CONTROLLER", "Pro Controller"], system: ["Pro Controller"]),
+                       ["Lic Pro Controller"], "Generic 不带 Pro Controller 不列；PRO CONTROLLER / Pro Controller 与系统已列的同名（不分大小写）不重复")
+        XCTAssertEqual(HIDFallbackPads.listed(hid: ["Lic Pro Controller", "Lic Pro Controller"], system: []), ["Lic Pro Controller", "Lic Pro Controller"], "两只同名各算一只")
+        XCTAssertEqual(HIDFallbackPads.listed(hid: [], system: ["DualSense Wireless Controller"]), [])
+        try snapshot("system_hid_only_zh", Self.panel(Self.isolated(), S(pads: [], hidNames: ["Lic Pro Controller"]), true))
+        try snapshot("system_hid_mixed_en", Self.panel(Self.isolated(), S(pads: [S.Pad(id: ObjectIdentifier(NSObject()), name: "DualSense Wireless Controller", family: .playstation)],
+                                                                         hidNames: ["Lic Pro Controller", "DualSense Wireless Controller"]), false))
         try snapshot("system_long_en", Self.panel(c, S(pads: [edge, S.Pad(id: ObjectIdentifier(NSObject()), name: "Xbox Wireless Controller", family: .xbox)]), false))
         try snapshot("system_two_zh", Self.panel(c, S(pads: [ps, xb]), true))
         let all: [(ControllerIcon.Glyph, String)] = [(.left, "Joy-Con 2 (L)"), (.right, "Joy-Con 2 (R)"), (.leftSideways, "Joy-Con 2 (L) 单只玩家"), (.rightSideways, "Joy-Con 2 (R) 单只玩家"), (.pairHead, "Joy-Con 2 (L + R)"), (.pro, "Switch 2 Pro / Pro"),
