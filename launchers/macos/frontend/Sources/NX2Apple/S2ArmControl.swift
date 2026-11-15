@@ -215,7 +215,11 @@ import S2ArmAppleAdapter
             let change = a["settings"] as? [String: Any] ?? [:]
             do {
                 let (options, _) = try await model.launchSettings(id, change: change.isEmpty ? nil : change)
-                return .object(options.mapValues { ["available": $0.available, "value": $0.value ?? NSNull(), "reason": $0.reason] })
+                return .object(options.mapValues { o -> [String: Any] in   // 游戏语言另带 choices（这款支持的）/ note（不支持时起局用哪种），同启动设置页
+                    var r: [String: Any] = ["available": o.available, "value": o.value ?? NSNull(), "reason": o.reason]
+                    if let c = o.choices { r["choices"] = c }
+                    if !o.note.isEmpty { r["note"] = o.note }
+                    return r })
             } catch { return .bad(error.localizedDescription) }
         case ("POST", "/cloudFolder"):
             // iCloud 存档同步的云盘文件夹（同环境页「选择文件夹…」）：path 为空 = 关闭
@@ -246,7 +250,9 @@ import S2ArmAppleAdapter
             case "install":   // 装机窗（进度 / 完成页）：同点顶栏「查看结果」
                 guard let g = game() else { return .bad("没有这个 gameId") }
                 model.showEnvironment = false; model.showInstallFor = g.id
-            default: return .bad("page 只认 environment / export / library / install")
+            case "sgradeUpgrade":   // S 级优化升级页（同点游戏库「S 级优化升级」）：截图核界面用
+                model.showEnvironment = false; model.exportFor = nil; model.sgradeUpgradeOpen = true
+            default: return .bad("page 只认 environment / export / library / install / sgradeUpgrade")
             }
             return .ok()
         case ("POST", "/refresh"):

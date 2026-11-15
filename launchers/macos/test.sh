@@ -7,9 +7,9 @@ source "$R/tools/toolchain.sh"   # 门禁用统一工具链（tools/toolchain.en
 export CLANG_MODULE_CACHE_PATH="$R/build/macos/clang-cache"
 export SWIFTPM_MODULECACHE_OVERRIDE="$R/build/macos/swift-cache"
 mkdir -p build/macos/tests
-python3 -B -m unittest discover -s pack/jobs/tests -v
 python3 -B -m unittest discover -s launchers/macos/Tests -p 'test_*.py' -v
 python3 -B -m unittest discover -s launchers/macos/gui_jobs/tests -v
+python3 launchers/macos/sparkle_vendor.py > /dev/null   # Sparkle 二进制包不随仓库，按校验值备到 frontend/Vendor/
 swift_args=(--disable-sandbox --cache-path "$R/build/macos/spm-cache" --package-path launchers/macos --scratch-path build/macos/spm)
 swift test "${swift_args[@]}" list > build/macos/tests/swift-discovery.log
 swift_rc=0

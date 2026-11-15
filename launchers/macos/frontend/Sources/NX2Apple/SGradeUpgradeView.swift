@@ -95,7 +95,7 @@ struct SGradeUpgradeBody: View {
                 if yes.contains(where: \.iphone) {
                     Text(x("iphoneNote")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                     HStack(spacing: 10) {
-                        Button(x("install")) { upgrade("install") }.buttonStyle(.borderedProminent).accessibilityIdentifier("sgrade.upgrade.install")
+                        Button(x("install")) { upgrade("device") }   // 装法取值同作业层 install.INSTALL_MODES（device / export）.buttonStyle(.borderedProminent).accessibilityIdentifier("sgrade.upgrade.install")
                         Button(x("export")) { upgrade("export") }.buttonStyle(.bordered).accessibilityIdentifier("sgrade.upgrade.export")
                         Spacer()
                         Button(x("close")) { close() }.buttonStyle(.plain).foregroundStyle(.secondary)
@@ -118,10 +118,11 @@ struct SGradeUpgradeBody: View {
         return parts.joined(separator: zh ? "、" : ", ")
     }
 
+    // 分组标题与游戏行要一眼分得开（11-14 体验走查：同号同色粗体分不清哪行是标题）：标题小一号、金 / 灰色、带款数，游戏行缩进
     private func group(_ title: String, _ rows: [(String, String)], gold: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.manrope(13, .semibold)).foregroundStyle(gold ? SGradeCardView.gold : .primary)
-            list(rows)
+            Text("\(title) · \(rows.count)").font(.manrope(12, .semibold)).foregroundStyle(gold ? SGradeCardView.gold : .secondary)
+            list(rows).padding(.leading, 12)
         }
     }
 
