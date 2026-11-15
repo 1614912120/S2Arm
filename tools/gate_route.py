@@ -140,6 +140,40 @@ def precheck_test(test):
     return n in PRECHECK_TESTS or fnmatch.fnmatch(n, '*lint*_test')
 
 
+CP_SEG = re.compile(r'(?<![\w-])cp\s[^;&|\n]*')
+WR_SEG = re.compile(r'(?<![>&\d])>\s*"?((?:[\w.-]+/)+[\w.-]+\.(?:sh|py))\b')
+
+
+def copied_only(test, txt):
+    """单测拷进假仓库 / 临时目录跑的脚本（cp "$H/tools/gate.sh" tools/）：它本身是依赖，但它在假仓库里执行，
+    它点名的仓库文件解析到假仓库、不是真依赖，闭包不顺着它展开（11-14 门禁减负：gate_budget_test 只核预算格式，
+    经拷进去的 tools/gate.sh 一路传递吃进 4285 个输入、其中 3873 个 C# 源文件，改一个 .cs 就要跑）。
+    只拷不执行真仓库那份才算：单测文本在 cp 以外的地方带变量前缀点名它（bash $H/x.sh、. "$H"/x.sh）照旧展开"""
+    code = '\n'.join(re.sub(r'\s#\s.*$', '', l) for l in txt.split('\n') if not l.lstrip().startswith('#'))
+    if re.search(r'git\s+clone\b[^\n]*\$\{?H\b', code): return set(), []   # 克隆整个本仓库跑：里面全是真脚本，照旧展开
+    segs = CP_SEG.findall(code)
+    wrote = set(WR_SEG.findall(code))   # 单测在假仓库里自己写出来的（printf … > graphics/gate.sh）：同名真文件不是依赖
+    dirs = []
+    if not segs and not wrote: return set(), dirs
+    rest = WR_SEG.sub(' ', CP_SEG.sub(' ', code))
+    out = set()
+    for sg in segs:   # 拷的源（最后一个参数是目的地，不算）：目录 / 通配按通配并进覆盖面（cp -R "$H/graphics/widen" …：目录里的内容是真输入）
+        args = [a.strip('"\'') for a in sg.split()[1:] if not a.startswith('-')][:-1]
+        for a in args:
+            m = re.match(r'\$\{?\w+\}?"?/(.+)$', a)
+            if not m: continue
+            q = m.group(1).replace('"', '').rstrip('/')
+            if '$' in q: return set(), []   # 源路径里还有变量（for 循环拷一批）：认不全，这支单测照旧全展开
+            if q in DIRNAMES_FULL: dirs.append(q + '/**')
+            elif re.search(r'[*?\[]', q): dirs.append(q)
+    for t in {t for sg in segs for t in TOK.findall(sg) if '/' in t} | wrote:
+        ps = t.split('/')
+        hit = next(('/'.join(ps[i:]) for i in range(len(ps) - 1) if '/'.join(ps[i:]) in FILESET), None)
+        # 拷过的文件再被点名：带变量前缀（$H/tools/x.sh、"${ROOT}"/x.py）= 执行真仓库那份，照旧展开；相对写法（cd 进假仓库后 bash tools/x.sh）= 跑的是拷贝
+        if hit and not re.search(r'\$\{?\w+\}?"?/(?:[\w.-]+/)*' + re.escape(os.path.basename(hit)) + r'\b', rest): out.add(hit)
+    return out - {test}, dirs
+
+
 def test_cover(test, files, by_name, full=False):
     """单测的覆盖面：自身 + 文本里点名的本线文件的传递闭包 + 头部「门禁覆盖」通配。
     full=True（缓存键用）：「门禁只看」不截断闭包，只并进去——路由可以窄，缓存输入只能宽（10-30：train_test「门禁只看」漏 known_red.py，
@@ -160,9 +194,10 @@ def test_cover(test, files, by_name, full=False):
         if gone: sys.exit(f'【红】gate_route：{test} 的「门禁只看」里 {" ".join(gone)} 不在仓库里（改名了要同笔改这行）')
         if not full: return {test} | build_cover([txt] + [read_text(f) for f in FILESET if f.endswith(('.sh', '.py')) and any(fnmatch.fnmatch(f, g) for g in only)]), globs + only, always
         globs = globs + only
+    stub, cpdirs = copied_only(test, txt); globs += cpdirs
     while todo:
         f = todo.pop()
-        if not f.endswith(('.sh', '.py')) and f != test: continue
+        if not f.endswith(('.sh', '.py')) and f != test or f in stub: continue
         got = first if f == test else refs(f, by_name)[0]
         for g in got - seen: seen.add(g); todo.append(g)
     for a in closures:   # 10-27 维护者：#550 改 runtime/run_mac.sh、新增 tools/mac_chain_check.py，落进直连阶段闭包，门禁没选 stage_keys_test，main 红
@@ -234,12 +269,14 @@ def hit(changed, prefixes):
 
 FILESET = set()
 DIRNAMES = set()   # 仓库里出现过的全部目录名（任一层）
+DIRNAMES_FULL = set()   # 仓库里出现过的全部目录路径（copied_only 认 cp -R 的目录用）
 TAIL2 = {}   # 末两段路径 → 以「/<末两段>」结尾的仓库文件（refs 相对目录写法用；逐个 endswith 扫全仓库要 390 万次）
 
 
 def index():
     """读仓库文件表、建 refs 用的索引（在仓库根调；一个进程一次）→ (仓库文件, 文件名 → 本线文件)"""
     files = repo_files(); FILESET.update(files); DIRNAMES.update(d for f in files for d in f.split('/')[:-1])
+    DIRNAMES_FULL.update('/'.join(f.split('/')[:i]) for f in files for i in range(1, f.count('/') + 1))
     for f in files:
         ps = f.split('/')
         if len(ps) >= 3: TAIL2.setdefault('/'.join(ps[-2:]), []).append(f)
