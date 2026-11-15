@@ -247,8 +247,10 @@ NACP_LANGUAGES = ("AmericanEnglish", "BritishEnglish", "Japanese", "French", "Ge
 
 
 def nacp_languages(nacp_bytes):
-    """control.nacp 原文 → 支持的语言（NACP_LANGUAGES 的名字，按位序）；读不到 / 标志为 0 → []"""
-    if len(nacp_bytes) < 0x3030:
+    """control.nacp 原文 → 支持的语言（NACP_LANGUAGES 的名字，按位序）；读不到 / 标志为 0 / 合成件 → []（不知道）
+    合成件（pack/ns2_dump.py synth_nacp：显示版本 0x3060 写「?」）只为防 #401 黑屏声明了美式英语，不是游戏真实支持表；
+    当真用会把下拉缩成「跟随系统 + 英语」，玩家选不了中文（#1209）。服务层对合成件同样不信支持表（IApplicationFunctions Switch2LanguagesUnknown / SynthTableHonorsExplicitLanguage）"""
+    if len(nacp_bytes) < 0x3030 or nacp_bytes[0x3060:0x3061] == b"?":
         return []
     flag = int.from_bytes(nacp_bytes[0x302C:0x3030], "little")
     return [n for i, n in enumerate(NACP_LANGUAGES) if flag >> i & 1]

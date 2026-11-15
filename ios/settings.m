@@ -77,7 +77,8 @@ NSArray<NSString *> *s2a_ios_game_supported_languages(void) {
     const char *gd = getenv("S2A_GAME_DATA");   // 同 loadpage.m：多款容器给 S2A_GAME_DATA，单款在 Documents/资源包
     NSString *dir = gd && *gd ? @(gd) : [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/资源包"];
     NSData *d = [NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:@"ctl/control.nacp"]];
-    if (d.length < 0x3030) return @[];
+    // 合成件（pack/ns2_dump.py synth_nacp：显示版本 0x3060 写「?」）的支持表只声明美式英语防 #401 黑屏，不是游戏真实支持的：当不知道（#1209 选不了中文），同 community.py nacp_languages
+    if (d.length < 0x3030 || (d.length > 0x3060 && ((const uint8_t *)d.bytes)[0x3060] == '?')) return @[];
     uint32_t flag; memcpy(&flag, (const uint8_t *)d.bytes + 0x302C, 4);
     NSMutableArray *out = [NSMutableArray array]; NSArray *names = nacp_language_names();
     for (NSUInteger i = 0; i < names.count; i++) if (flag >> i & 1) [out addObject:names[i]];

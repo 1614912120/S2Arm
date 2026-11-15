@@ -616,6 +616,20 @@ int main(int argc, char **argv) {
             [g9 removePersistentDomainForName:@"S2AGame.G9"]; unsetenv("S2A_LAUNCH_GAME_ID"); unsetenv("S2A_WIDEN_VERIFIED"); unsetenv("S2A_WIDEN_CAPS");
             [NSFileManager.defaultManager removeItemAtPath:caps error:nil]; [NSFileManager.defaultManager removeItemAtPath:ctsv error:nil];
         }
+        {   // #1209：导入合成的 control.nacp（pack/ns2_dump.py synth_nacp：支持表只写美式英语、显示版本 0x3060 =「?」）不是真表 → 当不知道（空），下拉列全部；真表照读
+            NSString *gd = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"t_ios_lang_%d", getpid()]];
+            [NSFileManager.defaultManager createDirectoryAtPath:[gd stringByAppendingPathComponent:@"ctl"] withIntermediateDirectories:YES attributes:nil error:nil];
+            NSMutableData *n = [NSMutableData dataWithLength:0x4000]; uint32_t one = 1, real = 1u | 1u << 2 | 1u << 14;   // 美英；美英 + 日 + 简中
+            [n replaceBytesInRange:NSMakeRange(0x302C, 4) withBytes:&one]; ((uint8_t *)n.mutableBytes)[0x3060] = '?';
+            [n writeToFile:[gd stringByAppendingPathComponent:@"ctl/control.nacp"] atomically:YES]; setenv("S2A_GAME_DATA", gd.UTF8String, 1);
+            NSArray *got = s2a_ios_game_supported_languages();
+            check(got.count == 0, [NSString stringWithFormat:@"合成 nacp 的支持语言：期望 空（不知道） → 真结果 %@", got]);
+            ((uint8_t *)n.mutableBytes)[0x3060] = '1'; [n replaceBytesInRange:NSMakeRange(0x302C, 4) withBytes:&real];
+            [n writeToFile:[gd stringByAppendingPathComponent:@"ctl/control.nacp"] atomically:YES];
+            got = s2a_ios_game_supported_languages(); NSArray *want = @[@"AmericanEnglish", @"Japanese", @"SimplifiedChinese"];
+            check([got isEqual:want], [NSString stringWithFormat:@"真 nacp 的支持语言：期望 %@ → 真结果 %@", want, got]);
+            unsetenv("S2A_GAME_DATA"); [NSFileManager.defaultManager removeItemAtPath:gd error:nil];
+        }
         clear_environment();
         [a removePersistentDomainForName:suiteA];
         [b removePersistentDomainForName:suiteB];
