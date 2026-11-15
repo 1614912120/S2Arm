@@ -19,6 +19,11 @@ void s2a_wg_frame(int fps);   // thread.c 帧间隔工作组（缺省关，S2A_W
 static _Atomic int g_hud_on = -1;
 int s2a_hud_on(void) { int v = atomic_load(&g_hud_on); if (v < 0) { const char *e = getenv("S2A_HUD"); v = e && !strcmp(e, "1"); atomic_store(&g_hud_on, v); } return v; }
 _Atomic uint64_t g_s2a_hud_ft[2048], g_s2a_hud_fn;
+// 声音调度迟到探针（11-14 卡顿诊断，compat 补丁 aud-late-probe）：C# 声音渲染线程每个 5 ms 周期把唤醒迟到的纳秒记进来（静态导入；放在本文件因为苹果与安卓游戏组合都链它，安卓诊断组合由 android/native/s2a_native_stub.c 给替身），
+//   直连逐帧表 @aud_wait_ms 每帧取走清零（graphics/nvn/gfx/nvn/hle_nvn.c）。游戏线程等的声音更新事件由该线程发出：这里晚到，游戏线程同量晚醒
+static _Atomic uint64_t g_aud_late_ns;
+void s2a_aud_late_note(long long ns) { if (ns > 0) atomic_fetch_add_explicit(&g_aud_late_ns, (uint64_t)ns, memory_order_relaxed); }
+uint64_t s2a_aud_late_take(void) { return atomic_exchange_explicit(&g_aud_late_ns, 0, memory_order_relaxed); }
 // 简版性能浮层（11-09 B 方案，齿轮菜单「性能浮层」，玩家随时开关）：开着时同样记上屏时间戳，跨局保留（界面按偏好设）
 static _Atomic int g_hud_brief;
 void s2a_hud_brief_set(int on) { atomic_store(&g_hud_brief, on ? 1 : 0); }

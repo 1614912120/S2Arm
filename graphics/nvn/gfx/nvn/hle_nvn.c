@@ -3212,7 +3212,7 @@ static double pres_expect_ms(uint64_t n) {   // the interval between presents n 
 __attribute__((weak)) double dm_brightness_now(void) { return -1; }
 __attribute__((weak)) void dm_perf_present(double iv_ms) { (void)iv_ms; }   // Default (unit tests); strong definition in the host's diag.c: always-on performance record perf.txt
 uint64_t dm_nvn_sub_cpu_ns(void) { return atomic_load(&g_cum_sub_cpu_ns); }   // Cumulative CPU nanoseconds of submit (excluding present)
-// 声音调度迟到探针（11-14 卡顿诊断）：累加在公用核心 runtime/src/hud.c（s2a_aud_late_note，C# 声音渲染线程静态导入），@aud_wait_ms 每帧取走清零；
+// 声音调度迟到探针（11-14 卡顿诊断）：累加在公用核心 runtime/src/ap_host.c（s2a_aud_late_note，C# 声音渲染线程静态导入），@aud_wait_ms 每帧取走清零；
 //   没链公用核心的图形单测取 0（弱定义）
 __attribute__((weak)) uint64_t s2a_aud_late_take(void) { return 0; }
 __attribute__((weak)) int dm_thermal_now(void) { return -1; }   // Strong definitions: iOS ios/app.m, Mac runtime/src/host_main.c (both NSProcessInfo, audit P1-80); -1 only in hosts/tests that link neither
