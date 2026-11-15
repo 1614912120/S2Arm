@@ -26,8 +26,8 @@ if [ "$(uname -s)" = Linux ]; then
     cc -D_POSIX_C_SOURCE=200809L -std=c11 -O1 -g -Wall -Wextra -Werror \
         -DS2A_ANDROID_VK_LOADER_SHIM=1 \
         -I "$repo/graphics/nvn/third_party/vulkan-headers/include" \
-        -I "$repo/android/native/direct" \
-        "$repo/android/native/direct/vk_loader_shim.c" \
+        -I "$repo/android/native/direct" -I "$repo/android/native" \
+        "$repo/android/native/vk_loader_shim.c" \
         "$repo/android/tests/vk/vkfake_driver_stub.c" "$repo/android/tests/vk/t_loader_shim_wrap.c" \
         -Wl,--wrap=vkEnumerateInstanceVersion \
         -Wl,--wrap=vkEnumerateInstanceExtensionProperties \

@@ -5,7 +5,7 @@
 #include "direct_callback.h"
 #include "direct/selection.h"   // NVN 直连的冻结选择（s2a_direct_lookup 的 nvnBootstrapLoader 分支）
 #include "capprobe/capprobe.h"  // #1456 runtime-lost 回写
-#include "direct/vk_loader_shim.h"  // 窄 shim 的入口表（__wrap_* 在 direct/vk_loader_shim.c）
+#include "vk_loader_shim.h"  // 窄 shim 的入口表（__wrap_* 在 vk_loader_shim.c；拦的是 Vulkan loader 一级的实例创建，归平台壳）
 S2A_CAPPROBE_RUNTIME_LOST_WEAK_REF;   // 宿主链接单元无 bridge.cpp 时解析为 NULL
 #include <errno.h>
 #include <stdatomic.h>
