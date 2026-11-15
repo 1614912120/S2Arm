@@ -65,7 +65,7 @@ ctl() { local d sum=0 c msg=
   [ "$(cat "$T/ctl/rest.rc")" = 0 ] && grep -q '^PASS: .*production Runtime backing handshake assertions' "$T/ctl/rest.log" \
     && grep -q "^PASS: [0-9]* threaded-renderer assertions.*, skip $LONG)" "$T/ctl/rest.log" || msg="其余用例（rc=$(cat "$T/ctl/rest.rc")）：$(tail -3 "$T/ctl/rest.log" | tr '\n' ' ' | cut -c1-300)"
   [ "$(cat "$T/ctl/long.rc")" = 0 ] && grep -q "^PASS: [0-9]* threaded-renderer assertions.*, only $LONG)" "$T/ctl/long.log" \
-    || msg="${msg:+$msg；}$LONG（rc=$(cat "$T/ctl/long.rc")）：$(tail -3 "$T/ctl/long.log" | tr '\n' ' ' | cut -c1-300)"
+    || msg="${msg:+${msg}；}${LONG}（rc=$(cat "$T/ctl/long.rc")）：$(tail -3 "$T/ctl/long.log" | tr '\n' ' ' | cut -c1-300)"
   if [ -n "$msg" ]; then echo "不通 ${1#$H/}：$msg"; bad=1; return; fi
   for c in rest long; do sum=$((sum + $(grep -o '^PASS: [0-9]* threaded-renderer' "$T/ctl/$c.log" | grep -o '[0-9]*'))); done
   echo "通 ${1#$H/}：两路同时跑全过（$LONG 单独一路），拆线程断言共 ${sum} 条"; }
