@@ -607,11 +607,17 @@ public class MainActivity extends Activity
         }
     }
 
+    private void stopGame(String why, boolean normal) { stopGame(why, normal, normal); }
+
     // normal 只表示“这是一次正常收局”（用户/游戏主动停止），异常清理（启动失败、
     // Activity 被销毁但没有正常结束会话）不能清 attempt 锁，否则下一局 AUTO 会误回 direct。
-    private void stopGame(String why, boolean normal) {
+    // cleanEnd（#528 第 15 项）：玩家或游戏自己结束了这一局，删会话标记，库页下次不问「上一局异常结束」。
+    //   运行时报错停局（HostApi 低内存 / 显卡设备丢失 / 不可恢复错误）也是 normal，但不算干净收尾，标记留着。
+    //   删在原生收尾之前：原生收尾以 _exit 结束进程，之后的 Java 不一定还能跑。
+    private void stopGame(String why, boolean normal, boolean cleanEnd) {
         if (!gameMode || gameStopping) return;
         gameStopping = true;
+        if (cleanEnd) sessionMark(LastSession.NONE);
         if (frameRate != null) frameRate.setResumed(false);
         saveAtomicProbe.removeCallbacks(saveAtomicSample);
         if (gameAudioFocus != null) gameAudioFocus.pause();
@@ -629,6 +635,17 @@ public class MainActivity extends Activity
         // 原生收尾有自己的硬预算并会 _exit；这里只兜底「原生没能结束进程」的情况。
         // 提前 finish 会撤销 BufferQueue，surfaceDestroyed 的 1 秒期限随即打断正在排空的 GPU 收尾。
         new android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(this::finishAndRemoveTask, 10000);
+    }
+
+    // #528 第 15 项：会话标记（LastSession，iOS sesdiag.c 的安卓侧），库页读它决定要不要提示「上一局异常结束」。
+    //   只在真有一局时写（游戏进程、有原生宿主、没在收局）：回前台 fg、进后台 bg。收局中不再改：干净收尾已删，异常收尾留着。
+    private void markSession(boolean foreground) {
+        if (!gameMode || !runtimeLoaded || host == 0 || gameStopping) return;
+        sessionMark(foreground ? LastSession.FOREGROUND : LastSession.BACKGROUND);
+    }
+    private void sessionMark(int state) {
+        try { LastSession.mark(getFilesDir(), state); }
+        catch (java.io.IOException | RuntimeException error) { Log.e("S2Arm", "Session mark failed", error); }
     }
 
     // Per-game APK (tools/game_apk.py): the game this app was built for, and a load check of the
@@ -650,6 +667,7 @@ public class MainActivity extends Activity
         // A rejected cold-start configuration never owns a native game host.
         // Do not acquire the game storage lease for a session that cannot start.
         if (!runtimeLoaded || (gameMode && host == 0)) return;
+        markSession(true);
         if (gameMode && !gameStopping && gameAudioFocus != null) gameAudioFocus.resume();
         hostKeyboard.resume();
         legacyTextInput.resume();
@@ -708,6 +726,7 @@ public class MainActivity extends Activity
     }
     @Override protected void onPause() {
         resumed = false;
+        markSession(false);
         if (gameAudioFocus != null) gameAudioFocus.pause();
         if (legacyTextInput != null) legacyTextInput.pause();
         if (dguardNotice != null) dguardNotice.pause();
@@ -982,7 +1001,7 @@ public class MainActivity extends Activity
         String why = NativeBridge.stopReason(reason) + (detail.isEmpty() ? "" : ": " + detail);
         status.setText("Session ended: " + why);
         android.widget.Toast.makeText(this, "S2Arm session ended: " + why, android.widget.Toast.LENGTH_LONG).show();
-        if (gameMode) stopGame(why, true);
+        if (gameMode) stopGame(why, true, LastSession.cleanStop(reason));
         else finish();
     }
     // Debug: `am start ... --es s2arm.orientation landscape|reverse-landscape|portrait` rotates this activity only;

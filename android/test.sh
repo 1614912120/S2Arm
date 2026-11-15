@@ -614,6 +614,8 @@ echo "Android package C/Python backend matrix: running real rewrites and Java co
 
 # Offline codec build/packaging regression (source preparation is explicit).
 s2a_gate_step python3 "$android_dir/tests/game_library_import_test.py"
+# #528 第 15 项：库页「上一局异常结束」提示（真 LibraryActivity + 导入用例的替身；3 个负对照）
+s2a_gate_step python3 "$android_dir/tests/last_session_notice_test.py"
 s2a_gate_step python3 "$android_dir/codecs/tests/build_test.py"
 s2a_gate_step "$PY" "$android_dir/codecs/tests/managed_test.py"
 # #1131：宿主原生构建契约——后端路由 / NativeAOT 静态归档校验 / docker↔host 产物等价核对。
