@@ -47,8 +47,8 @@ DIAGNOSTIC_LOG_SCENE = 96000         # 中间最后一次崩溃摘要 + 全线�
 class _Scene:
     """扫中段时收最后一次「崩溃摘要 + 全线程现场」（runtime/src/crash.c 打【红】CRASH 摘要行，随后 tdump.c 每行带「[现场] 」前缀，
     「===== 全线程现场：…」起、「===== 现场完 =====」止）。#141：只留头尾时崩溃在中段就整段丢了，玩家交了诊断包也定不了因"""
-    CRASH, TAG = "CRASH 信号".encode(), "[现场]".encode()
-    START, END = "===== 全线程现场".encode(), "现场完".encode()
+    CRASH, TAG = "CRASH 信号".encode(), "[现场]".encode()  # 非玩家句
+    START, END = "===== 全线程现场".encode(), "现场完".encode()  # 非玩家句
 
     def __init__(self):
         self.summary, self.block, self.in_block, self.taking = [], [], False, False
@@ -79,7 +79,7 @@ def _scene_text(summary, block, budget=DIAGNOSTIC_LOG_SCENE):
     keep = list(summary[:24]) + block[:1]
     threads, cur = [], None
     for line in block[1:]:
-        if "[现场] 线程 ".encode() in line: cur = [line]; threads.append(cur)
+        if "[现场] 线程 ".encode() in line: cur = [line]; threads.append(cur)  # 非玩家句
         elif cur is not None and _Scene.END not in line: cur.append(line)
     first = next((t for t in threads if "等待".encode() not in t[0]), threads[0] if threads else [])
     keep += first
@@ -131,7 +131,7 @@ def diagnostic_log_chunks(source, size, head=None, tail=None):
             partial = b""
         for line in lines:
             if len(line) < 4096: scene.feed(line)
-            if "[心跳]".encode() in line and len(line) < 4096:
+            if "[心跳]".encode() in line and len(line) < 4096:  # 非玩家句
                 beats.append(line)
                 used += len(line) + 1
                 while used > DIAGNOSTIC_LOG_BEATS:
@@ -139,10 +139,10 @@ def diagnostic_log_chunks(source, size, head=None, tail=None):
     if partial and len(partial) < 4096: scene.feed(partial)
     omitted = tail_start - len(first)
     gap = lambda text: f"\n…（{text}）…\n".encode()
-    mid = gap(f"日志共 {size} 字节，超过 {DIAGNOSTIC_LOG_LIMIT >> 20} MB 上限，中间截掉 {omitted} 字节，只保留其中 {len(beats)} 行心跳") + b"\n".join(beats)
+    mid = gap(f"日志共 {size} 字节，超过 {DIAGNOSTIC_LOG_LIMIT >> 20} MB 上限，中间截掉 {omitted} 字节，只保留其中 {len(beats)} 行心跳") + b"\n".join(beats)  # 非玩家句
     if scene.last:
-        mid += gap("中间最后一次崩溃摘要与全线程现场") + _scene_text(*scene.last)
-    yield mid + gap("以下是日志结尾")
+        mid += gap("中间最后一次崩溃摘要与全线程现场") + _scene_text(*scene.last)  # 非玩家句
+    yield mid + gap("以下是日志结尾")  # 非玩家句
     source.seek(tail_start)
     while chunk := source.read(DIAGNOSTIC_LOG_CHUNK):
         kept += len(chunk); yield chunk
@@ -349,7 +349,7 @@ def extract_inspect(c, source, icon_dir):
                     tid = int(line.split("\t")[1], 16)
                     break
             else:
-                raise ValueError("unpack.tsv 没有 title_id")
+                raise ValueError("unpack.tsv 没有 title_id")  # 非玩家句
         except (OSError, ValueError, IndexError) as e:
             raise Failure(f"读不出解包目录的元数据（{source.name}）：{e}", code="content_invalid") from None
         main_path = source / "exefs" / "main"
@@ -655,7 +655,7 @@ def copy_tree_links(src, dst, check=None):
         版本名记进 .root_tag（pack/orch/roots.py 实目录模式按它认）"""
         target = Path(os.path.realpath(a))
         copy(target, b)
-        if a.name.endswith("@现行"):
+        if a.name.endswith("@现行"):  # 非玩家句
             (b / ".root_tag").write_text(target.name + "\n", encoding="utf-8")
     def copy(a, b):
         if check:
@@ -827,7 +827,7 @@ def move_library(c, source):
             try:
                 _discard(a)
             except OSError as error:
-                c.diagnostic("游戏库已经搬好，旧位置有文件没删掉，可以手动删除：" + c.redact(str(error)), code="job_failed", severity="warning")
+                c.diagnostic("游戏库已经搬好，旧位置有文件没删掉，可以手动删除：" + c.redact(str(error)), code="job_failed", severity="warning")  # 非玩家句
     for name in (".execution.lock", ".catalog.lock", ".store-meta.lock", ".DS_Store"):
         (source / name).unlink(missing_ok=True)
     with contextlib.suppress(OSError):
@@ -1028,25 +1028,25 @@ def inspect(c, source, icon_dir, keyfile=None, *, source_id=None):
     except Failure as error:
         if error.code not in ("tool_exit", "job_failed"):
             raise
-        if any(line.startswith("【原因 disk_full】") for line in lines):
+        if any(line.startswith("【原因 disk_full】") for line in lines):  # 非玩家句
             raise Failure("读取游戏内容时磁盘空间不足。", code="disk_full") from None
-        if "【内容截断】" in lines:
+        if "【内容截断】" in lines:  # 非玩家句
             raise Failure("游戏文件不完整，部分内容超出文件末尾。", code="content_truncated") from None
-        if any(line.startswith("【原因 ticket_missing】") for line in lines):
+        if any(line.startswith("【原因 ticket_missing】") for line in lines):  # 非玩家句
             raise Failure("缺少内容对应的票据或标题密钥，请检查源文件是否完整。", code="ticket_missing") from None
-        if any(line.startswith("【原因 keys_missing】") for line in lines):
+        if any(line.startswith("【原因 keys_missing】") for line in lines):  # 非玩家句
             raise Failure("现有 prod.keys 缺少读取此文件所需的密钥。", code="keys_outdated") from None
         # 读取器自己给了确定原因（「【原因 hash_mismatch】源文件数据哈希校验不过…换一份原版完整的文件」等，pack/nx_unpack Inspect.cs / Program.cs）：
         #   照它的原话报，不再落到「文件不完整、缺票据或密钥不匹配」三选一的猜测（#1008：本体哈希校验不过，玩家被指去查密钥）
-        reason = next((line.split("】", 1)[1].strip() for line in lines if line.startswith("【原因 ") and "】" in line and line.split("】", 1)[1].strip()), "")
+        reason = next((line.split("】", 1)[1].strip() for line in lines if line.startswith("【原因 ") and "】" in line and line.split("】", 1)[1].strip()), "")  # 非玩家句
         if reason:
-            raise Failure("无法读取游戏内容：" + reason, code="content_unreadable") from None
+            raise Failure("无法读取游戏内容：" + reason, code="content_unreadable") from None  # 非玩家句
         if any("could not be decrypted" in line or "Check keys" in line for line in lines):
             raise Failure(KEYS_CANNOT_DECRYPT, code="content_unreadable") from None
         raise
     finally:
         scratch.cleanup()
-    if "【内容截断】" in lines:
+    if "【内容截断】" in lines:  # 非玩家句
         raise Failure("游戏文件不完整，部分内容超出文件末尾。", code="content_truncated")
     try:
         output = json.loads(next(line for line in reversed(lines) if line.startswith("{")))
@@ -1548,7 +1548,7 @@ IMPORT_DIAGNOSTIC_LIMIT = 100_000
 def cap_diagnostic(text, limit=IMPORT_DIAGNOSTIC_LIMIT):
     if len(text) <= limit:
         return text
-    marker = "\n…[已省略中间部分]…\n"
+    marker = "\n…[已省略中间部分]…\n"  # 非玩家句
     keep = limit - len(marker)
     head = keep // 4
     return text[:head] + marker + text[len(text) - (keep - head):]
@@ -2058,7 +2058,7 @@ def _rmdir_past_os_junk(path, error, tries=5, wait=0.2):
                 raise
         time.sleep(wait)
     others = [n for n in left if not layout.os_junk(n)]
-    raise OSError(errno.ENOTEMPTY, f"目录删不空：删的同时有程序往里写（剩 {', '.join(others[:5]) or '系统文件'}）", path) from error
+    raise OSError(errno.ENOTEMPTY, f"目录删不空：删的同时有程序往里写（剩 {', '.join(others[:5]) or '系统文件'}）", path) from error  # 非玩家句
 
 
 SHARING_RETRY_S = (0.1, 0.2, 0.4, 0.8, 1.5, 2.0)   # Windows 文件被别的程序短暂打开（杀毒 / 索引 / 预览刚扫到）时，删同一项的重试间隔（合计约 5 秒）
@@ -2151,7 +2151,7 @@ def _rm_entry(c, p):
 def _prune_roots(c, d):
     """产物根只留现行（*@现行 及其指向）与 RomFS 共享存储，清旧版本 → 清了几项。
     RomFS 共享存储：现行指向其中的身份，删了现行就断；没人指向的旧身份由下次提交清（pack/roots.sh root_romfs_sweep）"""
-    links = list(d.glob("*@现行"))
+    links = list(d.glob("*@现行"))  # 非玩家句
     current = {q.name for q in links}
     for q in links:
         if _is_link(q):
@@ -2248,7 +2248,7 @@ def _residue_disposable(c, gid):
 def _keep_stage_logs(c, gid):
     """产物根里的阶段日志要跟着删：先拷进私有日志目录，失败后的诊断包还能带上（只拷文件，单份 8 MB 以内，最多 64 份）。"""
     work = layout.ios_work(c, gid, create=False)
-    roots = [*work.glob("roots/*@现行"), *work.glob("work/pkg/product"), *layout.build_dir(c, gid, create=False).glob("*/roots/*@现行"),
+    roots = [*work.glob("roots/*@现行"), *work.glob("work/pkg/product"), *layout.build_dir(c, gid, create=False).glob("*/roots/*@现行"),  # 非玩家句
              *work.glob("work"),   # Windows 一键出包各步的日志（seed.log 等，pack/orch/oneclick_win.py Run.sh 写在工作目录下）：#754 失败后随 build/ 删掉，诊断包里没有
              # 阶段失败时各阶段把自己的日志拷进产物根旁的 .failed/（如改写 pack/stage_rewrite.sh 的 <款>_<模块>.log）：玩家报出包超时 / 改写失败时要的就是它（#251 诊断包里没有）
              *work.glob("roots/.failed"), *layout.build_dir(c, gid, create=False).glob("*/roots/.failed")]
@@ -2274,7 +2274,7 @@ def clean_after_stop(c):
                 _keep_stage_logs(c, gid)
                 prune_build(c, gid, record=False)
     except (Failure, OSError, ValueError) as error:
-        c.diagnostic("清理中间产物没有完成，下次空闲时会再清：" + c.redact(str(error)), code="job_failed", severity="warning")
+        c.diagnostic("清理中间产物没有完成，下次空闲时会再清：" + c.redact(str(error)), code="job_failed", severity="warning")  # 非玩家句
 
 
 def _residue(c):
@@ -2454,7 +2454,7 @@ def delete(c):
             if p.exists() or p.is_symlink():   # 删的过程中被别处（启动时的 sweep_trash）删完了，不算没删掉
                 left.append(f"{p.name}（{e}）")
     if left:
-        c.diagnostic("这款已从游戏库删掉；有几个文件当时删不掉（可能正被别的程序打开），S2Arm 空闲时会再删：" + "；".join(left)[:400],
+        c.diagnostic("这款已从游戏库删掉；有几个文件当时删不掉（可能正被别的程序打开），S2Arm 空闲时会再删：" + "；".join(left)[:400],  # 非玩家句
                      code="job_failed", severity="warning")
     return {}
 
@@ -2799,25 +2799,25 @@ def diagnostics(c):
         try:
             result = subprocess.run(args, env=c.env(), capture_output=True, text=True, timeout=10)
             if result.returncode:
-                return {"error": f"命令失败（退出码 {result.returncode}）"}
-            return result.stdout.strip() or {"error": "命令输出为空"}
+                return {"error": f"命令失败（退出码 {result.returncode}）"}  # 非玩家句
+            return result.stdout.strip() or {"error": "命令输出为空"}  # 非玩家句
         except subprocess.TimeoutExpired:
             return {"error": "命令超过 10 秒"}
         except OSError:
-            return {"error": "命令无法执行"}
+            return {"error": "命令无法执行"}  # 非玩家句
 
     def launcher_version():
         # Installed Jobs live below Contents/Resources; source runs have no
         # launcher identity and must say so rather than invent a version.
         contents = next((p for p in Path(__file__).resolve().parents if p.name == "Contents"), None)
         if contents is None:
-            return {"error": "源码运行，没有启动器 Info.plist"}
+            return {"error": "源码运行，没有启动器 Info.plist"}  # 非玩家句
         try:
             info = plistlib.loads((contents / "Info.plist").read_bytes())
             value = info.get("CFBundleShortVersionString")
-            return value if isinstance(value, str) and value.strip() else {"error": "启动器版本字段缺失"}
+            return value if isinstance(value, str) and value.strip() else {"error": "启动器版本字段缺失"}  # 非玩家句
         except (OSError, ValueError, plistlib.InvalidFileException):
-            return {"error": "启动器 Info.plist 无法读取"}
+            return {"error": "启动器 Info.plist 无法读取"}  # 非玩家句
 
     destination = resolve_path(Path(c.r["path"]).expanduser())
     library = resolve_path(c.library)
@@ -2971,7 +2971,7 @@ def diagnostics(c):
                 # 手机诊断（s2armctl diag pull / 设置页「拉回 iPhone 诊断」，pack/jobs/diag.py pull）：拉回在 <私有目录>/diagnostics/<时刻>-…/，
                 #   原先导出不收，照「反复闪退：先 diag pull 再 diag export」做的玩家交上来的包里没有手机日志。只收最近一次拉回的那份；
                 #   文本走和 logs/ 同一套脱敏（拉回的是没脱敏的原始文件），渲染出的 PNG 同诊断局读数原样收、限大小，别的类型跳过并在 manifest 里写明
-                step = "读手机诊断"
+                step = "读手机诊断"  # 非玩家句
                 phone = None
                 pulls = c.private / "diagnostics"
                 latest = max((d for d in pulls.iterdir() if d.is_dir() and not d.is_symlink()), key=lambda d: d.stat().st_mtime, default=None) \
@@ -2981,7 +2981,7 @@ def diagnostics(c):
                     try:
                         phone.update({k: v for k, v in json.loads((latest / "pull.json").read_text(encoding="utf-8")).items() if k in ("pulledAt", "devices", "apps")})
                     except (OSError, ValueError):
-                        phone["pulledAt"] = time.strftime("%Y-%m-%d %H:%M:%S %z", time.localtime(latest.stat().st_mtime)) + "（按目录修改时间，旧版拉回没有记录）"
+                        phone["pulledAt"] = time.strftime("%Y-%m-%d %H:%M:%S %z", time.localtime(latest.stat().st_mtime)) + "（按目录修改时间，旧版拉回没有记录）"  # 非玩家句
                     pulls_fd = winproc.open_dir_nofollow("diagnostics", home_fd) if os.name == "nt" else os.open("diagnostics", flags, dir_fd=home_fd)
                     descriptors.append(pulls_fd)
                     latest_fd = winproc.open_dir_nofollow(latest.name, pulls_fd) if os.name == "nt" else os.open(latest.name, flags, dir_fd=pulls_fd)
@@ -3016,7 +3016,7 @@ def diagnostics(c):
                             else:
                                 phone["skipped"].append(member)
                     pulled(latest_fd)
-                step = "读本机崩溃报告"
+                step = "读本机崩溃报告"  # 非玩家句
                 mac_crash = None
                 if sys.platform == "darwin" and MAC_CRASH_DIR.is_dir() and not MAC_CRASH_DIR.is_symlink():
                     cutoff = time.time() - MAC_CRASH_DAYS * 86400
@@ -3037,7 +3037,7 @@ def diagnostics(c):
                         mac_crash["files"] += 1
                 # 诊断局（#438，community.diag_run_env）的读数：各款游戏文件夹 diagrun/ 里的 PNG（出图画面与颜色目标，渲染出来的图、不含游戏数据），
                 #   原样放 diagrun/<游戏号>_<原名>。单张超过 4 MB 跳过、总量至多 40 MB；链接不跟（不越出游戏文件夹）
-                step = "读诊断局读数"
+                step = "读诊断局读数"  # 非玩家句
                 used = 0
                 for g in sorted(c.catalog().get("games", []), key=lambda g: g.get("id", "")) if c.library.is_dir() else []:
                     gdir = layout.find_game(c, g.get("id", ""))
@@ -3056,7 +3056,7 @@ def diagnostics(c):
                 # 本机管线记录（11-13 维护者：玩家上传的诊断收进随包种子，取件按程序号收进众包 zc_crowd.tsv）：各款文档目录 temp/<号>/wire/<号>/pso_user.tsv
                 #   （build.runtime_env 的 S2A_DOCS，宿主 nvn_mtl.m pso_user_path），原样放 pso/<号>.tsv。只有着色器键与管线状态的十六进制，不含个人信息、不过脱敏；
                 #   单份超过 4 MB 跳过；链接不跟。Windows 不在本机跑游戏，没有这份就不放
-                step = "读本机管线记录"
+                step = "读本机管线记录"  # 非玩家句
                 for g in sorted(c.catalog().get("games", []), key=lambda g: g.get("id", "")) if c.library.is_dir() else []:
                     c.check()
                     gid = (g.get("id") or "").upper()
@@ -3068,7 +3068,7 @@ def diagnostics(c):
                     archive.writestr(f"pso/{gid}.tsv", f.read_bytes())
                 manifest = dict(schema=1,   # 诊断上传服务收件要它（维护方方案「上传协议」：没有 schema 判 not_diag 拒收）；iOS ios/diag.m 同字段
                                 launcher_version=launcher_version(),
-                                macos_version=platform.mac_ver()[0] or {"error": "macOS 版本不可用"},
+                                macos_version=platform.mac_ver()[0] or {"error": "macOS 版本不可用"},  # 非玩家句
                                 xcode_version=probe(["/usr/bin/xcodebuild", "-version"]),
                                 mac_model=probe(["/usr/sbin/sysctl", "-n", "hw.model"]),
                                 xcode_signing=signing_status())
@@ -3122,7 +3122,7 @@ def diagnostics(c):
     except OSError as error:
         # 只带步骤、错误码与系统给的原因，不带路径（路径里可能有用户名，诊断摘要会被贴到公开帖子里）
         code = getattr(error, "winerror", None) or error.errno
-        reason = (error.strerror or type(error).__name__) + (f"，错误码 {code}" if code else "")
+        reason = (error.strerror or type(error).__name__) + (f"，错误码 {code}" if code else "")  # 非玩家句
         raise Failure(f"无法安全读取或写入诊断文件，未更新诊断包（{step}：{reason}）。") from None
     finally:
         for descriptor in reversed(descriptors):

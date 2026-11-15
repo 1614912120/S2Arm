@@ -557,10 +557,6 @@
  },
  {
   "file": "core.py",
-  "text": "操作路径不属于托管目录。"
- },
- {
-  "file": "core.py",
   "text": "改写 \\S+ 失败.*?日志 ([^）\\n]+?\\.log)"
  },
  {
@@ -1481,143 +1477,11 @@
  },
  {
   "file": "library.py",
-  "text": "\n…[已省略中间部分]…\n"
- },
- {
-  "file": "library.py",
-  "text": "*/roots/*@现行"
- },
- {
-  "file": "library.py",
-  "text": "*@现行"
- },
- {
-  "file": "library.py",
-  "text": "===== 全线程现场"
- },
- {
-  "file": "library.py",
-  "text": "@现行"
- },
- {
-  "file": "library.py",
-  "text": "CRASH 信号"
- },
- {
-  "file": "library.py",
-  "text": "Windows 重试约 1 分钟后，游戏库项目“{0}”仍被占用，无法改名。请关闭正在访问游戏库的资源管理器窗口、杀毒扫描或下载工具后重试；原游戏库仍保留在原位置。"
- },
- {
-  "file": "library.py",
-  "text": "[心跳]"
- },
- {
-  "file": "library.py",
-  "text": "[现场]"
- },
- {
-  "file": "library.py",
-  "text": "[现场] 线程 "
- },
- {
-  "file": "library.py",
-  "text": "macOS 版本不可用"
- },
- {
-  "file": "library.py",
-  "text": "roots/*@现行"
- },
- {
-  "file": "library.py",
-  "text": "unpack.tsv 没有 title_id"
- },
- {
-  "file": "library.py",
-  "text": "{0} 盘"
- },
- {
-  "file": "library.py",
   "text": "{0}（{0}，剩余 {0}）"
  },
  {
   "file": "library.py",
-  "text": "【内容截断】"
- },
- {
-  "file": "library.py",
-  "text": "【原因 "
- },
- {
-  "file": "library.py",
-  "text": "【原因 disk_full】"
- },
- {
-  "file": "library.py",
-  "text": "【原因 keys_missing】"
- },
- {
-  "file": "library.py",
-  "text": "【原因 ticket_missing】"
- },
- {
-  "file": "library.py",
-  "text": "不支持的输入映射格式。"
- },
- {
-  "file": "library.py",
-  "text": "中间最后一次崩溃摘要与全线程现场"
- },
- {
-  "file": "library.py",
-  "text": "以下是日志结尾"
- },
- {
-  "file": "library.py",
-  "text": "内容读取器返回的元数据不完整。"
- },
- {
-  "file": "library.py",
   "text": "写 {0}"
- },
- {
-  "file": "library.py",
-  "text": "启动器 Info.plist 无法读取"
- },
- {
-  "file": "library.py",
-  "text": "启动器版本字段缺失"
- },
- {
-  "file": "library.py",
-  "text": "命令失败（退出码 {0}）"
- },
- {
-  "file": "library.py",
-  "text": "命令无法执行"
- },
- {
-  "file": "library.py",
-  "text": "命令输出为空"
- },
- {
-  "file": "library.py",
-  "text": "密钥文件格式无效，请选择 prod.keys 文本文件。"
- },
- {
-  "file": "library.py",
-  "text": "密钥文件过大。"
- },
- {
-  "file": "library.py",
-  "text": "封面只支持 JPG 或 PNG 图片。"
- },
- {
-  "file": "library.py",
-  "text": "封面要选一张图片文件。"
- },
- {
-  "file": "library.py",
-  "text": "封面路径不对。"
  },
  {
   "file": "library.py",
@@ -1637,91 +1501,7 @@
  },
  {
   "file": "library.py",
-  "text": "摇杆死区必须在 0 到 1 之间。"
- },
- {
-  "file": "library.py",
-  "text": "操作路径不属于托管目录。"
- },
- {
-  "file": "library.py",
-  "text": "无效手柄映射。"
- },
- {
-  "file": "library.py",
-  "text": "无效摇杆映射。"
- },
- {
-  "file": "library.py",
-  "text": "无效的玩家序号。"
- },
- {
-  "file": "library.py",
-  "text": "无效输入目标。"
- },
- {
-  "file": "library.py",
-  "text": "无效键盘映射。"
- },
- {
-  "file": "library.py",
-  "text": "无效鼠标映射。"
- },
- {
-  "file": "library.py",
-  "text": "无效鼠标选项。"
- },
- {
-  "file": "library.py",
-  "text": "无法读取游戏内容："
- },
- {
-  "file": "library.py",
-  "text": "日志共 {0} 字节，超过 {0} MB 上限，中间截掉 {0} 字节，只保留其中 {0} 行心跳"
- },
- {
-  "file": "library.py",
-  "text": "未知清理类型。"
- },
- {
-  "file": "library.py",
-  "text": "没有选新的存放位置。"
- },
- {
-  "file": "library.py",
-  "text": "清理中间产物没有完成，下次空闲时会再清："
- },
- {
-  "file": "library.py",
-  "text": "清理路径包含目录链接，已停止操作。"
- },
- {
-  "file": "library.py",
-  "text": "游戏名字要在 {0} 个字以内，不能有换行。"
- },
- {
-  "file": "library.py",
   "text": "游戏存放位置所在的盘"
- },
- {
-  "file": "library.py",
-  "text": "游戏库已经搬好，旧位置有文件没删掉，可以手动删除："
- },
- {
-  "file": "library.py",
-  "text": "游戏库目录无法写入。"
- },
- {
-  "file": "library.py",
-  "text": "游戏库里的「{0}」正被别的程序占用（资源管理器、杀毒扫描或下载工具），等它放开再搬（已等 {0} 秒）"
- },
- {
-  "file": "library.py",
-  "text": "源码运行，没有启动器 Info.plist"
- },
- {
-  "file": "library.py",
-  "text": "现场完"
  },
  {
   "file": "library.py",
@@ -1729,75 +1509,11 @@
  },
  {
   "file": "library.py",
-  "text": "系统不让 S2Arm 读 {0}（{0}）"
- },
- {
-  "file": "library.py",
-  "text": "系统文件"
- },
- {
-  "file": "library.py",
-  "text": "缺少有效的 header_key。"
- },
- {
-  "file": "library.py",
   "text": "解包 {0}"
  },
  {
   "file": "library.py",
-  "text": "诊断临时文件在导出期间发生变化，请重试。"
- },
- {
-  "file": "library.py",
-  "text": "诊断包请选择应用数据和游戏库以外的位置。"
- },
- {
-  "file": "library.py",
-  "text": "诊断目录在导出期间发生变化，请重试。"
- },
- {
-  "file": "library.py",
-  "text": "请选择独立的游戏库文件夹，不能直接用整个盘或用户文件夹。"
- },
- {
-  "file": "library.py",
   "text": "读 {0}"
- },
- {
-  "file": "library.py",
-  "text": "读不了游戏文件。"
- },
- {
-  "file": "library.py",
-  "text": "读不了这张图片，请换一张试试。"
- },
- {
-  "file": "library.py",
-  "text": "读取游戏内容时磁盘空间不足。"
- },
- {
-  "file": "library.py",
-  "text": "读手机诊断"
- },
- {
-  "file": "library.py",
-  "text": "读本机崩溃报告"
- },
- {
-  "file": "library.py",
-  "text": "读本机管线记录"
- },
- {
-  "file": "library.py",
-  "text": "读诊断局读数"
- },
- {
-  "file": "library.py",
-  "text": "输入映射不完整。"
- },
- {
-  "file": "library.py",
-  "text": "输入映射存在重复绑定。"
  },
  {
   "file": "library.py",
@@ -1806,22 +1522,6 @@
  {
   "file": "library.py",
   "text": "这款上一次的 iPhone 包（{0}）出完会被新包换掉。"
- },
- {
-  "file": "library.py",
-  "text": "这款原来的存放位置没连上（{0}），这次改在新选的位置重新准备；原位置上的文件（包括 Mac 上的存档）没有动。"
- },
- {
-  "file": "library.py",
-  "text": "这款已从游戏库删掉；有几个文件当时删不掉（可能正被别的程序打开），S2Arm 空闲时会再删："
- },
- {
-  "file": "library.py",
-  "text": "鼠标灵敏度必须在 0.1 到 10 之间。"
- },
- {
-  "file": "library.py",
-  "text": "（按目录修改时间，旧版拉回没有记录）"
  },
  {
   "file": "library.py",
@@ -1842,10 +1542,6 @@
  {
   "file": "library.py",
   "text": "，单一 IMG 边写边腾解包、不另占"
- },
- {
-  "file": "library.py",
-  "text": "，错误码 {0}"
  },
  {
   "file": "main.py",

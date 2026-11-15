@@ -7878,5 +7878,165 @@
  {
   "source": "请求配置不可读或格式错误，未执行出包操作。",
   "en": "The request settings can't be read or are malformed; nothing was built."
+ },
+ {
+  "source": "Windows 重试约 1 分钟后，游戏库项目“{0}”仍被占用，无法改名。请关闭正在访问游戏库的资源管理器窗口、杀毒扫描或下载工具后重试；原游戏库仍保留在原位置。",
+  "en": "After retrying for about a minute, Windows still has the library item \"{0}\" in use, so it can't be renamed. Close any File Explorer windows, antivirus scans or download tools using the library, then try again. Your original library is still where it was."
+ },
+ {
+  "source": "游戏库里的「{0}」正被别的程序占用（资源管理器、杀毒扫描或下载工具），等它放开再搬（已等 {1} 秒）",
+  "en": "\"{0}\" in the library is in use by another program (File Explorer, an antivirus scan or a download tool). Waiting for it to be released before moving (waited {1} seconds)"
+ },
+ {
+  "source": "请选择独立的游戏库文件夹，不能直接用整个盘或用户文件夹。",
+  "en": "Choose a dedicated folder for the library, not a whole drive or your user folder."
+ },
+ {
+  "source": "密钥文件过大。",
+  "en": "The key file is too large."
+ },
+ {
+  "source": "密钥文件格式无效，请选择 prod.keys 文本文件。",
+  "en": "The key file isn't valid. Choose the prod.keys text file."
+ },
+ {
+  "source": "缺少有效的 header_key。",
+  "en": "A valid header_key is missing."
+ },
+ {
+  "source": "读取游戏内容时磁盘空间不足。",
+  "en": "Ran out of disk space while reading the game's content."
+ },
+ {
+  "source": "无法读取游戏内容：{0}",
+  "en": "Can't read the game's content: {0}"
+ },
+ {
+  "source": "内容读取器返回的元数据不完整。",
+  "en": "The content reader returned incomplete metadata."
+ },
+ {
+  "source": "{0} 盘",
+  "en": "Drive {0}"
+ },
+ {
+  "source": "系统不让 S2Arm 读 {0}（{1}）",
+  "en": "The system won't let S2Arm read {0} ({1})"
+ },
+ {
+  "source": "读不了游戏文件。",
+  "en": "Can't read the game files."
+ },
+ {
+  "source": "游戏库目录无法写入。",
+  "en": "Can't write to the library folder."
+ },
+ {
+  "source": "封面要选一张图片文件。",
+  "en": "Choose an image file for the cover."
+ },
+ {
+  "source": "读不了这张图片，请换一张试试。",
+  "en": "Can't read this image. Try another one."
+ },
+ {
+  "source": "封面只支持 JPG 或 PNG 图片。",
+  "en": "Covers can only be JPG or PNG images."
+ },
+ {
+  "source": "游戏名字要在 {0} 个字以内，不能有换行。",
+  "en": "The game name must be at most {0} characters, with no line breaks."
+ },
+ {
+  "source": "封面路径不对。",
+  "en": "The cover path isn't valid."
+ },
+ {
+  "source": "操作路径不属于托管目录。",
+  "en": "The path isn't inside a folder S2Arm manages."
+ },
+ {
+  "source": "清理路径包含目录链接，已停止操作。",
+  "en": "The path to clean up contains a folder link, so the operation was stopped."
+ },
+ {
+  "source": "清理中间产物没有完成，下次空闲时会再清：{0}",
+  "en": "Cleaning up working files didn't finish; S2Arm will try again when it's idle: {0}"
+ },
+ {
+  "source": "这款已从游戏库删掉；有几个文件当时删不掉（可能正被别的程序打开），S2Arm 空闲时会再删：{0}",
+  "en": "This game has been removed from the library. A few files couldn't be deleted (another program may have them open); S2Arm will delete them when it's idle: {0}"
+ },
+ {
+  "source": "未知清理类型。",
+  "en": "Unknown cleanup type."
+ },
+ {
+  "source": "不支持的输入映射格式。",
+  "en": "Unsupported input mapping format."
+ },
+ {
+  "source": "输入映射不完整。",
+  "en": "The input mapping is incomplete."
+ },
+ {
+  "source": "无效输入目标。",
+  "en": "Invalid input target."
+ },
+ {
+  "source": "无效键盘映射。",
+  "en": "Invalid keyboard mapping."
+ },
+ {
+  "source": "无效鼠标映射。",
+  "en": "Invalid mouse mapping."
+ },
+ {
+  "source": "无效手柄映射。",
+  "en": "Invalid controller mapping."
+ },
+ {
+  "source": "无效摇杆映射。",
+  "en": "Invalid stick mapping."
+ },
+ {
+  "source": "输入映射存在重复绑定。",
+  "en": "The input mapping has duplicate bindings."
+ },
+ {
+  "source": "摇杆死区必须在 0 到 1 之间。",
+  "en": "Stick dead zone must be between 0 and 1."
+ },
+ {
+  "source": "无效鼠标选项。",
+  "en": "Invalid mouse options."
+ },
+ {
+  "source": "鼠标灵敏度必须在 0.1 到 10 之间。",
+  "en": "Mouse sensitivity must be between 0.1 and 10."
+ },
+ {
+  "source": "无效的玩家序号。",
+  "en": "Invalid player number."
+ },
+ {
+  "source": "诊断包请选择应用数据和游戏库以外的位置。",
+  "en": "Save the diagnostic package somewhere outside the app data and the library."
+ },
+ {
+  "source": "诊断目录在导出期间发生变化，请重试。",
+  "en": "The diagnostics folder changed during export. Try again."
+ },
+ {
+  "source": "诊断临时文件在导出期间发生变化，请重试。",
+  "en": "Temporary diagnostic files changed during export. Try again."
+ },
+ {
+  "source": "这款原来的存放位置没连上（{0}），这次改在新选的位置重新准备；原位置上的文件（包括 Mac 上的存档）没有动。",
+  "en": "This game's original location isn't connected ({0}), so it will be prepared again in the newly chosen location. Files in the original location (including saves on the Mac) were not touched."
+ },
+ {
+  "source": "没有选新的存放位置。",
+  "en": "No new location was chosen."
  }
 ]
