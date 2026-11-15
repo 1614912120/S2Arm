@@ -2,7 +2,7 @@
 //   起因：授权第三方「… Pro Controller」（蓝牙 HID，厂商 / 产品号报 0x0 / 0x0）在系统里有设备、GameController 不枚举它，
 //   游戏里完全没反应。GameController 靠厂商 / 产品号认手柄，号是 0 的永远认不出，所以这里按 HID 元素直读。
 //   只接名字带「Pro Controller」的手柄（Switch 简易 HID 模式的键号含义是确定的；别的通用手柄键号各家不同，硬套会按错键）；
-//   GameController 已认出的同名手柄由 front_mac.m 跳过，不会变成两个玩家。
+//   GameController 已认出的同名手柄由 front_mac.m 跳过，不会变成两个玩家；任天堂原厂的不按厂商号排除（macOS 27 上原厂一代 Pro 手柄系统也认不出，#934 11-15）。
 #import <Foundation/Foundation.h>
 #import <IOKit/hid/IOHIDManager.h>
 #include "hid_pad.h"
@@ -13,6 +13,10 @@ enum { B_EAST = 1u << 0, B_SOUTH = 1u << 1, B_NORTH = 1u << 2, B_WEST = 1u << 3,
        B_L = 1u << 6, B_R = 1u << 7, B_ZL = 1u << 8, B_ZR = 1u << 9, B_PLUS = 1u << 10, B_MINUS = 1u << 11,
        B_LEFT = 1u << 12, B_UP = 1u << 13, B_RIGHT = 1u << 14, B_DOWN = 1u << 15 };
 
+int s2a_hid_pad_wants(const char *name, int vid) {
+    (void)vid;   // 不按厂商号排除（见 hid_pad.h）：任天堂原厂的也接，系统认出时由 front_mac.m 按名字让位
+    return name && strcasestr(name, "Pro Controller") != NULL;
+}
 uint32_t s2a_hid_pad_switch_button_bit(int usage) {
     static const uint32_t map[] = {0, B_SOUTH, B_EAST, B_WEST, B_NORTH, B_L, B_R, B_ZL, B_ZR, B_MINUS, B_PLUS, B_LSTICK, B_RSTICK};
     return usage > 0 && usage < (int)(sizeof map / sizeof *map) ? map[usage] : 0;   // 13 Home、14 截图不进游戏键位
@@ -60,11 +64,10 @@ static void attach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
     CFStringRef pn = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDProductKey));
     char name[96] = "";
     if (pn) CFStringGetCString(pn, name, sizeof name, kCFStringEncodingUTF8);
-    if (!strcasestr(name, "Pro Controller")) return;
     int vid = 0, pid = 0; CFNumberRef n;
     if ((n = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDVendorIDKey)))) CFNumberGetValue(n, kCFNumberIntType, &vid);
     if ((n = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDProductIDKey)))) CFNumberGetValue(n, kCFNumberIntType, &pid);
-    if (vid == 0x057e) return;   // 任天堂原装：GameController 认得（六轴另有 joycon_imu.m）
+    if (!s2a_hid_pad_wants(name, vid)) return;
     pthread_mutex_lock(&g_mu);
     hp_dev *d = NULL;
     for (int i = 0; i < S2A_HID_PAD_MAX; i++) if (g_dev[i].dev == dev) { pthread_mutex_unlock(&g_mu); return; }
