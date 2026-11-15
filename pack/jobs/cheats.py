@@ -219,9 +219,13 @@ def save(c, game, want):
 
 
 # 崩了能恢复（11-13 维护者改定：金手指 / 补丁是玩家主动开的，开局前不再问；崩了就关掉、下次进来告诉玩家关了什么，想用去设置里再开）：
-#   开着金手指 / 画面补丁时游戏异常退出（build.py launch 调）→ 当场把开着的这几条关掉，记在 cheats/crashed.json；
+#   开着金手指 / 画面补丁时游戏异常退出（build.py launch 调）→ 当场关掉、记在 cheats/crashed.json；
 #   下次开始这款时启动器读记录弹一条通知（不拦开局），读完清掉（answer_crash ack）
-def note_crash(c, game):
+# 只关出事的那份（v0.4.1）：原先把开着的全部关掉，玩家要一条条重开。按嫌疑从小到大，一次只关一层，再崩再扩大（narrow）：
+#   ① 比上一次好好收局时（note_good 记的 cheats/good.json）新开的那几条；② 没有新开的 → 我方没验过的（金手指、表里「缺省开」不是 1 的补丁 / 帧率档）；
+#   ③ 还没有 → 全部。崩溃地址定位不了具体哪份：补丁数据写在数据段，代码改动出包时编进补丁区按位开关，表里没有代码地址。iOS 同口径（ios/cpatch_model.m S2ACrashNarrow）
+def _on_now(c, game):
+    """→ (开着的 [(类, 键)], 我方验过的键集合, launch.json 数据)。类 = cheat / patch / fps"""
     gid = game["id"].upper()
     d = cheats_dir(c, gid, create=False)
     keys = sorted(set((d / "enabled.txt").read_text(encoding="utf-8").splitlines()) - {""}) if (d / "enabled.txt").is_file() else []
@@ -229,21 +233,57 @@ def note_crash(c, game):
     data = community.load_launch(c, gid)
     # 开着的补丁：11-13 起没选过 = 默认开，所以按包里编进去的、玩家没关过的算（不只是 launch.json 里写了 True 的）
     patches = sorted(it["id"] for it in community.packed_patches(c, gid) if data["patches"].get(it["id"]) is not False)
-    # 帧率补丁（编号 fps:）跟「60 帧」开关走、不在 packed_patches 里：包里有帧率补丁且开关没关 → 一并关掉（iOS 同口径，ios/game_options.m s2a_ios_crash_suspects_for）
+    # 帧率补丁（编号 fps:）跟「60 帧」开关走、不在 packed_patches 里：包里有帧率补丁且开关没关 → 算一条（iOS 同口径，ios/game_options.m s2a_ios_crash_suspects_for）
     fps = bool(community.fps_levels(c, gid)) and data["settings"].get("fps60", True) is not False
-    if not (keys or patches or fps):
+    # 自适应满屏一族（编号 wsauto:）跟「满屏」开关走、也不在 packed_patches 里（11-15 候选自测：崩了没关它）：有这一族且开关没关 → 算一条，关 = 关满屏开关（iOS 同口径）
+    fams, fam_verified = community.adaptive_patches(c, gid)
+    fs = bool(fams) and data["settings"].get("widescreen", True) is not False
+    on = [("cheat", k) for k in keys] + [("patch", k) for k in patches] + ([("fps", "fps60")] if fps else []) + ([("fs", "fullscreen")] if fs else [])
+    return on, community.verified_patches(c, gid) | ({"fullscreen"} if fam_verified else set()), data
+
+
+def narrow(on, good, verified):
+    """嫌疑从小到大取一层（规则见上）。on = [(类, 键)]，good = 上次好好收局时开着的集合（没记过 = None），verified = 我方验过的键"""
+    if good is not None:
+        new = [x for x in on if x not in good]
+        if new:
+            return new
+    return [x for x in on if x[0] == "cheat" or x[1] not in verified] or on
+
+
+def note_good(c, game):
+    """好好收局（build.py launch 正常退出调）：记下这时开着的，下次崩了按它找「新开的」"""
+    on, _, _ = _on_now(c, game)
+    d = cheats_dir(c, game["id"].upper())
+    atomic(d / "good.json", {"on": [list(x) for x in on], "at": int(time.time())})
+
+
+def note_crash(c, game):
+    gid = game["id"].upper()
+    on, verified, data = _on_now(c, game)
+    if not on:
         return
+    d = cheats_dir(c, gid, create=False)
+    g = read(d / "good.json", None)
+    off = narrow(on, {tuple(x) for x in g.get("on", [])} if isinstance(g, dict) else None, verified)
+    keys = [k for t, k in off if t == "cheat"]
+    patches = [k for t, k in off if t == "patch"]
+    fps = ("fps", "fps60") in off
+    fs = ("fs", "fullscreen") in off
     known = {it["key"] for it in listing(c, game)["items"]}
     if keys:
         save(c, game, {k: False for k in keys if k in known})
-    if patches or fps:
+    if patches or fps or fs:
         for k in patches:
             data["patches"][k] = False
         if fps:
             data["settings"]["fps60"] = False
+        if fs:
+            data["settings"]["widescreen"] = False
+        import community
         atomic(community.launch_path(c, gid), data)
     d.mkdir(parents=True, exist_ok=True)
-    atomic(d / "crashed.json", {"cheats": keys, "patches": patches, "fps": fps, "at": int(time.time()), "off": True})
+    atomic(d / "crashed.json", {"cheats": keys, "patches": patches, "fps": fps, "fullscreen": fs, "at": int(time.time()), "off": True})
 
 
 # 停帧救场（11-14 维护者）：局内画面停住时社区帧率补丁开着，运行时当场关掉（runtime/src/cpatch.c s2a_cpatch_stall_rescue）并在 S2A_DOCS 下写 cpatch_stall_off。
@@ -265,12 +305,13 @@ def note_stall(c, game, docs):
 
 
 def crashed(c, game):
-    """→ [{kind: cheat | patch, key, name}]：上次异常退出时开着、已经关掉的几条；没记录 = []"""
+    """→ [{kind: cheat | patch | fps | fs, key, name}]：上次异常退出时开着、已经关掉的几条；没记录 = []"""
     r = read(cheats_dir(c, game["id"].upper(), create=False) / "crashed.json", {}) or {}
     labels = {it["id"]: it["label"] for it in __import__("community").packed_patches(c, game["id"].upper())} if r.get("patches") else {}
     return [dict(kind="cheat", key=k, name=k.split("/", 1)[-1]) for k in r.get("cheats", [])] + \
            [dict(kind="patch", key=k, name=labels.get(k, k)) for k in r.get("patches", [])] + \
-           ([dict(kind="fps", key="fps60", name="")] if r.get("fps") else [])
+           ([dict(kind="fps", key="fps60", name="")] if r.get("fps") else []) + \
+           ([dict(kind="fs", key="fullscreen", name="")] if r.get("fullscreen") else [])
 
 
 def answer_crash(c, game, choice):

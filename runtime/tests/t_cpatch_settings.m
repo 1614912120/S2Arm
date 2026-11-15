@@ -105,6 +105,18 @@ int main(int argc, char **argv) {
            && [vi[0].name isEqual:@"16:10 / 21:9 / 3:2"] && [vi[1].ident isEqual:@"widescreen:x"],
            [NSString stringWithFormat:@"⑬ 定画幅变体并成一项 widescreen:auto、名字 16:10 / 21:9 / 3:2，没画幅的单列 → %@", [vi valueForKey:@"ident"]]);
 
+        // ⑭ 崩溃只关出事的那份（v0.4.1，同 pack/jobs/cheats.py narrow）：期望手写
+        NSDictionary *C = @{@"kind": @"cheat", @"key": @"f/HP", @"verified": @NO}, *A = @{@"kind": @"patch", @"key": @"widescreen:A", @"verified": @YES},
+                     *B = @{@"kind": @"patch", @"key": @"gfx:B", @"verified": @NO}, *F = @{@"kind": @"fps", @"key": @"fps60", @"verified": @YES};
+        NSArray *on4 = @[C, A, B, F];
+        NSString *(^keys)(NSArray *) = ^(NSArray *a) { return [[a valueForKey:@"key"] componentsJoinedByString:@","]; };
+        NSSet *goodAB = [NSSet setWithArray:@[S2ACrashTag(A), S2ACrashTag(B), S2ACrashTag(F)]];
+        ck([keys(S2ACrashNarrow(on4, goodAB)) isEqual:@"f/HP"], [NSString stringWithFormat:@"⑭ 上次收局开着 A B 帧率、这局新开金手指 → 只关金手指 → %@", keys(S2ACrashNarrow(on4, goodAB))]);
+        NSSet *goodAll = [NSSet setWithArray:@[S2ACrashTag(C), S2ACrashTag(A), S2ACrashTag(B), S2ACrashTag(F)]];
+        ck([keys(S2ACrashNarrow(on4, goodAll)) isEqual:@"f/HP,gfx:B"], [NSString stringWithFormat:@"⑭ 没新开 → 没验过的（金手指、B）→ %@", keys(S2ACrashNarrow(on4, goodAll))]);
+        ck([keys(S2ACrashNarrow(@[A, F], goodAll)) isEqual:@"widescreen:A,fps60"], [NSString stringWithFormat:@"⑭ 再崩、剩下都验过 → 全关 → %@", keys(S2ACrashNarrow(@[A, F], goodAll))]);
+        ck([keys(S2ACrashNarrow(on4, nil)) isEqual:@"f/HP,gfx:B"], [NSString stringWithFormat:@"⑭ 没收局记录 → 先关没验过的 → %@", keys(S2ACrashNarrow(on4, nil))]);
+
         [d removePersistentDomainForName:@"s2a.t_cpatch_settings"];
         if (bad) { fprintf(stderr, "✗ t_cpatch_settings：%d/%d 项不符\n", bad, n); return 1; }
         printf("✓ t_cpatch_settings：%d 项全符（真 cpatch.tsv 夹具 xc3 / mk8d / acnh：名字分组（与类别交叉）、中文名、缺省开、写回值、帧率项不写、旧写法、组序、同编号去重）\n", n);

@@ -828,17 +828,22 @@ static void library_play_go(const char *gid, S2ASceneDelegate *sd);
 //   上一局死在前台、死的就是这一款（会话标记是整个 App 一份，runtime/src/sesdiag.c；靠上次点开始的那款 S2ALastGameId 认）、当时开着金手指 /
 //   玩家开的未验证社区补丁（ios/game_options.m）→ 启动这一局之前关掉它们（社区补丁要在装载前关才不再带进这一局），进游戏后横幅告诉玩家。
 //   记下已处理，进游戏后 diag.m 不再处理一遍（只问发诊断）
-NSArray<NSDictionary *> *s2a_ios_crash_suspects_for(NSString *gid);
+//   v0.4.1：只关出事的那份（game_options.m s2a_ios_crash_pick_for），并记下这局开着的（s2a_ios_crash_session_begin）。
+//   多款容器一律在这里处理（g_s2a_crash_asked 先置上）：原先上一局死的是别的游戏时这里提前返回、没置标记，进游戏后 diag.m 会把这一款开着的关掉
+NSArray<NSDictionary *> *s2a_ios_crash_pick_for(NSString *gid);
+void s2a_ios_crash_session_begin(NSString *gid, BOOL prev_clean);
 void s2a_ios_crash_turn_off_for(NSString *gid, NSArray<NSDictionary *> *items);
 extern int g_s2a_crash_asked;
 void s2a_dprompt_notice(NSString *title, NSString *body, double delay, double seconds);   // dprompt.m
 static void crash_auto_off(const char *gid) {
-    char d[1024]; if (s2a_container_docs(d, sizeof d) <= 0) return;
-    if (s2a_sesmark_prev(d) != S2A_SESMARK_FG || ![[NSUserDefaults.standardUserDefaults stringForKey:@"S2ALastGameId"] isEqualToString:@(gid)]) return;
     g_s2a_crash_asked = 1;
-    NSString *g = @(gid); NSArray<NSDictionary *> *items = s2a_ios_crash_suspects_for(g);
+    NSString *g = @(gid);
+    char d[1024]; if (s2a_container_docs(d, sizeof d) <= 0) return;
+    BOOL same = [[NSUserDefaults.standardUserDefaults stringForKey:@"S2ALastGameId"] isEqualToString:g], fg = s2a_sesmark_prev(d) == S2A_SESMARK_FG;
+    NSArray<NSDictionary *> *items = same && fg ? s2a_ios_crash_pick_for(g) : @[];
+    if (items.count) s2a_ios_crash_turn_off_for(g, items);
+    s2a_ios_crash_session_begin(g, same && !fg);   // 关完再记这局开着的；上一局是这款且好好收局 → 那局开着的升为「好的」
     if (!items.count) return;
-    s2a_ios_crash_turn_off_for(g, items);
     NSString *names = [[items valueForKey:@"name"] componentsJoinedByString:S2AL(@"common.listSeparator")];
     LOG("崩溃恢复：%s 上一局开着 %s 时死在前台，这一局启动前已关掉（玩家可在设置里再开）", gid, names.UTF8String);
     { void s2a_diag_note_crash_off(NSString *); s2a_diag_note_crash_off(names); }   // 进游戏后诊断询问（diag.m，上次死在前台必问）一并说，不另弹横幅
