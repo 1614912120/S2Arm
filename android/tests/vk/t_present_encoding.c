@@ -1,16 +1,38 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 S2Arm contributors
 // 原创灰阶经生产呈现路径读回交换链；期望为输入编码字节，UNORM 是负对照。
+#define vkCreateImage fixture_CreateImage
 #define main unused_fixture_main
 #define vkGetSwapchainImagesKHR fixture_GetSwapchainImagesKHR
 #define vkQueuePresentKHR fixture_QueuePresentKHR
 #include "t_backend_vk.c"
 #undef main
+#undef vkCreateImage
 #undef vkGetSwapchainImagesKHR
 #undef vkQueuePresentKHR
 
 static VkExtent2D probe_extent;
 static VkFormat probe_format;
 static VkImage probe_images[64];
-static unsigned probe_active, probe_value, probe_bars, probe_cases;
+static unsigned probe_active, probe_value, probe_bars, probe_cases, probe_pattern, probe_flip;
+static VkImage encoded_image;
+static unsigned encoded_created, encoded_destroyed;
+
+// 旁观真实驱动对象的寿命，不替换其分配或释放。
+VKAPI_ATTR VkResult VKAPI_CALL vkCreateImage(VkDevice d, const VkImageCreateInfo *ci, const VkAllocationCallbacks *a, VkImage *im) {
+    VkResult r = fixture_CreateImage(d, ci, a, im);
+    if (r == VK_SUCCESS && ci->extent.width == 320 && ci->extent.height == 180 &&
+        (ci->format == VK_FORMAT_R8G8B8A8_SRGB || ci->format == VK_FORMAT_B8G8R8A8_SRGB)) {
+        CHECK(!encoded_image, "previous encoding target must be released");
+        encoded_image = *im; encoded_created++;
+    }
+    return r;
+}
+VKAPI_ATTR void VKAPI_CALL vkDestroyImage(VkDevice d, VkImage im, const VkAllocationCallbacks *a) {
+    PFN_vkDestroyImage real = (PFN_vkDestroyImage)dlsym(RTLD_NEXT, "vkDestroyImage");
+    if (im && im == encoded_image) { encoded_image = VK_NULL_HANDLE; encoded_destroyed++; }
+    real(d, im, a);
+}
 static uint64_t probe_bad, probe_pixels;
 // 只从真实驱动公布的格式中选择，分别验证 RGBA / BGRA 交换链，绝不伪造能力。
 VKAPI_ATTR VkResult VKAPI_CALL vkGetPhysicalDeviceSurfaceFormatsKHR(VkPhysicalDevice dev, VkSurfaceKHR surface, uint32_t *n, VkSurfaceFormatKHR *out) {
@@ -71,7 +93,14 @@ static void probe_readback(VkQueue q, VkImage image) {
         int inside=!probe_bars || (x>=40 && x<280 && y>=20 && y<160);
         unsigned want=inside?probe_value:0, alpha=inside?128:255;
         const uint8_t *p=data+4*((size_t)y*probe_extent.width+x);
-        int mismatch=abs((int)p[0]-(int)want)>1 || abs((int)p[1]-(int)want)>1 || abs((int)p[2]-(int)want)>1 || p[3]!=alpha;
+        unsigned rgb[3] = {want,want,want};
+        if (probe_pattern) {
+            // 两条水平色带，最近点放大 5 倍；CPU 期望独立于呈现实现。
+            unsigned top = probe_flip ? y >= 90 : y < 90;
+            rgb[0] = top ? 200 : 16; rgb[1] = top ? 64 : 128; rgb[2] = top ? 16 : 200;
+            if (probe_format == VK_FORMAT_B8G8R8A8_UNORM) { unsigned tmp=rgb[0];rgb[0]=rgb[2];rgb[2]=tmp; }
+        }
+        int mismatch=abs((int)p[0]-(int)rgb[0])>1 || abs((int)p[1]-(int)rgb[1])>1 || abs((int)p[2]-(int)rgb[2])>1 || p[3]!=alpha;
         if(mismatch && !bad) first=p[0];
         bad+=mismatch;probe_pixels++;
     }
@@ -105,7 +134,27 @@ int main(void) {
         CHECK(OK(nvn_gpu_fence_wait(ticket++,5000000000ull,&e)),"wait %s",e.why);
         nvn_gpu_view_release(v);nvn_gpu_tex_release(t);
     }
+    // 灰阶本身无法检验通道顺序与 Y 翻转；用不对称彩色条带逐像素核对。
+    for (unsigned fmt=0;fmt<4;fmt++) for (unsigned flip=0;flip<2;flip++) {
+        nvn_gpu_tex t=make_tex(64,36,formats[fmt],NVN_GPU_TEX_SAMPLED|NVN_GPU_TEX_CPU_UPLOAD);
+        nvn_gpu_view v=make_view(t); uint8_t pixels[64*36*4];
+        for (unsigned y=0;y<36;y++) for (unsigned x=0;x<64;x++) {
+            uint8_t *p=pixels+4*(y*64+x); unsigned top=y<18;
+            p[0]=top?200:16;p[1]=top?64:128;p[2]=top?16:200;p[3]=128;
+            if (fmt>=2) { uint8_t tmp=p[0];p[0]=p[2];p[2]=tmp; }
+        }
+        nvn_gpu_cmd c=begin_cmd();nvn_gpu_tex_upload(c,t,0,0,NULL,pixels,64*4,sizeof pixels);
+        CHECK(OK(nvn_gpu_cmd_commit(c,ticket,on_done,NULL,&e)),"pattern upload");
+        nvn_gpu_drawable dr={0};CHECK(OK(nvn_gpu_drawable_acquire(sf,1000000000ull,NULL,&dr,&e)),"pattern acquire");
+        nvn_gpu_present_desc pd={0};pd.src=v;pd.flip_y=flip;
+        probe_pattern=probe_active=1;probe_flip=flip;probe_bars=0;
+        CHECK(OK(nvn_gpu_present(sf,&dr,&pd,ticket,on_shown,NULL,&e)),"pattern present");probe_active=probe_pattern=0;
+        CHECK(OK(nvn_gpu_fence_wait(ticket++,5000000000ull,&e)),"pattern wait");
+        nvn_gpu_view_release(v);nvn_gpu_tex_release(t);
+    }
+    CHECK(encoded_created==1 && encoded_destroyed==0,"encoding target reused: %u/%u",encoded_created,encoded_destroyed);
     CHECK(OK(nvn_gpu_surface_rebuild(sf,&e)),"rebuild encoding target %s",e.why);
+    CHECK(!encoded_image && encoded_destroyed==1,"rebuild releases encoding target once");
     nvn_gpu_tex t=make_tex(64,36,NVN_FORMAT_RGBA8_SRGB,NVN_GPU_TEX_SAMPLED|NVN_GPU_TEX_CPU_UPLOAD);
     nvn_gpu_view v=make_view(t); uint8_t px[64*36*4];memset(px,128,sizeof px);
     nvn_gpu_cmd c=begin_cmd();nvn_gpu_tex_upload(c,t,0,0,NULL,px,64*4,sizeof px);
@@ -116,6 +165,7 @@ int main(void) {
     nvn_gpu_view_release(v);nvn_gpu_tex_release(t);
     // 不 detach：close 持 g_mu，仍须收掉带中间图的面，不能递归拿锁。
     CHECK(OK(nvn_gpu_close(5000000000ull,&e)),"close grayscale session");
+    CHECK(!encoded_image && encoded_created==2 && encoded_destroyed==2,"close releases recreated encoding target once: %u/%u",encoded_created,encoded_destroyed);
     CHECK(open_backend(),"reopen lifecycle session");
     c71_present();
     CHECK(OK(nvn_gpu_close(5000000000ull,&e)),"close %s",e.why);s2a_vk_device_destroy(&g_dev,1);

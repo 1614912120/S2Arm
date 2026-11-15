@@ -519,3 +519,9 @@ if [ "$mode" = "--tsan" ]; then
 else
     echo "【绿】C01–C08 + C23/C25/C26/C27/C28/C29/C30/C31/C32/C33/C34/C35/C36-55/C70/C71/C72/C73 + 清屏/复制/深度/纹理三角形 + BC1–BC7 逐像素解码：validation 0 条；设备 $(grep '^device:' "$out/log" | head -1)"
 fi
+
+# #1142：默认 vk 套件也验非线性上屏，立即 / 延迟两档均开同步校验。
+if [ -z "$mode" ]; then
+    (unset S2A_TEST_NVK_DQ; bash "$repo/android/tests/vk/run.sh" --present-only)
+    S2A_TEST_NVK_DQ=1 bash "$repo/android/tests/vk/run.sh" --present-only
+fi
