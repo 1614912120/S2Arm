@@ -194,7 +194,8 @@ class PatchesTests(unittest.TestCase):
             cheats.main_build = lambda c, g: ""                                    # 没解过包：不知道版本，精确命中为空，只列各版本
             r = patches.match(self.c)
             self.assertEqual((r["build"], r["total"], r["version"]), ("", 0, ""), "没解过包不报版本号（不知道玩家是哪一版）")
-            self.assertEqual([o["version"] for o in r["others"]], ["1.3.0"])
+            self.assertEqual((r["port"], r["portVersions"]), (False, []), "没解过包不判移植（同版本的满屏会被说成移植）")
+            self.assertEqual([(o["version"], o["cats"]) for o in r["others"]], [("1.0", ["widescreen"]), ("1.3.0", ["fps"])])
         finally:
             cheats.main_build = real
 
