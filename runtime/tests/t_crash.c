@@ -26,6 +26,7 @@ void *s2a_tail_map(uint64_t n, int f, int prot) { (void)n; (void)f; (void)prot; 
 void s2a_low_holes(uint64_t *t, uint64_t *l) { *t = *l = 0; } void s2a_fd_usage(int *n, uint64_t *s, uint64_t *h) { *n = 0; *s = *h = 0; }
 void s2a_lowva_crash_note(void) {} void s2a_vm_low(const char *w) { (void)w; } void s2a_guest_va_report(const char *w) { (void)w; }
 void s2a_diag_stamp_report(void) {} void s2a_lockwake_report(void) {} void s2a_svc_count_report(const char *w) { (void)w; }
+void s2a_gate_ipc_recent(const char *w) { (void)w; }   // gate.c：崩溃线程最近 IPC（本单测不链 gate.c；缺这个桩崩溃路径调到未解析符号，整组卡到超时）
 // ⑤ 用：第二段里拖 200 ms（线程表），让同时崩的另一条线程一定落在第一条还没写完的时候；第二段最后一步写收尾标记，有它 = 第一条的完整报告写到了底
 void s2a_thread_dump(void) { usleep(200000); } void s2a_direct_wait_dump(void) {} int s2a_dump_threads(const char *w) { (void)w; return 0; }
 void s2a_svc_red_summary(void) { static const char m[] = "[s2a] 报告收尾\n"; ssize_t w = write(g_s2a_logfd, m, sizeof m - 1); (void)w; }
