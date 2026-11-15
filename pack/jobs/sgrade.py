@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 
 import layout
+from pack.orch import dirrename
 from core import Failure
 
 PROGRAM_DIR = "original-exefs"
@@ -41,8 +43,22 @@ def save_program(c, gid, exefs):
     for m in MODULES:
         if (exefs / m).is_file():
             shutil.copyfile(exefs / m, tmp / m)
-    shutil.rmtree(dest, ignore_errors=True)
-    tmp.rename(dest)
+    if dest.exists() or dest.is_symlink():
+        # 先把旧版本移到同级备份；新目录改名失败时恢复旧版，不能先 rmtree 后赌一次 rename。
+        backup = dest.with_name(PROGRAM_DIR + ".backup-" + uuid.uuid4().hex)
+        dirrename.rename_dir(dest, backup)
+        try:
+            dirrename.rename_dir(tmp, dest)
+        except BaseException as e:
+            try:
+                dirrename.rename_dir(backup, dest)
+            except BaseException as restore_error:
+                if hasattr(e, "add_note"):
+                    e.add_note(f"恢复旧 original-exefs 失败，旧数据仍在 {backup}：{restore_error}")
+            raise
+        shutil.rmtree(backup, ignore_errors=True)
+    else:
+        dirrename.rename_dir(tmp, dest)
     return dest
 
 

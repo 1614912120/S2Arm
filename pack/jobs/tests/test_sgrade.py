@@ -13,6 +13,7 @@ import build
 import layout
 import sgrade
 from core import Failure
+from pack.orch import dirrename
 
 
 def nso(d, bid):
@@ -49,6 +50,51 @@ class SGradeTests(unittest.TestCase):
         sgrade.save_program(self.c, "0100A", src)
         self.assertEqual((d / "sdk").read_bytes(), b"mine", "同一主程序（构建号相同）不重复写")
         self.assertIsNone(sgrade.save_program(self.c, "0100B", self.t / "empty"), "源目录不完整不存")
+
+    def test_save_program_retries_transient_windows_rename_denial(self):
+        src = nso(self.t / "x", "AABBCCDD00112233")
+        real_rename = Path.rename
+        real_move = dirrename.rename_dir
+        attempts = []
+        sleeps = []
+        def rename(path, target):
+            if path.name == "original-exefs.partial":
+                attempts.append(path)
+                if len(attempts) == 1:
+                    error = PermissionError(5, "Access is denied", str(path))
+                    error.winerror = 5
+                    raise error
+            return real_rename(path, target)
+        with patch.object(dirrename, "os", types.SimpleNamespace(name="nt")), \
+             patch.object(dirrename, "DIR_RENAME_RETRIES", (0.1,)), \
+             patch.object(dirrename, "rename_dir", side_effect=lambda src, dst: real_move(src, dst, sleep=sleeps.append)):
+            with patch.object(Path, "rename", rename):
+                saved = sgrade.save_program(self.c, "0100A", src)
+        self.assertEqual(saved, self.t / "lib/0100A/original-exefs")
+        self.assertEqual((saved / "main").read_bytes(), (src / "main").read_bytes())
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(sleeps, [0.1])
+
+    def test_save_program_persistent_rename_denial_preserves_previous_program(self):
+        old = nso(self.t / "lib/0100A/original-exefs", "1111111111111111")
+        (old / "main").write_bytes(b"previous saved program")
+        src = nso(self.t / "x", "AABBCCDD00112233")
+        real_rename = Path.rename
+        real_move = dirrename.rename_dir
+        def rename(path, target):
+            if path.name == "original-exefs.partial":
+                error = PermissionError(5, "Access is denied", str(path))
+                error.winerror = 5
+                raise error
+            return real_rename(path, target)
+        with patch.object(dirrename, "os", types.SimpleNamespace(name="nt")), \
+             patch.object(dirrename, "DIR_RENAME_RETRIES", (0.1,)), \
+             patch.object(dirrename, "rename_dir", side_effect=lambda src, dst: real_move(src, dst, sleep=lambda _: None)):
+            with patch.object(Path, "rename", rename):
+                with self.assertRaises(PermissionError):
+                    sgrade.save_program(self.c, "0100A", src)
+        self.assertEqual((old / "main").read_bytes(), b"previous saved program")
+        self.assertEqual(sorted(p.name for p in old.iterdir()), ["main", "main.npdm", "rtld", "sdk"])
 
     def test_find_program_order(self):
         g = {"id": "0100A"}
