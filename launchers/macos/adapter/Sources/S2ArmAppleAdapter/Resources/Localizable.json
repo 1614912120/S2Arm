@@ -9574,5 +9574,37 @@
  {
   "source": "这是预估，照常开工；真写满时会停下，释放空间后重试即可。这款上一次的 iPhone 包（{0}）出完会被新包换掉。",
   "en": "This is an estimate, so the build goes ahead; if the disk actually fills up it will stop, and you can retry after freeing space. This game's previous iPhone package ({0}) will be replaced by the new one when the build finishes."
+ },
+ {
+  "source": "（这块盘的分配单元是 {0} KB，游戏库里小文件多，实际要占约 {1} GB）",
+  "en": " (this drive's allocation unit is {0} KB and the library has many small files, so it actually needs about {1} GB)"
+ },
+ {
+  "source": "新位置空间不够，游戏库没有搬：要约 {0} GB，只剩 {1} GB{2}。",
+  "en": "Not enough space at the new location, so the library wasn't moved: it needs about {0} GB, but only {1} GB is left{2}."
+ },
+ {
+  "source": "换库写到一半失败（盘满或写入出错）。手动删新位置残留的临时文件夹后，要在这块盘还接着时清倒{0}，空间才会腾出来；清倒以后可用空间仍明显比实际少，再{1}检查一次（不会删文件）。",
+  "en": "Moving the library failed partway (the disk filled up or a write failed). After deleting the leftover temporary folder at the new location, empty the {0} while this drive is still connected to free the space; if free space still looks much lower than it should, {1} once (no files are deleted)."
+ },
+ {
+  "source": "回收站",
+  "en": "Recycle Bin"
+ },
+ {
+  "source": "废纸篓",
+  "en": "Trash"
+ },
+ {
+  "source": "在「此电脑」里右键这块盘 →「属性」→「工具」→「检查」",
+  "en": "check it via This PC → right-click the drive → Properties → Tools → Check"
+ },
+ {
+  "source": "用「磁盘工具」选中这块盘点「急救」",
+  "en": "run First Aid on this drive in Disk Utility"
+ },
+ {
+  "source": "换库失败后，新位置的临时文件夹没删干净，可以手动删除：{0}（{1}）",
+  "en": "After the failed move, the temporary folder at the new location wasn't fully removed; you can delete it yourself: {0} ({1})"
  }
 ]
