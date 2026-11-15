@@ -107,7 +107,9 @@ EXPLAIN = (
     (r'mismatchedapplicationidentifierentitlement|application-identifier entitlement string[^\n]{0,240}does not match', 'app_other_signer'),   # 同 install.SIGN_ERRORS（文本已转小写）
     (r'developer mode', 'developer_mode_required'),
     (r'device is locked|passcode|unlock', 'device_locked'),
-    (r'pairing|not paired|invalidhostid|trust', 'device_pairing_required'),
+    # 苹果设备服务里没有这台的配对记录（#1198 plumesign 原文「unexpected response from device: missing PairRecordData in pair record response」）：
+    #   也是没配好对，原先落到 device_install_failed、建议成「检查设备连接与包」
+    (r'pairing|not paired|invalidhostid|trust|pair ?record', 'device_pairing_required'),
     (r'no device|not connected|usbmux', 'device_not_connected'),
 )
 
