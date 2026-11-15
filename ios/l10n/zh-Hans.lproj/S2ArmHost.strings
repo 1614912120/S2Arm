@@ -220,6 +220,8 @@
 "vpad.menu.ns2pro" = "启用 Switch 2 Pro 手柄";
 "vpad.menu.pad" = "手柄与体感";
 "vpad.menu.rumble" = "震动";
+"vpad.menu.volume" = "声音";
+"vpad.volume.mute" = "静音";
 "vpad.menu.rumble.note" = "手机马达和手柄共用；选档位时会按那一档震一下";
 "vpad.menu.saves" = "存档管理";
 "vpad.menu.stickFixed.note" = "关掉 = 手指落点当中心";
@@ -456,6 +458,7 @@
 "settings.fps.knownIssue.message" = "此游戏开 60 帧有已知问题，若游戏速度异常请关闭";
 "settings.fps.native" = "本款原生 60 帧";
 "settings.group.dev" = "开发";
+"settings.devEntry" = "开发与诊断";
 "settings.notStarted" = "未启动游戏";
 "settings.restart.message" = "是否立刻重启游戏？未保存的进度会丢失，请确认已在游戏内保存进度。";
 "settings.restart.messageLater" = "保存的设置将在下次启动游戏时生效。";
@@ -497,6 +500,9 @@
 "settings.language.zhHans" = "简体中文";
 "settings.language.zhHant" = "繁體中文";
 "settings.language.en" = "English";
+"settings.language.ja" = "日本語";
+"settings.language.es" = "Español";
+"settings.language.fr" = "Français";
 "settings.language.restart" = "关掉 S2Arm 再重新打开后生效。";
 "settings.gameLanguage" = "游戏语言";
 "settings.gameLanguage.system" = "跟随系统";

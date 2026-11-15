@@ -15,11 +15,13 @@ void s2a_cpatch_fps_follow(int on); void s2a_cpatch_fps_pick(int target); int s2
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { fails++; printf("✗ "); printf(__VA_ARGS__); printf("\n"); } } while (0)
 static const char *E(const char *k) { const char *v = getenv(k); return v ? v : "-"; }
+static int g_fi;   // ④ 补帧开着（DM_PRESENT_FI=1）
 static void run(const char *dir, int pick_env, char *out, size_t n) {
     int pp[2]; pipe(pp); pid_t c = fork();
     if (c == 0) {
         close(pp[0]); unsetenv("DM_PRESENT_LINK"); unsetenv("DM_PRESENT_HZ"); unsetenv("S2A_CPATCH_ON");
         if (pick_env) setenv("S2A_FPS_PICK", "120", 1); else unsetenv("S2A_FPS_PICK");
+        if (g_fi) setenv("DM_PRESENT_FI", "1", 1); else unsetenv("DM_PRESENT_FI");
         module_t m; memset(&m, 0, sizeof m); snprintf(m.name, sizeof m.name, "%s", "main");
         m.size = 0x8000; m.base = mmap(NULL, m.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); m.key_page_off = 0x4000; m.key_page_size = 0x4000;
         s2a_cpatch_load(&m, dir);
@@ -68,6 +70,11 @@ int main(void) {
     run(dir, 1, got, sizeof got);
     const char *want2 = "档 2:60/120 开 80 77 2 120 关 0 00";
     CHECK(!strcmp(got, want2), "② 玩家设置 S2A_FPS_PICK=120 起局：期望 %s，实得 %s", want2, got);
+    // ④ 补帧开着（iOS 设置页缺省写 DM_PRESENT_FI=1）：选 120 照样要 120 Hz 显示链（2，nvn_mtl.m mtl_init 见到 2 不再清成 0）；
+    //   不在高刷档时回到 0（不建显示链，画面交还补帧），不是 1。期望手写
+    g_fi = 1; run(dir, 0, got, sizeof got); g_fi = 0;
+    const char *want4 = "档 2:60/120 开 40 55 0 60 选120 80 77 2 120 选60 40 55 0 60 关 0 00";
+    CHECK(!strcmp(got, want4), "④ 补帧开着：期望 %s，实得 %s", want4, got);
     run_rescue(dir, got, sizeof got);
     const char *want3 = "未开救 0 开 80 77 2 120 救 1 0 00 1 60 标记 fps 再救 0";
     CHECK(!strcmp(got, want3), "③ 停帧救场：期望 %s，实得 %s", want3, got);

@@ -187,6 +187,7 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
     vkGetPhysicalDeviceProperties2(out->physical, &props2);
     snprintf(out->driver_name, sizeof out->driver_name, "%.120s", driver.driverName);
     snprintf(out->driver_info, sizeof out->driver_info, "%.120s", driver.driverInfo);
+    out->driver_id = (int)driver.driverID;
 
     uint32_t family_count = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(out->physical, &family_count, NULL);
@@ -328,6 +329,8 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
     VkPhysicalDeviceDepthClipControlFeaturesEXT dcc = {0};
     dcc.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT;
     const int has_dcc = has_device_extension(out->physical, "VK_EXT_depth_clip_control");
+    VkPhysicalDeviceCustomBorderColorFeaturesEXT border = {0};
+    border.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_FEATURES_EXT;
     {
         VkPhysicalDeviceFeatures2 query = {0};
         query.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
@@ -339,6 +342,10 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
         if (out->has_swapchain_maintenance1) {
             maintenance.pNext = &draw_parameters;
             query.pNext = &maintenance;
+        }
+        if (has_device_extension(out->physical, "VK_EXT_custom_border_color")) {   // 只在 advertise 时挂查询结构
+            border.pNext = query.pNext;
+            query.pNext = &border;
         }
         vkGetPhysicalDeviceFeatures2(out->physical, &query);
         out->swapchain_maintenance1_enabled = out->has_swapchain_maintenance1 && maintenance.swapchainMaintenance1 == VK_TRUE;
@@ -352,7 +359,8 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
     if (!out->shader_draw_parameters_enabled)
         return fail(why, why_size, "required feature missing: shaderDrawParameters");
 
-    // 容量：所有可选扩展同时启用 13 项（含深度裁剪控制），留余量
+    // 容量 = 所有可选扩展同时启用时的项数（swapchain / maintenance1 / 校准 / index_type_uint8 / display_timing / host import /
+    // AHB + queue_family_foreign / indirect count / 4444 / 实例除数 / 镜像夹取 / 自定义边框色 / 深度裁剪控制，校准 KHR / EXT 二选一 = 14），留余量。
     const char *device_ext[16];
     uint32_t device_ext_count = 0;
     if (out->has_swapchain) device_ext[device_ext_count++] = "VK_KHR_swapchain";
@@ -446,6 +454,20 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
     if (out->sampler_mirror_clamp_enabled) device_ext[device_ext_count++] = "VK_KHR_sampler_mirror_clamp_to_edge";
     if (out->formats_4444_enabled) device_ext[device_ext_count++] = "VK_EXT_4444_formats";
     if (out->depth_clip_control_enabled) device_ext[device_ext_count++] = "VK_EXT_depth_clip_control";
+    // #976：NVN 的任意边框色。要 customBorderColors 特性；customBorderColorWithoutFormat 按设备如实开（没有时后端建这种采样器报 UNSUPPORTED）。
+    out->custom_border_enabled = border.customBorderColors == VK_TRUE;
+    out->custom_border_without_format = out->custom_border_enabled && border.customBorderColorWithoutFormat == VK_TRUE;
+    out->custom_border_max = 0;
+    if (out->custom_border_enabled) {
+        device_ext[device_ext_count++] = "VK_EXT_custom_border_color";
+        VkPhysicalDeviceCustomBorderColorPropertiesEXT bp = {0};
+        bp.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_CUSTOM_BORDER_COLOR_PROPERTIES_EXT;
+        VkPhysicalDeviceProperties2 p2 = {0};
+        p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+        p2.pNext = &bp;
+        vkGetPhysicalDeviceProperties2(out->physical, &p2);
+        out->custom_border_max = bp.maxCustomBorderColorSamplers;
+    }
     out->device_extension_count = device_ext_count;
 
     // #975：NVN 16 位打包格式的路由（格式表在 nvn_vk_format.c 的 k_p16，弱引用同 #398 深度替换）。
@@ -516,6 +538,12 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
         VkBaseOutStructure *tail = (VkBaseOutStructure *)device_info.pNext;
         while (tail->pNext) tail = tail->pNext;
         tail->pNext = (VkBaseOutStructure *)&dcc;
+    }
+    if (out->custom_border_enabled) {
+        border.customBorderColors = VK_TRUE;
+        border.customBorderColorWithoutFormat = out->custom_border_without_format ? VK_TRUE : VK_FALSE;
+        border.pNext = (void *)device_info.pNext;
+        device_info.pNext = &border;
     }
     if (vkCreateDevice(out->physical, &device_info, NULL, &out->device) != VK_SUCCESS)
         return fail(why, why_size, "vkCreateDevice failed");

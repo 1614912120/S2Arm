@@ -72,7 +72,7 @@ static int shader_compile_admit(void) {
     }
 }
 
-struct entry { struct rp_prog prog; int failed; int warm; int warm_hit; };   // warm：预热带发布；warm_hit：已被真实 draw 采用过一次（验收计数口径）
+struct entry { struct rp_prog prog; int failed; int warm; int warm_hit; uint8_t fact_ok; uint32_t fact_mask[4]; };   // fact_*：结果字节里读出的「编译器实际读了哪些绑定事实」（nvk_shader_fact_cache.h），work_run 里算好，发布后由提交线程入表   // warm：预热带发布；warm_hit：已被真实 draw 采用过一次（验收计数口径）
 static nvn_hmap g_progs = {.klen = 32};   // 内容身份（SHA-256）→ struct entry *
 // g_progs 与「同身份在途」表共用一把锁：nvn_hm 不是线程安全的，而预热带（[后台]）与提交线程都会查找/发布。
 // 锁只覆盖表结构与 entry 标志；parse、建后端着色器、编译都在锁外（否则预热带持锁建对象会挡住回放线程）。
@@ -438,7 +438,7 @@ static void fill_facts(const struct rp_shader_req *q, const struct s2a_direct_co
     if (!any_ssbo || pc->storage_buffer_offset_alignment) { g->has_unaligned_ssbo = 1; g->unaligned_ssbo = unaligned; }
     for (int i = 0; i < 32; i++) g->attribute_types[i] = num_type(i < rp_S.nattr && i < 16 ? rp_S.attr[i].fmt : 0, 1);
     for (int i = 0; i < 8; i++) g->fragment_output_types[i] = i < q->rt_count && q->rt_format[i] ? num_type(q->rt_format[i], 0) : "Float";
-    for (int st = 0; st < 6; st++) { uint32_t m = 0; for (int i = 0; i < 16; i++) if (rp_S.ubo[st][i].size) m |= 1u << i; f->ubo_use[st] = m << 3; }   // 用户常量缓冲从 c3 起
+    for (int st = 0; st < nst; st++) { uint32_t m = 0; for (int i = 0; i < 16; i++) if (rp_S.ubo[st][i].size) m |= 1u << i; f->ubo_use[st] = m << 3; }   // 用户常量缓冲从 c3 起
     // 组合贴图槽事实：顶点、片元各 32 槽。槽里是「贴图号 | 采样器号 << 20」；没绑过的槽读作池里的第 0 项。
     for (int st = 0; st < nst; st++) for (int slot = 0; slot < 32; slot++) {
         uint64_t h = rp_S.tex[st][slot]; long id = h ? (long)(h & 0xFFFFF) : (long)rp_S.tex_base;
@@ -470,6 +470,8 @@ static void fill_facts(const struct rp_shader_req *q, const struct s2a_direct_co
         f->tex[n] = (struct s2a_compile_texture_src){(const char *const[]){"vs", "fs", "gs"}[st], (uint32_t)(90 + 2 * slot), 2, f->tsmp[n], f->tfmt[n], nf.is_buffer, nf.normalized, 1, nf.array_length};
     }
 }
+
+#include "nvk_shader_fact_cache.h"
 
 // fd_binding → 后端布局项（核心按 src_kind / src_reg 绑定）。0 = 这一项首版不支持
 static int layout_ent(const struct fd_binding *b, nvn_gpu_layout_ent *e) {
@@ -887,6 +889,8 @@ static struct entry *work_run(const struct work_snap *s, int background) {
     }
     if (!bytes) return NULL;
     struct entry *e = build(bytes, len, s->views, s->nst, s->identity);
+    // 事实复用（#1187 nvk_shader_fact_cache.h）：结果字节在这里释放，掩码先算好挂在 entry 上（纯函数，后台线程也能算）
+    if (e && !e->failed) e->fact_ok = (uint8_t)fact_cache_mask(bytes, len, &e->prog, e->fact_mask);
     free(bytes);
     return e;
 }
@@ -1067,7 +1071,7 @@ static uint64_t input_sig(const struct rp_shader_req *q, const struct s2a_direct
     MIX(rp_depth_zero()); MIX(rp_origin_lower_left()); MIX(pc->shader_draw_parameters);
     { int any = 0, un = 0; for (int st = 0; st < 5; st++) for (int i = 0; i < 16; i++) if (rp_S.ssbo[st][i].addr) { any = 1; if (pc->storage_buffer_offset_alignment && rp_S.ssbo[st][i].addr % pc->storage_buffer_offset_alignment) un = 1; } MIX(any); MIX(un); MIX(pc->storage_buffer_offset_alignment); }
     MIX(rp_S.nattr); for (int i = 0; i < 16; i++) MIX(i < rp_S.nattr ? rp_S.attr[i].fmt : 0);
-    for (int st = 0; st < 6; st++) { uint32_t m = 0; for (int i = 0; i < 16; i++) if (rp_S.ubo[st][i].size) m |= 1u << i; MIX(m); }
+    for (int st = 0; st < 3; st++) if (stages & (1u << st)) { uint32_t m = 0; for (int i = 0; i < 16; i++) if (rp_S.ubo[st][i].size) m |= 1u << i; MIX(m); }
     MIX(rp_S.tex_pool_n); MIX(rp_S.samp_pool_n); MIX(rp_S.tf_on); MIX(rp_S.tex_base);
     if (with_tex_facts) {
         MIX(combined_fact_sig(0)); MIX(combined_fact_sig(1));
@@ -1240,6 +1244,12 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
         nvk_prog_warm_note(&rec);
         return 0;
     }
+    // 1b) 事实复用（#1187）：编译器只读了一部分绑定事实，事实相同的另一份身份可以直接用同一个程序。
+    //   别名表与变体表只有提交线程读写（rp_shader_reset 清），不进 g_progs_mu；别名不持有程序，程序只归 g_progs。
+    if ((*out = nvn_hm_get(&g_fact_aliases, sha))) return 0;
+    uint8_t fact_base[32];
+    const int reusable = fact_cache_shape(&id) && fact_cache_hash(&id, NULL, fact_base);
+    if (reusable && (*out = fact_cache_find(&id, fact_base))) { nvn_hm_put(&g_fact_aliases, sha, (void *)*out); return 0; }
     // 2) 同身份在途：等它发布，不重复准备同一份程序。
     struct entry *win = NULL;
     int w = await_inflight(sha, &win);
@@ -1315,6 +1325,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
     // 失败标志在发布锁内读好带出来：发布之后 entry 已归缓存，会话收尾（rp_shader_reset）可能回收它。
     if (failed) return -1;
     *out = &use->prog;
+    if (reusable && use->fact_ok) fact_cache_keep_mask(&id, fact_base, use->fact_mask, &use->prog);
     nvk_prog_warm_note(&rec);   // 真实 resolve 成功：记身份 + uses（含 c1）
     prog_tally_log();
     return 0;
@@ -1544,6 +1555,7 @@ int rp_shader_resolve_compute(const struct rp_prog **out) {
 }
 
 void rp_shader_reset(void) {
+    fact_cache_reset();
     if (g_pool_programs || g_pool_request_rejected) pool_stats("reset");
     // 后台预热一律不得越过这一步进会话收尾：先有界静默（置位后后台不再发布），再释放。
     // Lead 的调度器在 Stop 时已经调过一次 nvk_shader_warm_quiesce（幂等）；这里再调是为了不依赖调用顺序。

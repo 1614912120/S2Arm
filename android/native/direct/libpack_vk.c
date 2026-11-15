@@ -105,8 +105,12 @@ int s2a_libpack_get(const struct s2a_libpack *lp, const uint8_t key[8], unsigned
 
 // 阶段名 ↔ StageNo（DshVk.cs StageNo 表同值）/ NVN 位序 ↔ v1 阶段名
 static int lp_stage_no(const char *s) {
-    static const char *const names[] = {"vs", "hs", "ds", "gs", "ps", "cs"};
-    for (int i = 0; i < 6; i++) if (!strcmp(s, names[i])) return i;
+    if (!strcmp(s, "vs")) return 0;
+    if (!strcmp(s, "hs")) return 1;
+    if (!strcmp(s, "ds")) return 2;
+    if (!strcmp(s, "gs")) return 3;
+    if (!strcmp(s, "ps")) return 4;
+    if (!strcmp(s, "cs")) return 5;
     return -1;
 }
 // NVN 位 → 库内阶段名（vk 库只出 vs/ps/cs；gs/tcs/tes 给出 NULL → 程序 MISS）

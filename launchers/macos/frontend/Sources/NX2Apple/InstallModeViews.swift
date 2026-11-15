@@ -10,7 +10,7 @@ import NXModel
 import NXLauncher
 import S2ArmAppleAdapter
 
-private func ix(_ loc: Localizer, _ id: String) -> String { BackendText.launcherText(id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+private func ix(_ loc: Localizer, _ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
 
 struct InstallModeCard: View {
     @ObservedObject var model: S2ArmLauncherModel

@@ -639,7 +639,7 @@ void s2a_diag_menu_hold(uint64_t press) {
         if (s2a_pad_plus_press() == press) s2a_diag_open_menu();
     });
 }
-// 上局死在前台、当时开着金手指 / 玩家开的未验证社区补丁（ios/game_options.m s2a_ios_crash_suspects）：自动关掉、横幅告诉玩家（11-13 维护者改定：不问）。
+// 上局死在前台、当时开着金手指 / 社区补丁（ios/game_options.m s2a_ios_crash_suspects，v0.4.1 起只取最可疑的一层）：自动关掉、横幅告诉玩家（11-13 维护者改定：不问）。
 //   多款容器在游戏库点开始时已处理（app.m crash_auto_off，社区补丁要在装载前关），这里只剩单款壳：金手指关了马上生效（服务层每秒重载），补丁下次启动生效。
 //   关掉了什么不另弹横幅，交给紧接着的诊断询问一并说（s2a_diag_prompt）
 NSArray<NSDictionary *> *s2a_ios_crash_suspects(void);
@@ -671,7 +671,9 @@ void s2a_diag_attach(UIViewController *vc) {
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         check_toggle();
         // 真机自动化（S2A_OPEN_SETTINGS 测试开关在）每局都是被强杀收尾的，上次异常退出的提示会挡住要截的设置页：只在这时不问（玩家给不了这个环境变量）
-        if (prev == S2A_SESMARK_FG) { crash_auto_off(); if (!getenv("S2A_OPEN_SETTINGS")) s2a_diag_prompt(S2AL(@"diag.prompt.abnormalExit")); }
+        if (prev == S2A_SESMARK_FG) crash_auto_off();
+        { void s2a_ios_crash_session_begin_single(int); s2a_ios_crash_session_begin_single(prev != S2A_SESMARK_FG); }   // 单款壳：关完再记这局开着的（v0.4.1，game_options.m）
+        if (prev == S2A_SESMARK_FG && !getenv("S2A_OPEN_SETTINGS")) s2a_diag_prompt(S2AL(@"diag.prompt.abnormalExit"));
       }); }
 }
 // 进后台 / 回前台（app.m 生命周期通知，主线程）：改写会话标记，在后台被划掉 / 被系统回收不算异常

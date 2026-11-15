@@ -11,7 +11,7 @@
 //   C2 跨线程清空：线程 P 发 K 条调用后用 release 通知线程 W，W 在 acquire 到通知后清空队列；
 //      清空返回时 P 通知之前发的每一条都必须已被录制线程做完。
 //   C3 背压：录制线程每条慢 1.5 微秒，单生产者发的总量超过队列容量，生产者必须等环里有地方；全部按序做完、不死锁。
-//   C5 两条线程同时清空：用两条慢记录定次序，先到的先走之后，后到的必须仍被叫醒（不能等满 1 秒的超时）。
+//   C5 两条线程同时清空：用记录桩与真实等待握手定次序，先到的先走之后，后到的必须仍被叫醒（不能等满 1 秒的超时）。
 //   C4 运行时开关：生产者在跑的时候来回切 nvk_dq（经提交处的开关读取，开 → 关 → 开），每个 cb 的序列仍然一致。
 // 任何一处卡住由看门狗在 TEST_TIMEOUT_S 秒后以退出码 3 收场（队列死锁不会让 CI 挂着）。
 #ifndef _GNU_SOURCE
@@ -85,6 +85,9 @@ enum { MAXCB = 8, CB_BASE = 0x1000 };
 static uint64_t g_hash[MAXCB], g_cnt[MAXCB];   // 同一个 cb 同一时刻只有一侧在写（直调前先清空）；主线程在清空之后读（清空返回对录制线程的 release 写有 acquire）
 static _Atomic uint64_t g_executed[MAXCB];      // 每做完一条加一（release）
 static _Atomic int g_unexpected;                // 桩被调到没登记的调用
+static _Atomic int g_c5_entered, g_c5_waiters, g_c5_a_done, g_c5_remaining;
+static int c5_drainer_count(void);
+static _Thread_local int g_c5_role;
 static int g_slow_ns;                           // 录制每条额外耗时（制造背压）；改它只在队列清空之后
 
 static uint64_t mix(uint64_t h, uint64_t v) { h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2); h *= 0xff51afd7ed558ccdull; return h ^ (h >> 29); }
@@ -110,8 +113,15 @@ static VKAPI_ATTR void VKAPI_CALL rec_barrier(VkCommandBuffer cb, VkPipelineStag
     rec_note(cb, 4, ((uint64_t)src << 32) | dst, ((uint64_t)nm << 40) | ((uint64_t)nb << 20) | ni, hash_bytes(im, ni * sizeof *im), dep ^ (nm ? hash_bytes(m, nm * sizeof *m) : 0));
 }
 static VKAPI_ATTR void VKAPI_CALL rec_dispatch(VkCommandBuffer cb, uint32_t x, uint32_t y, uint32_t z) {
-    if (z == 0x5101u) spin_ns(100 * 1000 * 1000);   // C5 的两条「慢记录」：z 取不到别处发的 dispatch 会用的值（那些 z ≤ 15）
-    else if (z == 0x5102u) spin_ns(40 * 1000 * 1000);
+    if (z == 0x5101u) {
+        atomic_store(&g_c5_entered, 1);
+        while (atomic_load(&g_c5_waiters) != 3) sched_yield();
+    }   // C5 的两条握手记录：z 取不到别处发的 dispatch 会用的值（那些 z ≤ 15）
+    else if (z == 0x5102u) {
+        while (!atomic_load(&g_c5_a_done)) sched_yield();
+        // R2尚未完成，B不能退出；A已返回，所以真实在等者必须恰为1。
+        atomic_store(&g_c5_remaining, c5_drainer_count());
+    }
     rec_note(cb, 5, x, y, z, 0);
 }
 static void rec_nop(void) { atomic_store(&g_unexpected, 1); }
@@ -126,7 +136,15 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL vkGetDeviceProcAddr(VkDevice d, const c
 }
 
 // ---- 被测：队列本体（包含之后，vkCmd* / vkEndCommandBuffer 等名字走它的包装）----
+// 只观察真实条件等待的进入，不伪造返回或唤醒，也不读取被测计数作期望。
+static int c5_timedwait(pthread_cond_t *cond, pthread_mutex_t *mu, const struct timespec *dl) {
+    if (g_c5_role) atomic_fetch_or(&g_c5_waiters, g_c5_role);
+    return pthread_cond_timedwait(cond, mu, dl);
+}
+#define pthread_cond_timedwait c5_timedwait
 #include "nvn_vk_dq.inc"
+#undef pthread_cond_timedwait
+static int c5_drainer_count(void) { return atomic_load(&g_dq_draining); }
 
 // ---- 检查计数 ----
 static int g_checks, g_bad;
@@ -257,22 +275,28 @@ static void run_drain_phase(int rounds) {
 
 // ---- C5：两条线程同时清空，先到的先走 ----
 // 回归：清空线程的「在等」标记曾是个标志位——先走的那条把它抹掉，后到的还在等，录制线程做完最后一条见标记是 0，不再叫醒它，它只能等满 1 秒的超时。
-// 做法（全靠两条慢记录定次序，不靠碰运气）：R1 让录制线程耗 100 毫秒；A 在 R1 之后清空，开始等；R2（40 毫秒）排在 R1 后面；B 在 R2 之后清空。
-// R1 做完叫醒 A、B：A 走（把标记抹掉），B 的位置还没到，继续等；R2 做完时标记若已被抹掉就没有人叫 B。B 应在约 120 毫秒后返回，不是 1 秒。
+// R1进入记录桩后才发布R2，保证是两次发布快照。A进入真实条件等待后再发布R2；
+// R1等A/B都进入真实等待再完成；R2等A实际返回再完成，确保撤改标志位时漏掉B的唤醒。
+// 所有握手受整局看门狗保护；原600ms判据保持。
 static uint64_t now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec; }
-static void *c5_a_main(void *arg) { (void)arg; vkEndCommandBuffer(cb_of(1)); return NULL; }
+static void *c5_a_main(void *arg) { (void)arg; g_c5_role = 1; vkEndCommandBuffer(cb_of(1)); atomic_store(&g_c5_a_done, 1); return NULL; }
 static void run_two_drainers_phase(void) {
     phase("C5 两条线程同时清空");
     set_dq(1); reset_sinks();
+    atomic_store(&g_c5_entered, 0); atomic_store(&g_c5_waiters, 0); atomic_store(&g_c5_a_done, 0); atomic_store(&g_c5_remaining, -1);
     vkCmdDispatch(cb_of(0), 1, 1, 0x5101);   // R1
+    while (!atomic_load(&g_c5_entered)) sched_yield();
     pthread_t ta; pthread_create(&ta, NULL, c5_a_main, NULL);   // A：快照在 R1 之后
-    usleep(20 * 1000);   // A 已经在等（R1 还要做 80 毫秒）
+    while (!(atomic_load(&g_c5_waiters) & 1)) sched_yield();
     vkCmdDispatch(cb_of(0), 2, 2, 0x5102);   // R2，排在 R1 后面
     uint64_t t0 = now_ns();
+    g_c5_role = 2;
     vkEndCommandBuffer(cb_of(1));   // B：快照在 R2 之后
+    g_c5_role = 0;
     double b_ms = (double)(now_ns() - t0) / 1e6;
     pthread_join(ta, NULL);
-    CHECK(b_ms < 600.0, "C5：后到的清空等了 %.0f 毫秒（应约 120 毫秒；等满 1 秒的超时 = 先走的那条把「在等」标记抹掉了，没人叫醒它）", b_ms);
+    CHECK(atomic_load(&g_c5_remaining) == 1, "C5：先到的清空已返回、后到的尚未完成，等待者应为1，实际%d", atomic_load(&g_c5_remaining));
+    CHECK(b_ms < 600.0, "C5：后到的清空等了 %.0f 毫秒（应小于600毫秒；等满 1 秒的超时 = 先走的那条把「在等」标记抹掉了，没人叫醒它）", b_ms);
     CHECK(g_cnt[0] == 2, "C5：条数不符：发 2 → 收 %llu", (unsigned long long)g_cnt[0]);
     printf("  %-38s 后到的清空等了 %.0f 毫秒\n", "C5 两条线程同时清空", b_ms);
 }
@@ -296,11 +320,16 @@ static void run_pressure_phase(uint64_t n) {
     printf("  %-38s %llu 条，写入 %.1f MB（队列 %d MB）\n", "C3 背压（录制每条慢 1.5 微秒）", (unsigned long long)n, mb, dq_RING >> 20);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     pthread_t wd; pthread_create(&wd, NULL, watchdog_main, NULL); pthread_detach(wd);
     vk_dq_init((VkDevice)(uintptr_t)0x1);
     CHECK(g_dq_ring != NULL && g_dq_on, "队列没起来（环内存 / 录制线程）");
     if (!g_dq_ring) { printf("dq_queue_test：队列没起来\n"); return 1; }
+    if (argc == 2 && !strcmp(argv[1], "--two-drainers-only")) {
+        run_two_drainers_phase();
+        CHECK(atomic_load(&g_red_logs) == 0, "队列自己报过红");
+        return g_bad ? 1 : 0;
+    }
     printf("两级回放队列宿主用例（真队列 + 真录制线程 + 记录桩）\n");
     run_seq_phase("C1 多生产者序列（另有线程不停清空）", 4, 160000, 1, 0);
     run_drain_phase(3000);

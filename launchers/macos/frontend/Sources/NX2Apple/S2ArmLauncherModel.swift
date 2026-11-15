@@ -109,6 +109,9 @@ struct PhoneOutcome: Equatable {
     var exportFolder = ""
     var exportGames = 0
     var exportBytes: Int64? = nil
+    /// 这次新写的 .img 与沿用的款数（#1132）：有沿用才在完成页点名「.img 只要拷这几个」
+    var exportFresh: [String] = []
+    var exportReused = 0
     /// 完成页「推到手机」（11-13）：推进手机上自签 S2Arm 的 .img 文件名（空 = 还没推）；推不成时作业给的一句「缺什么、怎么做」
     var pushed: [String] = []
     var pushNote = ""
@@ -1016,7 +1019,8 @@ public final class S2ArmLauncherModel: ObservableObject {
             do {
                 let r = try await self?.provider.install(gameId: game.id, teamId: teamId, device: device, accept: accept, events: sink)
                 if let r, !r.exportFolder.isEmpty {   // 导出模式：没装手机，打开放好的文件夹
-                    self?.phoneOutcome = PhoneOutcome(skipped: r.skipped, exportFolder: r.exportFolder, exportGames: r.exportGames, exportBytes: r.exportBytes)
+                    self?.phoneOutcome = PhoneOutcome(skipped: r.skipped, exportFolder: r.exportFolder, exportGames: r.exportGames, exportBytes: r.exportBytes,
+                                                     exportFresh: r.exportFresh, exportReused: r.exportReused)
                     NSWorkspace.shared.open(URL(fileURLWithPath: r.exportFolder))
                 } else if let r {
                     self?.installedTo = Self.deviceLabel(kind: r.deviceKind, name: r.deviceName)
@@ -1095,8 +1099,9 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     private func crashedBeforePlay(_ gameID: String) async throws -> [String] {
         let result = try await saveJob("community", gameID: gameID, extra: [:])
-        // 帧率补丁那条（kind fps，作业层 cheats.note_crash / note_stall）没有补丁名：交 CrashPromptHost 按界面语言写「帧率」
-        return (result["crashed"] as? [[String: Any]] ?? []).compactMap { ($0["kind"] as? String) == "fps" ? CrashPrompt.fpsName : $0["name"] as? String }
+        // 帧率补丁那条（kind fps）、满屏开关那条（kind fs，自适应满屏一族跟它走）没有补丁名（作业层 cheats.note_crash / note_stall）：交 CrashPromptHost 按界面语言写「帧率」「满屏」
+        return (result["crashed"] as? [[String: Any]] ?? []).compactMap {
+            switch $0["kind"] as? String { case "fps": return CrashPrompt.fpsName; case "fs": return CrashPrompt.fullscreenName; default: return $0["name"] as? String } }
     }
 
     private func playChecked(_ game: GameSummary, uiLanguage: String?) {

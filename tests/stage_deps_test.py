@@ -141,6 +141,25 @@ class StageDeps(unittest.TestCase):
             r = subprocess.run([sys.executable, '-c', 'import os; print(os.environ.get("S2A_T_CHAINED", "缺"))'], env=env, capture_output=True, text=True, check=True)
             self.assertEqual(r.stdout.strip(), '1', f'记依赖={deps}：排在后面的 sitecustomize 应被接续执行')
 
+    def test_peer_chaining_back_runs_each_once(self):
+        # 11-14 门禁根修：排在后面的另一个接续型 sitecustomize（门禁实读采集即此写法）按「sys.path 上第一个不是自己的」接续 → 回头执行本钩子 →
+        #   本钩子又接续它……修前来回执行到递归上限：一个进程装 100 多个审计钩子、退出写 140 多份记录。期望：本钩子与对方各执行 1 次、记录恰 1 份
+        peer = Path(self.t.name) / 'peer_site'; peer.mkdir(); runs = Path(self.t.name) / 'peer_runs'
+        (peer / 'sitecustomize.py').write_text(
+            "import importlib.util, os, sys\n"
+            f"open({str(runs)!r}, 'a').write('peer\\n')\n"
+            "here = os.path.dirname(os.path.abspath(__file__))\n"
+            "for p in sys.path:\n"
+            "    f = os.path.join(p or '.', 'sitecustomize.py')\n"
+            "    if os.path.abspath(p or '.') != here and os.path.isfile(f):\n"
+            "        s = importlib.util.spec_from_file_location('_peer_chained', f); s.loader.exec_module(importlib.util.module_from_spec(s)); break\n")
+        raw = Path(self.t.name) / 'raw_peer'; raw.mkdir()
+        env = dict(os.environ, S2A_DEPS_OUT=str(raw), PYTHONPATH=str(ROOT / 'tools/stage_deps_hook') + os.pathsep + str(peer))
+        r = subprocess.run([sys.executable, '-c', 'print("ok")'], env=env, capture_output=True, text=True)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, 'ok'), r.stderr[-2000:])
+        self.assertEqual(runs.read_text().splitlines(), ['peer'], '对方 sitecustomize 应只执行 1 次')
+        self.assertEqual(len(list(raw.glob('*.tsv'))), 1, f'记录应恰 1 份（实 {len(list(raw.glob("*.tsv")))} 份）')
+
 
 class EveryStageWired(unittest.TestCase):
     """⑤ 各阶段都接了实际读入（10-30 维护者：所有阶段的缓存键按实际读过的文件算）：pack/ 下凡是用 root_stage_done 判跳过的阶段脚本，

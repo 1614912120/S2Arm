@@ -755,11 +755,32 @@ static uint32_t mdi_group(const uint8_t *rec, uint64_t cnt, uint64_t ind0, uint6
 // OP_DRAW / OP_DRAW_IDX 共用。di 非空 = 带索引
 // 分时：一笔绘制里各步各花多久（累计到 rp_perf，上屏那边每 5 秒报一次）
 static uint64_t dt_now(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec; }
-#define DT(step) do { uint64_t n_ = dt_now(); rp_perf_add(step, n_ - dt_); dt_ = n_; } while (0)
+// 分时抽样（#1103）：原先每笔取 10 次时钟 + 9 次原子加（世界稳态每帧约 1430 笔 → 1.4 万次取时钟），占回放线程约 3%，
+// 而它只服务每 5 秒一行的「分时」读数。现在每 rp_tm_stride() 帧只完整计 1 帧：采样帧里逐步计时照旧，其余帧一次时钟都不取；
+// 「分时」行里这些项按采样帧数求每帧值（rp_present.c）。抽样状态放在本文件：vk 隔离用例只链接 rp_draw.c / rp_state.c，不带 rp_exec.c。
+int rp_tm_on;                  // 1 = 当前这一帧要逐步计时（上屏所在线程在帧边界翻，其它线程只读）
+static unsigned g_tm_stride;   // 抽样间隔（帧）；0 = 还没读开关
+static unsigned g_tm_n;        // 离上一个采样帧过了几帧（上屏所在线程独占）
+void rp_tm_reset(void) {       // 会话重开：重读开关。nvk_tm_full=1 压过 nvk_tm_stride
+    const int full = nvn_plat_flag("nvk_tm_full", 0) != 0, v = nvn_plat_flag("nvk_tm_stride", 32);
+    const unsigned s = full || v < 1 ? 1u : v > 1024 ? 1024u : (unsigned)v;
+    g_tm_stride = s; g_tm_n = 0;
+    __atomic_store_n(&rp_tm_on, s == 1, __ATOMIC_RELAXED);   // 每帧都计：从头就开着；否则第一个采样帧在第 s 帧
+}
+unsigned rp_tm_stride(void) { if (!g_tm_stride) rp_tm_reset(); return g_tm_stride; }
+void rp_tm_frame_end(void) {   // 每次上屏调一次：刚结束的是采样帧就记一帧，再定下一帧要不要计时
+    const int was = rp_tm();   // 先取：第一次调用时下面的 rp_tm_stride() 会读开关并改写它
+    if (was) rp_perf_add(RP_PERF_TM_FRAMES, 1);
+    const unsigned s = rp_tm_stride();
+    g_tm_n = g_tm_n + 1 >= s ? 0 : g_tm_n + 1;
+    __atomic_store_n(&rp_tm_on, g_tm_n == 0, __ATOMIC_RELAXED);
+}
+#define DT(step) do { if (tm_) { uint64_t n_ = dt_now(); rp_perf_add(step, n_ - dt_); dt_ = n_; } } while (0)
 void rp_draw(nvn_gpu_cmd c, const p_draw *dr, const p_draw_idx *di, const void *rec) {
     if (!c) return;
     memset(g_ind_drv_ok, 0, sizeof g_ind_drv_ok);
-    uint64_t dt_ = dt_now();
+    const int tm_ = rp_tm();   // 采样帧才逐步计时：非采样帧不取时钟、不做原子加
+    uint64_t dt_ = tm_ ? dt_now() : 0;
     uint32_t prim = (uint32_t)(di ? di->prim : dr->prim);
     const uint64_t ind = di ? di->ind : dr->ind;
     const uint64_t mcnt = di ? di->mdi_cnt : dr->mdi_cnt;
@@ -1069,7 +1090,7 @@ void rp_draw(nvn_gpu_cmd c, const p_draw *dr, const p_draw_idx *di, const void *
         pd.depth_clamp = (uint8_t)(rp_S.depth_clamp != 0);
         pd.clip_neg1 = (uint8_t)(g_prog->z_raw && !rp_depth_zero());   // 程序没做 near = -w 的深度改写：交给管线（只在 CAP_DEPTH_CLIP_CTL 时会出这种程序）
         nvn_gpu_pipe np = NULL; nvn_gpu_err err = {0};
-        const uint64_t pg0_ = dt_now();
+        const uint64_t pg0_ = tm_ ? dt_now() : 0;
         int fu_skip = 0;
         nvn_gpu_rc r = rp_fu_enabled() ? rp_draw_pipe_async(&pd, rt, &np, &err, &fu_skip)
                                        : nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &np, &err);
@@ -1098,7 +1119,7 @@ void rp_draw(nvn_gpu_cmd c, const p_draw *dr, const p_draw_idx *di, const void *
         g_pipe = np; g_pipe_cmd = c;
         if (recipe_new && nvk_pipe_warm_note_prog) nvk_pipe_warm_note_prog(&pd, g_prog);   // 下一局按这份配方提前建（验收看后端 warm 命中）
         nvn_gpu_set_pipe(c, g_pipe); g_pipe_set = 1;
-        rp_perf_add(RP_PERF_D_PGET, dt_now() - pg0_);   // 后端取管线 + 设管线（含在取管线那一项里）
+        if (tm_) rp_perf_add(RP_PERF_D_PGET, dt_now() - pg0_);   // 后端取管线 + 设管线（含在取管线那一项里）
         // 换管线：只有绑定布局（set / binding / 类别 / 数量）变了的阶段才立脏重发；布局没变时后端按管线布局自己判描述符组归属。
         for (int st = 0; st < RP_PROG_STAGES; st++) if (!prog_layout_same(g_lb[st].ok ? g_lb[st].pg : NULL, g_prog, st)) rp_args_dirty[st] = 1;
     }
@@ -1304,5 +1325,6 @@ done:
 
 void rp_draw_stats(uint64_t *draws, uint64_t *skips) { if (draws) *draws = g_draws; if (skips) *skips = g_skips; }
 void rp_draw_reset(void) { g_caps_ok = 0; g_arena_reason_n = 0; g_arena_reason_full = 0;   // 会话重开：能力表重新取
+    rp_tm_reset();   // 分时抽样的开关也重新读（#1103）
     memset(g_ind_drv_ok, 0, sizeof g_ind_drv_ok); memset(g_ind_drv, 0, sizeof g_ind_drv); memset(g_lb, 0, sizeof g_lb);   // #941
     free(g_cpipes.keys); free(g_cpipes.vals); nvn_hm_init(&g_cpipes, 8); g_prog = NULL; g_pipe = NULL; g_pipe_cmd = NULL; g_draws = g_skips = 0; g_prim = ~0u; g_quads = -1; g_face = -1; g_ms_off = 0; }

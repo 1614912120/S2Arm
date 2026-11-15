@@ -732,6 +732,70 @@ internal static unsafe class Program
             }
         }
 
+        // 句柄在游戏自己的 UBO 里（认领 #999）：LDC Rh, c[4][off]; TEX.B Rd, Rcoord, Rh。真实编译器、真实 BindlessElimination。
+        //   A：字偏移 8（字节 0x20）正好等于组合槽 0 的句柄位置（8 + 2 × 槽）。请求只带运行时照常给的组合槽事实（handle 8 / cbufSlot −1）。
+        //      这个句柄来自 c4、不是 c2 句柄表，不许当成组合槽 0 绑——修前「同 handle 事实回退」放行，绑到组合槽 0，读错图还不报。
+        //   B：字节 0x400（字偏移 256，和组合区不重叠），请求带精确事实（handle 256 / cbufSlot 4）。第 2 片起编出贴图绑定，来源是
+        //      uboSlot 1（NVN UBO 号 = cbuf − 3）/ uboOffset 1024（句柄字的字节偏移），不带 slot（slot 只指 c2 组合槽）。
+        {
+            byte[] fsUboA = Guest(true, new[] { Ldc(4, 0x20, 4), Fadd32i(2, 0.5f), Fadd32i(3, 0.5f), TexBindless2D(0, 2, 4) });
+            const string comboFact = "[{\"stage\":\"fs\",\"handle\":8,\"cbufSlot\":-1,\"samplerType\":\"2d\",\"format\":\"R8G8B8A8Unorm\",\"isBuffer\":false,\"normalized\":true,\"separate\":false,\"arrayLength\":1}]";
+            string misbind = "";
+            try
+            {
+                using JsonDocument r = ParseResult(DirectShaderCompiler.Compile(RequestJson(profile, "graphics", 1, 1, "ubo-handle-a", vs, fsUboA, textureFacts: comboFact, fsCbUse: 1u << 4)));
+                foreach (var b in r.RootElement.GetProperty("content").GetProperty("bindings").EnumerateArray())
+                    if (b.GetProperty("kind").GetString() == "texture" && !b.TryGetProperty("uboSlot", out _)) misbind += b.GetRawText();
+            }
+            catch (DirectCompileException) { }
+            Check(misbind.Length == 0, "c4 handle at word 8 is not bound as combined texture slot 0: " + misbind);
+
+            static string UboFact(int handle, int cbufSlot) =>
+                "{\"stage\":\"fs\",\"handle\":" + handle + ",\"cbufSlot\":" + cbufSlot +
+                ",\"samplerType\":\"2d\",\"format\":\"R8G8B8A8Unorm\",\"isBuffer\":false,\"normalized\":true,\"separate\":false,\"arrayLength\":1}";
+            // 编出的贴图绑定逐个列成「uboSlot/uboOffset/slot」，不带的字段写 -
+            string UboTextures(string id, byte[] fs, string facts, uint cbUse)
+            {
+                try
+                {
+                    using JsonDocument r = ParseResult(DirectShaderCompiler.Compile(RequestJson(profile, "graphics", 1, 1, id, vs, fs, textureFacts: facts, fsCbUse: cbUse)));
+                    string Field(JsonElement b, string name) => b.TryGetProperty(name, out JsonElement f) ? f.GetInt32().ToString() : "-";
+                    return string.Join(";", r.RootElement.GetProperty("content").GetProperty("bindings").EnumerateArray()
+                        .Where(b => b.GetProperty("kind").GetString() == "texture")
+                        .Select(b => Field(b, "uboSlot") + "/" + Field(b, "uboOffset") + "/" + Field(b, "slot")).OrderBy(x => x, StringComparer.Ordinal));
+                }
+                catch (DirectCompileException error) { return error.Code + " " + error.Message; }
+            }
+
+            byte[] fsUboB = Guest(true, new[] { Ldc(4, 0x400, 4), Fadd32i(2, 0.5f), Fadd32i(3, 0.5f), TexBindless2D(0, 2, 4) });
+            string got = UboTextures("ubo-handle-b", fsUboB, "[" + UboFact(256, 4) + "]", 1u << 4);
+            Check(got == "1/1024/-", "c4 handle at byte 0x400 compiles to uboSlot 1 / uboOffset 1024 without a combined slot: " + got);
+
+            // UBO 号的两端：c3 = NVN UBO 0、c18 = NVN UBO 15
+            byte[] fsUboC3 = Guest(true, new[] { Ldc(4, 0, 3), Fadd32i(2, 0.5f), Fadd32i(3, 0.5f), TexBindless2D(0, 2, 4) });
+            got = UboTextures("ubo-handle-c3", fsUboC3, "[" + UboFact(0, 3) + "]", 1u << 3);
+            Check(got == "0/0/-", "c3 handle at byte 0 compiles to uboSlot 0 / uboOffset 0: " + got);
+            byte[] fsUboC18 = Guest(true, new[] { Ldc(4, 0x7FFC, 18), Fadd32i(2, 0.5f), Fadd32i(3, 0.5f), TexBindless2D(0, 2, 4) });
+            got = UboTextures("ubo-handle-c18", fsUboC18, "[" + UboFact(0x7FFC / 4, 18) + "]", 1u << 18);
+            Check(got == "15/32764/-", "c18 handle at byte 0x7FFC compiles to uboSlot 15 / uboOffset 32764: " + got);
+
+            // 同一个片元着色器两张 UBO 句柄贴图（c4 0x400、c6 0x10）：各自的来源，不串
+            byte[] fsUboTwo = Guest(true, new[] {
+                Ldc(4, 0x400, 4), Fadd32i(2, 0.5f), Fadd32i(3, 0.5f), TexBindless2D(8, 2, 4),
+                Ldc(5, 0x10, 6), TexBindless2D(12, 2, 5),
+                FaddR(0, 8, 12), FaddR(1, 9, 13), FaddR(2, 10, 14), FaddR(3, 11, 15) });
+            got = UboTextures("ubo-handle-two", fsUboTwo, "[" + UboFact(256, 4) + "," + UboFact(4, 6) + "]", (1u << 4) | (1u << 6));
+            Check(got == "1/1024/-;3/16/-", "two user-UBO handles keep their own uboSlot / uboOffset: " + got);
+
+            // 缺精确事实：如实报 MISSING_FACT，坐标是「这个 UBO 句柄」（宿主按它读 UBO 补事实）；
+            //   同 handle 的组合槽事实、别的 UBO 里同偏移的事实都不借
+            got = UboTextures("ubo-handle-missing", fsUboB,
+                "[{\"stage\":\"fs\",\"handle\":256,\"cbufSlot\":-1,\"samplerType\":\"2d\",\"format\":\"R8G8B8A8Unorm\",\"isBuffer\":false,\"normalized\":true,\"separate\":false,\"arrayLength\":1}," +
+                UboFact(256, 5) + "]", 1u << 4);
+            Check(got.StartsWith("MISSING_FACT ", StringComparison.Ordinal) && got.EndsWith("has no source (stage=fs,handle=256,cbufSlot=4)", StringComparison.Ordinal),
+                "a c4 handle without its exact fact is MISSING_FACT at (fs, 256, 4): " + got);
+        }
+
         // 1) 接口全覆盖（接口新增方法时这里先红）。
         var interfaceMethods = typeof(IGpuAccessor).GetMethods().Where(m => m.DeclaringType == typeof(IGpuAccessor)).ToList();
         var classMethods = typeof(DirectGpuAccessor).GetMethods().Where(m => m.DeclaringType == typeof(DirectGpuAccessor))
@@ -1523,13 +1587,17 @@ internal static unsafe class Program
             Check(matrixAccessor.QueryTextureFormat(2, -1) == TextureFormat.R32Uint, "integer buffer format");
             Check(matrixAccessor.QuerySamplerType(3, -1) == SamplerType.Texture3D, "3d sampler type");
 
-            // cbuf 查询没有精确事实时，只能回落到同句柄的直接事实（NVN c2 句柄→组合槽）；
-            // 没有同句柄直接事实、或未列出的 handle 仍是缺事实；事实不跨阶段。
-            Check(matrixAccessor.QuerySamplerType(0, 0) == SamplerType.Texture2D &&
-                  matrixAccessor.QueryTextureCoordNormalized(0, 0),
-                "cbuf query falls back to the same handle's direct fact");
-            Check(matrixAccessor.HasDirectTextureFact(0) && !matrixAccessor.HasDirectTextureFact(1),
+            // 经 c2 句柄表的查询没有精确事实时，只能回落到同句柄的直接事实（NVN c2 句柄→组合槽）；
+            // 别的常量缓冲（游戏 UBO、c0）同一字偏移不借（#999）；没有同句柄直接事实、或未列出的 handle 仍是缺事实；事实不跨阶段。
+            Check(matrixAccessor.QuerySamplerType(0, 2) == SamplerType.Texture2D &&
+                  matrixAccessor.QueryTextureCoordNormalized(0, 2),
+                "c2 query falls back to the same handle's direct fact");
+            Throws("MISSING_FACT", () => matrixAccessor.QuerySamplerType(0, 4), "a user-UBO handle does not borrow the combined slot's fact");
+            Throws("MISSING_FACT", () => matrixAccessor.QuerySamplerType(0, 3), "c3 (NVN UBO 0) does not borrow either");
+            Check(matrixAccessor.HasDirectTextureFact(0, 2) && !matrixAccessor.HasDirectTextureFact(1, 2),
                 "only directly bound handles have a fallback");
+            Check(!matrixAccessor.HasDirectTextureFact(0, 4) && !matrixAccessor.HasDirectTextureFact(0, 0),
+                "the fallback is only for the c2 handle table");
             Throws("MISSING_FACT", () => matrixAccessor.QuerySamplerType(9, 0), "cbuf handle without a direct fact is a missing fact");
             Throws("MISSING_FACT", () => matrixAccessor.QueryTextureFormat(9, -1), "unlisted handle is a missing fact");
             var vsMatrix = new DirectGpuAccessor(matrixProfile, program, program.StageOf("vs"), 1,
@@ -1548,10 +1616,10 @@ internal static unsafe class Program
             Check(resolvePoolSlots != null, "production pool-slot resolver exists");
             var cbufAllocator = new DirectAllocator(matrixProfile);
             cbufAllocator.Bindings.Add(new DirectBinding("fs", "texture", "test", 2, 0, 1));
-            ShaderProgram CbufProgram(int handleIndex) => new(
+            ShaderProgram CbufProgram(int handleIndex, int cbufSlot = 2) => new(
                 new ShaderProgramInfo(Array.Empty<BufferDescriptor>(), Array.Empty<BufferDescriptor>(),
                     new[] { new TextureDescriptor(2, 0, SamplerType.Texture2D, TextureFormat.R8G8B8A8Unorm,
-                        cbufSlot: 4, handleIndex: handleIndex, arrayLength: 1, separate: false, TextureUsageFlags.None) },
+                        cbufSlot: cbufSlot, handleIndex: handleIndex, arrayLength: 1, separate: false, TextureUsageFlags.None) },
                     Array.Empty<TextureDescriptor>(), ShaderStage.Fragment, 0, 0, 0,
                     usesFragCoord: false, usesInstanceId: false, usesDrawParameters: false, usesRtLayer: false,
                     clipDistancesWritten: 0, fragmentOutputMap: 0),
@@ -1571,13 +1639,63 @@ internal static unsafe class Program
                 cbufRejected = error.InnerException is DirectCompileException compile && compile.Code == "UNSUPPORTED_PROGRAM";
             }
             Check(cbufRejected, "cbuf handle without a direct fact is rejected");
+            // 游戏 UBO（c4）里的同一字偏移：不是组合槽，有同句柄直接事实也拒（#999 错绑）
+            var uboAllocator = new DirectAllocator(matrixProfile);
+            uboAllocator.Bindings.Add(new DirectBinding("fs", "texture", "test", 2, 0, 1));
+            bool uboRejected = false;
+            try { resolvePoolSlots.Invoke(null, new object[] { new List<(DirectStage stage, ShaderProgram shader, DirectGpuAccessor accessor)>
+                { (program.StageOf("fs"), CbufProgram(0, 4), matrixAccessor) }, uboAllocator }); }
+            catch (System.Reflection.TargetInvocationException error)
+            {
+                uboRejected = error.InnerException is DirectCompileException compile && compile.Code == "UNSUPPORTED_PROGRAM" && compile.Message.Contains("cbuf slot 4");
+            }
+            Check(!uboRejected && uboAllocator.Bindings.Last().Slot == -1 && uboAllocator.Bindings.Last().UboSlot == 1 &&
+                  uboAllocator.Bindings.Last().UboOffset == 0,
+                "a c4 handle is not bound as the combined slot with the same handle index (it is uboSlot 1 / uboOffset 0)");
+            // 游戏 UBO 句柄只接单个、非分离的采样贴图；其余形态如实报未接，不给 uboSlot
+            string UboShape(string kind, string source, int count, int cbufSlot, int handleIndex, int arrayLength, bool separate)
+            {
+                var allocator = new DirectAllocator(matrixProfile);
+                var b = new DirectBinding("fs", kind, source, kind == "image" ? 3 : 2, 0, count);
+                allocator.Bindings.Add(b);
+                var descriptor = new TextureDescriptor(kind == "image" ? 3 : 2, 0, source == "buffer-texture" ? SamplerType.TextureBuffer : SamplerType.Texture2D,
+                    TextureFormat.R8G8B8A8Unorm, cbufSlot: cbufSlot, handleIndex: handleIndex, arrayLength: arrayLength, separate: separate, TextureUsageFlags.None);
+                ShaderProgram shaderProgram = new(
+                    new ShaderProgramInfo(Array.Empty<BufferDescriptor>(), Array.Empty<BufferDescriptor>(),
+                        kind == "image" ? Array.Empty<TextureDescriptor>() : new[] { descriptor },
+                        kind == "image" ? new[] { descriptor } : Array.Empty<TextureDescriptor>(), ShaderStage.Fragment, 0, 0, 0,
+                        usesFragCoord: false, usesInstanceId: false, usesDrawParameters: false, usesRtLayer: false,
+                        clipDistancesWritten: 0, fragmentOutputMap: 0),
+                    Ryujinx.Graphics.Shader.Translation.TargetLanguage.Spirv, Array.Empty<byte>());
+                try
+                {
+                    resolvePoolSlots.Invoke(null, new object[] { new List<(DirectStage stage, ShaderProgram shader, DirectGpuAccessor accessor)>
+                        { (program.StageOf("fs"), shaderProgram, matrixAccessor) }, allocator });
+                    return "bound " + b.UboSlot + "/" + b.UboOffset + "/" + b.Slot;
+                }
+                catch (System.Reflection.TargetInvocationException error) when (error.InnerException is DirectCompileException compile)
+                {
+                    return compile.Code + " " + compile.Message;
+                }
+            }
+            Check(UboShape("texture", "texture", 1, 18, 0x3FFF, 1, false) == "bound 15/65532/-1", "c18 last word of a 64 KiB UBO is bound");
+            foreach (var (what, shape, outcome) in new[] {
+                ("image", "image", UboShape("image", "image", 1, 4, 256, 1, false)),
+                ("buffer texture", "buffer texture", UboShape("texture", "buffer-texture", 1, 4, 256, 1, false)),
+                ("separate", "separate", UboShape("texture", "texture", 1, 4, 256, 1, true)),
+                ("array", "array", UboShape("texture", "texture", 4, 4, 0, 4, false)),
+                ("offset past 64 KiB", "offset outside 64 KiB", UboShape("texture", "texture", 1, 4, 0x4000, 1, false)) })
+                Check(outcome == "UNSUPPORTED_PROGRAM fs: texture handle from cbuf slot 4 is not implemented (" + shape + ")",
+                    "user-UBO " + what + " handle stays unsupported: " + outcome);
+            string c19 = UboShape("texture", "texture", 1, 19, 256, 1, false);
+            Check(c19 == "UNSUPPORTED_PROGRAM fs: texture handle from cbuf slot 19 is not implemented", "cbuf 19 is outside the user UBO range: " + c19);
             // Facts alone do not implement separate binding; the production resolver must still refuse it.
             var separateAllocator = new DirectAllocator(matrixProfile);
             separateAllocator.Bindings.Add(new DirectBinding("fs", "texture", "test", 2, 0, 1));
             ShaderProgram separateProgram = new(
                 new ShaderProgramInfo(Array.Empty<BufferDescriptor>(), Array.Empty<BufferDescriptor>(),
                     new[] { new TextureDescriptor(2, 0, SamplerType.Texture2D, TextureFormat.R8G8B8A8Unorm,
-                        cbufSlot: 4, handleIndex: 0, arrayLength: 1, separate: true, TextureUsageFlags.None) },
+                        cbufSlot: 2, handleIndex: 0, arrayLength: 1, separate: true, TextureUsageFlags.None) },
                     Array.Empty<TextureDescriptor>(), ShaderStage.Fragment, 0, 0, 0,
                     usesFragCoord: false, usesInstanceId: false, usesDrawParameters: false, usesRtLayer: false,
                     clipDistancesWritten: 0, fragmentOutputMap: 0),

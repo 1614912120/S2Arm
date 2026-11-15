@@ -27,6 +27,16 @@ int main(void) { @autoreleasepool {
     CHECK(r == 1 && dt < 5, "① 重启后已过 1 拍：等拍立即返回（返回 %d、等 %.1f ms；旧代码等满 50 ms 返回 0 = 锁 30 帧）", r, dt);
     CHECK(atomic_load(&g_vs_loaded) == 0 && atomic_load(&g_depth_zero) == 0, "② 重启后深度约定计数清零（顶点着色器 %d、深度模式 %d）", atomic_load(&g_vs_loaded), atomic_load(&g_depth_zero));
     g_link = nil; g_dm_present_link = 0;
+    // ③ 每局开头的出图方式（11-15 #ee56e7 / #1155 另一条入口）：期望手写——补帧开、没给 DM_PRESENT_LINK → 0（出图线程自己取画布，不起显示链）；
+    //   补帧开、DM_PRESENT_LINK=2（120 档帧率补丁）→ 2；补帧关 → 1（缺省 60 Hz 显示链）。旧实现每局开头只看 DM_PRESENT_LINK：第一项得 1（红）
+    { struct { const char *fi, *link; int want; } c[] = {{"1", NULL, 0}, {"1", "2", 2}, {NULL, NULL, 1}};
+      for (int i = 0; i < 3; i++) {
+          if (c[i].fi) setenv("DM_PRESENT_FI", c[i].fi, 1); else unsetenv("DM_PRESENT_FI");
+          if (c[i].link) setenv("DM_PRESENT_LINK", c[i].link, 1); else unsetenv("DM_PRESENT_LINK");
+          nvn_be_request_stop(); nvn_be_shutdown_session(); nvn_be_begin_session();
+          CHECK(g_dm_present_link == c[i].want, "③ 每局开头：DM_PRESENT_FI=%s、DM_PRESENT_LINK=%s → 出图方式 %d（期望 %d）", c[i].fi ? c[i].fi : "未设", c[i].link ? c[i].link : "未设", g_dm_present_link, c[i].want);
+      }
+      unsetenv("DM_PRESENT_FI"); unsetenv("DM_PRESENT_LINK"); }
     printf("%s t_link_restart：%u 项，不过 %u\n", failures ? "✗" : "✓", checks, failures);
     return failures ? 1 : 0;
 }}

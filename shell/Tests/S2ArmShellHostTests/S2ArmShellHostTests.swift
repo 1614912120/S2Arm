@@ -585,3 +585,27 @@ nonisolated(unsafe) private var lastPlayed = ""
     #expect(SigningIdentity.mismatch(provision: nil, bundleID: "io.s2arm.games") == nil)
     #expect(SigningIdentity.mismatch(provision: Data("no plist here".utf8), bundleID: "io.s2arm.games") == nil)
 }
+
+// 游戏音量（#1186，同齿轮菜单「声音」）：宿主给了 volume 才出「声音」一组、五档里取最接近的；改值交宿主（种类 volume、键 = 百分比）。期望手算
+@MainActor @Test func gameSettingsVolume() throws {
+    typealias O = S2ArmGameSettings.Options
+    var withVol = O(fps: .init(on: false, hidden: true), fullscreen: .init(on: false, hidden: true)); withVol.volume = 30
+    let opts: [String: O] = ["G7": withVol, "G8": O(fps: .init(on: false, hidden: true), fullscreen: .init(on: false, hidden: true))]
+    var sets: [String] = []
+    let tag = UUID().uuidString
+    let app = try #require(UserDefaults(suiteName: "s2a.test.app." + tag))
+    defer { app.removePersistentDomain(forName: "s2a.test.app." + tag) }
+    let stores = S2ArmGameSettings.Stores(game: { _ in app }, app: app, options: { opts[$0] },
+                                          setOption: { id, kind, key, on in sets.append("\(id) \(kind) \(key) \(on)"); return true })
+    let s = S2ArmGameSettings.sections(for: "G7", stores: stores, state: .init(selected: "default", hasMine: false))
+    #expect(s.map(\.id) == ["s2a.identity", "s2a.picture", "s2a.sound", "s2a.vpad"])
+    let row = try #require(s.first { $0.id == "s2a.sound" }?.rows.first)
+    #expect(row.id == "gameVolume" && row.value == "25", "30 取最接近的 25 档")
+    if case .choice(let o) = row.kind { #expect(o.map(\.id) == ["0", "25", "50", "75", "100"] && o.first?.label == "Mute") } else { Issue.record("不是选项行") }
+    #expect(!S2ArmGameSettings.sections(for: "G8", stores: stores, state: .init(selected: "default", hasMine: false)).contains { $0.id == "s2a.sound" }, "宿主没给音量不出这一组")
+    S2ArmGameSettings.apply(id: "G7", setting: "gameVolume", value: "50", stores: stores)
+    S2ArmGameSettings.apply(id: "G7", setting: "gameVolume", value: "loud", stores: stores)
+    #expect(sets == ["G7 volume 50 true"], "非数字不交宿主")
+    #expect(O.parse(#"{"fps":{"on":false},"fullscreen":{"on":false},"volume":75}"#)?.volume == 75)
+    #expect(O.parse(#"{"fps":{"on":false},"fullscreen":{"on":false}}"#)?.volume == nil)
+}
