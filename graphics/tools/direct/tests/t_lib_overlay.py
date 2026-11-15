@@ -5,7 +5,9 @@
 #     K1：old 反射无 fetch、无 _bf；fresh 反射 = old + fetch、有 _bf → 收：覆盖层里 K1 的种类 1（json）= fresh 那份字节、种类 2（_bf）= fresh 那份字节
 #     K2：fresh 反射除了 fetch 还改了 fn_prefix（配不上主容器的旧库）→ 跳过
 #     K3：old 已有 _bf → 不收
-#     覆盖层只有 K1 的两条记录；两份容器链版本不同 → 退出 1；没有要补的 → 退出 0、不建覆盖层目录
+#     K4（顶点）：重出只多了 raster.scr_pos、无 _bf → 只收它的 json（同像素证明要它，#1152 实测漏了它 ⑤ 全拒）
+#     K5（顶点）：反射一字不差 → 不收；K6（顶点）：只多了空的 scr_pos → 不收（证明不了什么，不推）
+#     覆盖层只有 K1 的两条与 K4 的 json；两份容器链版本不同 → 退出 1；没有要补的 → 退出 0、不建覆盖层目录
 import json, os, struct, subprocess, sys, tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -17,7 +19,7 @@ def check(cond, msg):
     if not cond: fails.append(msg)
 def run(*a): return subprocess.run([*CMD, '--libpack', *a], capture_output=True, text=True)
 
-K1, K2, K3, CHAIN = '0000000000000a01', '0000000000000a02', '0000000000000a03', '0a7dae3c1e7b'
+K1, K2, K3, K4, K5, K6, CHAIN = '0000000000000a01', '0000000000000a02', '0000000000000a03', '0000000000000a04', '0000000000000a05', '0000000000000a06', '0a7dae3c1e7b'
 LIB = b'MTLB-not-a-real-library-'   # 覆盖层只搬字节、不建库：内容任意（PackFiles 不核 metallib 内容）
 
 def write(d, files):
@@ -36,11 +38,14 @@ def seg(d, rec):
 
 with tempfile.TemporaryDirectory() as t:
     j = lambda k, **x: json.dumps({"key": f"{k}_b", "stage": "ps", "fn_prefix": "s0_", **x}, sort_keys=True)
+    jv = lambda k, **r: json.dumps({"key": f"{k}_b", "stage": "vs", "raster": {"pos_attr": 0, "scr_uv": [], **r}}, sort_keys=True)
     old = {f'{K1}_b.metallib': LIB + b'1', f'{K1}_b.json': j(K1),
+           f'{K4}_b.metallib': LIB + b'4', f'{K4}_b.json': jv(K4), f'{K5}_b.metallib': LIB + b'5', f'{K5}_b.json': jv(K5, scr_pos=[3]), f'{K6}_b.metallib': LIB + b'6', f'{K6}_b.json': jv(K6),
            f'{K2}_b.metallib': LIB + b'2', f'{K2}_b.json': j(K2),
            f'{K3}_b.metallib': LIB + b'3', f'{K3}_b.json': j(K3, fetch={"calls": []}), f'{K3}_bf.metallib': LIB + b'3bf'}
     fetch = {"calls": [{"fc": 0, "tex_reg": 9, "varying_locn": 7, "proj": 1, "ndc": 1}], "mixed_regs": [], "outputs": [{"color": 0, "type": "float4"}]}
     fresh = {f'{K1}_b.metallib': LIB + b'1', f'{K1}_b.json': j(K1, fetch=fetch), f'{K1}_bf.metallib': LIB + b'1bf',
+             f'{K4}_b.metallib': LIB + b'4', f'{K4}_b.json': jv(K4, scr_pos=[7]), f'{K5}_b.metallib': LIB + b'5', f'{K5}_b.json': jv(K5, scr_pos=[3]), f'{K6}_b.metallib': LIB + b'6', f'{K6}_b.json': jv(K6, scr_pos=[]),
              f'{K2}_b.metallib': LIB + b'2', f'{K2}_b.json': json.dumps({"key": f"{K2}_b", "stage": "ps", "fn_prefix": "s9_", "fetch": fetch}, sort_keys=True), f'{K2}_bf.metallib': LIB + b'2bf',
              f'{K3}_b.metallib': LIB + b'3', f'{K3}_b.json': j(K3, fetch={"calls": []}), f'{K3}_bf.metallib': LIB + b'3bf-new'}
     for name, files in (('old', old), ('fresh', fresh)):
@@ -53,10 +58,11 @@ with tempfile.TemporaryDirectory() as t:
     chain, recs = read_idx(ov)
     check(chain == CHAIN, f'覆盖层链版本 = {CHAIN}（得 {chain}）')
     got = sorted((r_[0], r_[1]) for r_ in recs)
-    check(got == [(int(K1, 16), 1), (int(K1, 16), 2)], f'覆盖层只有 K1 的 json（种类 1）与 _bf（种类 2）（得 {got}）')
+    check(got == [(int(K1, 16), 1), (int(K1, 16), 2), (int(K4, 16), 1)], f'覆盖层只有 K1 的 json（种类 1）与 _bf（种类 2）、K4 的 json（得 {got}）')
     by = {(r_[0], r_[1]): r_ for r_ in recs}
     if (int(K1, 16), 1) in by: check(seg(ov, by[(int(K1, 16), 1)]) == fresh[f'{K1}_b.json'].encode(), 'K1 的 json = 重出那份（带 fetch）逐字节')
     if (int(K1, 16), 2) in by: check(seg(ov, by[(int(K1, 16), 2)]) == fresh[f'{K1}_bf.metallib'], 'K1 的 _bf = 重出那份逐字节')
+    if (int(K4, 16), 1) in by: check(seg(ov, by[(int(K4, 16), 1)]) == fresh[f'{K4}_b.json'].encode(), 'K4 的 json = 重出那份（带 scr_pos）逐字节')
     # 反证：链版本不同 → 红、退出 1
     write(os.path.join(t, 'other_src'), fresh)
     run('pack', os.path.join(t, 'other_src'), os.path.join(t, 'other'), '0000000000aa')

@@ -493,10 +493,20 @@ static class LibPack
             var o = new byte[r.Len]; f.ReadExactly(o); return o;
         }
     }
-    /// <summary>反射去掉 fetch 后的规范文本（比较用）；解不了 → null</summary>
+    static bool HasScrPos(byte[] json)
+    {
+        try { return System.Text.Json.Nodes.JsonNode.Parse(json)?["raster"]?["scr_pos"] is System.Text.Json.Nodes.JsonArray a && a.Count > 0; }
+        catch (JsonException) { return false; }
+    }
+    /// <summary>反射去掉「可读瓦片版带进来的字段」后的规范文本（比较用）：片元的 fetch、顶点的 raster.scr_pos（宿主 scr_proof 对 ndc 采样的同像素证明要它）；解不了 → null</summary>
     static string WithoutFetch(byte[] json)
     {
-        try { var n = System.Text.Json.Nodes.JsonNode.Parse(json) as System.Text.Json.Nodes.JsonObject; if (n == null) return null; n.Remove("fetch"); return n.ToJsonString(); }
+        try
+        {
+            var n = System.Text.Json.Nodes.JsonNode.Parse(json) as System.Text.Json.Nodes.JsonObject; if (n == null) return null;
+            n.Remove("fetch"); if (n["raster"] is System.Text.Json.Nodes.JsonObject r) r.Remove("scr_pos");
+            return n.ToJsonString();
+        }
         catch (JsonException) { return null; }
     }
     /// <summary>
@@ -509,20 +519,23 @@ static class LibPack
     {
         var o = new Packed(oldDir); var f = new Packed(freshDir);
         if (o.Chain != f.Chain) return (new() { $"两份容器链版本不同（{o.Chain} / {f.Chain}）：覆盖层只能补同链的库，要整款重新出包" }, "", 0, 0);
-        var files = new Dictionary<string, byte[]>(); int added = 0, skipped = 0;
+        var files = new Dictionary<string, byte[]>(); int added = 0, skipped = 0, vjson = 0;
         foreach (var ((key, k), _) in f.Rec)
         {
-            if (k != 2 || o.Rec.ContainsKey((key, 2))) continue;   // 只补 old 没有的 _bf
+            if (k != 1 || !o.Rec.ContainsKey((key, 1))) continue;   // 键：两份都有反射的（新增的键不在老包的着色器映射里，补了也用不上）
+            bool newBf = f.Rec.ContainsKey((key, 2)) && !o.Rec.ContainsKey((key, 2));   // 老包没有、重出有的 _bf
             byte[] fj = f.Get(key, 1), oj = o.Get(key, 1);
-            string a = fj == null ? null : WithoutFetch(fj), b = oj == null ? null : WithoutFetch(oj);
-            if (a == null || b == null || a != b) { skipped++; continue; }
-            files[$"{key:x16}_bf.metallib"] = f.Get(key, 2); files[$"{key:x16}_b.json"] = fj; added++;
+            if (!newBf && (fj.AsSpan().SequenceEqual(oj) || !HasScrPos(fj))) continue;   // 没新 _bf：只收「多了非空 scr_pos」的顶点反射（空的证明不了什么，不推）
+            string a = WithoutFetch(fj), b = WithoutFetch(oj);
+            if (a == null || b == null || a != b) { if (newBf) skipped++; continue; }   // 别的字段也变了：配不上主容器里的旧库，不收（只有带新 _bf 的才计进「跳过」）
+            files[$"{key:x16}_b.json"] = fj;
+            if (newBf) { files[$"{key:x16}_bf.metallib"] = f.Get(key, 2); added++; } else vjson++;   // 没有新 _bf、只多了 scr_pos 等的（顶点）：只换反射
         }
         if (added == 0) return (new(), $"[直连库] 覆盖层：没有要补的可读瓦片版（跳过 {skipped} 个反射别处也变了的键）", 0, skipped);
         Directory.CreateDirectory(outDir);
         var (bad, line) = PackFiles(files.Keys, n => files.TryGetValue(n, out var v) ? v : null, outDir, f.Chain);
         long bytes = files.Values.Sum(v => (long)v.Length);
-        return (bad, $"[直连库] 覆盖层：补 {added} 个键的可读瓦片版（{bytes / 1048576.0:F1} MB）；跳过 {skipped} 个反射别处也变了的键。{line}", added, skipped);
+        return (bad, $"[直连库] 覆盖层：补 {added} 个键的可读瓦片版、{vjson} 个键的反射（顶点 scr_pos 等，{bytes / 1048576.0:F1} MB）；跳过 {skipped} 个反射别处也变了的键。{line}", added, skipped);
     }
 
     public static int Cli(string[] argv)
