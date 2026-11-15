@@ -161,6 +161,7 @@ nvn_gpu_rc nvn_gpu_shader_load(const nvn_gpu_shader_src *s, nvn_gpu_shader *out,
     return (nvn_gpu_rc){NVN_GPU_OK};
 }
 void nvn_gpu_shader_release(nvn_gpu_shader s) { (void)s; g_release_calls++; }
+void nvn_gpu_caps_get(nvn_gpu_caps *out) { memset(out, 0, sizeof *out); }   // 建程序时问深度裁剪能力（nvk_shader.c depth_clip_cap）：本用例只管借用，报「没有」
 void nvk_prog_warm_reset(void) {}
 void nvk_prog_warm_stat_build(int rc) { (void)rc; }
 void nvk_prog_warm_stat_draw_hit(void) {}
