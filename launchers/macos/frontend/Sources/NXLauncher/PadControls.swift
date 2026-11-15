@@ -21,17 +21,19 @@ package struct PadControl {
     package let adjust: ((Int) -> Void)?
     package let preferred: Bool
     package var shortcuts: [PadShortcut] = []
+    package var shortcutsRequireFocus = false
 }
-/// A operates the focused control; Menu remains a submit alias for editable
-/// sheets. Hints show the mapped physical A/B/X/Y of the primary player's pad.
+/// A operates the focused control; the right trigger submits the current page.
+/// Hints follow the primary player's controller family and face-button mapping.
 package enum PadShortcut: String, CaseIterable {
-    case primary, back, secondary, tertiary
+    case primary, back, secondary, tertiary, rightTrigger
     package var symbol: String {
         switch self {
         case .primary: return "a.circle"
         case .back: return "b.circle"
         case .secondary: return "x.circle"
         case .tertiary: return "y.circle"
+        case .rightTrigger: return "rt.rectangle.roundedtop"
         }
     }
 }
@@ -41,6 +43,7 @@ package enum PadShortcut: String, CaseIterable {
     package init() {}
 }
 private struct PadShortcutsKey: EnvironmentKey { static let defaultValue: [PadShortcut] = [] }
+private struct PadShortcutsRequireFocusKey: EnvironmentKey { static let defaultValue = false }
 private struct PadRegistryKey: EnvironmentKey { static let defaultValue: (any PadControlRegistry)? = nil }
 private struct PadControlIDKey: EnvironmentKey { static let defaultValue: String? = nil }
 private struct PadControlScopeKey: EnvironmentKey { static let defaultValue = "page" }
@@ -51,12 +54,18 @@ extension EnvironmentValues {
     package var padControlScope: String { get { self[PadControlScopeKey.self] } set { self[PadControlScopeKey.self] = newValue } }
     package var padPreferred: Bool { get { self[PadPreferredKey.self] } set { self[PadPreferredKey.self] = newValue } }
     package var padShortcuts: [PadShortcut] { get { self[PadShortcutsKey.self] } set { self[PadShortcutsKey.self] = newValue } }
+    package var padShortcutsRequireFocus: Bool { get { self[PadShortcutsRequireFocusKey.self] } set { self[PadShortcutsRequireFocusKey.self] = newValue } }
 }
 extension View {
     package func controllerID(_ id: String) -> some View { environment(\.padControlID, id).accessibilityIdentifier(id) }
     package func controllerScope(_ scope: String) -> some View { environment(\.padControlScope, scope) }
     package func controllerPreferredFocus(_ preferred: Bool) -> some View { environment(\.padPreferred, preferred) }
-    package func controllerShortcut(_ shortcuts: PadShortcut...) -> some View { environment(\.padShortcuts, shortcuts) }
+    /// Secondary submit actions in a page with multiple tasks require focus, so
+    /// R2 cannot start an unrelated row or replace the page's default action.
+    /// Back and other aliases remain available regardless of focus.
+    package func controllerShortcut(_ shortcuts: PadShortcut..., focused: Bool = false) -> some View {
+        environment(\.padShortcuts, shortcuts).environment(\.padShortcutsRequireFocus, focused)
+    }
     package func controllerConnectedOnly() -> some View { modifier(PadConnectedOnlyModifier()) }
     package func controllerButtonStyle<S: ButtonStyle>(_ style: S) -> some View { buttonStyle(PadVisualButtonStyle(style: style)) }
     package func controllerButtonStyle<S: PrimitiveButtonStyle>(_ style: S) -> some View { buttonStyle(PadPrimitiveButtonStyle(style: style)) }
@@ -128,11 +137,13 @@ private struct PadControlModifier: ViewModifier {
     @Environment(\.isEnabled) private var enabled
     @Environment(\.padPreferred) private var preferred
     @Environment(\.padShortcuts) private var shortcuts
+    @Environment(\.padShortcutsRequireFocus) private var shortcutsRequireFocus
     func body(content: Content) -> some View {
         content.background {
             if registry != nil {
                 PadControlFrame(registry: registry, id: explicitID ?? identifier ?? "control." + token.uuidString,
-                    scope: scope, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred, shortcuts: shortcuts)
+                    scope: scope, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred, shortcuts: shortcuts,
+                    shortcutsRequireFocus: shortcutsRequireFocus)
             }
         }
     }
@@ -146,6 +157,7 @@ private struct PadControlFrame: NSViewRepresentable {
     let adjust: ((Int) -> Void)?
     let preferred: Bool
     let shortcuts: [PadShortcut]
+    let shortcutsRequireFocus: Bool
     final class Host: NSView {
         weak var registry: (any PadControlRegistry)?
         // SwiftUI can overlap old and new hosts during a button-style update.
@@ -158,7 +170,7 @@ private struct PadControlFrame: NSViewRepresentable {
     func updateNSView(_ view: Host, context: Context) {
         if let previous = view.registry, previous !== registry { previous.removeControl(view.token) }
         view.registry = registry
-        registry?.register(PadControl(token: view.token, id: id, scope: scope, view: view, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred, shortcuts: shortcuts))
+        registry?.register(PadControl(token: view.token, id: id, scope: scope, view: view, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred, shortcuts: shortcuts, shortcutsRequireFocus: shortcutsRequireFocus))
     }
     static func dismantleNSView(_ view: Host, coordinator: ()) {
         view.registry?.removeControl(view.token)

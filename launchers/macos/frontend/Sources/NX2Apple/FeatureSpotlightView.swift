@@ -179,7 +179,7 @@ struct FeatureSpotlightView: View {
             Button { if last { model.closeFeatureAndExport() } else { go(index + 1) } } label: {
                 Text(last ? t("feature.go") : t("feature.next")).font(.manrope(14.5, .bold))
             }
-            .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).accessibilityIdentifier("feature.next").controllerShortcut(.primary)
+            .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).accessibilityIdentifier("feature.next").controllerShortcut(.rightTrigger)
         }
     }
 }

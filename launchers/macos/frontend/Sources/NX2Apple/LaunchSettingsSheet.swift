@@ -143,7 +143,7 @@ struct LaunchSettingsSheet: View {
             Spacer(minLength: 0)
             LauncherSheetFooter {
                 Spacer()
-                Button(t("display.done")) { dismiss() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary, .back)
+                Button(t("display.done")) { dismiss() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger, .back)
                     .controllerID("launch.done")
             }
         }

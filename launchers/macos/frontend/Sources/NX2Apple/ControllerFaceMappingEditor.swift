@@ -13,6 +13,8 @@ struct ControllerFaceMappingEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(zh ? "四键布局" : "Button layout").font(.manrope(15, .semibold))
+            Text(zh ? "所有非 Switch Pro / Joy-Con 手柄共用" : "Shared by all controllers except Switch Pro / Joy-Con")
+                .font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text(zh ? "实体按键 → Switch" : "Physical button → Switch")
                 .font(.manrope(12)).foregroundStyle(.secondary)
             let positions = family.diamond
@@ -37,12 +39,13 @@ struct ControllerFaceMappingEditor: View {
     }
     private func binding(_ source: Int) -> some View {
         HStack(spacing: 6) {
-            Image(systemName: family.symbol(source: source)).font(.system(size: 22)).frame(width: 24)
+            ControllerFaceButton(family: family, source: source)
             Image(systemName: "arrow.right").font(.system(size: 10)).foregroundStyle(.secondary)
             LauncherDropdown(options: ControllerFaceMapping.labels.enumerated().map { (String($0.offset), $0.element) },
-                selection: String(mapping.target(for: source)), label: family.label(source: source)) { target in
+                selection: String(mapping.target(for: source)), label: family.label(source: source), fill: true,
+                artwork: { value in AnyView(ControllerFaceButton(family: .nintendo, source: Int(value) ?? 0, size: 30)) }) { target in
                 if let target = Int(target) { store.set(mapping.assigning(source: source, to: target), for: family) }
-            }.controllerID("controller.face.\(source)")
+            }.frame(width: 88).controllerID("controller.face.\(source)")
         }.frame(width: 146)
     }
 }

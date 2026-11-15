@@ -63,7 +63,7 @@ import LauncherPadBridge
     func handle(_ action: LauncherPadAction) -> Bool {
         switch action {
         case .back: close(apply: false); return true
-        case .menu: close(apply: true); return true
+        case .submit: close(apply: true); return true
         case .filter: if !value.isEmpty { value.removeLast() }; return true
         case .details: value.append(" "); return true
         default: return false
@@ -107,7 +107,7 @@ private struct LauncherPadKeyboardView: View {
                 Button(keyboard.t("home.keyboard.cancel")) { keyboard.close(apply: false) }
                     .controllerShortcut(.back)
                 Button(keyboard.t("home.keyboard.done")) { keyboard.close(apply: true) }
-                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger)
             }.controllerButtonStyle(LauncherSecondaryButtonStyle()).fixedSize(horizontal: true, vertical: false)
         }.padding(LauncherTheme.Space.section).launcherSheet(.settings, height: 410)
     }

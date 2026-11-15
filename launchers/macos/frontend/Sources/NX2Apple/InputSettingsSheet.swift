@@ -191,24 +191,11 @@ struct InputSettingsSheet: View {
                     }
                 }
             }
-            VStack(alignment: .leading, spacing: 7) {
-                Label(t("gamepad"), systemImage: "gamecontroller").font(LauncherTheme.TypeStyle.section)
-                if player == 1 {
-                    Text(loc.lang == .zh ? "主手柄四键在顶栏手柄弹窗设置，这里可绑定其余实体按键" : "Set the primary pad’s four face buttons in the controller popover; bind its other buttons here")
-                        .font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-                let codes = player == 1 ? Array(InputConfig.padCodes.dropFirst(4)) : InputConfig.padCodes
-                let binding = config.gamepad[selected] ?? ""
-                LauncherDropdown(options: [("", t("unbound"))] + codes.map { ($0, names.pad($0)) },
-                                 selection: codes.contains(binding) ? binding : "", label: t("gamepad"), fill: true) { value in
-                    recording = nil
-                    let pad = value.isEmpty ? nil : value, target = selected
-                    let holder = pad.flatMap { p in config.gamepad.first { $0.key != target && $0.value == p }?.key }
-                    bind("gamepad", key: pad.map(names.pad) ?? "", target: target, holder: holder) {
-                        if let holder { config.gamepad[holder] = nil }
-                        config.gamepad[target] = pad; failure = nil
-                    }
-                }
+            Text(loc.lang == .zh ? "手柄四键统一在顶栏手柄弹窗设置，所有玩家共用" : "Set the four face buttons in the top-bar controller popover; the layout is shared by all players")
+                .font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("input.sharedFaces")
+            if !ControllerFaceMapping.labels.contains(selected) {
+                gamepadField
             }
             if config.conflictingTargets.contains(selected) {
                 Label(t("conflict.here"), systemImage: "exclamationmark.triangle").font(LauncherTheme.TypeStyle.detail).foregroundStyle(LauncherPalette.danger)
@@ -221,6 +208,25 @@ struct InputSettingsSheet: View {
         .padding(LauncherTheme.Metrics.cardInset)
         .frame(maxWidth: .infinity, alignment: .topLeading)
         .launcherPanel()
+    }
+
+    private var gamepadField: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Label(t("gamepad"), systemImage: "gamecontroller").font(LauncherTheme.TypeStyle.section)
+            let codes = Array(InputConfig.padCodes.dropFirst(4))
+            let binding = config.gamepad[selected] ?? ""
+            LauncherDropdown(options: [("", t("unbound"))] + codes.map { ($0, names.pad($0)) },
+                             selection: codes.contains(binding) ? binding : "", label: t("gamepad"), fill: true) { value in
+                recording = nil
+                let pad = value.isEmpty ? nil : value, target = selected
+                let holder = pad.flatMap { p in config.gamepad.first { $0.key != target && $0.value == p }?.key }
+                bind("gamepad", key: pad.map(names.pad) ?? "", target: target, holder: holder) {
+                    if let holder { config.gamepad[holder] = nil }
+                    config.gamepad[target] = pad; failure = nil
+                }
+            }
+            .controllerID("input.gamepad")
+        }
     }
 
     /// 键盘绑定：点一下进入录入（按新键，Esc 取消），右侧 × 清掉。
@@ -358,7 +364,7 @@ struct InputSettingsSheet: View {
                 Button(t("cancel")) { dismiss() }
                     .controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).disabled(saving).controllerShortcut(.back)
                 Button(t("save")) { save() }
-                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).disabled(!canSave).controllerShortcut(.primary)
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).disabled(!canSave).controllerShortcut(.rightTrigger)
                     .controllerID("input.save")
             }
         }
@@ -613,6 +619,7 @@ struct InputControllerMap: View {
                 .contentShape(Rectangle())
         }
         .controllerButtonStyle(.plain)
+        .controllerID("input.map." + target)
         .accessibilityLabel(names.target(target)).accessibilityValue(names.short(config, target))
         .accessibilityAddTraits(active ? [.isSelected] : [])
         .help(names.target(target) + " · " + names.short(config, target))
@@ -647,6 +654,7 @@ struct InputControllerMap: View {
             .contentShape(Rectangle())
         }
         .controllerButtonStyle(.plain)
+        .controllerID("input.map." + target)
         .accessibilityLabel(names.target(target)).accessibilityValue(names.short(config, target))
         .accessibilityAddTraits(active ? [.isSelected] : [])
         .help(names.target(target) + " · " + names.short(config, target))

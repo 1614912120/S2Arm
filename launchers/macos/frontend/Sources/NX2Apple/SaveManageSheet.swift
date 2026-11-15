@@ -121,7 +121,7 @@ struct SaveManageSheet: View {
                     Button(t("save.stop")) { state.stop() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.secondary)
                 }
                 Button(t("save.done")) { dismiss() }
-                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.primary, .back)
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.rightTrigger, .back)
                     .disabled(state.running == .restore)
             }
         }
@@ -199,7 +199,7 @@ struct SaveManageSheet: View {
     private var backupCard: some View {
         CardGroup(t("save.backup")) {
             CardRow(t("save.backupRow"), detail: t("save.backupDetail")) {
-                Button(t("save.backupButton")) { backup() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+                Button(t("save.backupButton")) { backup() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.rightTrigger, focused: true)
                     .disabled(blocked || state.status?.hasSave != true)
             }
         }
@@ -227,6 +227,7 @@ struct SaveManageSheet: View {
                 CardRow(t("save.verified"), detail: p.notice.isEmpty ? "" : loc.backend(p.notice),
                         dot: p.notice.isEmpty ? LauncherPalette.ready : LauncherPalette.building) {
                     Button(t("save.restoreButton")) { confirming = true }
+                        .controllerShortcut(.rightTrigger, focused: true)
                         .controllerButtonStyle(LauncherPrimaryButtonStyle()).disabled(blocked)
                 }
             }

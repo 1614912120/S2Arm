@@ -110,7 +110,7 @@ struct InstallView: View {
             }
             Divider().opacity(0.3)
             if model.installDone == gameID {
-                HStack { Spacer(); Button(text("install.close")) { model.installDone = nil; dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary, .back) }
+                HStack { Spacer(); Button(text("install.close")) { model.installDone = nil; dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger, .back) }
                     .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
             } else if let job = installJob {
                 HStack { Spacer(); Button(loc.t("s2arm.job.cancel")) { model.stop() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(job.phase == .stopping).controllerShortcut(.back) }
@@ -123,11 +123,11 @@ struct InstallView: View {
                     Button(loc.t("s2arm.export.revealIpa")) { model.revealIpa(ipa) }
                         .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.revealIpa").controllerShortcut(.secondary)
                 }
-                Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.back)
+                Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.rightTrigger, .back, focused: true)
                 Button(loc.t("s2arm.install.start")) {
                     if let game { model.clearInlineFailure(); model.install(game) }
                 }
-                .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
+                .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger)
                 // 不按清单置灰（维护者 11-11：玩家主动点装机不许前端挡）：清单可能是旧的（在外面登录好、插好线回来仍灰），
                 // 真做不下去的（没出 iPhone 版、没连设备、签名失败）作业层开头自己判、回真实原因；只在有作业在跑时置灰
                 .disabled(model.busy)

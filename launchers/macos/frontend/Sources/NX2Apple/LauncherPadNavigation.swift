@@ -20,16 +20,29 @@ enum LauncherPadSpatial {
     static func next(from current: CGRect, targets: [LauncherPadTarget], action: LauncherPadAction) -> LauncherPadTarget? {
         let horizontal = action == .left || action == .right
         let sign: CGFloat = action == .left || action == .down ? -1 : 1
+        func verticalGap(_ frame: CGRect) -> CGFloat {
+            action == .up ? frame.minY - current.maxY : current.minY - frame.maxY
+        }
         let candidates = targets.compactMap { target -> (LauncherPadTarget, CGFloat, Bool)? in
             let along = horizontal ? (target.frame.midX - current.midX) * sign : (target.frame.midY - current.midY) * sign
             guard along > 4 else { return nil }
+            // Different-height controls in the same row still belong to left/right.
+            guard horizontal || verticalGap(target.frame) >= -4 else { return nil }
             let across = horizontal ? abs(target.frame.midY - current.midY) : abs(target.frame.midX - current.midX)
             let overlap = horizontal ? target.frame.minY < current.maxY && target.frame.maxY > current.minY
                 : target.frame.minX < current.maxX && target.frame.maxX > current.minX
             return (target, along + across * 2, overlap)
         }
-        let aligned = candidates.filter { $0.2 }
-        let pool = horizontal || !aligned.isEmpty ? aligned : candidates
+        // Visit the adjacent row before preserving the column. Otherwise a lone
+        // control at the far end of a row can never be reached from the row below.
+        let row: [(LauncherPadTarget, CGFloat, Bool)]
+        if !horizontal, let nearest = candidates.min(by: { a, b in
+            verticalGap(a.0.frame) < verticalGap(b.0.frame)
+        }) {
+            row = candidates.filter { $0.0.frame.minY < nearest.0.frame.maxY && $0.0.frame.maxY > nearest.0.frame.minY }
+        } else { row = candidates }
+        let aligned = row.filter { $0.2 }
+        let pool = horizontal || !aligned.isEmpty ? aligned : row
         return pool.min { $0.1 < $1.1 }?.0
     }
 }
@@ -102,7 +115,9 @@ enum LauncherPadSpatial {
     func shortcutTargets(in window: NSWindow) -> [PadShortcut: [String]] {
         var result: [PadShortcut: [String]] = [:]
         for control in controls.values where control.view.window === window && !control.view.isHiddenOrHasHiddenAncestor && controlTarget(control) != nil {
-            for shortcut in control.shortcuts { result[shortcut, default: []].append(control.id) }
+            for shortcut in control.shortcuts where shortcut != .rightTrigger || !control.shortcutsRequireFocus || control.id == focusedID {
+                result[shortcut, default: []].append(control.id)
+            }
         }
         return result
     }
@@ -319,7 +334,7 @@ enum LauncherPadSpatial {
         visible = true
         if trackingMenu {
             switch action {
-            case .confirm: sendKey(36, "\r", in: currentWindow)
+            case .confirm, .submit: sendKey(36, "\r", in: currentWindow)
             case .back: sendKey(53, "\u{1b}", in: currentWindow)
             case .up: sendKey(126, "\u{f700}", in: currentWindow)
             case .down: sendKey(125, "\u{f701}", in: currentWindow)
@@ -368,7 +383,7 @@ enum LauncherPadSpatial {
         case .previousGroup: linear(-1, all: all)
         case .nextGroup: linear(1, all: all)
         case .scrollUp, .pageUp: scroll(-1, page: action == .pageUp, window: currentWindow, selected: selected)
-        case .scrollDown, .pageDown: scroll(1, page: action == .pageDown, window: currentWindow, selected: selected)
+        case .scrollDown: scroll(1, page: false, window: currentWindow, selected: selected)
         default: break
         }
         if let focusedID { memories[scope] = focusedID }
@@ -377,7 +392,7 @@ enum LauncherPadSpatial {
     private func performShortcut(_ action: LauncherPadAction, in window: NSWindow) -> Bool {
         let shortcut: PadShortcut
         switch action {
-        case .menu: shortcut = .primary
+        case .submit: shortcut = .rightTrigger
         case .back: shortcut = .back
         case .filter: shortcut = .secondary
         case .details: shortcut = .tertiary
@@ -387,9 +402,10 @@ enum LauncherPadSpatial {
         let matches = controls.values.filter {
             $0.view.window === window && !$0.view.isHiddenOrHasHiddenAncestor && $0.shortcuts.contains(shortcut)
                 && (!dropdown || $0.scope == "dropdown") && controlTarget($0) != nil
+                && (shortcut != .rightTrigger || !$0.shortcutsRequireFocus || $0.id == focusedID)
         }
         // A disabled submit/cancel must not fall through to Escape or to the page underneath.
-        guard let control = matches.first else {
+        guard let control = matches.first(where: { $0.id == focusedID }) ?? matches.first else {
             guard !controls.values.contains(where: { $0.view.window === window }),
                   let button = nativeButtons.buttons(in: window).first(where: { $0.0 == shortcut })?.1 else { return false }
             if button.isEnabled { button.performClick(nil) }

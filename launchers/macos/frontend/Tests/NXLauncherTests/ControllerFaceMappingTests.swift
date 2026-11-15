@@ -81,9 +81,9 @@ import XCTest
         for name in ["DualSense Wireless Controller", "Xbox Wireless Controller"] {
             let controller = FaceMappingController(name), navigation = LauncherPadNavigation()
             let pad = try XCTUnwrap(controller.extendedGamepad)
-            let physical = [pad.buttonA, pad.buttonB, pad.buttonX, pad.buttonY]
+            let physical = [pad.rightTrigger, pad.buttonB, pad.buttonX, pad.buttonY, pad.buttonA]
             var counts = [0, 0, 0, 0], mapping = ControllerFaceMapping.identity
-            let shortcuts: [PadShortcut] = [.primary, .back, .secondary, .tertiary]
+            let shortcuts: [PadShortcut] = [.rightTrigger, .back, .secondary, .tertiary]
             let host = NSHostingView(rootView: HStack {
                 ForEach(0..<4) { index in
                     Button(["Done", "Back", "Recheck", "Details"][index]) { counts[index] += 1 }
@@ -98,7 +98,7 @@ import XCTest
             defer { navigation.detach(); window.close() }
             try await Task.sleep(for: .milliseconds(100))
             var time: TimeInterval = 0
-            for (round, sources) in [[0, 1, 2, 3], [1, 0, 3, 2]].enumerated() {
+            for (round, sources) in [[0, 1, 2, 3], [0, 4, 3, 2]].enumerated() {
                 mapping = round == 0 ? .identity : .switchPosition(for: .xbox)
                 navigation.source.tick(now: time); time += 0.01
                 for target in 0..<4 {
@@ -112,24 +112,29 @@ import XCTest
         }
     }
 
-    func testCustomMappingsRemainPermutationsAndPersistSeparatelyByFamily() throws {
+    func testCustomMappingsRemainPermutationsAndPersistAcrossControllerFamilies() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("faces.json"), store = ControllerFaceMapStore(fileURL: root.appendingPathComponent("faces.json"))
         var custom = ControllerFaceMapping.identity.assigning(source: 0, to: 2)
         custom = custom.assigning(source: 1, to: 3)
         XCTAssertEqual((0..<4).map { custom.source(for: $0) }, [2, 3, 0, 1])
-        store.set(custom, for: .playstation); store.set(.switchPosition(for: .xbox), for: .xbox)
+        store.set(custom, for: .playstation)
+        XCTAssertEqual(store.mapping(for: .xbox), custom)
+        XCTAssertEqual(store.mapping(for: .other), custom)
+        XCTAssertEqual(store.mapping(for: .nintendo), .identity)
+        store.set(.switchPosition(for: .xbox), for: .xbox)
         let restored = ControllerFaceMapStore(fileURL: file)
         XCTAssertNil(restored.problem)
-        XCTAssertEqual(restored.mapping(for: .playstation), custom)
+        XCTAssertEqual(restored.mapping(for: .playstation).code, 0xb1)
         XCTAssertEqual(restored.mapping(for: .xbox).code, 0xb1)
         restored.set(nil, for: .playstation)
         XCTAssertEqual(restored.mapping(for: .playstation), .identity)
-        XCTAssertEqual(ControllerFaceMapStore(fileURL: file).mapping(for: .xbox).code, 0xb1)
+        XCTAssertEqual(ControllerFaceMapStore(fileURL: file).mapping(for: .xbox), .identity)
         let document = try JSONDecoder().decode(ControllerFaceMapStore.Document.self, from: Data(contentsOf: file))
-        XCTAssertEqual(document.schema, 1)
-        XCTAssertEqual(document.profiles, ["xbox": 0xb1], "游戏宿主读取同一份原子保存的配置")
+        XCTAssertEqual(document.schema, 2)
+        XCTAssertEqual(document.mapping, ControllerFaceMapping.identity.code, "游戏宿主读取同一份统一映射")
+        XCTAssertNil(document.profiles)
         XCTAssertNil(ControllerFaceMapping(code: 0))
         XCTAssertNil(ControllerFaceMapping(code: 0x1e4))
     }
@@ -166,7 +171,7 @@ import XCTest
             }
             navigation.focus("controller.face.reset"); navigation.handle(.confirm)
             XCTAssertEqual(store.mapping(for: family), .identity)
-            XCTAssertTrue(store.profiles.isEmpty)
+            XCTAssertEqual(store.sharedMapping, .identity)
         }
     }
 }

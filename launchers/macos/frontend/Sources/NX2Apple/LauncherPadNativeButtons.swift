@@ -22,7 +22,7 @@ import NXLauncher
         guard let content = window.contentView else { return [] }
         let all = collect(content).filter { !$0.isHiddenOrHasHiddenAncestor && !$0.title.isEmpty && $0.frame.width > 30 }
         guard let primary = all.first(where: { $0.keyEquivalent == "\r" || $0.cell === window.defaultButtonCell }) else { return [] }
-        var result: [(PadShortcut, NSButton)] = [(.primary, primary)]
+        var result: [(PadShortcut, NSButton)] = [(.rightTrigger, primary)]
         if let cancel = all.first(where: { $0.keyEquivalent == "\u{1b}" }) { result.append((.back, cancel)) }
         let baseline = primary.convert(primary.bounds, to: content).midY
         let secondary = all.filter { candidate in

@@ -13,8 +13,6 @@ struct ExportView: View {
     @ObservedObject var model: S2ArmLauncherModel
     @EnvironmentObject var loc: Localizer
     @ObservedObject var covers: CoverCache
-    @State private var renaming = false
-    @State private var renameText = ""
     /// 当前页面的选择；打开时恢复上次手动选择，没有时由模型选缺省位置。
     @State private var location = ""
     /// S 级优化卡片报了「这款什么都没有」的游戏号（整张卡不出）
@@ -67,21 +65,8 @@ struct ExportView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     let version = String(format: loc.t("s2arm.export.version"), game.display.isEmpty ? (game.version("base") ?? "-") : game.display)
                     LauncherHeadingLine {
-                        Button { renameText = game.name; renaming = true } label: {
-                            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                Text(game.name).font(.manrope(36, .heavy)).tracking(-1.0)
-                                Image(systemName: "pencil").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
-                            }
-                        }
-                        .controllerButtonStyle(.plain).disabled(model.busy || model.customizing)
-                        .help(loc.t("s2arm.custom.name.help"))
-                        .accessibilityIdentifier("export.name")
-                        .alert(loc.t("s2arm.custom.name.title"), isPresented: $renaming) {
-                            TextField(loc.t("s2arm.custom.name.placeholder"), text: $renameText)
-                            Button(loc.t("s2arm.custom.save")) { model.customize(game, name: renameText) }
-                            if game.customName { Button(loc.t("s2arm.custom.name.reset")) { model.customize(game, name: "") } }
-                            Button(loc.t("s2arm.custom.cancel"), role: .cancel) {}
-                        }
+                        ExportNameControl(name: game.name, custom: game.customName) { model.customize(game, name: $0) }
+                            .id(game.id).disabled(model.busy || model.customizing)
                     } subtitle: {
                         Text(version).font(.manrope(14)).foregroundStyle(.secondary).help(version)
                     }
@@ -129,7 +114,7 @@ struct ExportView: View {
                 if game.iphoneReady {
                     Button(loc.t(model.installKey("s2arm.export.installExisting")), action: install)
                         .controllerButtonStyle(.plain).font(.manrope(12.5, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.85))
-                        .accessibilityIdentifier("export.install")
+                        .controllerID("export.install").controllerShortcut(.rightTrigger, focused: true)
                 }
             }
             HStack(alignment: .top, spacing: 12) {
@@ -242,6 +227,7 @@ struct ExportView: View {
             .opacity(open ? 1 : 0.5)
         }
         .controllerButtonStyle(.plain)
+        .controllerID("export.platform." + platform.rawValue)
         .disabled(!open || model.busy)
         .busyHint(model, disabled: open)
         .padTarget("export." + platform.rawValue, scope: "main", radius: 16) { model.toggleExport(platform) }
@@ -305,7 +291,7 @@ struct ExportView: View {
             .disabled(blocker?.stopsStart == true)   // 缺文件 / 缺 keys 只在左边提示，不置灰（作业层核实）
             .busyHint(model, disabled: blocker == .busy)   // 别的任务（非出包）在跑：说在等谁（出包在跑时这里是「排队」，不置灰）
             .keyboardShortcut(.defaultAction)
-            .controllerID("export.start").controllerShortcut(.primary)
+            .controllerID("export.start").controllerShortcut(.rightTrigger)
             .padTarget("export.start", scope: "main", radius: LauncherTheme.Metrics.controlRadius) { model.export(game, location: location.isEmpty ? nil : location) }
             .accessibilityLabel(count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"))
             .accessibilityIdentifier("export.start")

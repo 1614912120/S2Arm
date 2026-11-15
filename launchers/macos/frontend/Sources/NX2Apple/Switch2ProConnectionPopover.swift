@@ -20,6 +20,9 @@ struct Switch2ProConnectionPopover: View {
     private var zh: Bool { simplifiedChinese }
     @State private var keyMonitor: Any?   // 分配中收键盘按键（键盘登记成一位玩家）
     @State private var showSwitchOptions = false
+    @State private var selectedPlayer = 0
+
+    private var currentPlayer: Int { controller.assignment.units.indices.contains(selectedPlayer) ? selectedPlayer : 0 }
 
     private func unitGlyph(_ unit: PlayerAssignment.Unit) -> ControllerIcon.Glyph {
         switch unit {
@@ -158,7 +161,7 @@ struct Switch2ProConnectionPopover: View {
                     }
                     HStack(spacing: 8) {
                         Button(zh ? "取消" : "Cancel") { controller.cancelAssign() }.controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true)).controllerShortcut(.back)
-                        Button(zh ? "完成" : "Done") { controller.finishAssign() }.controllerButtonStyle(LauncherPrimaryButtonStyle(fill: true)).controllerShortcut(.primary)
+                        Button(zh ? "完成" : "Done") { controller.finishAssign() }.controllerButtonStyle(LauncherPrimaryButtonStyle(fill: true)).controllerShortcut(.rightTrigger)
                     }
                 }
                 .onAppear {
@@ -181,15 +184,21 @@ struct Switch2ProConnectionPopover: View {
                         Text(zh ? "玩家" : "Players").font(.manrope(15, .semibold))
                         VStack(spacing: 8) {
                             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                                PlayerRow(number: index + 1, glyph: row.glyph, name: row.name)   // 平时不给 ×，分配中才有
+                                Button { selectedPlayer = index } label: {
+                                    PlayerRow(number: index + 1, glyph: row.glyph, name: row.name, selected: currentPlayer == index)
+                                }
+                                .controllerButtonStyle(.plain)
+                                .controllerID("controller.player.\(index)")
+                                .accessibilityLabel("P\(index + 1) \(row.name)")
+                                .accessibilityAddTraits(currentPlayer == index ? .isSelected : [])
                             }
                         }
                         .accessibilityIdentifier("controller.players")
                     }
-                    if let primary = controller.assignment.primaryPad(in: systems.pads) {
-                        ControllerFaceMappingEditor(store: controller.faceMaps, family: ControllerFaceFamily(primary.family), simplifiedChinese: zh)
-                    } else if controller.assignment.primaryIsNintendo {
-                        ControllerFaceMappingEditor(store: controller.faceMaps, family: .nintendo, simplifiedChinese: zh)
+                    if let pad = controller.assignment.pad(forPlayer: currentPlayer, in: systems.pads),
+                       ControllerFaceFamily(pad.family) != .nintendo {
+                        ControllerFaceMappingEditor(store: controller.faceMaps, family: ControllerFaceFamily(pad.family), simplifiedChinese: zh)
+                            .id(pad.id)
                     }
                     // 两只以上手柄才有得分配（一对 Joy-Con 算两只、蓝牙手柄也算）
                     if controller.allDevices.count + systems.pads.count >= 2 {
@@ -294,6 +303,7 @@ private struct PlayerRow: View {
     let number: Int
     let glyph: ControllerIcon.Glyph
     let name: String
+    var selected = false
     var clearLabel = ""
     var onClear: (() -> Void)?
 
@@ -326,7 +336,7 @@ private struct PlayerRow: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Self.fill))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(selected ? LauncherPalette.cream.opacity(0.7) : Color.white.opacity(0.12), lineWidth: 1))
         .accessibilityElement(children: .contain)
     }
 }

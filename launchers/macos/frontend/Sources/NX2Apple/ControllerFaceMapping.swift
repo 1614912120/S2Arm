@@ -52,18 +52,29 @@ struct ControllerFaceMapping: Equatable {
         family == .nintendo ? .identity : Self(code: 0xb1)!
     }
     func symbols(for family: ControllerFaceFamily) -> [PadShortcut: String] {
-        Dictionary(uniqueKeysWithValues: zip([PadShortcut.primary, .back, .secondary, .tertiary], 0..<4).map {
+        var symbols = Dictionary(uniqueKeysWithValues: zip([PadShortcut.primary, .back, .secondary, .tertiary], 0..<4).map {
             ($0.0, family.symbol(source: source(for: $0.1)))
         })
+        switch family {
+        case .playstation: symbols[.rightTrigger] = "r2.rectangle.roundedtop"
+        case .nintendo: symbols[.rightTrigger] = "zr.rectangle.roundedtop"
+        case .xbox, .other: symbols[.rightTrigger] = "rt.rectangle.roundedtop"
+        }
+        return symbols
     }
 }
 
 /// This file is also read live by the game host. Publish only after its atomic
 /// write succeeds, so the launcher cannot advertise a mapping the game cannot read.
 @MainActor final class ControllerFaceMapStore: ObservableObject {
-    struct Document: Codable { var schema = 1; var profiles: [String: Int32] }
+    // Schema 2 stores one permutation shared by every non-Nintendo controller.
+    struct Document: Codable {
+        var schema = 2
+        var mapping: Int32? = nil
+        var profiles: [String: Int32]? = nil // schema 1, read only
+    }
     let fileURL: URL
-    @Published private(set) var profiles: [String: Int32] = [:]
+    @Published private(set) var sharedMapping: ControllerFaceMapping = .identity
     @Published private(set) var problem: String?
 
     init(fileURL: URL) {
@@ -71,23 +82,37 @@ struct ControllerFaceMapping: Equatable {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
         do {
             let document = try JSONDecoder().decode(Document.self, from: Data(contentsOf: fileURL))
-            guard document.schema == 1, document.profiles.values.allSatisfy({ ControllerFaceMapping(code: $0) != nil }) else {
+            let code: Int32
+            switch document.schema {
+            case 1:
+                guard let profiles = document.profiles, profiles.values.allSatisfy({ ControllerFaceMapping(code: $0) != nil }) else {
+                    throw CocoaError(.fileReadCorruptFile)
+                }
+                // Use a stable precedence when old brand preferences disagree;
+                // the launcher and game host must select the same permutation.
+                code = ["playstation", "xbox", "other"].compactMap { profiles[$0] }.first ?? ControllerFaceMapping.identity.code
+            case 2:
+                guard let mapping = document.mapping else { throw CocoaError(.fileReadCorruptFile) }
+                code = mapping
+            default: throw CocoaError(.fileReadCorruptFile)
+            }
+            guard let mapping = ControllerFaceMapping(code: code) else {
                 throw CocoaError(.fileReadCorruptFile)
             }
-            profiles = document.profiles
+            sharedMapping = mapping
         } catch { problem = error.localizedDescription }
     }
     func mapping(for family: ControllerFaceFamily) -> ControllerFaceMapping {
-        profiles[family.rawValue].flatMap(ControllerFaceMapping.init(code:)) ?? .identity
+        family == .nintendo ? .identity : sharedMapping
     }
     func set(_ mapping: ControllerFaceMapping?, for family: ControllerFaceFamily) {
-        var next = profiles
-        next[family.rawValue] = mapping?.code
+        guard family != .nintendo else { return }
+        let next = mapping ?? .identity
         do {
-            let data = try JSONEncoder().encode(Document(profiles: next))
+            let data = try JSONEncoder().encode(Document(mapping: next.code))
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: fileURL, options: .atomic)
-            profiles = next; problem = nil
+            sharedMapping = next; problem = nil
             if fileURL == PlayerAssignment.orderFileURL.deletingPathExtension().appendingPathExtension("face.json") {
                 DistributedNotificationCenter.default().postNotificationName(.init("org.s2arm.controller-face-map.changed"), object: nil,
                     userInfo: nil, deliverImmediately: true)
@@ -105,7 +130,12 @@ extension PlayerAssignment {
         return matches.indices.contains(index) ? matches[index] : nil
     }
     func primaryPad(in pads: [SystemControllers.Pad]) -> SystemControllers.Pad? {
-        guard let unit = units.first else { return pads.first }
+        pad(forPlayer: 0, in: pads)
+    }
+    func pad(forPlayer player: Int, in pads: [SystemControllers.Pad]) -> SystemControllers.Pad? {
+        guard !units.isEmpty else { return pads.indices.contains(player) ? pads[player] : nil }
+        guard units.indices.contains(player) else { return nil }
+        let unit = units[player]
         guard case let .system(name, index) = unit else { return nil }
         let matches = pads.filter { $0.name == name }
         return matches.indices.contains(index) ? matches[index] : nil

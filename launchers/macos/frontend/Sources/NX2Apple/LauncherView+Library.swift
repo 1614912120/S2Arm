@@ -92,6 +92,7 @@ extension LauncherView {
             .padding(.horizontal, 10).padding(.vertical, 6)
             Divider().opacity(0.3).padding(.vertical, 4)
             moreRow(loc.t("s2arm.export.action"), "shippingbox") { model.exportFor = game.id }
+                .controllerShortcut(.rightTrigger)
             moreRow(loc.t("s2arm.action.freeSpace"), "externaldrive") { spaceFor = game.id }
             moreRow(txt("game.display"), "slider.horizontal.3") { displayFor = game.id }
             moreRow(txt("game.saves"), "tray.full") { saveFor = game.id }

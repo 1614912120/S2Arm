@@ -81,7 +81,7 @@ struct SGradeCardView: View {
                     if let on {
                         Spacer(minLength: 12)
                         Toggle(x("toggle"), isOn: on).toggleStyle(.checkbox).font(.manrope(12.5, .medium)).tint(Self.gold)
-                            .controllerControl(id: "export.sgrade.toggle", activate: { on.wrappedValue.toggle() }, adjust: { on.wrappedValue = $0 > 0 })
+                            .controllerControl(id: "export.sgrade.toggle", activate: { on.wrappedValue.toggle() })
                             .accessibilityIdentifier("export.sgrade.toggle")
                     }
                 }

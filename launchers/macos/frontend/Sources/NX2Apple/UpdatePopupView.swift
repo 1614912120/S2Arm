@@ -85,7 +85,7 @@ struct UpdatePopupView: View {
                     .keyboardShortcut(.cancelAction).accessibilityIdentifier("update.popup.later").controllerShortcut(.back)
                 Button(t("update.popup.now")) { model.restartToUpdate() }
                     .controllerButtonStyle(LauncherPrimaryButtonStyle()).disabled(model.updateState != .ready)
-                    .accessibilityIdentifier("update.popup.now").controllerShortcut(.primary)
+                    .accessibilityIdentifier("update.popup.now").controllerShortcut(.rightTrigger)
             }
         }
     }
@@ -104,7 +104,7 @@ struct UpdatePopupView: View {
                 }
                 Spacer()
                 Button(t("update.after.ok")) { model.closeUpdatePopup() }
-                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).accessibilityIdentifier("update.after.ok").controllerShortcut(.primary, .back)
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).accessibilityIdentifier("update.after.ok").controllerShortcut(.rightTrigger, .back)
             }
         }
     }

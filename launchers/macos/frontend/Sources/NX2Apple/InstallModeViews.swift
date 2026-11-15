@@ -160,7 +160,7 @@ struct PhoneUpdateButton: View {
                 }
             }
             .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
-            .accessibilityIdentifier("top.phoneUpdate")
+            .controllerID("top.phoneUpdate").controllerShortcut(.rightTrigger, focused: true)
             .alert(t("update.confirm.title"), isPresented: Binding(get: { model.updateConfirm != nil }, set: { if !$0 { model.updateConfirm = nil } }),
                    presenting: model.updateConfirm) { u in
                 Button(t("update.confirm.repack")) { model.updatePhone(acceptStale: true, repack: u.stale.map(\.id), language: language) }

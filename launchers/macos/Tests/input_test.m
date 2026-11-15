@@ -704,7 +704,7 @@ static void test_pad_layout(void) {
 }
 
 // 同一份四键配置在主线程与事件回调路径生效，原始键态始终只映射一次。
-static void test_primary_face_maps(void) {
+static void test_shared_face_map(void) {
     GCController *c = [GCController controllerWithExtendedGamepad];
     GCExtendedGamepad *pad = c.extendedGamepad;
     GCControllerButtonInput *face[] = {pad.buttonA, pad.buttonB, pad.buttonX, pad.buttonY};
@@ -715,25 +715,32 @@ static void test_primary_face_maps(void) {
     uint32_t expected[3][4] = {{1, 2, 4, 8}, {2, 1, 8, 4}, {4, 8, 1, 2}};
     int checks = 0;
     for (int layout = 0; layout < 3; layout++) {
-        g_face_maps = @{@"other": @(codes[layout])};
+        g_face_map = codes[layout];
         for (int key = 0; key < 4; key++) {
             [face[key] setValue:1];
             uint32_t sampled; int32_t sticks[4];
-            sample_pad_state(pad, primary_face_cfg(config), &sampled, sticks);
+            sample_pad_state(pad, face_mapping_cfg(config), &sampled, sticks);
             uint32_t raw = controller_face_bits(c);
-            expect(primary_face_buttons(0, c, raw, sampled) == expected[layout][key], "main-player face map: physical key reaches agreed Switch button");
+            expect(mapped_face_buttons(c, raw, sampled) == expected[layout][key], "shared face map: physical key reaches agreed Switch button");
             pad_event_fast(c);
             expect(s2a_vpad_read_pad(0, sticks) == expected[layout][key], "main-player face map: event callback publishes the same mapped button");
-            expect(primary_face_buttons(1, c, raw, sampled) == sampled, "main-player map does not overwrite player 2's bindings");
+            pad_slot_owner[0] = nil;
+            for (int slot = 1; slot < 4; slot++) {
+                pad_slot_owner[slot] = c;
+                pad_event_fast(c);
+                expect(s2a_vpad_read_pad(slot, sticks) == expected[layout][key], "all four players use the same shared face map");
+                pad_slot_owner[slot] = nil;
+            }
+            pad_slot_owner[0] = c;
             [face[key] setValue:0]; pad_event_fast(c);
             expect(s2a_vpad_read_pad(0, sticks) == 0, "releasing a remapped key clears its target");
-            checks += 4;
+            checks += 6;
         }
     }
-    expect(primary_face_buttons(0, nil, 1u << 2, (1u << 7)) == ((1u << 7) | 4), "Switch channel mapping preserves shoulders and normal Nintendo face labels");
-    expect(primary_face_buttons(0, c, 0, 1) == 1, "a non-face input bound to A keeps its game action");
-    g_face_maps = @{@"nintendo": @0xb1};
-    expect(primary_face_buttons(0, nil, 1, 0) == 2, "Switch channel can use a custom primary mapping too");
+    expect(mapped_face_buttons(nil, 1u << 2, (1u << 7)) == ((1u << 7) | 4), "Switch channel mapping preserves shoulders and normal Nintendo face labels");
+    expect(mapped_face_buttons(c, 0, 1) == 1, "a non-face input bound to A keeps its game action");
+    g_face_map = 0xb1;
+    expect(mapped_face_buttons(nil, 1, 0) == 1, "Switch controllers always keep their native face layout");
     int valid = 0;
     for (int code = 0; code < 256; code++) if (s2a_face_valid(code)) {
         valid++;
@@ -744,14 +751,14 @@ static void test_primary_face_maps(void) {
     setenv("S2A_PAD_FACE_FILE", file.UTF8String, 1);
     [@"{\"schema\":1,\"profiles\":{\"other\":177}}" writeToFile:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
     pad_face_refresh(YES);
-    expect(primary_face_map(c) == 0xb1, "game host reads the launcher's persisted document");
-    [@"{\"schema\":1,\"profiles\":{}}" writeToFile:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    expect(controller_face_map(c) == 0xb1, "game host reads the launcher's legacy document as one shared map");
+    [@"{\"schema\":2,\"mapping\":228}" writeToFile:file atomically:YES encoding:NSUTF8StringEncoding error:nil];
     pad_face_refresh(YES);
-    expect(primary_face_map(c) == 0xe4, "restoring defaults takes effect live without restarting the game");
+    expect(controller_face_map(c) == 0xe4, "restoring defaults takes effect live without restarting the game");
     [NSFileManager.defaultManager removeItemAtPath:file error:nil];
     setenv("S2A_PAD_FACE_FILE", "/nonexistent/s2arm-face.json", 1); pad_face_refresh(YES);
     pad_slot_owner[0] = nil;
-    printf("Mac primary face mapping: %d input checks, 24 permutations x 16 states, live save/reset passed\n", checks);
+    printf("Mac shared face mapping: %d input checks, 24 permutations x 16 states, live save/reset passed\n", checks);
 }
 
 static void test_controller_face_overlay(void) {
@@ -1421,7 +1428,7 @@ int main(int argc, const char **argv) {
         test_pad_fast_path();
         test_profile_only_pad();
     test_pad_layout();
-    test_primary_face_maps();
+    test_shared_face_map();
     test_controller_face_overlay();
         test_per_player_config();
         test_save_atomic_warning();

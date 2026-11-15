@@ -8,6 +8,22 @@ import XCTest
 @testable import NX2AppleUI
 
 @MainActor final class ControllerInteractionTests: XCTestCase {
+    func testVerticalNavigationVisitsTheAdjacentRowBeforePreservingTheColumn() {
+        // Screen coordinates: checkbox above the platform row at its far right;
+        // title in the platform's column, storage below in the checkbox's column.
+        let title = LauncherPadTarget(id: "title", frame: CGRect(x: 260, y: 700, width: 700, height: 50), role: "AXTextField", element: NSObject())
+        let checkbox = LauncherPadTarget(id: "checkbox", frame: CGRect(x: 940, y: 550, width: 100, height: 20), role: "AXCheckBox", element: NSObject())
+        let first = LauncherPadTarget(id: "first", frame: CGRect(x: 0, y: 300, width: 240, height: 140), role: "AXButton", element: NSObject())
+        let second = LauncherPadTarget(id: "second", frame: CGRect(x: 260, y: 300, width: 240, height: 140), role: "AXButton", element: NSObject())
+        let location = LauncherPadTarget(id: "location", frame: CGRect(x: 940, y: 200, width: 100, height: 36), role: "AXButton", element: NSObject())
+        let cover = LauncherPadTarget(id: "cover", frame: CGRect(x: 0, y: 640, width: 240, height: 140), role: "AXButton", element: NSObject())
+        XCTAssertEqual(LauncherPadSpatial.next(from: second.frame, targets: [title, checkbox, first, location], action: .up)?.id, "checkbox")
+        XCTAssertEqual(LauncherPadSpatial.next(from: checkbox.frame, targets: [title, first, second, location], action: .down)?.id, "second")
+        XCTAssertEqual(LauncherPadSpatial.next(from: location.frame, targets: [title, checkbox, first, second], action: .up)?.id, "second")
+        XCTAssertEqual(LauncherPadSpatial.next(from: first.frame, targets: [title, checkbox, second, location], action: .right)?.id, "second")
+        XCTAssertEqual(LauncherPadSpatial.next(from: title.frame, targets: [cover, checkbox, first, second, location], action: .down)?.id, "checkbox")
+    }
+
     func testConfirmationHintUsesTheMappedFaceButton() {
         let source = LauncherPadSource()
         let snapshot = GCController.withExtendedGamepad()
@@ -15,7 +31,7 @@ import XCTest
         var symbols: [PadShortcut: String] = [:]
         source.updatePresentation = { _, value in symbols = value }
         source.refreshPresentation()
-        XCTAssertEqual(symbols[.primary], "a.circle", "未改映射时，完成与确认应提示实体 A，不能显示 Menu")
+        XCTAssertEqual(symbols[.primary], "a.circle", "未改映射时，组件选择提示应跟随实体 A")
         XCTAssertEqual(symbols[.back], "b.circle")
     }
 
@@ -172,10 +188,13 @@ import XCTest
         XCTAssertEqual(fixture.submits, 0)
         pad.buttonA.setValue(0); source.tick(now: 0.42)
         pad.buttonMenu.setValue(1); source.tick(now: 0.43)
-        XCTAssertEqual(fixture.submits, 1, "Menu 在内容焦点上也能提交底栏动作")
+        XCTAssertEqual(fixture.submits, 0, "Menu 不再承担提交动作")
+        pad.buttonMenu.setValue(0); source.tick(now: 0.44)
+        pad.rightTrigger.setValue(1); source.tick(now: 0.45)
+        XCTAssertEqual(fixture.submits, 1, "R2 在内容焦点上也能提交底栏动作")
         source.tick(now: 1)
         XCTAssertEqual(fixture.submits, 1, "提交按钮长按不能重复触发")
-        pad.buttonMenu.setValue(0); source.tick(now: 1.01)
+        pad.rightTrigger.setValue(0); source.tick(now: 1.01)
         pad.buttonB.setValue(1); source.tick(now: 1.02)
         XCTAssertEqual(fixture.cancels, 1)
         source.controllers = { [] }; source.tick(now: 1.03)
@@ -201,6 +220,27 @@ import XCTest
         XCTAssertEqual(fixture.cancels, 0)
     }
 
+    func testFocusedSubmitOverridesThePageAction() async throws {
+        let fixture = ScrollFixture()
+        defer { fixture.close() }
+        let action = NSView(frame: CGRect(x: 140, y: 10, width: 120, height: 35))
+        fixture.window.contentView?.addSubview(action)
+        var calls = 0
+        let token = UUID()
+        func register(enabled: Bool) {
+            fixture.navigation.register(PadControl(token: token, id: "row.submit", scope: "page", view: action,
+                enabled: enabled, activate: { calls += 1 }, adjust: nil, preferred: false,
+                shortcuts: [.rightTrigger], shortcutsRequireFocus: true))
+        }
+        register(enabled: true)
+        fixture.navigation.focus("row.0"); fixture.navigation.handle(.submit)
+        XCTAssertEqual(fixture.submits, 1)
+        XCTAssertEqual(calls, 0, "未选中行内动作时，R2 执行页面主动作")
+        fixture.navigation.focus("row.submit"); fixture.navigation.handle(.submit)
+        XCTAssertEqual(calls, 1, "选中行内启动时，R2 只执行该任务")
+        XCTAssertEqual(fixture.submits, 1)
+    }
+
     func testDisabledDropdownStillOwnsFocusAndDoesNotTriggerParentShortcuts() async throws {
         let fixture = ScrollFixture()
         defer { fixture.close() }
@@ -211,13 +251,13 @@ import XCTest
             enabled: false, activate: { XCTFail("禁用选项不能执行") }, adjust: nil, preferred: false))
         XCTAssertFalse(fixture.navigation.inMainContent, "全禁用的下拉层也必须隔离底层输入")
         XCTAssertTrue(fixture.navigation.controlTargets(in: fixture.window).isEmpty)
-        fixture.navigation.handle(.menu)
+        fixture.navigation.handle(.submit)
         fixture.navigation.handle(.confirm)
         XCTAssertEqual(fixture.submits, 0)
         XCTAssertEqual(fixture.rowActions, 0)
     }
 
-    func testKeyboardBackCancelsWhileMenuCommits() async throws {
+    func testKeyboardBackCancelsWhileRightTriggerCommits() async throws {
         let fixture = ScrollFixture()
         defer { fixture.close() }
         var text = "original"
@@ -232,7 +272,7 @@ import XCTest
         fixture.navigation.editText(value: text, label: "Original text") { text = $0 }
         try await Task.sleep(for: .milliseconds(100))
         fixture.navigation.keyboard?.value = "committed"
-        fixture.navigation.handle(.menu)
+        fixture.navigation.handle(.submit)
         XCTAssertEqual(text, "committed")
         XCTAssertEqual(fixture.navigation.focusedID, "row.0")
     }
@@ -259,12 +299,12 @@ import XCTest
         navigation.source.stop(); navigation.source.controllers = { [snapshot] }; navigation.source.isActive = { true }
         navigation.source.tick(now: 0)
         _ = navigation.targets(in: window)
-        XCTAssertNotNil(primary.image, "原生确认框也应在按钮内显示手柄键")
+        XCTAssertEqual(primary.image?.name(), "rt.rectangle.roundedtop", "原生确认框应显示右扳机提示")
         XCTAssertNotNil(cancel.image)
         let sink = NativeButtonSink()
         primary.target = sink; primary.action = #selector(NativeButtonSink.submit)
         cancel.target = sink; cancel.action = #selector(NativeButtonSink.cancel)
-        navigation.handle(.menu)
+        snapshot.extendedGamepad?.rightTrigger.setValue(1); navigation.source.tick(now: 0.01)
         XCTAssertEqual(sink.submits, 1)
         navigation.handle(.back)
         XCTAssertEqual(sink.cancels, 1)
@@ -286,13 +326,19 @@ import XCTest
         let button = NSView(frame: CGRect(x: 20, y: 20, width: 160, height: 40))
         child.contentView?.addSubview(button)
         var submits = 0
-        fixture.navigation.register(PadControl(token: UUID(), id: "child.submit", scope: "page", view: button,
-            enabled: true, activate: { submits += 1 }, adjust: nil, preferred: true, shortcuts: [.primary]))
+        let token = UUID()
+        fixture.navigation.register(PadControl(token: token, id: "child.submit", scope: "page", view: button,
+            enabled: true, activate: { submits += 1 }, adjust: nil, preferred: true, shortcuts: [.rightTrigger]))
         fixture.window.addChildWindow(child, ordered: .above); child.orderFront(nil)
         defer { fixture.window.removeChildWindow(child); child.close() }
-        fixture.navigation.handle(.menu)
+        fixture.navigation.handle(.submit)
         XCTAssertEqual(submits, 1)
         XCTAssertEqual(fixture.submits, 0, "子弹窗不能触发父窗口完成")
+        fixture.navigation.register(PadControl(token: token, id: "child.submit", scope: "page", view: button,
+            enabled: false, activate: { XCTFail("禁用提交不能执行") }, adjust: nil, preferred: true, shortcuts: [.rightTrigger]))
+        fixture.navigation.handle(.submit)
+        XCTAssertEqual(submits, 1)
+        XCTAssertEqual(fixture.submits, 0, "禁用的子弹窗提交也不能回落到父窗口")
         fixture.window.removeChildWindow(child); child.orderOut(nil)
         fixture.navigation.handle(.up)
         XCTAssertEqual(fixture.navigation.focusedID, "row.0", "返回父窗口后从之前的 row.1 继续导航")
@@ -305,8 +351,8 @@ private struct ShortcutHintPreview: View {
         VStack(spacing: 16) {
             HStack(spacing: 24) {
                 Button("Original action") {}.controllerID("hint.plain")
-                Button("Original action") {}.controllerID("hint.single").controllerShortcut(.primary)
-                Button("Original action") {}.controllerID("hint.aliases").controllerShortcut(.primary, .back)
+                Button("Original action") {}.controllerID("hint.single").controllerShortcut(.rightTrigger)
+                Button("Original action") {}.controllerID("hint.aliases").controllerShortcut(.rightTrigger, .back)
             }.controllerButtonStyle(LauncherSecondaryButtonStyle())
             Text("Controller navigation")
                 .controllerControl(id: "hint.footer", activate: {})
@@ -344,7 +390,7 @@ private struct ShortcutHintPreview: View {
         }
         let footer = NSView(frame: CGRect(x: 280, y: 10, width: 160, height: 35))
         content.addSubview(footer)
-        navigation.register(PadControl(token: UUID(), id: "footer", scope: "page", view: footer, enabled: true, activate: { [weak self] in self?.submits += 1 }, adjust: nil, preferred: false, shortcuts: [.primary]))
+        navigation.register(PadControl(token: UUID(), id: "footer", scope: "page", view: footer, enabled: true, activate: { [weak self] in self?.submits += 1 }, adjust: nil, preferred: false, shortcuts: [.rightTrigger]))
         let cancel = NSView(frame: CGRect(x: 20, y: 10, width: 100, height: 35))
         content.addSubview(cancel)
         navigation.register(PadControl(token: UUID(), id: "cancel", scope: "page", view: cancel, enabled: true, activate: { [weak self] in self?.cancels += 1 }, adjust: nil, preferred: false, shortcuts: [.back]))

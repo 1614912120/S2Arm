@@ -63,7 +63,7 @@ import NXLauncher
         navigation.focus("export.sgrade.toggle"); navigation.handle(.confirm)
         XCTAssertTrue(state.enabled)
         navigation.handle(.left)
-        XCTAssertFalse(state.enabled)
+        XCTAssertTrue(state.enabled, "复选框只由确认键切换，方向键留给导航")
     }
 
     private func host<V: View>(_ content: V, navigation: LauncherPadNavigation) -> NSWindow {

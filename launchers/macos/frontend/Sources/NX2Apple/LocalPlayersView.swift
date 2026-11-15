@@ -63,7 +63,7 @@ struct PlayerToolbarButton: View {
                 HStack {
                     Spacer()
                     Button(loc.t("s2arm.players.cancel")) { finish() }.controllerShortcut(.back)
-                    Button(loc.t("s2arm.players.remove")) { store.remove(p.uid); finish(); reload() }.controllerShortcut(.primary)
+                    Button(loc.t("s2arm.players.remove")) { store.remove(p.uid); finish(); reload() }.controllerShortcut(.rightTrigger)
                 }
             }
         default:
@@ -91,7 +91,7 @@ struct PlayerToolbarButton: View {
             TextField(loc.t("s2arm.players.name"), text: $text, prompt: Text(loc.t("s2arm.players.name")).foregroundColor(LauncherTheme.Colors.secondary))
                 .textFieldStyle(LauncherTextFieldStyle()).onSubmit(action).accessibilityLabel(loc.t("s2arm.players.name"))
             Button(loc.t("s2arm.players.cancel")) { finish() }.controllerShortcut(.back)
-            Button(confirm, action: action).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
+            Button(confirm, action: action).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger)
         }
     }
     private func commit(_ body: () throws -> Void) {

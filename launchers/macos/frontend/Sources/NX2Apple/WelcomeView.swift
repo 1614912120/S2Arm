@@ -83,7 +83,7 @@ struct WelcomeView: View {
                     // 一键出包放在三步清单正下方（11-14 体验梳理：原先浮在窗口右下角、离清单很远；Windows 上一轮已同样挪到清单下）
                     if macReady, model.welcomeGame != nil {
                         Button { model.oneClickExport() } label: { LauncherHeroActionLabel(title: w("oneclick"), symbol: "shippingbox.fill") }
-                            .controllerButtonStyle(.plain).controllerID("welcome.oneclick").keyboardShortcut(.defaultAction).disabled(model.busy)
+                            .controllerButtonStyle(.plain).controllerID("welcome.oneclick").keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger).disabled(model.busy)
                             .padding(.leading, 46).padding(.top, 26)
                             .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
@@ -326,7 +326,7 @@ struct WelcomeView: View {
     private func actionButton(_ title: String, primary: Bool, enabled: Bool, action: @escaping () -> Void) -> some View {
         Group {
             if primary {
-                Button(title, action: action).controllerButtonStyle(LauncherPrimaryButtonStyle())
+                Button(title, action: action).controllerButtonStyle(LauncherPrimaryButtonStyle()).controllerShortcut(.rightTrigger, focused: true)
             } else {
                 Button(action: action) { Text(title).font(.manrope(13, .semibold)).fixedSize() }
                     .controllerButtonStyle(LauncherSecondaryButtonStyle())

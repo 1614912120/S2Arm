@@ -6,7 +6,7 @@ import LauncherPadBridge
 import NXLauncher
 
 enum LauncherPadAction: String, Equatable {
-    case left, right, up, down, confirm, back, details, filter, previousGroup, nextGroup, pageUp, pageDown, search, menu, scrollUp, scrollDown
+    case left, right, up, down, confirm, submit, back, details, filter, previousGroup, nextGroup, pageUp, search, menu, scrollUp, scrollDown
 }
 
 struct LauncherPadInput: Equatable {
@@ -52,7 +52,7 @@ struct LauncherPadRepeater {
         previous = input.buttons
         if pressed & (1 << 1) != 0 { return [.back] }
         let mappings: [(Int, LauncherPadAction)] = [(0, .confirm), (1, .back), (2, .filter), (3, .details), (6, .previousGroup), (7, .nextGroup),
-            (8, .pageUp), (9, .pageDown), (10, .menu), (11, .search)]
+            (8, .pageUp), (9, .submit), (10, .menu), (11, .search)]
         var result = mappings.compactMap { pressed & (1 << $0.0) != 0 ? $0.1 : nil }
         let b = input.buttons
         let threshold: Float = direction == nil ? 0.55 : 0.30
@@ -159,9 +159,9 @@ struct LauncherPadRepeater {
         var symbols: [PadShortcut: String] = [:]
         if let primary {
             let family = ControllerFaceFamily.of(primary)
-            symbols = faceMapping(family).symbols(for: family)
+            symbols = (family == .nintendo ? .identity : faceMapping(family)).symbols(for: family)
         } else if assignment().primaryIsNintendo || relayConnected() || relay.ready != 0 {
-            symbols = faceMapping(.nintendo).symbols(for: .nintendo)
+            symbols = ControllerFaceMapping.identity.symbols(for: .nintendo)
         }
         updatePresentation(!pads.isEmpty || relayConnected() || relay.ready != 0, symbols)
     }
@@ -191,13 +191,17 @@ struct LauncherPadRepeater {
             }
         }
         let pads = currentControllers()
-        let primary = assignment().primarySystem(in: pads)
+        let players = assignment()
+        let primary = players.primarySystem(in: pads)
         publishPresentation(pads)
         refresh()
         var input = LauncherPadInput()
+        var controllerTokens: [String] = []
         for controller in pads {
             guard let pad = controller.extendedGamepad else { continue }
-            let mapping = controller === primary ? faceMapping(ControllerFaceFamily.of(controller)) : .identity
+            let family = ControllerFaceFamily.of(controller)
+            let mapping = family == .nintendo ? .identity : faceMapping(family)
+            controllerTokens.append("\(ObjectIdentifier(controller)):\(mapping.code)")
             let state = LauncherPadInput.system(pad, mapping: mapping)
             input.buttons |= state.buttons
             if abs(state.x) > abs(input.x) { input.x = state.x }
@@ -205,15 +209,13 @@ struct LauncherPadRepeater {
             if abs(state.rightY) > abs(input.rightY) { input.rightY = state.rightY }
         }
         if relay.ready != 0 {
-            input.buttons |= (primary == nil && (assignment().primaryIsNintendo || assignment().units.isEmpty))
-                ? faceMapping(.nintendo).apply(relay.buttons) : relay.buttons
+            input.buttons |= relay.buttons
             if abs(relay.x) > abs(input.x) { input.x = relay.x }
             if abs(relay.y) > abs(input.y) { input.y = relay.y }
             if abs(relay.right_y) > abs(input.rightY) { input.rightY = relay.right_y }
         }
-        let mapping = primary.map { faceMapping(ControllerFaceFamily.of($0)) } ?? faceMapping(.nintendo)
-        let nextToken = pads.map { String(describing: ObjectIdentifier($0)) }.joined(separator: ",")
-            + ":\(relay.ready):\(relay.epoch):\(primary.map { String(describing: ObjectIdentifier($0)) } ?? ""):\(mapping.code)"
+        let nextToken = controllerTokens.joined(separator: ",")
+            + ":\(relay.ready):\(relay.epoch):\(primary.map { String(describing: ObjectIdentifier($0)) } ?? ""):\(players.generation)"
         if token != nextToken { token = nextToken; repeater.reset() }
         for action in repeater.actions(input, time: now) { receive(action) }
     }

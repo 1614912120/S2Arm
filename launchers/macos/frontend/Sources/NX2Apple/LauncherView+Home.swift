@@ -64,7 +64,7 @@ extension LauncherView {
                     .controllerButtonStyle(ConsolePlayButtonStyle()).disabled(model.cloudSyncing)
                     .keyboardShortcut(.return, modifiers: [])
                     .help(homePrimaryTitle(game)).accessibilityLabel(homePrimaryTitle(game))
-                    .controllerID(game.playable ? "hero.play" : game.iphoneReady ? "hero.install" : "hero.export")
+                    .controllerID(game.playable ? "hero.play" : game.iphoneReady ? "hero.install" : "hero.export").controllerShortcut(.rightTrigger)
                 Button { moreFor = game.id } label: { Image(systemName: "ellipsis") }
                     .controllerButtonStyle(ConsoleIconButtonStyle(size: 52)).controllerID("hero.more")
                     .help(loc.t("home.details")).accessibilityLabel(loc.t("home.details"))
@@ -202,7 +202,7 @@ extension LauncherView {
         HStack(spacing: 20) {
             Label(loc.t("home.navigate"), systemImage: "dpad").font(.manrope(11.5))
             Spacer(minLength: 8)
-            homeHint(.primary, homeSelected.map(homePrimaryTitle) ?? loc.t("home.select"))
+            homeHint(.rightTrigger, homeSelected.map(homePrimaryTitle) ?? loc.t("home.select"))
             homeHint(.back, loc.t("home.back"))
             homeHint(.tertiary, loc.t("home.details"))
         }.foregroundStyle(.white.opacity(0.6)).padding(.horizontal, 54).frame(height: 48)
@@ -263,8 +263,10 @@ extension LauncherView {
             if action == .back, !showingHome, !model.showsWelcome { model.goToLibrary(); return true }
             guard showingHome else { return false }
             switch action {
-            case .previousGroup: home.cycle(-1); return true
-            case .nextGroup: home.cycle(1); return true
+            case .previousGroup, .nextGroup:
+                home.cycle(action == .previousGroup ? -1 : 1)
+                navigation.focus("home.group." + home.group.rawValue)
+                return true
             case .details: if let game = homeSelected { moreFor = game.id }; return true
             case .search:
                 navigation.focus("home.search")
@@ -284,7 +286,6 @@ extension LauncherView {
             }
             guard let id = navigation.focusedID, id.hasPrefix("card."),
                   let index = homeGames.firstIndex(where: { "card." + $0.id == id }) else { return false }
-            if action == .confirm { homePrimary(homeGames[index]); return true }
             switch action {
             case .left, .right:
                 let next = index + (action == .left ? -1 : 1)

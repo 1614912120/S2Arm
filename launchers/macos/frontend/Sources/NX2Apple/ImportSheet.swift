@@ -141,7 +141,7 @@ struct ImportSheet: View {
                     .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.secondary)
                     .disabled(model.busy)
                 Button(resultText("retry")) { model.retryImport() }
-                .controllerButtonStyle(LauncherPrimaryButtonStyle()).controllerShortcut(.primary)
+                .controllerButtonStyle(LauncherPrimaryButtonStyle()).controllerShortcut(.rightTrigger)
                 .disabled(model.busy)
             } else {
                 Button(common("cancel")) { cancel() }
@@ -419,7 +419,7 @@ struct UploadDiagnosticsSheet: View {
                 HStack {
                     Spacer()
                     Button(loc.t("s2arm.diagUpload.cancel")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.back)
-                    Button(loc.t("s2arm.diagUpload.send")) { send() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
+                    Button(loc.t("s2arm.diagUpload.send")) { send() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger)
                         .accessibilityIdentifier("diag.upload.send")
                 }
             case .uploading:
@@ -441,7 +441,7 @@ struct UploadDiagnosticsSheet: View {
                     Spacer()
                     Button(loc.t("s2arm.diagUpload.close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.back)
                     if let url = receipt.issueURL {   // 主按钮：系统浏览器打开预填好诊断码 / 版本 / 平台的新帖页
-                        Button(loc.t("s2arm.diagUpload.github")) { NSWorkspace.shared.open(url) }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
+                        Button(loc.t("s2arm.diagUpload.github")) { NSWorkspace.shared.open(url) }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger)
                             .accessibilityIdentifier("diag.upload.github")
                     }
                 }
@@ -451,7 +451,7 @@ struct UploadDiagnosticsSheet: View {
                 HStack {
                     Spacer()
                     Button(loc.t("s2arm.diagUpload.close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.back)
-                    Button(loc.t("s2arm.play.diagnostics")) { exportInstead() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
+                    Button(loc.t("s2arm.play.diagnostics")) { exportInstead() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger)
                         .accessibilityIdentifier("diag.upload.export")
                 }
             }

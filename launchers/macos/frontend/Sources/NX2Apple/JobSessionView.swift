@@ -60,7 +60,7 @@ struct JobSessionView: View {
                         .controllerButtonStyle(.plain).disabled(session.phase == .stopping).keyboardShortcut(".", modifiers: .command)
                 } else {
                     Button { model.backToLibrary() } label: { LauncherHeroActionLabel(title: loc.t("s2arm.play.back"), symbol: "chevron.left") }
-                        .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction)
+                        .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger, .back)
                 }
                 Spacer()
             }
@@ -121,7 +121,7 @@ struct JobSessionView: View {
                     Button { model.backToLibrary() } label: {
                         LauncherHeroActionLabel(title: loc.t("s2arm.play.back"), symbol: "chevron.left")
                     }
-                    .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction)
+                    .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger, .back)
                     if let reveal = session.reveal, finished == .completed {
                         Button(loc.t("s2arm.job.reveal")) { revealInFinder(reveal) }
                             .controllerButtonStyle(LauncherSecondaryButtonStyle())

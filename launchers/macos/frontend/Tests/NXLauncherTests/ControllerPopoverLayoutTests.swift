@@ -81,9 +81,9 @@ import NXLauncher
                 }
                 host.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(80))
                 let frames = navigation.controlTargets(in: window).map { window.convertFromScreen($0.frame) }
-                XCTAssertEqual(Set(navigation.controlTargets(in: window).map(\.id)), ["controller.system.settings", "controller.switch-options",
+                XCTAssertEqual(Set(navigation.controlTargets(in: window).map(\.id)), ["controller.system.settings", "controller.switch-options", "controller.player.0",
                     "controller.face.0", "controller.face.1", "controller.face.2", "controller.face.3", "controller.face.switch", "controller.face.reset"],
-                               "系统手柄提供连接设置和主玩家四键映射，不能出现伪装成 DualSense 的重连按钮")
+                               "系统手柄提供连接设置、玩家选择和共享四键映射，不能出现伪装成 DualSense 的重连按钮")
                 XCTAssertEqual(host.bounds.width, 380, accuracy: 0.5)
                 XCTAssertGreaterThanOrEqual(frames.count, 2, "必须测到 Switch 入口和蓝牙设置按钮")
                 print("popover-insets name=\(name) zh=\(zh) width=\(host.bounds.width) frames=\(frames)")
@@ -111,7 +111,7 @@ import NXLauncher
                     controller.setAssignmentForTesting(.init())
                     try await Task.sleep(for: .milliseconds(100))
                     let shortcuts = navigation.shortcutTargets(in: window)
-                    XCTAssertEqual(shortcuts[.primary]?.count, 1, "分配玩家的完成按钮必须有直接快捷键")
+                    XCTAssertEqual(shortcuts[.rightTrigger]?.count, 1, "分配玩家的完成按钮必须使用 R2")
                     XCTAssertEqual(shortcuts[.back]?.count, 1, "分配玩家的取消按钮必须有直接快捷键")
                     navigation.handle(.back)
                     XCTAssertFalse(controller.assigning, "B 应实际取消当前分配")

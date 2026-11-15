@@ -126,7 +126,7 @@ struct DevCertSheet: View {
                 Spacer()
                 Button(sx(loc, "sheet.cancel")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.back)
                 Button(sx(loc, "sheet.import")) { start() }
-                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
+                    .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger)
                     .disabled(working || p12.isEmpty || profile.isEmpty)
                     .accessibilityIdentifier("export.sign.sheet.import")
             }

@@ -136,7 +136,7 @@ struct PlaySessionView: View {
                         Label(loc.t("s2arm.play.again"), systemImage: "play.fill").font(.manrope(13, .semibold))
                     }
                     .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
-                    .accessibilityIdentifier("play.again")
+                    .controllerID("play.again").controllerShortcut(.rightTrigger, focused: true)
                 }
                 CopyReportButton(model: model, gameID: session.gameID, operations: ["launch"], fallback: session.message)
             }
@@ -156,12 +156,12 @@ struct PlaySessionView: View {
             if finished == nil {
                 Button { model.stop() } label: { Label(loc.t("s2arm.play.stop"), systemImage: "stop.fill") }
                     .controllerButtonStyle(LauncherPrimaryButtonStyle(prominent: true)).disabled(session.phase == .stopping)
-                    .keyboardShortcut(".", modifiers: .command).controllerID("play.stop").controllerShortcut(.primary)
+                    .keyboardShortcut(".", modifiers: .command).controllerID("play.stop").controllerShortcut(.rightTrigger)
             } else {
                 // Match the titlebar/B action even before a newly started session has redrawn this footer.
                 Button { model.goToLibrary() } label: { Label(loc.t("s2arm.play.back"), systemImage: "chevron.left") }
                     .controllerButtonStyle(LauncherPrimaryButtonStyle(prominent: true))
-                    .keyboardShortcut(.defaultAction).controllerID("play.back").controllerShortcut(.primary, .back)
+                    .keyboardShortcut(.defaultAction).controllerID("play.back").controllerShortcut(.rightTrigger, .back)
             }
         }
         .padding(.horizontal, LauncherTheme.Metrics.libraryInset).padding(.vertical, 16)

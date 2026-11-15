@@ -416,7 +416,7 @@ struct ExportSessionView: View {
                 if platform == .ios {
                     // 装法是「导出，自己签名安装」时（D-9ZF9 / 维护者实测）：按钮和说明照导出写，不再写「一键装到 iPhone / 连上数据线」；出完包会自动接着导出
                     Button { install(session.gameID ?? "") } label: { LauncherHeroActionLabel(title: x(exportMode ? "done.export" : "done.install"), symbol: exportMode ? "square.and.arrow.up" : "iphone") }
-                        .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction).accessibilityIdentifier("result.ios.install")
+                        .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction).controllerID("result.ios.install").controllerShortcut(.rightTrigger, focused: run.platforms.count > 1)
                     // 出包这步没有 IPA（装机时才组装、整库共用一份）：给「打开游戏文件夹」；真有 IPA 才给「显示 .ipa」
                     if let ipa = o.ipa, !ipa.isEmpty { finderButton(loc.t("s2arm.export.revealIpa")) { model.revealIpa(ipa) } }
                     if let game { finderButton(loc.t("s2arm.export.openGameFolder")) { model.reveal(game) } }
@@ -424,7 +424,7 @@ struct ExportSessionView: View {
                     Button { if let game { model.backToLibrary(); model.play(game, uiLanguage: uiLanguage) } } label: {
                         LauncherHeroActionLabel(title: loc.t("library.play"), symbol: "play.fill")
                     }
-                    .controllerButtonStyle(.plain).accessibilityIdentifier("result.mac.play")
+                    .controllerButtonStyle(.plain).controllerID("result.mac.play").controllerShortcut(.rightTrigger, focused: run.platforms.count > 1)
                     if let game { finderButton(loc.t("s2arm.export.openGameFolder")) { model.reveal(game) } }
                 }
             }
@@ -467,11 +467,11 @@ struct ExportSessionView: View {
                 HStack(spacing: 8) {
                     if platform == .mac {
                         Button(loc.t("library.play")) { if let game { model.backToLibrary(); model.play(game, uiLanguage: uiLanguage) } }
-                            .accessibilityIdentifier("result.mac.play")
+                            .controllerID("result.mac.play").controllerShortcut(.rightTrigger, focused: true)
                         if let game { Button(loc.t("s2arm.export.openGameFolder")) { model.reveal(game) } }
                     } else {
                         Button(loc.t(model.installKey("s2arm.action.install"))) { install(session.gameID ?? "") }
-                            .accessibilityIdentifier("result.ios.install")
+                            .controllerID("result.ios.install").controllerShortcut(.rightTrigger, focused: true)
                         if let ipa = outcome?.ipa, !ipa.isEmpty { Button(loc.t("s2arm.export.revealIpa")) { model.revealIpa(ipa) } }
                         if let game { Button(loc.t("s2arm.export.openGameFolder")) { model.reveal(game) } }
                     }
@@ -495,13 +495,13 @@ struct ExportSessionView: View {
             HStack(spacing: 8) {
                 if outcome.code == "disk_full" {
                     Button(x("fix.space")) { freeSpace(session.gameID ?? "") }.controllerButtonStyle(LauncherSecondaryButtonStyle())
-                    Button(x("fix.continue")) { if let game { model.export(game, platforms: [platform], spaceOverride: true) } }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+                    Button(x("fix.continue")) { if let game { model.export(game, platforms: [platform], spaceOverride: true) } }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.rightTrigger, focused: true)
                 }
                 // 剃刀 M4：出包前不再按前端的环境检查结果挡人；作业因环境缺东西失败时（作业层错误码），这里给环境检查页的入口
                 if let code = outcome.code, S2ArmLauncherModel.environmentCodes.contains(code) {
                     Button(loc.t("s2arm.env.title")) { model.showEnvironment = true }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                 }
-                Button(x("fail.retry")) { if let game { model.export(game, platforms: [platform]) } }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+                Button(x("fail.retry")) { if let game { model.export(game, platforms: [platform]) } }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.rightTrigger, focused: true)
                 Button(copied == platform ? loc.t("s2arm.export.copied") : loc.t("s2arm.export.copyError")) {
                     let fallback = S2ArmLauncherModel.reportUnavailable(loc.backend(outcome.message), code: outcome.code)
                     Task {

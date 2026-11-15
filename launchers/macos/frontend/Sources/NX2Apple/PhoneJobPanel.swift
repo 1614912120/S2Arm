@@ -206,7 +206,7 @@ struct PhoneJobPanel: View {
                     Button { model.pushExportToPhone(gameID: session.gameID) } label: {
                         LauncherHeroActionLabel(title: model.exportPushing ? t("phone.export.pushing") : t("phone.export.push"), symbol: "iphone.and.arrow.forward")
                     }
-                    .controllerButtonStyle(.plain).disabled(model.exportPushing).accessibilityIdentifier("phone.export.push")
+                    .controllerButtonStyle(.plain).disabled(model.exportPushing).controllerID("phone.export.push").controllerShortcut(.rightTrigger)
                 }
             }
             SGradeResultView(results: o.sgrade, text: { t($0) })   // 补进 S 级优化的各款：打上 / 没打上（11-14）
@@ -226,7 +226,7 @@ struct PhoneJobPanel: View {
             HStack(spacing: 12) {
                 if session.kind == .installUpdate {
                     Button { model.retryPhoneUpdate() } label: { LauncherHeroActionLabel(title: t("phone.retry"), symbol: "arrow.clockwise") }
-                        .controllerButtonStyle(.plain).disabled(model.busy).accessibilityIdentifier("phone.retry")
+                        .controllerButtonStyle(.plain).disabled(model.busy).controllerID("phone.retry").controllerShortcut(.rightTrigger)
                 }
                 CopyReportButton(model: model, gameID: session.gameID, operations: [session.kind.rawValue], fallback: session.message)
             }
@@ -249,7 +249,7 @@ struct PhoneJobPanel: View {
             headline(seal: AnyView(StatusSeal(symbol: "exclamationmark", color: LauncherPalette.building)), title: title, subtitle: loc.backend(session.message))
             HStack(spacing: 12) {
                 Button { if let d = model.dropConfirm { model.confirmDrop(d) } } label: { LauncherHeroActionLabel(title: t("install.drop_confirm"), symbol: "arrow.right") }
-                    .controllerButtonStyle(.plain).accessibilityIdentifier("phone.drop.confirm")
+                    .controllerButtonStyle(.plain).controllerID("phone.drop.confirm").controllerShortcut(.rightTrigger)
                 Button(t("phone.drop.cancel")) { model.dropConfirm = nil; model.backToLibrary() }
                     .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("phone.drop.cancel")
             }

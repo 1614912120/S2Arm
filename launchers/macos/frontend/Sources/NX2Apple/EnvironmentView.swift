@@ -140,7 +140,7 @@ struct EnvironmentView: View {
                     .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.checking || model.busy).controllerShortcut(.secondary)
                 Button(loc.t("launch.done")) { dismiss() }
                     .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
-                    .controllerID("settings.done").controllerShortcut(.primary, .back)
+                    .controllerID("settings.done").controllerShortcut(.rightTrigger, .back)
             }
         }
         .onAppear { if model.checks.isEmpty { model.checkEnvironment() } }

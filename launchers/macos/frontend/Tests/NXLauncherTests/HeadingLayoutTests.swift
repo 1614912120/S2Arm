@@ -3,10 +3,53 @@
 import AppKit
 import SwiftUI
 import XCTest
+import NXModel
 @testable import NXLauncher
 @testable import NX2AppleUI
 
 @MainActor final class HeadingLayoutTests: XCTestCase {
+    func testEditableExportTitleKeepsTheVisibleTextOnTheSubtitleBaseline() async throws {
+        _ = NSApplication.shared
+        for width: CGFloat in [300, 680] {
+            let navigation = LauncherPadNavigation()
+            let host = NSHostingView(rootView: LauncherHeadingLine {
+                ExportNameControl(name: "HHHH", custom: false, save: { _ in })
+            } subtitle: {
+                Text("HHHH").font(.manrope(14)).foregroundStyle(.white)
+                    .controllerControl(id: "heading.subtitle", activate: {})
+            }
+            .padding(32).frame(width: width, height: 140).foregroundStyle(.white).background(Color.black)
+            .environmentObject(Localizer(.en)).environment(\.padControls, navigation).preferredColorScheme(.dark))
+            let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: width, height: 140), styleMask: [.titled], backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+            defer { window.close() }
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            if let output = ProcessInfo.processInfo.environment["S2A_SETTINGS_SHOTS"] {
+                try bitmap.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: output).appendingPathComponent("heading-editable-\(Int(width)).png"))
+            }
+            let scale = CGFloat(bitmap.pixelsWide) / width
+            func glyphBottom(_ id: String) throws -> CGFloat {
+                let target = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == id })
+                let rect = host.convert(window.convertFromScreen(target.frame), from: nil)
+                let left = max(0, Int(rect.minX * scale)), right = min(bitmap.pixelsWide, Int(rect.maxX * scale))
+                var bottom: Int?
+                for y in 0..<bitmap.pixelsHigh {
+                    for x in left..<right {
+                        guard let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) else { continue }
+                        if min(color.redComponent, color.greenComponent, color.blueComponent) > 0.9 { bottom = y; break }
+                    }
+                }
+                return CGFloat(try XCTUnwrap(bottom, "H 的白色笔画应真实可见")) / scale
+            }
+            let title = try glyphBottom("export.name"), subtitle = try glyphBottom("heading.subtitle")
+            print("editable-heading \(width): titleGlyphBottom=\(title), subtitleGlyphBottom=\(subtitle)")
+            XCTAssertEqual(title, subtitle, accuracy: 1, "输入标题与版本的实际字形基线应对齐，不能只核控件的名义 baseline")
+        }
+    }
+
     func testTitleAndSubtitleShareABaselineWithoutWrapping() async throws {
         for zh in [false, true] {
             for width: CGFloat in [300, 680] {

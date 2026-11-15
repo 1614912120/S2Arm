@@ -94,10 +94,11 @@ struct FreeSpaceView: View {
                 if overviewMode {
                     Button(storage("refresh")) { model.loadOverview() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.overviewLoading).controllerShortcut(.secondary)
                 }
-                Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction).controllerShortcut(.back)
+                Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                    .controllerShortcut(.rightTrigger, .back, focused: !overviewMode)
                 if !overviewMode {
                     Button(loc.t("s2arm.space.free")) { confirming = true }
-                        .controllerButtonStyle(LauncherPrimaryButtonStyle()).disabled(!canFree).controllerShortcut(.primary)
+                        .controllerButtonStyle(LauncherPrimaryButtonStyle()).disabled(!canFree).controllerShortcut(.rightTrigger)
                 }
             }
         }
