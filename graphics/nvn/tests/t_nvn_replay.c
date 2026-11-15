@@ -31,8 +31,10 @@ static int g_flag_finish_lag;   // 用例设：开关 nvk_finish_lag 的值
 static int g_flag_sync_lag;     // 用例设：开关 nvk_sync_lag 的值（产品缺省 1＝允许一格在飞；用例固定 0，测的是「真等」这条契约）
 static int g_flag_state_keep = 1, g_flag_rt_cont = 1, g_flag_clear_park = 1, g_flag_pass_area = 1;   // 用例设：开关 nvk_state_keep / nvk_rt_cont / nvk_clear_park / nvk_pass_area 的值（缺省同产品：都开）
 static int g_flag_pool_memo = 1;   // 用例设：开关 nvk_pool_memo 的值（缺省同产品：开）；备忘每 4096 次查找才重读一次，换值后要用 pm_flag() 推一下
+static int g_flag_vf_key = 1;      // 用例设：开关 nvk_vf_key 的值（缺省同产品：视图表按存储认视图）；每 256 次取视图重读一次，换值后要用 vf_push() 推一下
 int nvn_plat_flag(const char *name, int dflt) {
     if (!strcmp(name, "nvk_pool_memo")) return g_flag_pool_memo;
+    if (!strcmp(name, "nvk_vf_key")) return g_flag_vf_key;
     if (!strcmp(name, "nvk_finish_lag")) return g_flag_finish_lag;
     if (!strcmp(name, "nvk_sync_lag")) return g_flag_sync_lag;
     if (!strcmp(name, "nvk_state_keep")) return g_flag_state_keep;
@@ -89,8 +91,17 @@ nvn_gpu_rc nvn_gpu_cmd_commit(nvn_gpu_cmd c, uint64_t signal, nvn_gpu_done_fn do
     (void)err; c->live = 0; g_commits++; if (!c->is_pre) g_main_commits++; g_pend[g_npend].fn = done; g_pend[g_npend].user = user; g_pend[g_npend].signal = signal; g_npend++; return (nvn_gpu_rc){NVN_GPU_OK}; }
 nvn_gpu_rc nvn_gpu_fence_wait(uint64_t v, uint64_t timeout_ns, nvn_gpu_err *err) { (void)timeout_ns; (void)err; return (nvn_gpu_rc){v <= g_fdone ? NVN_GPU_OK : NVN_GPU_E_TIMEOUT}; }
 // 贴图 / 视图 / 采样器 / 上传：只记账
-struct nvn_gpu_tex_s { nvn_gpu_tex_desc d; }; struct nvn_gpu_view_s { nvn_gpu_tex of; int has_v; int rid; }; struct nvn_gpu_samp_s { int x; };
-static int g_tex_creates, g_tex_releases, g_view_creates, g_view_releases, g_samp_creates, g_samp_releases, g_tex_create_fail;
+struct nvn_gpu_tex_s { nvn_gpu_tex_desc d; int ord; uint32_t px[4][4]; }; struct nvn_gpu_view_s { nvn_gpu_tex of; int has_v; int rid; view_t v; }; struct nvn_gpu_samp_s { int x; };   // ord：后端贴图的递增序号；px：像素替身（4 个 mip × 4 层各一个 32 位字）；v：建视图时收到的视图记录
+static int g_tex_creates, g_tex_releases, g_view_creates, g_view_releases, g_samp_creates, g_samp_releases, g_tex_create_fail, g_tex_ord;
+// 像素替身（视图表按存储认视图的用例用）：每份后端存储有一小块「像素」——4 个 mip × 4 层各一个 32 位字，初值 0。「画」= 往视图指到的（mip，层）那个字里写
+// 一个值；写进去的值要经过视图记录的签名（格式 / 通道映射不同的视图，同一次绘制写进去的字节不同，真 GPU 上也一样）；「读回」= 把存储的 16 个字原样取出。
+// 视图的内容只取决于（后端贴图，视图记录），所以同样的画面序列走新旧两条取视图的路径，每帧读回的像素必须逐字节相同——
+// 不同就说明某次画进了别的存储 / 别的层 / 别的 mip / 用了别种视图。
+static uint32_t view_sig(const struct nvn_gpu_view_s *w) { uint32_t h = 2166136261u ^ (uint32_t)w->has_v; if (w->has_v) for (size_t i = 0; i < sizeof w->v; i++) h = (h ^ ((const uint8_t *)&w->v)[i]) * 16777619u; return h; }
+static void fake_paint(const struct nvn_gpu_view_s *w, uint32_t val) {
+    const uint32_t lvl = w->has_v ? w->v.base_level : 0, layer = w->has_v ? w->v.min_layer : 0;   // 没带视图记录 = 第 0 个 mip、第 0 层
+    if (lvl < 4 && layer < 4) w->of->px[lvl][layer] = val ^ view_sig(w);
+}
 static int g_vid; static int g_released_id[8192]; static int g_nrel;   // 视图生命周期取证：每个视图一个递增 id，release 记下 id
 static int was_view_released(int rid) { for (int i = 0; i < g_nrel; i++) if (g_released_id[i] == rid) return 1; return 0; }
 static uint32_t g_last_usage; static uint16_t g_last_swz;
@@ -98,9 +109,9 @@ static view_t g_vw_last; static int g_vw_last_has;   // 最近一次 view_create
 static struct { uint32_t level, layer; uint64_t pitch, img; int w, h, pre; uint8_t first[64]; } g_up[16]; static int g_nup;
 nvn_gpu_rc nvn_gpu_tex_create(const nvn_gpu_tex_desc *d, nvn_gpu_tex *out, nvn_gpu_err *err) {
     if (g_tex_create_fail) { snprintf(err->why, sizeof err->why, "替身：不支持"); *out = NULL; return (nvn_gpu_rc){NVN_GPU_E_UNSUPPORTED}; }
-    g_tex_creates++; g_last_usage = d->usage; g_last_swz = d->swz; *out = calloc(1, sizeof **out); (*out)->d = *d; return (nvn_gpu_rc){NVN_GPU_OK}; }
+    g_tex_creates++; g_last_usage = d->usage; g_last_swz = d->swz; *out = calloc(1, sizeof **out); (*out)->d = *d; (*out)->ord = ++g_tex_ord; return (nvn_gpu_rc){NVN_GPU_OK}; }
 void nvn_gpu_tex_release(nvn_gpu_tex t) { g_tex_releases++; free(t); }
-nvn_gpu_rc nvn_gpu_view_create(nvn_gpu_tex t, const view_t *v, nvn_gpu_view *out, nvn_gpu_err *err) { (void)err; g_view_creates++; g_vw_last_has = v != NULL; if (v) g_vw_last = *v; *out = calloc(1, sizeof **out); (*out)->of = t; (*out)->has_v = v != NULL; (*out)->rid = ++g_vid; return (nvn_gpu_rc){NVN_GPU_OK}; }
+nvn_gpu_rc nvn_gpu_view_create(nvn_gpu_tex t, const view_t *v, nvn_gpu_view *out, nvn_gpu_err *err) { (void)err; g_view_creates++; g_vw_last_has = v != NULL; if (v) g_vw_last = *v; *out = calloc(1, sizeof **out); (*out)->of = t; (*out)->has_v = v != NULL; if (v) (*out)->v = *v; (*out)->rid = ++g_vid; return (nvn_gpu_rc){NVN_GPU_OK}; }
 void nvn_gpu_view_release(nvn_gpu_view v) { g_view_releases++; if (v && g_nrel < 8192) g_released_id[g_nrel++] = v->rid; free(v); }
 nvn_gpu_rc nvn_gpu_samp_create(const samp_par *p, nvn_gpu_samp *out, nvn_gpu_err *err) { (void)p; (void)err; g_samp_creates++; *out = calloc(1, sizeof **out); (*out)->x = p->ws; return (nvn_gpu_rc){NVN_GPU_OK}; }
 void nvn_gpu_samp_release(nvn_gpu_samp s) { g_samp_releases++; free(s); }
@@ -415,36 +426,40 @@ static tex_t mk_tex(uint64_t serial, int64_t off, int fmt, uint32_t w, uint32_t 
 static void res_fresh(void);   // 定义在本文件后面
 // 视图取用窗口（#699）：一笔通道要同时挂多个附件，窗口内取到的缓存视图必须钉住到窗口结束；
 // 窗口一结束它就该能按轮转淘汰（证明窗口只在窗口内起作用，不是永久驻留）。
+static view_t vk_layer(int i) { view_t v; memset(&v, 0, sizeof v); v.set_layers = 1; v.min_layer = (uint16_t)i; v.nlayers = 1; return v; }   // 同一份存储上的第 i 种视图记录（替身不校验层号）
 static void t_view_pin(void) {
     res_fresh();
-    // 视图表是 128 组 x 8 路（按贴图序号散列）：窗口里取 3000 个不同贴图，平均每组 23 个——first 那一组的 8 格必然被本轮钉满、
+    // 视图表是 128 组 x 8 路（按存储、视图记录散列）：窗口里取 3000 种不同的（存储，视图记录），平均每组 23 个——first 那一组的 8 格必然被本轮钉满、
     // 多出来的走溢出表；窗口结束后再取 3000 个，first 那一格必然被换掉。数量由表的形状推出，不依赖具体散列到哪一组。
+    // 表按存储认视图：不同序号共用一份存储（同池同偏移同描述）时是同一项，所以这里在一份存储上取不同的视图记录来凑不同的项。
     enum { N = 6000, NWIN = 3000 };
-    static tex_t tp[N];
-    for (int i = 0; i < N; i++) { tp[i] = mk_tex(3000 + (uint64_t)i, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&tp[i]); }
+    static view_t vp[N];
+    tex_t tp = mk_tex(3000, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&tp);
+    for (int i = 0; i < N; i++) vp[i] = vk_layer(i);
     nvn_gpu_view first = NULL;
     int first_id = 0;
     rp_view_pin_begin();
-    first = rp_view_for(&tp[0], NULL, &g_fake_cmd);
+    first = rp_view_for(&tp, &vp[0], &g_fake_cmd);
     CHECK(first != NULL);
     if (first) first_id = first->rid;
-    for (int i = 1; i < NWIN; i++) (void)rp_view_for(&tp[i], NULL, &g_fake_cmd);   // 每组都被挤满：钉住时不能放掉 first
+    for (int i = 1; i < NWIN; i++) (void)rp_view_for(&tp, &vp[i], &g_fake_cmd);   // 每组都被挤满：钉住时不能放掉 first
     CHECK(first && !was_view_released(first_id));                                  // 修前：轮转把 first 放掉 → 红
     rp_view_pin_end();
-    for (int i = NWIN; i < N; i++) (void)rp_view_for(&tp[i], NULL, &g_fake_cmd);
+    for (int i = NWIN; i < N; i++) (void)rp_view_for(&tp, &vp[i], &g_fake_cmd);
     CHECK(first && was_view_released(first_id));                                   // 窗口结束：它可以被淘汰
     res_fresh();
     // 一帧里轮着用 300 个目标（真机一款 3D 游戏每帧一百多个通道）：第二遍取到的必须是第一遍那些视图，一个都不重建。
     // 300 个散进 128 组、每组 8 格；数量远小于 1024 格，但会不会有一组超过 8 个取决于散列，所以只要求「重建的不超过 300 个里的 5%」
     // （原先 64 格的环：第二遍 300 个全部重建）。
     { enum { M = 300 }; static tex_t tm[M]; static int rid[M]; int rebuilt = 0;
-      for (int i = 0; i < M; i++) { tm[i] = mk_tex(9000 + (uint64_t)i * 7, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&tm[i]); }
+      for (int i = 0; i < M; i++) { tm[i] = mk_tex(9000 + (uint64_t)i * 7, (int64_t)i * 4096, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&tm[i]); }   // 各占一份存储（偏移错开）
       for (int i = 0; i < M; i++) { nvn_gpu_view v = rp_view_for(&tm[i], NULL, &g_fake_cmd); rid[i] = v ? v->rid : -1; }
       for (int i = 0; i < M; i++) { nvn_gpu_view v = rp_view_for(&tm[i], NULL, &g_fake_cmd); if (!v || v->rid != rid[i]) rebuilt++; }
       if (rebuilt > M / 20) fprintf(stderr, "视图表：300 个目标取第二遍，重建了 %d 个（期望 ≤ %d）\n", rebuilt, M / 20);
       CHECK(rebuilt <= M / 20); }
     res_fresh();   // 本用例建的存储不留给后面的用例（它们按 live 计数做断言）
 }
+
 
 // 程序按阶段绑定：只绑程序实际有 shader 的阶段；VS/FS 不能被关（保留原绑定）；GS/TCS/TES 程序没有就解绑。
 // 期望值直接由输入推出：绑 0x1f、程序只有 VS+FS → 有效掩码 3；分程序组合 → VS 保留、FS 换；
@@ -746,6 +761,202 @@ static void t_alias_take_over(void) {
     nvn_be_alias_drop_pool(&g_tp);
     CHECK(rp_res_tex_built() == 0);
     nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK);
+}
+
+// 视图表按存储认视图（rp_res.c g_vf）：游戏每帧把瞬态渲染目标 Finalize 再按同描述重建——新序号、同一份存储（共用表）。视图只由（存储，视图记录）决定，
+// 所以新序号取到的必须是上一个序号建的那个视图，一个都不重建（后端按视图记的帧缓冲也就跟着沿用）；换视图记录 / 换存储才是新项；存储放掉，名下的视图一并放。
+// 期望值都由用例自己建的输入直接得出：创建 / 放掉次数来自替身计数，视图身份来自替身给的 rid。
+// 两臂：arm 1 = 缺省（按存储）；arm 0 = nvk_vf_key=0（旧：按序号）——同样的操作每个新序号都重建，是这条改动的负对照（两臂的期望写在同一处，一臂变红即说明开关没起作用或改动没生效）。
+static void vf_push(int on) {   // 开关每 256 次取视图重读一次：换值后用一张探针贴图推一下
+    g_flag_vf_key = on;
+    tex_t pr = mk_tex(83999, 0x7F000, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&pr);
+    for (int i = 0; i < 300; i++) (void)rp_view_for(&pr, NULL, &g_fake_cmd);
+    nvn_be_tex_release(&pr);
+}
+static void t_view_storage_key(void) {
+    for (int arm = 1; arm >= 0; arm--) {
+        res_fresh();
+        const int c0 = g_view_creates, r0 = g_view_releases;   // 整臂的账：结束时创建数 = 放掉数（不漏、不多放）
+        vf_push(arm);
+        const int ca = g_view_creates;
+        tex_t a = mk_tex(84001, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&a);
+        nvn_gpu_view va = rp_view_for(&a, NULL, &g_fake_cmd);
+        CHECK(va != NULL && g_view_creates == ca + 1);
+        const int rid_a = va ? va->rid : -1;
+        // ① 序号销毁、同描述的新序号接上来（瞬态渲染目标每帧 Finalize 再重建）：同一份存储
+        nvn_be_tex_release(&a);
+        tex_t b = mk_tex(84002, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&b);
+        nvn_gpu_view vb = rp_view_for(&b, NULL, &g_fake_cmd);
+        CHECK(vb != NULL);
+        if (arm) CHECK(vb && vb->rid == rid_a && g_view_creates == ca + 1 && !was_view_released(rid_a));   // 视图沿用：没重建、没放
+        else     CHECK(vb && vb->rid != rid_a && g_view_creates == ca + 2 && was_view_released(rid_a));   // 负对照：按序号认，旧序号一没就放、新序号重建
+        // ② 两个活着的序号共用一份存储（同池同偏移同描述）：视图共用
+        const int cb = g_view_creates;
+        tex_t d = mk_tex(84003, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&d);
+        nvn_gpu_view vd = rp_view_for(&d, NULL, &g_fake_cmd);
+        if (arm) CHECK(vd && vb && vd->rid == vb->rid && g_view_creates == cb);
+        else     CHECK(vd && vb && vd->rid != vb->rid && g_view_creates == cb + 1);
+        // ③ 同一份存储上换视图记录：新项；再取：命中
+        view_t l1 = vk_layer(1);
+        const int cc = g_view_creates;
+        nvn_gpu_view v1 = rp_view_for(&b, &l1, &g_fake_cmd);
+        CHECK(v1 && vb && v1->rid != vb->rid && g_view_creates == cc + 1);
+        CHECK(rp_view_for(&b, &l1, &g_fake_cmd) == v1 && g_view_creates == cc + 1);
+        // ④ 另一份存储（偏移不同）：新项
+        tex_t e = mk_tex(84004, 4096, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&e);
+        const int cd = g_view_creates;
+        nvn_gpu_view ve = rp_view_for(&e, NULL, &g_fake_cmd);
+        CHECK(ve && vb && ve->rid != vb->rid && g_view_creates == cd + 1);
+        // ⑤ 存储放掉（内存池 Finalize）：名下的视图一并放，一个不留
+        nvn_be_tex_release(&b); nvn_be_tex_release(&d); nvn_be_tex_release(&e); nvn_be_alias_drop_pool(&g_tp);
+        CHECK(g_view_creates - c0 == g_view_releases - r0);
+        // ⑥ 同地址的新存储（calloc 常把刚放掉的块再给出来）：取到新视图，不是死存储的旧视图
+        tex_t f = mk_tex(84005, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&f);
+        const int ce = g_view_creates;
+        nvn_gpu_view vf = rp_view_for(&f, NULL, &g_fake_cmd);
+        CHECK(vf && vf->rid != rid_a && g_view_creates == ce + 1);
+        nvn_be_tex_release(&f); nvn_be_alias_drop_pool(&g_tp);
+        CHECK(g_view_creates - c0 == g_view_releases - r0);
+        // ⑦ 不进共用表的存储（没有池）：序号销毁就是存储销毁，视图当场放（tex_unref 路径）
+        tex_t p = mk_tex(84006, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); p.pool = NULL; p.mem = NULL; nvn_be_tex_init(&p);
+        const int cf = g_view_creates, rf = g_view_releases;
+        nvn_gpu_view vp0 = rp_view_for(&p, NULL, &g_fake_cmd);
+        CHECK(vp0 != NULL && g_view_creates == cf + 1);
+        const int rid_p = vp0 ? vp0->rid : -1;
+        nvn_be_tex_release(&p);
+        CHECK(g_view_releases == rf + 1 && was_view_released(rid_p));
+        CHECK(g_view_creates - c0 == g_view_releases - r0);
+        // ⑧ 同偏移来了别的描述、旧存储闲置够久被挤掉（alias_take_over，序号早已销毁）：名下的视图一并放
+        nvn_be_sub_begin();
+        tex_t h = mk_tex(84007, 0, NVN_FORMAT_RGBA8, 64, 64, 1, 0); nvn_be_tex_init(&h);
+        nvn_gpu_view vh = rp_view_for(&h, NULL, &g_fake_cmd);
+        CHECK(vh != NULL);
+        const int rid_h = vh ? vh->rid : -1;
+        nvn_be_tex_release(&h);
+        nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK);
+        subs_pass(16);
+        nvn_be_sub_begin();
+        tex_t h2 = mk_tex(84008, 0, NVN_FORMAT_RGBA8, 40, 40, 1, 0); nvn_be_tex_init(&h2);
+        CHECK(rp_tex_resolve(&h2, &g_fake_cmd) != NULL);
+        CHECK(was_view_released(rid_h));
+        nvn_be_tex_release(&h2); nvn_be_alias_drop_pool(&g_tp);
+        nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK);
+        CHECK(g_view_creates - c0 == g_view_releases - r0);
+    }
+    vf_push(1);   // 开关回缺省，并让备忘重读
+    res_fresh();
+}
+
+// 视图记录的每个字节都在键里（键是（存储 uid，视图记录整份 16 字节 + 有没有记录））：同一份存储上，把记录逐字节各改一次、再加一个「没带记录」，每个变体各是一个独立的视图；
+// 换序号后，按存储认的一臂每个变体沿用自己的视图、一个不错认；按序号认的一臂（负对照）每个变体都重建。身份用替身给的 rid 比（放掉的视图地址会被复用，不能比指针）。
+static void t_view_storage_fields(void) {
+    enum { NV = 18 };   // 0 = 基础记录；1..16 = 逐字节改一个字节；17 = 不带记录（NULL）
+    for (int arm = 1; arm >= 0; arm--) {
+        res_fresh();
+        const int c0 = g_view_creates, r0 = g_view_releases;   // 整臂的账（含 vf_push 的探针视图）
+        vf_push(arm);
+        const int c1 = g_view_creates;                         // 本用例自己的创建数从这里数
+        view_t var[NV]; var[0] = vk_layer(2); for (int k = 1; k < 17; k++) { var[k] = var[0]; ((uint8_t *)&var[k])[k - 1] ^= 0x5A; }
+        memset(&var[17], 0, sizeof var[17]);
+        tex_t a = mk_tex(86500, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&a);
+        int rid[NV];
+        for (int k = 0; k < NV; k++) {
+            nvn_gpu_view w = rp_view_for(&a, k == 17 ? NULL : &var[k], &g_fake_cmd);
+            CHECK(w != NULL); rid[k] = w ? w->rid : -1;
+            for (int m = 0; m < k; m++) CHECK(rid[m] != rid[k]);                                     // 改任何一个字节都不是同一个视图
+        }
+        CHECK(g_view_creates - c1 == NV);
+        nvn_be_tex_release(&a);                                                                         // 序号销毁；同描述的新序号接上来
+        tex_t b = mk_tex(86501, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&b);
+        for (int k = NV - 1; k >= 0; k--) {
+            nvn_gpu_view w = rp_view_for(&b, k == 17 ? NULL : &var[k], &g_fake_cmd);
+            CHECK(w != NULL);
+            if (arm) CHECK(w && w->rid == rid[k]); else CHECK(w && w->rid != rid[k]);                 // 新：各沿用各的；旧：全部重建
+        }
+        CHECK(g_view_creates - c1 == (arm ? NV : 2 * NV));
+        nvn_be_tex_release(&b); nvn_be_alias_drop_pool(&g_tp);
+        CHECK(g_view_creates - c0 == g_view_releases - r0);
+    }
+    vf_push(1);
+    res_fresh();
+}
+
+// 视图记录的每个字节都在键里，且不靠散列碰巧分开：上面逐字节的用例里各变体散列到不同的组，比较函数漏比一个字节时，被漏的那个变体多半碰不上同组的兄弟，
+// 照样全绿。这里把同一个字节的 256 个取值逐个取一遍（一个字节 256 个变体挤进 128 组，同组争位的有几百对），再取一次「不带记录」：取回的视图自己记着建它时
+// 收到的记录，必须与这次要的逐字节相同、有没有记录也相同——键里漏了哪个字节（或漏比有没有记录），总会有一对同组变体取回别人的视图。
+static void t_view_storage_sweep(void) {
+    const int saved_nrel = g_nrel;   // 本用例要放掉几千个视图：别把后面用例用的「视图放掉」记录挤满
+    for (int arm = 1; arm >= 0; arm--) {
+        int reqs = 0, bad = 0;
+        for (int k = 0; k < (int)sizeof(view_t); k++) {
+            res_fresh();
+            const int c0 = g_view_creates, r0 = g_view_releases;   // 这一个字节的账（含 vf_push 的探针视图）
+            vf_push(arm);
+            const int c1 = g_view_creates;
+            tex_t a = mk_tex(87000 + k, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&a);
+            const view_t base = vk_layer(2);
+            for (int val = 0; val < 256; val++) {
+                view_t r = base; ((uint8_t *)&r)[k] ^= (uint8_t)val;   // val = 0 → 基础记录
+                nvn_gpu_view w = rp_view_for(&a, &r, &g_fake_cmd);
+                reqs++; if (!w || !w->has_v || memcmp(&w->v, &r, sizeof r)) bad++;
+            }
+            { nvn_gpu_view w = rp_view_for(&a, NULL, &g_fake_cmd); reqs++; if (!w || w->has_v) bad++; }
+            { view_t r = base; nvn_gpu_view w = rp_view_for(&a, &r, &g_fake_cmd); reqs++; if (!w || !w->has_v || memcmp(&w->v, &r, sizeof r)) bad++; }   // 不带记录之后再取带记录的
+            CHECK(g_view_creates - c1 >= 256);                         // 256 个不同的记录各建过自己的视图（用例没有空转）
+            nvn_be_tex_release(&a); nvn_be_alias_drop_pool(&g_tp);
+            CHECK(g_view_creates - c0 == g_view_releases - r0);        // 建了几个、放了几个：不漏、不多放
+        }
+        CHECK(reqs == 16 * 258);
+        CHECK(bad == 0);   // 取回的视图没有一个是为别的记录建的
+    }
+    vf_push(1);
+    res_fresh();
+    g_nrel = saved_nrel;
+}
+
+// 同一存储换序号后，读回的像素与旧路径逐字节相同，且等于「该画的内容」。60 帧、每帧一个新序号（Finalize 再按同描述重建）、每帧在 6 种视图记录上各画一次（带 / 不带记录、
+// 不同层、不同 mip、不同格式、不同通道映射；6 个视图各写自己的那个像素字，互不覆盖）；中间经历：存储不变（0–14）→ 内存池 Finalize、存储换成新对象（15–29）→ 同池另一偏移（30–44）
+// → 回到前一份（45–59）。每帧画完读回这一帧用的那份存储的全部像素（16 个字），两臂（缺省按存储 / nvk_vf_key=0 按序号）各跑一遍：两臂每帧读回逐字节相同，
+// 且每帧读回恰好等于「6 个视图各写进自己那个字的值」（没有画丢、没有画进别的存储）；同时核两臂确实走了不同机制：新路径只建 18 个视图（存储 / 偏移每换一次 6 个），旧路径每帧 6 个共 360 个。
+static void t_view_storage_pixels(void) {
+    static uint32_t snap[2][60][16]; int creates[2] = {0, 0};
+    // 6 个视图各自写的那个像素字（mip，层）：0 → [0][3]；1 → [0][1]；2 → [0][2]；3 → [1][0]；4 → [2][1]；5（不带记录）→ [0][0]
+    static const int cell[6] = {0 * 4 + 3, 0 * 4 + 1, 0 * 4 + 2, 1 * 4 + 0, 2 * 4 + 1, 0 * 4 + 0};
+    for (int arm = 1; arm >= 0; arm--) {
+        res_fresh();
+        const int c0 = g_view_creates, r0 = g_view_releases;   // 整臂的账（含 vf_push 的探针视图）
+        vf_push(arm);
+        const int c1 = g_view_creates;                         // 本用例自己的创建数从这里数
+        for (int f = 0; f < 60; f++) {
+            const int64_t off = f >= 30 && f < 45 ? 4096 : 0;
+            tex_t t = mk_tex(86600 + f, off, NVN_FORMAT_RGBA8, 16, 16, 1, 0); nvn_be_tex_init(&t);
+            nvn_gpu_tex st = NULL; uint32_t want_px[16]; memset(want_px, 0, sizeof want_px);
+            for (int j = 0; j < 6; j++) {
+                view_t vj = vk_layer(j == 0 ? 3 : j % 3);
+                if (j == 3) vj.base_level = 1;
+                if (j == 4) { vj.base_level = 2; vj.format = 7; }
+                if (j == 2) vj.swz[1] = 3;
+                nvn_gpu_view w = rp_view_for_attach(&t, j == 5 ? NULL : &vj, &g_fake_cmd);
+                CHECK(w != NULL);
+                const uint32_t val = (uint32_t)(f * 8 + j + 1);
+                struct nvn_gpu_view_s want = {0}; want.has_v = j != 5; if (j != 5) want.v = vj;
+                want_px[cell[j]] = val ^ view_sig(&want);
+                if (w) { fake_paint(w, val); st = w->of; }
+            }
+            CHECK(st != NULL);
+            if (st) { memcpy(snap[arm][f], st->px, sizeof snap[arm][f]); CHECK(!memcmp(snap[arm][f], want_px, sizeof want_px)); }   // 读回 = 该画的内容
+            nvn_be_tex_release(&t);
+            if (f == 14) nvn_be_alias_drop_pool(&g_tp);   // 内存池 Finalize：存储死亡，下一帧起是新的存储对象
+        }
+        creates[arm] = g_view_creates - c1;
+        nvn_be_alias_drop_pool(&g_tp);
+        CHECK(g_view_creates - c0 == g_view_releases - r0);
+    }
+    CHECK(!memcmp(snap[1], snap[0], sizeof snap[0]));                 // 两臂每帧读回的像素逐字节相同
+    CHECK(creates[1] == 18 && creates[0] == 360);                     // 且两臂走的确实是两条路（新路径少建 95%）
+    CHECK(memcmp(snap[1][0], snap[1][1], sizeof snap[1][0]) != 0);    // 画面确实在变（每帧写进去的值不同）
+    vf_push(1);
+    res_fresh();
 }
 
 static void t_alias(void) {   // 同池同偏移同描述的对象共用一份存储；只差用途标志也算同一份；偏移不同是两份
@@ -3068,6 +3279,8 @@ static void t_registered_view_pin(void) {
     res_fresh();
 }
 
+// 视图表按存储认视图：序号销毁时视图跟着存储留在表里（存储还在共用表里，下一个同描述的新序号接着用，见 t_view_storage_key）；
+// 存储真放掉（内存池 Finalize）时名下的视图一并放，窗口内已交出的要等窗口结束。
 static void t_invalidated_attachment_pin(void) {
     res_fresh();
     tex_t t = mk_tex(82001, 0, NVN_FORMAT_RGBA8, 16, 16, 1, 0);
@@ -3078,6 +3291,8 @@ static void t_invalidated_attachment_pin(void) {
     rp_view_pin_begin();
     nvn_be_tex_release(&t);
     CHECK(!was_view_released(id));
+    nvn_be_alias_drop_pool(&g_tp);   // 存储放掉：视图要放，但窗口内已交出的钉到窗口结束
+    CHECK(!was_view_released(id));
     rp_view_pin_end();
     CHECK(!was_view_released(id));
     rp_view_pin_end();
@@ -3085,6 +3300,7 @@ static void t_invalidated_attachment_pin(void) {
     v = rp_view_for(&t, NULL, &g_fake_cmd);
     CHECK(v != NULL); id = v ? v->rid : 0;
     nvn_be_tex_release(&t);
+    nvn_be_alias_drop_pool(&g_tp);   // 窗口外：当场放
     CHECK(was_view_released(id));
     res_fresh();
 }
@@ -3159,6 +3375,10 @@ int main(int argc, char **argv) {
     t_separate_sampler();
     t_present();
     t_view_pin();
+    t_view_storage_key();
+    t_view_storage_fields();
+    t_view_storage_sweep();
+    t_view_storage_pixels();
     t_pass_3d_slice_view();
     t_bind_reuse();
     t_begin_fail();
