@@ -93,6 +93,7 @@ struct LauncherView: View {
         .font(.manrope(13))
         .frame(minWidth: 900, idealWidth: 1280, minHeight: 680, idealHeight: 900)
         .onAppear { model.startup() }
+        .sheet(isPresented: $model.sgradeUpgradeOpen) { SGradeUpgradeView(model: model).environmentObject(loc) }   // S 级优化升级（v0.4.0）
         .sheet(item: Binding(get: { installFor.map(OptionsTarget.init) }, set: { installFor = $0?.id })) { target in
             InstallView(model: model, gameID: target.id).environmentObject(loc)
         }
@@ -113,6 +114,7 @@ struct LauncherView: View {
             UploadDiagnosticsSheet(model: model, gameID: target.id.isEmpty ? nil : target.id, operations: nil, fallback: "") { model.diagUploadFor = nil }.environmentObject(loc)
         }
         .background(DownstreamPromptHost(model: model))   // 下游深度方案确认页（DownstreamConfirmSheet.swift）
+        .background(CrashPromptHost(model: model))       // 上次开着金手指 / 补丁时异常退出：已当场关掉，开局时通知关了哪几条
         .alert(txt("game.delete.title").replacingOccurrences(of: "{0}", with: deleteFor?.name ?? ""), isPresented: Binding(get: { deleteFor != nil }, set: { if !$0 { deleteFor = nil } })) {
             Button(txt("game.cancel"), role: .cancel) { deleteFor = nil }
             Button(txt("game.delete.confirm"), role: .destructive) { if let g = deleteFor { model.deleteGame(g) }; deleteFor = nil }
@@ -130,7 +132,11 @@ struct LauncherView: View {
         .sheet(isPresented: $model.showAddGames) { ImportSheet(model: model, kind: .games).environmentObject(loc) }
         // 打开时最多一个更新弹窗（有新版 / 这版更新了什么），只给最新一期；关掉（含 Esc）= 这一版不再弹
         .sheet(isPresented: Binding(get: { model.updatePopup != nil && !model.showAddGames && !model.showKeys }, set: { if !$0, model.updatePopup != nil { model.closeUpdatePopup() } })) {
-            UpdatePopupView(model: model, language: uiLanguage)
+            if model.updatePopup?["kind"] as? String == "feature" {   // 大版本首次打开的新功能大窗（docs/site/feature.json，updater.py feature_spotlight）
+                FeatureSpotlightView(model: model, language: uiLanguage)
+            } else {
+                UpdatePopupView(model: model, language: uiLanguage)
+            }
         }
         .alert(txt(model.updateGate ?? "update.gate.busy"), isPresented: Binding(get: { model.updateGate != nil && model.updatePopup == nil }, set: { if !$0 { model.updateGate = nil } })) {
             Button(txt("update.after.ok"), role: .cancel) { model.updateGate = nil }
@@ -177,13 +183,16 @@ struct LauncherView: View {
     private var topBarRow: some View {
         HStack(spacing: 12) {
             // 点品牌名回欢迎页（社区贡献者补丁 #2）
-            Button { installFor = nil; model.goToLibrary(); model.welcomeHome = true } label: {
-                Text(brand).font(.manrope(22, .bold)).tracking(-0.6).lineLimit(1).fixedSize()
+            // 版本号（11-11 维护者：玩家截图时我们一眼看出是哪一版）：正式版 v0.3.0，开发版 v0.2.9-dev+短提交号（build_app.py 写进 Info.plist）。
+            //   11-14 体验梳理第二轮：放到品牌名下面一行小字——右侧按钮在系统标题栏里、不给窗口内容让位，同一行时长版本号会被「玩家」等按钮盖住
+            VStack(alignment: .leading, spacing: 0) {
+                Button { installFor = nil; model.goToLibrary(); model.welcomeHome = true } label: {
+                    Text(brand).font(.manrope(19, .bold)).tracking(-0.5).lineLimit(1).fixedSize()
+                }
+                .buttonStyle(.plain).accessibilityIdentifier("top.brand")
+                Text(verbatim: Self.displayVersion).font(.manrope(10.5, .semibold)).monospacedDigit().foregroundStyle(.secondary)
+                    .lineLimit(1).fixedSize().textSelection(.enabled).accessibilityIdentifier("topbar.version")
             }
-            .buttonStyle(.plain).accessibilityIdentifier("top.brand")
-            // 版本号（11-11 维护者：玩家截图时我们一眼看出是哪一版）：正式版 v0.3.0，开发版 v0.2.9-dev+短提交号（build_app.py 写进 Info.plist）
-            Text(verbatim: Self.displayVersion).font(.manrope(12.5, .semibold)).monospacedDigit().foregroundStyle(.secondary)
-                .lineLimit(1).fixedSize().textSelection(.enabled).accessibilityIdentifier("topbar.version")
             Spacer()
         }
         .padding(.leading, 90).padding(.trailing, 24)   // the window's traffic lights sit in the transparent title bar

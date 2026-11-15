@@ -232,10 +232,12 @@ public sealed partial class EnvironmentWindow : Window
             welcomeHome = true; Navigate("library");
         };
         // 版本号（11-11 维护者：玩家截图时我们一眼看出是哪一版）：正式版 v0.3.0，开发版 v0.2.9-dev+短提交号（S2Arm.csproj 构建时算好）
-        var versionLabel = new TextBlock { Text = DisplayVersion, FontSize = 12.5, FontWeight = FontWeight.SemiBold, Foreground = Brush.Parse("#8C8A85"),
-            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 0, 0) };
+        //   11-14 体验梳理第二轮：放到品牌名下面一行小字（同 Mac），放不下就截断；左栏裁掉超出部分，窗口窄时不再画到右侧按钮底下
+        var versionLabel = new TextBlock { Text = DisplayVersion, FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Brush.Parse("#8C8A85"),
+            TextTrimming = TextTrimming.CharacterEllipsis };
         Avalonia.Automation.AutomationProperties.SetAutomationId(versionLabel, "topbar.version");
-        header.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { brand, versionLabel } });
+        header.Children.Add(new StackPanel { Orientation = Orientation.Vertical, VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true,
+            Margin = new Thickness(0, 0, 12, 0), Children = { brand, versionLabel } });
 
         var rightBar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10,
             VerticalAlignment = VerticalAlignment.Center };
@@ -318,6 +320,12 @@ public sealed partial class EnvironmentWindow : Window
             ShowPage("import", body);
             return;
         }
+        if (FeatureOpen)   // 大版本首次打开的新功能大窗（FeatureSpotlight.cs）：和更新弹窗同一个位子，排在它前面（updater.py inbox）
+        {
+            RenderFeature(body);
+            ShowPage("feature", body);
+            return;
+        }
         if (updatePopup is not null)   // 打开时最多一个更新弹窗，只给最新一期（UpdateFlow.cs）
         {
             RenderUpdatePopup(body);
@@ -328,6 +336,18 @@ public sealed partial class EnvironmentWindow : Window
         {
             RenderMessages(body);
             ShowPage("messages", body);
+            return;
+        }
+        if (page == "library" && cheatsFor is not null)   // 「金手指」页（CheatsPage.cs）：从游戏库这款的菜单进、「返回」回游戏库
+        {
+            RenderCheats(body);
+            ShowPage("cheats", body);
+            return;
+        }
+        if (page == "library" && sgradeOpen)   // 「S 级优化升级」页（SGradeUpgradePage.cs）：从游戏库进、确认 / 关闭回游戏库
+        {
+            RenderSGradeUpgrade(body);
+            ShowPage("sgrade", body);
             return;
         }
         if (page == "library" && (ShowsWelcome || welcomeHome))
@@ -474,8 +494,10 @@ public sealed partial class EnvironmentWindow : Window
         settings.Children.Add(Label(T("settings.runtime"))); settings.Children.Add(runtime);
         settings.Children.Add(Label(T("settings.shell"))); settings.Children.Add(shell);
         settings.Children.Add(Action("action.save_settings", CapturePaths, !busy));
-        body.Children.Add(new Expander { Header = T("settings.title"), Content = settings,
-            HorizontalAlignment = HorizontalAlignment.Stretch });
+        // 只在开发版（没有版本号 = 不是装出来的发版包）显示：发版包玩家用不上，包不完整时后端提示的是重新安装（11-14 体验梳理）
+        if (AppVersion == "-")
+            body.Children.Add(new Expander { Header = T("settings.title"), Content = settings,
+                HorizontalAlignment = HorizontalAlignment.Stretch });
 
         if (diagnostics.Length != 0)
         {

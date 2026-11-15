@@ -94,6 +94,46 @@ class LongPathTest(unittest.TestCase):
         self.assertEqual(sr.group_targets(["R:\\lib\\iPhone\\g\\work", "R:\\lib\\cache\\g\\extract"]), ["R:\\lib"])
         self.assertEqual(sorted(sr.group_targets(["R:\\lib\\w", "D:\\x"])), ["D:\\x", "R:\\lib\\w"])
 
+    def test_unc_share_is_not_used_as_junction_target(self):
+        from pack.orch import shortroot as sr
+        local = r"R:\lib\iPhone\g\work"
+        unc = r"\\server\share\lib\cache\g\extract"
+        self.assertEqual(sorted(sr.junction_targets([local, unc])), [r"R:\lib\iPhone\g\work"])
+        self.assertTrue(sr.is_network_path(unc))
+        self.assertFalse(sr.is_network_path(local))
+
+    def test_mapped_network_drive_is_not_used_as_junction_target(self):
+        # NAS 映射成盘符（11-14 Windows 实机实测：联接建得出、一访问 WinError 123）：和 UNC 一样不建联接；本地盘照建
+        from unittest.mock import patch
+        from pack.orch import shortroot as sr
+        mapped, local = r"Q:\lib\games\g\build\ios", r"R:\lib\iPhone\g\work"
+        with patch.object(sr, "_remote_drive", lambda d: d.upper() == "Q:"):
+            self.assertTrue(sr.is_network_path(mapped))
+            self.assertFalse(sr.is_network_path(local))
+            self.assertEqual(sr.junction_targets([local, mapped]), [local])
+
+    def test_enter_keeps_unc_paths_unchanged_without_junction(self):
+        import types
+        from unittest.mock import Mock, patch
+        from pack.orch import shortroot as sr
+        unc = r"\\server\share\lib\games\title\build\ios"
+        create = Mock()
+        real_makedirs = sr.os.makedirs
+        def local_makedirs(path, **kwargs):
+            if ntpath.splitdrive(os.fspath(path))[0].startswith("\\\\"):
+                return None
+            return real_makedirs(path, **kwargs)
+        with tempfile.TemporaryDirectory() as t, \
+             patch.object(sr, "entry_dir", return_value=os.path.join(t, "j")), \
+             patch.object(sr, "_is_ntfs", return_value=True), \
+             patch.object(sr, "sweep", return_value=0), \
+             patch.object(sr.os, "makedirs", side_effect=local_makedirs), \
+             patch.dict(sys.modules, {"_winapi": types.SimpleNamespace(CreateJunction=create)}), \
+             patch.dict(os.environ, {"LOCALAPPDATA": t}, clear=False):
+            got = sr.enter(unc)
+            self.assertEqual(got, {ntpath.abspath(unc): ntpath.abspath(unc)})
+            create.assert_not_called()
+
     def test_sweep_removes_orphan_pid_without_junction(self):   # 审计 P2-217：写了 .pid、联接没建成就被杀，残留 .pid 要被扫掉；进程还活着的不动
         from pack.orch import shortroot as sr
         with tempfile.TemporaryDirectory() as root:

@@ -46,7 +46,8 @@ public sealed partial class EnvironmentWindow
 
     private void RenderWelcome(StackPanel body)
     {
-        var outer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,580") };
+        // 宽窗左右两栏；窗宽不够左栏放下大标题时（右栏固定 580，左栏会被挤到一两个字宽）改上下排：介绍在上、三步在下（11-14 体验梳理）
+        var outer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,580"), RowDefinitions = new RowDefinitions("Auto,Auto") };
 
         // ── 左列：介绍 ──────────────────────────────────────────────────
         var intro = new StackPanel { Spacing = 0 };
@@ -80,21 +81,33 @@ public sealed partial class EnvironmentWindow
         steps.Children.Add(WelcomeStepRow(WelcomeStep.Keys,
             T(KeysSettled ? "welcome.step.keys.done" : welcomeGameId != null ? "welcome.step.keys.notNeeded" : "welcome.step.keys.title"),
             true, KeysContent()));
-        Grid.SetColumn(steps, 1); outer.Children.Add(steps);
-        body.Children.Add(outer);
-
-        // 右下角「一键出包」
+        // 「一键出包」放在三步清单下面、和清单左对齐（原先浮在页面右侧中间，不挨着任何一步；11-14 体验梳理）
         if (PcReady && welcomeGameId != null)
         {
             var oneclick = new Button
             {
                 Content = T("welcome.oneclick"), Background = Accent, Foreground = Canvas,
-                Padding = new Thickness(28, 12), CornerRadius = new CornerRadius(24),
-                FontSize = 16, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Right
+                Padding = new Thickness(28, 12), CornerRadius = new CornerRadius(24), Margin = new Thickness(44, 28, 0, 0),
+                FontSize = 16, FontWeight = FontWeight.SemiBold, HorizontalAlignment = HorizontalAlignment.Left
             };
             oneclick.Click += (_, _) => StartOneClick(WelcomeGame!);
-            body.Children.Add(oneclick);
+            steps.Children.Add(oneclick);
         }
+        Grid.SetColumn(steps, 1); outer.Children.Add(steps);
+        bool? stacked = null;
+        void Arrange(double width)
+        {
+            var narrow = width < WelcomeTwoColumnMinWidth;
+            if (stacked == narrow) return;
+            stacked = narrow;
+            outer.ColumnDefinitions = new ColumnDefinitions(narrow ? "*" : "*,580");
+            Grid.SetColumn(steps, narrow ? 0 : 1); Grid.SetRow(steps, narrow ? 1 : 0);
+            intro.Margin = narrow ? new Thickness(48, 48, 48, 8) : new Thickness(48);
+            steps.Margin = narrow ? new Thickness(48, 24, 48, 44) : new Thickness(0, 44, 48, 44);
+        }
+        Arrange(Bounds.Width);
+        outer.SizeChanged += (_, e) => Arrange(e.NewSize.Width);
+        body.Children.Add(outer);
     }
 
     private string? metalPickError;
@@ -267,6 +280,9 @@ public sealed partial class EnvironmentWindow
         Navigate("build");
     }
 
+    // 两栏的下限：右栏 580 + 左栏放得下「大标题一行至少一个完整词」约 380 + 左右边距
+    private const double WelcomeTwoColumnMinWidth = 1060;
+
     private static Canvas Spacer(double height) => new() { Height = height };
 
     private static TextBlock BigTitle(string text) => new()
@@ -284,7 +300,7 @@ public sealed partial class EnvironmentWindow
     private Control WelcomeStepRow(WelcomeStep step, string title, bool last, Control content)
     {
         var done = WelcomeDone(step);
-        var active = step == WelcomeCurrent;
+        var active = step == WelcomeCurrent && !done;   // 三步都做完时最后一步不算「当前」：原先它按当前步放大成 22 号，和前两步不一样（11-14 体验梳理）
         var leftCol = new Grid { RowDefinitions = new RowDefinitions("Auto,*") };
         var circle = new Border
         {

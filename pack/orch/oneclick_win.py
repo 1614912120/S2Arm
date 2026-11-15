@@ -226,7 +226,7 @@ def env_items(target, shell):
     add('tzdata', (R / 'Binaries/Prepare/Tzdata/output').is_dir() or (tz and Path(tz, 'output').is_dir()),
         '钉版时区离线产物（S2A_TZDATA_CACHE/output，Mac 上 services/systemdata/make_tzdata.sh 生成后带来）')
     fonts = os.environ.get('S2A_FONTS')
-    add('fonts', fonts and len(glob.glob(os.path.join(fonts, '*.bfttf'))) == 7, '开源共享字体 7 份（S2A_FONTS，Mac 上 pack/fonts/make_open_fonts.py 生成后带来）')
+    add('fonts', fonts and len(glob.glob(os.path.join(glob.escape(fonts), '*.bfttf'))) == 7, '开源共享字体 7 份（S2A_FONTS，Mac 上 pack/fonts/make_open_fonts.py 生成后带来）')
     if pre:
         from pack import rewriter
         rw = rewriter.bundled()
@@ -304,7 +304,7 @@ def log_reason(text, limit=600):
 
 def nx_unpack_id():   # 源码身份（现编目录名与预编件 .src_digest 共用）
     import hashlib
-    src = b''.join(Path(f).read_bytes() for f in sorted(glob.glob(str(R / 'pack/nx_unpack/*.cs')) + glob.glob(str(R / 'pack/nx_unpack/*.csproj'))))
+    src = b''.join(Path(f).read_bytes() for f in sorted(glob.glob(os.path.join(glob.escape(str(R / 'pack/nx_unpack')), '*.cs')) + glob.glob(os.path.join(glob.escape(str(R / 'pack/nx_unpack')), '*.csproj'))))
     return hashlib.sha256(src).hexdigest()[:12]
 
 
@@ -355,8 +355,8 @@ def unpack(run, sources, title_id, program_index=0):
     exe = run.step('编 nx_unpack', lambda: nx_unpack(run))
     env = dict(os.environ, PYTHONUTF8='1', S2A_NX_UNPACK=str(exe))
     s = Path(sources[0])
-    nup = [p for p in sources if p.lower().endswith('.nup')] or (glob.glob(os.path.join(sources[0], '*.nup')) if s.is_dir() else [])
-    export = next((d for d in [s] + ([Path(p) for p in glob.glob(os.path.join(sources[0], '*'))] if s.is_dir() else []) if (d / 'base/exefs/main.npdm').is_file()), None)
+    nup = [p for p in sources if p.lower().endswith('.nup')] or (glob.glob(os.path.join(glob.escape(sources[0]), '*.nup')) if s.is_dir() else [])
+    export = next((d for d in [s] + ([Path(p) for p in glob.glob(os.path.join(glob.escape(sources[0]), '*'))] if s.is_dir() else []) if (d / 'base/exefs/main.npdm').is_file()), None)
     drop_seed_link(x)
     shutil.rmtree(x, ignore_errors=True)
     if export is None and nup:   # Switch 2 NUP 容器：先展开成导出目录
@@ -369,7 +369,7 @@ def unpack(run, sources, title_id, program_index=0):
     else:   # Switch 1 原件：按内容清单认款（pack/source_pick.py，与 Mac 一键出包同一份规则），本体 + 更新 + DLC 一起解
         keys = os.environ.get('S2A_KEYS') or os.path.expanduser('~/.switch/prod.keys')
         if not os.path.isfile(keys): raise Fail(f'prod.keys 不在：{keys}', 75)
-        files = sorted(f for d in sources for f in ([d] if os.path.isfile(d) else glob.glob(os.path.join(d, '**', '*'), recursive=True)) if f.lower().endswith(SRC_EXT))
+        files = sorted(f for d in sources for f in ([d] if os.path.isfile(d) else glob.glob(os.path.join(glob.escape(d), '**', '*'), recursive=True)) if f.lower().endswith(SRC_EXT))
         if not files: raise Fail(f'{sources} 下没有 {"/".join(SRC_EXT)}')
         def pick():
             with tempfile.TemporaryDirectory() as t:
@@ -556,6 +556,11 @@ def direct(run, cur, target, jobs, tid=None, name='direct'):
     """直连库。缓存：S2A_DIRECT_CACHE（整条路径）> S2A_DIRECT_CACHE_ROOT/<程序号>（常驻，按款共用，11-06 出包速度线：Windows 出包机原先每单私有、成功即删，同款再出从零翻译 + 编 Metal）
     > <工作目录>/dcache（本单私有）。常驻时同款两单按文件锁串行（日志 logs/、跑局知识快照同目录），出完把本次 logs/ 拷回 <工作目录>/dcache/logs
     （tools/tianyan_lane.py 拉 direct_fail.log / 判红日志的路径不变），再按预算淘汰"""
+    if WIN and not metal_exe().is_file():   # 物理上做得下去：不带着色器库照出包（product 收 dlib=None），游戏里首次遇到的画面现编、前几分钟会卡
+        run.say(f'【黄】没找到 Metal 开发工具（{metal_exe().parent}）：这次不带着色器库，游戏能玩，首次遇到的画面现编、前几分钟会卡；'
+                f'在「准备这台电脑」装好 Metal 开发工具后重新出包就不卡')
+        run.ev('direct_skipped', reason='metal_missing')
+        return None
     out = run.out / name   # 多程序合集序号 n：direct_p<n>（sub_programs）
     dsx = (prebuilt('dsx/dsx.dll') or R / 'build/dsx/win/dsx.dll') if WIN else None   # 直连翻译库：启动器随发版预编的在就用（同 Mac pack/stage_direct.sh 内置 dsx/libdsx.dylib）
     if WIN and not prebuilt('dsx/dsx.dll'): run.step('编 dsx', lambda: run.sh([PY, '-X', 'utf8', str(R / 'graphics/dsx/dsx_win.py'), str(dsx)], 'dsx_build.log'))
@@ -599,6 +604,10 @@ def direct(run, cur, target, jobs, tid=None, name='direct'):
 def junction(dst, src):
     """工作根里联到现行各项 / 直连库。游戏库所在盘建不了联接（exFAT / FAT32，v0.3.1 玩家确认过照用，pack/orch/roots.py links_supported）时整份拷过来：
     多占一份空间（空间预算已按这类盘多算），产物一样"""
+    target = shortroot.to_long(src, shortroot.table_now())
+    if WIN and shortroot.is_network_path(target):
+        shutil.copytree(src, dst)
+        return
     try:
         if WIN:   # 目标写真实长路径：短根是工作期的入口，产物里的联接要在它之外也有效；CreateJunction 不受 cmd 的长度限制
             import _winapi
@@ -763,9 +772,9 @@ def main(argv=None):
     run = Run(a.out, a.events); t0 = time.time(); cur = None
     work_temp(run.out)
     share_walk_dir(a.out)
-    if bad:
-        for n, _, why, *_ in bad: run.say(f'【红】环境缺件 {n}：{why}')
-        run.ev('result', ok=False, msg='环境缺件：' + '、'.join(i[0] for i in bad)); return 75
+    # 自检只当提示、不拦（不许堵门，11-14 诊断#9478d5：一项判缺就整单退 75，什么都不做）：照做，真用到缺的那件的那步才失败、报那步的原话；
+    #   Metal 不是必需的：没有就这次不带着色器库（direct 里跳过），游戏里首次遇到的画面现编
+    for n, _, why, *_ in bad: run.say(f'【黄】环境自检说缺 {n}：{why}（照做，到要用它的那步再看）')
     try:
         x, tid, src_dir = from_extract(run, a.from_extract) if a.from_extract else unpack(run, a.source, a.title_id)
         if a.rt_shaders:

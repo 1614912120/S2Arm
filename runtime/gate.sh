@@ -11,7 +11,9 @@
 set -u
 GT=300
 has_file() { [ -f "runtime/tests/t_$1.c" ] || [ -f "runtime/tests/t_$1.m" ] || [ -f "graphics/nvn/tests/t_$1.c" ] || [ -f "graphics/nvn/tests/t_$1.m" ]; }
-for k in ${GATE_SKIP:-} ${GATE_ONLY:-}; do has_file "$k" || { echo "原生层：子项键 $k 在 runtime/tests 或 graphics/nvn/tests 下没有对应的 C / Objective-C 单测 → 红"; exit 1; }; done
+# 子项键也认只有构建分片、没有单测源文件的组（runtime/tests/mk/<键>.mk：touch_compat、ns2pro 这类打自己通过行的目标；11-14 新门禁按组拆步要能单跑它们）
+is_key() { has_file "$1" || [ -f "runtime/tests/mk/$1.mk" ]; }
+for k in ${GATE_SKIP:-} ${GATE_ONLY:-}; do is_key "$k" || { echo "原生层：子项键 $k 在 runtime/tests 或 graphics/nvn/tests 下没有对应的 C / Objective-C 单测 → 红"; exit 1; }; done
 # 跑一组并判：绿 → G+1；红 → R+1、记「键 原因」进 WHY、把细节行攒进 DET
 G=0; R=0; WHY=; DET=; TM=
 # 组并行（10-28 质量线门禁提速：100 组逐个跑本机 212 秒、gate-host 276 秒，单组最慢 13 秒，瓶颈是串行）：每组一个 make 进后台，同时至多 NATIVE_GATE_J 组
@@ -68,6 +70,27 @@ run_groups() {   # run_groups <键…>：前置建一次 → 非 SER 组并行 �
   for k in "$@"; do case $SER in *" $k "*) [ -f "$OUT/$k.rc" ] || exec_group "$k";; esac; done
   for k in "$@"; do judge "$k"; done
 }
+depskip() {   # depskip <键…>：可跳过的组（空格分隔）；不跳就什么都不打。见上方「按源文件跳组」
+  [ -n "${GATE_CHANGED:-}" ] && [ "${NATIVE_GATE_DEPSKIP:-1}" != 0 ] || return 0
+  local f c=() st day key cd b k
+  for f in $GATE_CHANGED; do case $f in
+    runtime/*.c|runtime/*.m|runtime/*.mm|runtime/*.cpp|runtime/*.cc|runtime/*.S|runtime/*.s|graphics/*.c|graphics/*.m|graphics/*.mm|graphics/*.cpp|graphics/*.cc|graphics/*.S|graphics/*.s) c+=("$f");;
+    runtime/*|graphics/*|Makefile|*/build.mk|tests/autoplay/*|tests/build.mk|compat/*) return 0;;   # 非 C 源落在本钩子管的路径下：全跑
+  esac; done
+  [ ${#c[@]} -gt 0 ] || return 0
+  st=${S2A_RUN_ROOT:-$HOME/.s2arm/run}/s2arm/gate_depskip; day=$(date +%Y%m%d); mkdir -p "$st" 2> /dev/null || return 0
+  [ -f "$st/full.$day" ] || { : > "$st/full.$day"; return 0; }   # 每天这台机器第一次：全跑
+  key=$(cat Makefile */build.mk runtime/tests/mk/*.mk 2> /dev/null | shasum | cut -c1-16); cd=$st/src.$key
+  if [ ! -f "$cd/.done" ]; then b=$(mktemp -d "${TMPDIR:-/tmp}/s2a_depskip_XXXXXX"); mkdir -p "$cd"
+    # 并行算（J 路，同组并行数）：串行 345 组约 400 秒，mk 一变就要重算，不并行会把省下的时间吃回去
+    printf '%s\n' "$@" | xargs -P "$J" -I{} sh -c 'make -n -B BUILD="$1" "native-test-$2" 2> /dev/null | grep -oE "[A-Za-z0-9_./+-]+\.(c|m|mm|cpp|cc|S|s)\b" | sed "s#^\./##" | sort -u > "$0/$2.txt"' "$cd" "$b" {}
+    rm -rf "${b:?}"; : > "$cd/.done"; fi
+  # 规则里自己再调 $(MAKE) 的组（graphics_session 编整个带 S2A_CS 的宿主、nvn_abba、input_config_apple）：干跑列不全它们的源（11-14 实测
+  #   graphics_session 串行干跑 0 个源、并行干跑 2 个），一律照跑。按规则文本静态认，不靠干跑输出
+  local rec; rec=" $(grep -l '\$(MAKE)' runtime/tests/mk/*.mk 2> /dev/null | sed 's#.*/##; s#\.mk$##' | tr '\n' ' ') $(awk '/^native-test-[a-z_0-9]+:/{t=substr($1, 13); sub(/:$/, "", t)} /\$\(MAKE\)/{if (t) print t}' Makefile */build.mk 2> /dev/null | tr '\n' ' ') "
+  local out=; for k in "$@"; do case $rec in *" $k "*) continue;; esac; [ -s "$cd/$k.txt" ] || continue; grep -qxFf <(printf '%s\n' "${c[@]}") "$cd/$k.txt" || out="$out $k"; done
+  echo "${out# }"
+}
 summary() { [ $R = 0 ] && echo "绿 $G 组" || echo "绿 $G 组、红 $R 组（${WHY#、}）"; }
 slowest() { printf '%s' "$TM" | sort -rn | head -5 | awk '{printf "%s%s %s 秒", (NR > 1 ? "、" : ""), $2, $1}'; }
 # 最慢 5 组单独一行，打在末行之前（末行格式 tools/gate.sh 要解析，不动）
@@ -83,12 +106,20 @@ rm -f /tmp/s2a_native_gate_$$.log; HB=$((SECONDS - t0))
 SK=" ${GATE_SKIP:-} "; TG=" $(make -pn 2>/dev/null | grep -oE '^native-test-[a-z_0-9]+' | sed 's/^native-test-//' | sort -u | tr '\n' ' ') "
 case $TG in (*[![:space:]]*) ;; (*) echo "原生层单测目标列表为空 → 红"; exit 1;; esac
 n=0
-RUN=(); for k in $TG; do case $SK in *" $k "*) continue;; esac; RUN+=("$k"); n=$((n + 1)); done; run_groups "${RUN[@]}"
+RUN=(); for k in $TG; do case $SK in *" $k "*) continue;; esac; RUN+=("$k"); n=$((n + 1)); done
+# 按源文件跳组（11-14 门禁提速）：只在本批改动「只有 runtime/ 或 graphics/ 下的 C 系源文件」时，跳过源文件清单里一个改动都没有的组。
+#   改动里有头文件 / 数据 / 脚本 / mk / Makefile / build.mk / 别的门禁路由路径、没给 GATE_CHANGED、今天这台机器还没全跑过 → 全跑。
+#   每组源文件清单 = make -n -B native-test-<键> 里出现的 .c / .m / .mm / .cpp / .cc / .S / .s（不受增量构建影响），按 Makefile + */build.mk +
+#   runtime/tests/mk/*.mk 的内容哈希缓存（变了重算）；清单算不出 / 为空的组照跑。11-14 模拟：今天 64 次触发本钩子的合并里 17 次只需跑 0–5 组
+NDS=$(depskip "${RUN[@]}") || NDS=
+if [ -n "$NDS" ]; then KEEP=(); SKN=0; for k in "${RUN[@]}"; do case " $NDS " in *" $k "*) SKN=$((SKN + 1));; *) KEEP+=("$k");; esac; done
+  RUN=("${KEEP[@]}"); n=$((n - SKN)); fi
+[ ${#RUN[@]} -gt 0 ] && run_groups "${RUN[@]}"
 for f in runtime/tests/t_*.c runtime/tests/t_*.m graphics/nvn/tests/t_*.c; do
   [ -f "$f" ] || continue; k=${f##*/t_}; k=${k%.*}
   case $SK in *" $k "*) continue;; esac; case $TG in *" $k "*) continue;; esac
   n=$((n + 1)); R=$((R + 1)); WHY="${WHY}、${k} 没有构建目标（有 ${f}，build.mk 没登记 native-test-${k}）"
 done
-ex=; [ -n "${GATE_SKIP:-}" ] && ex="（${GATE_SKIP} 另跑）"
+ex=; [ -n "${GATE_SKIP:-}" ] && ex="（${GATE_SKIP} 另跑）"; [ -n "${NDS:-}" ] && ex="${ex}（本批只改 C 源，按源文件清单跳过 $(wc -w <<< "$NDS" | tr -d ' ') 组）"
 [ $R = 0 ] || { printf '%s' "$DET"; timing; echo "原生层单测 期望 $n 组全绿 → $(summary)$ex"; exit 1; }
 timing; echo "原生层：宿主构建成功；单测 期望 $n 组全绿 → $(summary)$ex"
