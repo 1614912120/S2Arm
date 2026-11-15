@@ -132,6 +132,8 @@ static void *stall_watch(void *a) { s2a_thread_name("s2a-ap-stall");
     int (*hd)(const char *) = (int (*)(const char *))dlsym(RTLD_DEFAULT, "s2a_dump_threads");   // tdump.c：宿主线程调用栈（10-24 xc3 停住靠它定出实化互等）
     void (*msg)(const char *) = (void (*)(const char *))dlsym(RTLD_DEFAULT, "s2a_ios_show_message");   // 第 2 档：屏幕上给玩家一句话（见 s2a_ap_stall_notice_after）
     void (*clr)(const char *) = (void (*)(const char *))dlsym(RTLD_DEFAULT, "s2a_ios_clear_message");   // 帧又走了收掉提示（只收这条，别的提示不动）
+    int (*rescue)(void) = (int (*)(void))dlsym(RTLD_DEFAULT, "s2a_cpatch_stall_rescue");   // 停帧救场：帧率补丁开着就当场关（runtime/src/cpatch.c）；只链本文件的单测取不到
+    void (*banner)(const char *, double) = (void (*)(const char *, double))dlsym(RTLD_DEFAULT, "s2a_ios_banner");   // 定时横幅（ios/dprompt.m），救场那句不随帧又走了收掉
     char shown[512] = "";   // 正在屏幕上的那句提示（收的时候按它认）
     uint64_t last = s2a_ap_frames(); int idle = 0, armed = 1, n = 0, noticed = 0, lim = 4 * stall_s();
     while (!atomic_load(&g_stall_stop)) {
@@ -156,6 +158,10 @@ static void *stall_watch(void *a) { s2a_thread_name("s2a-ap-stall");
         }
         if (idle >= lim && armed && n < 3) {
             armed = 0; n++; s2a_dguard_evidence("画面停住", 1);   // 直连安全网：前台停住满 S2A_STALL_DUMP_S 秒算失败证据，帧又走了撤回
+            if (n == 1 && rescue && rescue()) {   // 停帧救场：社区帧率补丁开着 → 已当场关、记下次也关；告诉玩家（横幅 8 秒，不随帧恢复收掉，读得完）
+                const char *t = S2A_UI(S2A_UI_STALL_PATCH_OFF);
+                if (g_notice_hook) g_notice_hook(t); else if (banner) banner(t, 8); else if (msg) msg(t);
+            }
             LOG("出图停住看门：上屏帧数停在 %llu 已 %d 秒（第 %d 次，每局至多 3 次；S2A_STALL_DUMP_S=0 关），游戏线程表 + 宿主线程栈：", (unsigned long long)f, stall_s(), n);
             // 每份现场现读（不缓存）：一轮里失焦、冻结状态会变，缓存就永远是起线程那一刻的值（单测用同一进程停两次、改桩验它跟着变）
             LOG("出图停住看门：外因状态 宿主焦点=%d 失焦暂停=%d 宿主睡眠=%d 客机冻结=%d（1=是 / 0=否 / -1=取不到符号；焦点=0、睡眠=1、冻结=1 任一成立，"

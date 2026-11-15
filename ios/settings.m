@@ -198,6 +198,8 @@ BOOL s2a_ios_fps60_on(void) { return s2a_ios_fps60_on_for(current_gid()); }
 // 补帧开关（按游戏存，S2AFrameInterp；没设过 = 开）：有社区帧率补丁时补帧自己让路（runtime/src/fps.c s2a_fps_source），开关不用管
 BOOL s2a_ios_fi_on(void) { id v = [s2a_ios_settings_defaults() objectForKey:@"S2AFrameInterp"]; return v ? [v boolValue] : YES; }
 void s2a_ios_set_fi(BOOL on) { [s2a_ios_settings_defaults() setBool:on forKey:@"S2AFrameInterp"]; }
+// 停帧救场记住关（runtime/src/cpatch.c s2a_cpatch_stall_rescue 的强定义）：这款「帧率」写关，下次启动不再开帧率补丁，设置页同步显示关
+void s2a_cpatch_persist_fps_off(void) { s2a_ios_set_fps60_for(current_gid(), NO); }
 void s2a_ios_set_fps60(BOOL on) { s2a_ios_set_fps60_for(current_gid(), on); }
 
 // 满屏（自适应：按这台设备的屏幕比例铺满，11-13 合并原「宽屏」与「宽屏强制启用」两个开关）：
