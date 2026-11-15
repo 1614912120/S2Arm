@@ -64,7 +64,10 @@ import LauncherPadBridge
         model.gamepad.handle(.down)
         XCTAssertEqual(model.gamepad.focusedID, "card." + String(format: "%016X", 1))
         for _ in 0..<19 { model.gamepad.handle(.right); try await Task.sleep(for: .milliseconds(80)) }
-        try await Task.sleep(for: .milliseconds(300))
+        let lastCard = "card." + String(format: "%016X", 20)
+        for _ in 0..<100 where !model.gamepad.isFullyVisible(lastCard) {
+            try await Task.sleep(for: .milliseconds(20))
+        }
         XCTAssertEqual(model.selectedID, String(format: "%016X", 20), "能横向滚动到最后一款游戏")
         XCTAssertTrue(model.gamepad.controlTargets(in: window).contains { $0.id == "card." + String(format: "%016X", 20) }, "屏外目标要实际滚入视口")
         model.gamepad.handle(.right)

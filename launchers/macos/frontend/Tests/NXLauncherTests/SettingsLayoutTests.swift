@@ -635,7 +635,16 @@ import S2ArmAppleAdapter
                 for backgroundTask in [false, true, false] {
                     fixture.model.session = backgroundTask ? JobSession(kind: .play, gameID: "fixture", name: "Original task") : nil
                     fixture.model.sessionHidden = backgroundTask
-                    try await Task.sleep(for: .milliseconds(100))
+                    // The native titlebar has its own hosting view. Its layout
+                    // and the page's inset update on separate main-loop passes.
+                    for _ in 0..<100 {
+                        let ready = fixture.model.gamepad.controlTargets(in: window)
+                        if let brand = ready.first(where: { $0.id == "top.brand" }),
+                           let action = ready.filter({ $0.id.hasPrefix("top.") && $0.id != "top.brand" }).min(by: { $0.frame.minX < $1.frame.minX }),
+                           ready.contains(where: { $0.id == "top.currentTask" }) == backgroundTask,
+                           brand.frame.maxX + 12 <= action.frame.minX { break }
+                        try await Task.sleep(for: .milliseconds(20))
+                    }
                     let targets = fixture.model.gamepad.controlTargets(in: window)
                     let brand = try XCTUnwrap(targets.first { $0.id == "top.brand" })
                     let action = try XCTUnwrap(targets.filter { $0.id.hasPrefix("top.") && $0.id != "top.brand" }.min { $0.frame.minX < $1.frame.minX })
