@@ -1700,6 +1700,7 @@ namespace S2A.Dsh
                 else if (nm == UVX) e.Set("kind", "uvx");   // 宽屏 16:9 采样换算（FsUvx）
                 else if (nm == LB) e.Set("kind", "lb");   // #800 采样器偏置表（FsLb）
                 else if (nm == "gal_ubo_len") e.Set("kind", "ubolen");   // #1204 T1 常量缓冲界长表（gal_spvx.m 直连口径：uint[NVN 统一缓冲槽] = 绑定的 vec4 个数，宿主按当前绑定填）
+                else if (nm.StartsWith("gal_tbl_", StringComparison.Ordinal)) e.Set("kind", "tblead").Set("for", nm["gal_tbl_".Length..]);   // #798 纹素缓冲前导元素数（gal_spvx.c spv_tbias：for = 那个纹素缓冲的成员名；宿主指向常量表里值为前导数的一格）
                 else if (nm == "spvBufferSizeConstants") e.Set("kind", "sbsize");   // SPIRV-Cross 存储缓冲字节数表（uint[存储缓冲的 [[id]]]，加固取运行时数组长度用；宿主按当前绑定填）
                 else if ((mm = Full(@"[a-z]+_c(\d+)", nm)).Success)
                 {

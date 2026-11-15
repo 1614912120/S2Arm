@@ -273,6 +273,8 @@ def sgrade_pending(c, games):
         rid = rewrite_refresh.rewriter_id(c)
     except (Failure, OSError, subprocess.SubprocessError):
         return False
+    if any(rewrite_refresh.kept_todo(c, g, layout.ios_kit(c, g)) for g in games if g):   # 运行时留下、还没进 iPhone 件的 NRO（#8be819）：要重组容器补上
+        return True
     pend = rewrite_refresh.pending_ios(c, [g for g in games if g], rid)
     # 这一版记号下已经试过、缺原件补不上的不算（不然每次「更新 iPhone」都白重装一遍）
     return any((layout.game_info(c, g).get("ios") or {}).get("sgradeMissing") != (rewrite_refresh.ios_key(c, g, rid) or "") for g in pend)
@@ -758,6 +760,54 @@ def pull_seen(c, ident, bid, gid, tag, docs="Documents"):
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(got, dest)
         return True
+
+
+def app_running(c, ident, bid):
+    """手机上这个包名的 App（S2Arm 容器）现在是不是在跑：进程可执行文件落在它的安装目录下 = 在跑。→ True / False（没装也算不在跑）/ None（查不清）。
+    自动推送前查（#8be819，phone_kept_pull）：在玩就不推，推送装 App 会把这局杀掉"""
+    from diag import devicectl
+    rc, apps, _ = devicectl(c, "device", "info", "apps", "--device", ident, "--bundle-id", bid, timeout=60)
+    if rc:
+        return None
+    urls = [a["url"].rstrip("/") + "/" for a in (apps.get("result") or {}).get("apps") or [] if isinstance(a, dict) and a.get("bundleIdentifier") == bid and a.get("url")]
+    if not urls:
+        return False
+    rc, procs, _ = devicectl(c, "device", "info", "processes", "--device", ident, timeout=60)
+    if rc:
+        return None
+    exe = [p.get("executable") or "" for p in (procs.get("result") or {}).get("runningProcesses") or [] if isinstance(p, dict)]
+    return any(e.startswith(u) for e in exe for u in urls)
+
+
+def pull_kept_nros(c, ident, bid, gid, docs="Documents"):
+    """装之前把这台设备上宿主留下的 NRO（runtime/src/loader.c s2a_nro_keep：包里没有改写映像、游戏解开的整份，Documents/wire/<号>/nro/<SHA-256>.nro）
+    拉回游戏库 games/<号>/nro_kept/，下次准备这款时改写进包（#8be819）。机上没有 / 列不出 / 拉不到都不算错；只收文件名 = 内容 SHA-256 的。→ 新收的个数"""
+    import hashlib
+    from diag import devicectl
+    rc, data, _ = devicectl(c, "device", "info", "files", "--device", ident, "--domain-type", "appDataContainer", "--domain-identifier", bid,
+                            "--subdirectory", f"{docs}/wire/{gid.upper()}/nro", timeout=120)
+    if rc:
+        return 0
+    names = sorted({p.rsplit("/", 1)[-1] for p in (f.get("relativePath") or f.get("path") for f in ((data.get("result") or {}).get("files") or [])
+                                                   if isinstance(f, dict) and not (f.get("resources") or {}).get("isDirectory")) if p})
+    new = 0
+    for name in names:
+        if not re.fullmatch(r"[0-9a-f]{64}\.nro", name):
+            continue
+        dest = layout.nro_kept(c, gid, create=True) / name
+        if dest.is_file():
+            continue
+        with tempfile.TemporaryDirectory(dir=c.private) as d:
+            rc, _, _ = devicectl(c, "device", "copy", "from", "--device", ident, "--domain-type", "appDataContainer", "--domain-identifier", bid,
+                                 "--source", f"{docs}/wire/{gid.upper()}/nro/{name}", "--destination", f"{d}/n", timeout=300)
+            got = Path(d, "n")
+            if rc or not got.is_file() or hashlib.sha256(got.read_bytes()).hexdigest() != name[:64]:
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(got, dest); new += 1
+    if new:
+        c.emit("message", f"这款游戏有 {new} 个代码模块要在运行中才能取到，已经从 iPhone 收回，这次装机一并补上")
+    return new
 
 
 SAVE_REL = "S2A/ryujinx/bis/user/save"   # 文档根下的存档目录（Ryujinx 数据根 = <文档根>/S2A/ryujinx）
@@ -1578,6 +1628,19 @@ class MacPhone:
                          team=self.team["name"], free=self.team["free"])
         self.pending = None   # 资源传完但没拉起 App 解开时的那句（put_game 带进结果 unpackPending）
 
+    def app_running(self):
+        return app_running(self.c, self.dev["id"], self.bid) if self.bid else None
+
+    def pull_kept(self, games):
+        """这几款在手机上留下的 NRO 都收回游戏库（pull_kept_nros，#8be819）→ 新收的个数；收不到不挡装机"""
+        n = 0
+        for g in games:
+            try:
+                n += pull_kept_nros(self.c, self.dev["id"], self.bid, g, docs=game_docs(g))
+            except (OSError, Failure) as e:
+                print(f"[s2a] 收回 {g} 留下的 NRO 失败：{e}", file=sys.stderr)
+        return n
+
     def backup(self, g):
         backup_saves(self.c, self.dev["id"], self.bid, g, docs=game_docs(g))
 
@@ -1643,6 +1706,12 @@ class WinPhone:
                 kind = ""
         self.info = dict(device=self.udid, deviceName="", deviceKind=kind)
         self.pending = None   # 资源传完但没拉起 App 解开时的那句（put_game 带进结果 unpackPending）
+
+    def pull_kept(self, games):   # 留下的 NRO（#8be819）：Windows 没有 devicectl，先不收（后续项：经 s2a-devpush 列 / 拉 Documents 文件）
+        return 0
+
+    def app_running(self):   # 查不清（Windows 没有 devicectl）：自动推送不发起
+        return None
 
     def client(self, work):
         return devpush_client(self.c, self.udid, self.bid, work)
@@ -1914,6 +1983,7 @@ def put_game(c, gid, ph, steps=True, others=None, skipped=()):
     if steps: c.begin("把这款放进手机上的 S2Arm" if gid else "核对手机上的游戏要不要跟着更新", 2, 6)   # gid 为 None = 更新手机上的 S2Arm（update_phone），不说装机的话
     # 改写器修过的话：容器里各款按本引擎改写器核一遍，受影响的只换改写产物（不重出资源包、不推 game.img），再组进新壳（rewrite_refresh.py）
     from rewrite_refresh import refresh_ios
+    ph.pull_kept([g for g in ([gid] if gid else []) + list(others) if g])   # 先收回机上留下的 NRO，refresh_ios 才补得进（#8be819）
     refresh_ios(c, [g for g in ([gid] if gid else []) + list(others) if g])
     # 已同意过「这次不带」的款（#479）：按壳号记在设备记录 staleAgreed，同一版壳不再每次问；换了壳号重新问。重新打过 iPhone 包的款组装时带得进，自然不在名单里
     ipa, games, sid = packer.assemble(c, gid, others, failed=rec.get("failedShells", []), agreed=rec.get("staleAgreed") or {})
@@ -2014,11 +2084,33 @@ def phone_updates(c):
     import ipa as packer
     sid = packer.current_shell_id(c)
     out = []
+    import rewrite_refresh
     for key, rec in recs:
         st = shell_outdated(c, rec, sid)
-        if st:
-            out.append(dict(device=key, name=(rec.get("signed") or {}).get("device") or "", **st))
+        # 运行时留下、已收回游戏库还没补进 iPhone 件的 NRO（#8be819）：壳是本版也要更新（只推程序），按钮亮、启动器自动发起（kept 列这几款）
+        kept = [g for g in rec.get("games") or [] if isinstance(g, str) and rewrite_refresh.kept_todo(c, g, layout.ios_kit(c, g))]
+        if st or kept:
+            if not st:
+                names = {g["id"].upper(): g.get("name") or g["id"] for g in c.catalog()["games"]}
+                st = dict(fromShell=rec["shellId"], toShell=sid, games=[dict(gameId=g, name=names.get(g, g)) for g in sorted(rec.get("games") or {})], stale=[])
+            out.append(dict(device=key, name=(rec.get("signed") or {}).get("device") or "", **st, kept=[dict(gameId=g, name=g) for g in kept]))
     return out
+
+
+def phone_kept_pull(c):
+    """「手机插着、启动器开着」时启动器隔一阵调一次（phoneKeptPull 作业）：连着的那台手机上，宿主留下的 NRO（#8be819）拉回游戏库。
+    → {device, new: 新收的个数, kept: 还没补进 iPhone 件的款, running: 手机上 S2Arm 正在跑或查不清}；有 kept 且 running 为假时启动器自动发起「更新 iPhone」
+    只推程序（正在玩就不推：装 App 会杀掉这局，等它退了下一轮再推）。没连手机 / 没装过 = new 0、不报错"""
+    try:
+        ph = phone_for(c)
+    except Failure:
+        return dict(device="", new=0, kept=[], running=False)
+    rec = layout.load_device(c, ph.key)
+    games = [g for g in rec.get("games") or [] if isinstance(g, str)]
+    new = ph.pull_kept(games)
+    import rewrite_refresh
+    kept = [g for g in games if rewrite_refresh.kept_todo(c, g, layout.ios_kit(c, g))]   # 没补进的款（手动按钮兜底同 phone_updates）
+    return dict(device=ph.key, new=new, kept=kept, running=bool(kept) and ph.app_running() is not False)
 
 
 def online_devices(c):
@@ -2065,6 +2157,7 @@ def update_phone(c):
     others = container_others(c, ph, rec)
     sid = packer.current_shell_id(c)
     st = shell_outdated(c, rec, sid, others)
+    ph.pull_kept(others)   # 机上留下的 NRO（#8be819）先收回：有新的就照样重组容器补上（sgrade_pending 认）
     if st is None and (c.r.get("sgradeUpgrade") is True or sgrade_pending(c, others)):
         # 壳已是本版、但有款要补 S 级优化（「S 级优化升级」页；补丁库更新了 / 电脑上导入了要改游戏代码的金手指，11-14）：照样重组容器，
         #   游戏程序在 put_game → refresh_ios 里补上，资源包照旧不推。Windows「更新 iPhone 上的 S2Arm」同走这里

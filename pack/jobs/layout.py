@@ -402,6 +402,12 @@ def path(c, gid, *parts, create=True):
     return d.joinpath(*parts)
 
 
+def nro_kept(c, gid, create=False):
+    """运行时留下的 NRO（#8be819：游戏自有加密归档里的 NRO，出包时认不出；宿主 LoadNro 缺表时把游戏解开的那份存成 <SHA-256>.nro，
+    Mac 局收局后 / 装 iPhone 前收回这里），出包改写阶段经 S2A_NRO_KEPT_DIR 读（runtime/rewriter/nro_to_nso.py 第三来源）"""
+    return path(c, gid, "nro_kept", create=create)
+
+
 def image_mac(c, gid, create=True):
     return path(c, gid, "image", "mac", create=create)
 

@@ -159,6 +159,19 @@ static int ubo_word_parse(struct s2a_jv o, struct fd_ubo_word *w) {
 static int ubo_texture_parse(struct s2a_jv b, struct fd_binding *dst, char *why, size_t why_size) {
     struct s2a_jv u = { NULL, 0 }, sm = { NULL, 0 }, f = { NULL, 0 };
     int has_u = !s2a_jv_obj_find(b, "uboHandle", &u), has_s = !s2a_jv_obj_find(b, "sampler", &sm);
+    // 现编结果（直连编译器 #1189）的平铺写法：uboSlot（NVN UBO 号 = cbuf − 3）+ uboOffset（组合句柄字的字节偏移），没有 slot。
+    //   组合句柄一个字里低 20 位是贴图号、高 12 位是采样器号，所以采样器取同一个字（FD_SAMP_UBO，samp_u = tex_u；回放按 >> 20 取）
+    struct s2a_jv us = { NULL, 0 }, uo = { NULL, 0 };
+    if (!has_u && dst->kind == 2 && !s2a_jv_obj_find(b, "uboSlot", &us)) {   // 存储绑定也带 uboSlot（地址来源），只认贴图
+        uint32_t sl = 0, off = 0;
+        if (has_s) return fail(why, why_size, "texture uboSlot form takes no separate sampler object");
+        if (dst->slot >= 0 || dst->count != 1) return fail(why, why_size, "texture uboSlot only on a single texture without slot");
+        if (s2a_jv_u32(us, &sl) || sl >= 16) return fail(why, why_size, "texture uboSlot outside 0..15");
+        if (s2a_jv_obj_find(b, "uboOffset", &uo) || s2a_jv_u32(uo, &off) || off > 0xffff || (off & 3)) return fail(why, why_size, "texture uboOffset missing / not a word offset");
+        memset(&dst->tex_u, 0, sizeof dst->tex_u); dst->tex_u.slot = (uint8_t)sl; dst->tex_u.offset = (uint16_t)off;
+        dst->tex_ubo = 1; dst->samp_src = FD_SAMP_UBO; dst->samp_u = dst->tex_u;
+        return 0;
+    }
     if (!has_u) return has_s ? fail(why, why_size, "texture sampler source without uboHandle") : 0;
     if (dst->kind != 2 || dst->slot >= 0 || dst->count != 1) return fail(why, why_size, "uboHandle only on a single texture without slot");
     if (ubo_word_parse(u, &dst->tex_u) || dst->tex_u.sid) return fail(why, why_size, "texture uboHandle invalid");
