@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 int nvn_be_test_ph_hash(const void *mem, uint64_t size, uint32_t n, uint64_t *h);
+uint64_t nvn_be_test_mem_readable(const void *p, uint64_t n);
 static int bad;
 #define CHECK(c, ...) do { if (!(c)) { printf("✗ "); printf(__VA_ARGS__); printf("\n"); bad++; } } while (0)
 int main(void) { @autoreleasepool {
@@ -25,7 +26,15 @@ int main(void) { @autoreleasepool {
     mprotect(m + pg, pg, PROT_READ | PROT_WRITE);
     r = nvn_be_test_ph_hash(m, 3 * pg, 3, h);
     CHECK(r == 1 && h[0] == h[1] && h[0] != h[2], "③ 恢复可读：返回 %d（应 1）、页 0 / 1 %s", r, h[0] == h[1] ? "相等" : "不等");
+    // ④ 存储尾巴没映射（#b5a081 / #8328e7：不在池里的贴图按全长读，尾巴落进 --- 区）：从起点算起连续可读的长度。期望手算：
+    //   末页不可访问 → 2 页；起点在页 1、长度跨到末页 → 1 页；末页解除映射（空洞）→ 2 页
+    mprotect(m + 2 * pg, pg, PROT_NONE);
+    uint64_t a1 = nvn_be_test_mem_readable(m, 3 * pg), a2 = nvn_be_test_mem_readable(m + pg, 2 * pg);
+    CHECK(a1 == 2 * pg && a2 == pg, "④ 末页不可访问：可读 %llu / %llu 字节（应 %zu / %zu）", (unsigned long long)a1, (unsigned long long)a2, 2 * pg, pg);
     munmap(m, 3 * pg);
-    printf("%s t_nvn_ph_hash：后台逐页哈希 可读 / 不可访问不崩 / 恢复 → %s\n", bad ? "✗" : "✓", bad ? "有不符合项" : "通过");
+    uint8_t *q = mmap(NULL, 3 * pg, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
+    if (q != MAP_FAILED) { munmap(q + 2 * pg, pg); uint64_t a3 = nvn_be_test_mem_readable(q, 3 * pg);
+        CHECK(a3 == 2 * pg, "④ 末页解除映射：可读 %llu 字节（应 %zu）", (unsigned long long)a3, 2 * pg); munmap(q, 2 * pg); }
+    printf("%s t_nvn_ph_hash：后台逐页哈希 可读 / 不可访问不崩 / 恢复 / 尾巴可读长度 → %s\n", bad ? "✗" : "✓", bad ? "有不符合项" : "通过");
     return bad != 0;
 }}
