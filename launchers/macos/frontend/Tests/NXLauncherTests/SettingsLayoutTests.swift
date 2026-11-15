@@ -27,12 +27,13 @@ import S2ArmAppleAdapter
                 navigation.attach(window)
                 defer { navigation.detach(); window.close() }
                 let initialWindows = Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber))
+                XCTAssertFalse(navigation.controlTargets(in: window).contains { $0.id == "home.filter" }, "首页不再显示重复的筛选按钮")
                 navigation.focus("home.search"); navigation.handle(.confirm)
                 try await Task.sleep(for: .milliseconds(350))
                 let field = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.search.field" }, "搜索框应直接在首页展开")
                 XCTAssertEqual(Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber)), initialWindows, "展开搜索不能创建 popup")
                 XCTAssertTrue(window.convertToScreen(host.bounds).contains(field.frame))
-                for id in ["home.search", "home.filter", "home.refresh", "library.sgradeUpgrade", "home.group.all", "home.group.recent", "home.group.favorites"] {
+                for id in ["home.search", "home.refresh", "library.sgradeUpgrade", "home.group.all", "home.group.recent", "home.group.favorites"] {
                     let control = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == id })
                     XCTAssertTrue(window.convertToScreen(host.bounds).contains(control.frame), "\(language)/\(width): 展开后控件必须留在窗口内")
                     XCTAssertLessThanOrEqual(control.frame.height, 44, "\(language)/\(width): 首页控件不能被换行撑高")

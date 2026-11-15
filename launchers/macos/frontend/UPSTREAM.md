@@ -52,6 +52,8 @@ S2Arm 新增（不是上游文件）：`Sources/NX2Apple/S2ArmLauncherModel.swif
 
 S2Arm 新增 `Sources/NX2Apple/HomeSearchControl.swift`，搜索胶囊在首页控制栏内动画展开和收起，保留查询并支持清除、键盘焦点和减少动态效果设置，不使用搜索弹出窗口。`LauncherView+Home.swift` 在窄窗口中使用有完整辅助功能名称的图标分组，为搜索保留空间。`InstallModeViews.swift` 的签名子区只保留左侧缩进，右边缘与父选项一致。两项均由 `Tests/NXLauncherTests/SettingsLayoutTests.swift` 的中英文真实窗口回归覆盖，同步上游时保留。
 
+首页分组直接使用全部、最近和收藏三个入口，移除重复的筛选按钮、弹层及手柄 X 筛选提示，保留肩键切换分组与文本键盘的 X 删除功能。
+
 ## 剔除清单
 
 整块不要（S2Arm 有自己的引擎、出包、签名、装机与发版，不引入第二套）：

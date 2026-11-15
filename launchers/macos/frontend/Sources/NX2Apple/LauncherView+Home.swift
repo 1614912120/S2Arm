@@ -99,10 +99,6 @@ extension LauncherView {
                               width: size.width < 1000 ? LauncherControl.width : LauncherTheme.Metrics.navigationWidth) {
                 navigation.editText(value: home.search, label: loc.t("home.search")) { home.search = $0 }
             }
-            Button { home.showFilters.toggle() } label: { Image(systemName: "line.3.horizontal.decrease") }
-                .controllerButtonStyle(ConsoleIconButtonStyle()).controllerID("home.filter")
-                .help(loc.t("home.filter")).accessibilityLabel(loc.t("home.filter"))
-                .popover(isPresented: $home.showFilters) { homeFilters }
             Button { model.refresh() } label: { Image(systemName: "arrow.clockwise") }
                 .controllerButtonStyle(ConsoleIconButtonStyle()).disabled(model.loading).controllerID("home.refresh")
                 .help(loc.t("s2arm.library.refresh")).accessibilityLabel(loc.t("s2arm.library.refresh"))
@@ -168,18 +164,6 @@ extension LauncherView {
         }
     }
 
-    private var homeFilters: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(loc.t("home.filter")).font(.manrope(15, .bold)).padding(8)
-            ForEach(HomeGroup.allCases, id: \.self) { group in
-                Button { home.group = group; home.showFilters = false } label: {
-                    HStack { Text(loc.t("home.group." + group.rawValue)); Spacer(); if home.group == group { Image(systemName: "checkmark") } }
-                        .padding(10).frame(minWidth: 190).contentShape(Rectangle())
-                }.controllerButtonStyle(.plain).accessibilityIdentifier("home.filter." + group.rawValue)
-            }
-        }.padding(10).preferredColorScheme(.dark)
-    }
-
     private func homeCard(_ game: GameSummary, side: CGFloat) -> some View {
         let selected = homeSelected?.id == game.id
         let focused = navigation.visible && navigation.focusedID == "card." + game.id
@@ -219,7 +203,6 @@ extension LauncherView {
             homeHint("A", homeSelected.map(homePrimaryTitle) ?? loc.t("home.select"))
             homeHint("B", loc.t("home.back"))
             homeHint("Y", loc.t("home.details"))
-            homeHint("X", loc.t("home.filter"))
         }.foregroundStyle(.white.opacity(0.6)).padding(.horizontal, 54).frame(height: 48)
     }
     private func homeHint(_ button: String, _ title: String) -> some View {
@@ -279,7 +262,6 @@ extension LauncherView {
             switch action {
             case .previousGroup: home.cycle(-1); return true
             case .nextGroup: home.cycle(1); return true
-            case .filter: home.showFilters = true; return true
             case .details: if let game = homeSelected { moreFor = game.id }; return true
             case .search:
                 showHomeSearch = true

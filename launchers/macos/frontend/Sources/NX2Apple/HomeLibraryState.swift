@@ -9,7 +9,6 @@ enum HomeGroup: String, CaseIterable { case all, recent, favorites }
 @MainActor final class HomeLibraryState: ObservableObject {
     @Published var group: HomeGroup = .all
     @Published var search = ""
-    @Published var showFilters = false
     @Published private(set) var favorites: Set<String>
     @Published private(set) var recent: [String]
     private let store: UserDefaults

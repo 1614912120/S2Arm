@@ -132,6 +132,8 @@ final class LauncherPadInputTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
         navigation.focus("pad.key.#"); navigation.handle(.confirm)
         XCTAssertEqual(keyboard.value, "oldq#", "密码与路径需要能输入符号页的字符")
+        navigation.handle(.filter)
+        XCTAssertEqual(keyboard.value, "oldq", "移除首页筛选后，手柄 X 仍须删除屏幕键盘的末尾字符")
         keyboard.value = "new"; keyboard.close(apply: false)
         XCTAssertEqual(result, "old")
         navigation.editText(value: result, label: "Query") { result = $0 }
