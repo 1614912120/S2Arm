@@ -626,6 +626,7 @@ void mtl_init(void) {
     const char *vbc = getenv("DM_NVN_VBUF_CACHE"); g_vbuf_cache = !(vbc && !strcmp(vbc, "0"));
     const char *link = getenv("DM_PRESENT_LINK");
     g_dm_present_link = link ? atoi(link) : 1; if (g_dm_present_link < 0 || g_dm_present_link > 2) g_dm_present_link = 1;   // Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
+    { const char *fi = getenv("DM_PRESENT_FI"); if (fi && !strcmp(fi, "1")) g_dm_present_link = 0; }   // 实验：出图补帧走出图线程自己取画布，一开始就不建显示链接
     const char *latency = getenv("DM_PRESENT_LATENCY");
     if (latency && atoi(latency) > 0) g_present_latency = atoi(latency);
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
@@ -16443,6 +16444,7 @@ static void rl_row(const uint8_t *q, NSUInteger w, NSUInteger h, unsigned long l
     for (NSUInteger k = 0; k < ng; k++) fprintf(g_rlf, "%02x", g[k]);
     fputc('\n', g_rlf); fflush(g_rlf); pthread_mutex_unlock(&g_rlmu);
 }
+#include "nvn_present_fi.inc"   // 实验：出图补帧（DM_PRESENT_FI=1）
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (mtl_gpu_halted()) { atomic_fetch_add_explicit(&g_gpu_refused, 1, memory_order_relaxed); return 0; }   // GPU 安全停：不取画布、不交上屏（调用方按「没交」把票记完成）
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
@@ -16546,6 +16548,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     present_pipeline(layer.pixelFormat);   // Same as the original path: the first frame compiles the pipeline before taking the drawable
     fit_geom(layer.drawableSize.width, layer.drawableSize.height, pcw, pch);   // game units (was the crop / source size read here)
     if (g_grab_cb) grab_present(src, crop, layer.drawableSize, ticket);   // Game picture needed by the whole-window screenshot (peek without the lock first; the real take locks inside the function)
+    if (fi_wanted() && !supplied) { if (@available(macOS 26.0, iOS 26.0, *)) { int fr = fi_frame(src, crop, layer, period, ticket); if (fr >= 0) return fr; } }   // 实验：出图补帧接手这一帧
     uint64_t dt0 = now_ns();
     id<CAMetalDrawable> dr = supplied ? supplied : [layer nextDrawable];
     if (!supplied) g_drawable_ns += now_ns() - dt0;
