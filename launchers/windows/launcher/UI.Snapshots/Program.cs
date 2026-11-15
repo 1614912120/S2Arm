@@ -233,6 +233,11 @@ TrackField("Started", DateTime.UtcNow.AddSeconds(-47)); TrackField("Ended", (Dat
 TrackField("PackBytes", (long?)0L); TrackField("PackFiles", (int?)0); TrackField("Version", "0.3.0");
 SetW(pack, "updateState", "succeeded");
 SaveP("win_21_phone_update_done", () => Navigate(pack, "phoneupdate"));
+// 导出模式完成（#1132）：3 款里 2 款沿用上次导出，只新写了丙 → 路径下点名「.img 只要拷这次新写的：丙.img」
+TrackField("ExportFolder", @"D:\S2Arm Games\S2Arm 自签导出"); TrackField("ExportGames", 3); TrackField("ExportBytes", (long?)9_800_000_000L);
+TrackField("ExportFresh", new List<string> { "丙.img" }); TrackField("ExportReused", 2);
+SaveP("win_21b_export_done_copy_only_new", () => Navigate(pack, "phoneupdate"));
+TrackField("ExportFolder", ""); TrackField("ExportGames", 0); TrackField("ExportBytes", (long?)null); TrackField("ExportFresh", new List<string>()); TrackField("ExportReused", 0);
 // 失败示例用真正做不下去的情况（签名失败）；认得出的风险走 drop 态让玩家确认，不当失败（维护者 11-11）
 TrackField("Suggestion", "在 Impactor 里重新登录你的 Apple ID，再点一次。");
 SetW(pack, "updateMessage", "签名没成功：Impactor 里的 Apple ID 登录已过期。");

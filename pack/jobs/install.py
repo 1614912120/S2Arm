@@ -1260,7 +1260,7 @@ def export_phone(c, gid=None):
         os.replace(ipa, out / "S2Arm.ipa")
         shutil.rmtree(work / "assemble", ignore_errors=True)
         c.begin("写各款游戏的 .img（含着色器库）与着色器更新包", 3, 4)
-        used, listed = set(), []
+        used, listed, fresh = set(), [], []
         prev, stamps = export_dir(c), {}
         old_stamps = read(c.private / EXPORT_STAMPS, {}) or {}
         for g in games:
@@ -1268,6 +1268,7 @@ def export_phone(c, gid=None):
             stamp = _pack_stamp(c, layout.ios_pack(c, g))
             if not _reuse_export(prev / f, out / f, old_stamps.get(f), stamp):
                 _export_img(c, layout.ios_pack(c, g), out / f)
+                fresh.append(f)   # 这次新写的（#1132 完成页点名「.img 只要拷这几个」；沿用的和上次导出逐字节相同，手机上已有就不用再拷）
             # 着色器更新包（维护者 11-13）：只含派生件，几百 MB；手机上已有这款同一版本体时只放它就能换着色器，不用重拷几 GB 的 .img
             u = _update_name(f, ui_lang(c))
             if not _reuse_export(prev / u, out / u, old_stamps.get(u), stamp):
@@ -1298,7 +1299,8 @@ def export_phone(c, gid=None):
         c.diagnostic("这几款和这次导出的游戏地址空间类型不同，放不进同一个 App，这次没带：" + "、".join(names[g] for g in apart)
                      + "（要玩它们就单独点它们导出，导出的 S2Arm 会换成只含同一类的游戏）", code="container_incompatible", severity="warning")
     return dict(exported=True, outputPath=str(dest), ipa=str(dest / "S2Arm.ipa"), readme=str(dest / readme), sgrade=patches_results(c),
-                games=[x["gameId"] for x in listed], files=listed, skipped=skipped + [names[g] for g in apart], exportBytes=size)
+                games=[x["gameId"] for x in listed], files=listed, skipped=skipped + [names[g] for g in apart], exportBytes=size,
+                fresh=fresh, reused=len(listed) - len(fresh))
 
 
 def readiness(c):
