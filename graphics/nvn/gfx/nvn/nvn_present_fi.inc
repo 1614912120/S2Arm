@@ -19,7 +19,8 @@ API_AVAILABLE(macos(26.0), ios(26.0))
     id<MTLRenderPipelineState> psoCopy;
     id<MTLComputePipelineState> mvDown, mvMatch, mvSpread; id<MTLTexture> lumaCur, lumaPrev; id<MTLBuffer> mvBlocks; int qw, qh, bw, bh;   // 自算运动矢量（DM_PRESENT_FI_MV）
     id<MTLBuffer> uv[4]; id tab[4];   // 命令槽 0 写输入（出图线程）、1 上补出的帧、2 上真帧（补帧队列）
-    id<MTL4CommandAllocator> alloc[3]; id<MTL4CommandBuffer> cb[3]; dispatch_semaphore_t slot_free[3];
+    id alloc[3], cb[3];   // Metal 4 分配器 / 命令缓冲（MTL4 棘轮：用 id，经 nvn_mtl.m 的 m4_* 包装）
+    dispatch_semaphore_t slot_free[3];
     dispatch_queue_t q; uint64_t last_seq, jobs;
     uint64_t made, skipped, shown_mid, declined, last_in_ns; double ms_sum, ms_max, gpu_sum;   // declined：按规则不补的帧（60 帧档 / 跑不满），原图直接上屏
 }
@@ -125,6 +126,7 @@ static void fi_mv_encode(NvPresentFI *f, id<MTLCommandBuffer> c, id<MTLTexture> 
     [en setTexture:f->motion atIndex:0]; [en setTexture:cur atIndex:1]; [en setTexture:prev atIndex:2]; [en dispatchThreads:MTLSizeMake(f->w, f->h, 1) threadsPerThreadgroup:tg];
     [en endEncoding];
 }
+API_AVAILABLE(macos(26.0), ios(26.0))
 static int fi_copy_setup(NvPresentFI *f) {
     static const char *msl =
         "#include <metal_stdlib>\nusing namespace metal;\n"
@@ -177,7 +179,7 @@ static NvPresentFI *fi_get(CAMetalLayer *layer, NSUInteger cw, NSUInteger ch) {
         }
         NSError *te = nil;
         for (int i = 0; i < 4; i++) { f->uv[i] = [g_dev newBufferWithLength:8 * sizeof(float) options:MTLResourceStorageModeShared]; res_add(f->uv[i]); f->tab[i] = tab_new(1, 1, 1, &te); if (!f->uv[i] || !f->tab[i]) { fi_off("cannot create the blit tables"); return nil; } }
-        for (int i = 0; i < 3; i++) { NSError *ae = nil; f->alloc[i] = [g_dev newCommandAllocatorWithDescriptor:[MTL4CommandAllocatorDescriptor new] error:&ae]; f->cb[i] = [g_dev newCommandBuffer]; f->slot_free[i] = dispatch_semaphore_create(1); if (!f->alloc[i] || !f->cb[i]) { fi_off("cannot create the command buffers"); return nil; } }
+        for (int i = 0; i < 3; i++) { f->alloc[i] = [g_dev newCommandAllocator]; f->cb[i] = [g_dev newCommandBuffer]; f->slot_free[i] = dispatch_semaphore_create(1); if (!f->alloc[i] || !f->cb[i]) { fi_off("cannot create the command buffers"); return nil; } }
         f->q = dispatch_queue_create("dm.nvn.present-fi", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0)); f->last_seq = UINT64_MAX;
         if (!fi_copy_setup(f)) { fi_off("cannot create the copy pipeline"); return nil; }
         if (fi_mv_mode() && !fi_mv_setup(f)) { fi_off("cannot create the motion-vector pipelines"); return nil; }
@@ -203,16 +205,15 @@ static int fi_dup(void) { static int v = -1; if (v < 0) v = getenv("DM_PRESENT_F
 typedef struct { int has, c[4]; } fi_crop;
 // 一遍全屏三角：t0（与可选的 t1）经 pso 画进 dst。裁剪 / 翻转同 present_blit_m4；vw x vh 是内容的宽高（定视口：画布上保持比例居中，平面贴图上铺满）
 API_AVAILABLE(macos(26.0), ios(26.0))
-static int fi_pass(id<MTL4CommandBuffer> cb, id<MTLRenderPipelineState> pso, id table, id<MTLBuffer> uvb, id<MTLTexture> t0, id<MTLTexture> t1, id<MTLTexture> dst, const int *crop, BOOL flip, NSUInteger vw, NSUInteger vh) {
+static int fi_pass(id cb, id<MTLRenderPipelineState> pso, id table, id<MTLBuffer> uvb, id<MTLTexture> t0, id<MTLTexture> t1, id<MTLTexture> dst, const int *crop, BOOL flip, NSUInteger vw, NSUInteger vh) {
     NSUInteger cx = 0, cy = 0, cw = t0.width, ch = t0.height;
     if (crop && (crop[2] || crop[3])) { if (crop[0] < 0 || crop[1] < 0 || crop[2] <= 0 || crop[3] <= 0 || (uint64_t)crop[0] + crop[2] > t0.width || (uint64_t)crop[1] + crop[3] > t0.height) return 0;
         cx = (NSUInteger)crop[0]; cy = (NSUInteger)crop[1]; cw = (NSUInteger)crop[2]; ch = (NSUInteger)crop[3]; }
     double dw = dst.width, dh = dst.height; pf_vp pv = pf_viewport(dw, dh, vw ? vw : cw, vh ? vh : ch); MTLViewport vp = {pv.x, pv.y, pv.w, pv.h, 0, 1};
     int full = vp.originX == 0 && vp.originY == 0 && vp.width == dw && vp.height == dh;
-    MTL4RenderPassDescriptor *rp = pass_desc();
-    rp.colorAttachments[0].texture = dst; rp.colorAttachments[0].loadAction = full ? MTLLoadActionDontCare : MTLLoadActionClear;
-    rp.colorAttachments[0].storeAction = MTLStoreActionStore; rp.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 1);
-    id<MTL4RenderCommandEncoder> en = [cb renderCommandEncoderWithDescriptor:rp]; if (!en) return 0;
+    id rp = pass_desc(); MTLRenderPassColorAttachmentDescriptor *ca = [rp colorAttachments][0];
+    ca.texture = dst; ca.loadAction = full ? MTLLoadActionDontCare : MTLLoadActionClear; ca.storeAction = MTLStoreActionStore; ca.clearColor = MTLClearColorMake(0, 0, 0, 1);
+    id en = m4_render_on(cb, rp); if (!en) return 0;
     enc_full_barrier_begin(en);
     enc_r_table(en, table, MTLRenderStageFragment);
     tab_tex(table, present_raw_src(t0), 0); if (t1) tab_tex(table, t1, 1);
@@ -229,19 +230,19 @@ static int fi_pass(id<MTL4CommandBuffer> cb, id<MTLRenderPipelineState> pso, id 
 }
 // 在命令槽 s 上编码并提交（dr 非空 = 这次画进画布）。after 在 GPU 做完的回调里调。槽的分配器要等它上一次提交做完才能重用
 API_AVAILABLE(macos(26.0), ios(26.0))
-static int fi_commit(NvPresentFI *f, int s, id<CAMetalDrawable> dr, int (^enc)(id<MTL4CommandBuffer> cb), void (^after)(int ok)) {
+static int fi_commit(NvPresentFI *f, int s, id<CAMetalDrawable> dr, int (^enc)(id cb), void (^after)(int ok)) {
     dispatch_semaphore_wait(f->slot_free[s], DISPATCH_TIME_FOREVER);
     pthread_mutex_lock(&g_fi_enc_mu);
     present_pipeline(MTLPixelFormatBGRA8Unorm);   // 取样器（g_blit_samp）在这里建
-    [f->alloc[s] reset]; if (dr) [g_q4 waitForDrawable:dr];
-    id<MTL4CommandBuffer> cb = f->cb[s]; [cb beginCommandBufferWithAllocator:f->alloc[s]];
+    if (dr) [g_q4 waitForDrawable:dr];
+    id cb = f->cb[s]; m4_begin_on(cb, f->alloc[s]);
     int ok = enc(cb);
     [cb endCommandBuffer];
     if (!ok) { if (dr) [g_q4 signalDrawable:dr]; pthread_mutex_unlock(&g_fi_enc_mu); dispatch_semaphore_signal(f->slot_free[s]); return 0; }
     dispatch_semaphore_t fr = f->slot_free[s];
-    id o = fb_new(); fb_add(o, ^(id<MTL4CommitFeedback> fbk) { int good = !fbk.error; if (!good) MLOG("【红】 frame interpolation command buffer error (slot %d): %s", s, fbk.error.description.UTF8String);
+    id o = fb_new(); fb_add(o, ^(id fbk) { NSError *fe = [fbk error]; int good = !fe; if (!good) MLOG("【红】 frame interpolation command buffer error (slot %d): %s", s, fe.description.UTF8String);
                                 dispatch_semaphore_signal(fr); if (after) after(good); });
-    res_commit(); id<MTL4CommandBuffer> bufs[] = {cb}; [g_q4 commit:bufs count:1 options:o];
+    res_commit(); m4_commit_one(cb, o);
     if (dr) [g_q4 signalDrawable:dr];
     pthread_mutex_unlock(&g_fi_enc_mu);
     return 1;
@@ -280,9 +281,9 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
     // 先上补出的帧，再隔半个游戏周期上真帧（游戏原图直接画进画布）
     double half = period > 0 ? period / 2 : 1.0 / 60; int mid_shown = 0;
     if (have_mid) { id<CAMetalDrawable> dm = [layer nextDrawable]; NSUInteger vw = (NSUInteger)f->w, vh = (NSUInteger)f->h;
-        if (dm && fi_commit(f, 1, dm, ^int(id<MTL4CommandBuffer> cb) { return dup ? present_blit_m4(cb, src, dm.texture, crop, f->uv[2], f->tab[2], flip) : fi_pass(cb, f->psoCopy, f->tab[2], f->uv[2], mid, nil, dm.texture, NULL, NO, vw, vh); }, nil)) { fi_count_on(dm, &g_fi_on_mid); [dm present]; mid_shown = 1; f->shown_mid++; } }
+        if (dm && fi_commit(f, 1, dm, ^int(id cb) { return dup ? present_blit_m4(cb, src, dm.texture, crop, f->uv[2], f->tab[2], flip) : fi_pass(cb, f->psoCopy, f->tab[2], f->uv[2], mid, nil, dm.texture, NULL, NO, vw, vh); }, nil)) { fi_count_on(dm, &g_fi_on_mid); [dm present]; mid_shown = 1; f->shown_mid++; } }
     id<CAMetalDrawable> dr = [layer nextDrawable];
-    if (dr && fi_commit(f, 2, dr, ^int(id<MTL4CommandBuffer> cb) { return present_blit_m4(cb, src, dr.texture, crop, f->uv[3], f->tab[3], flip); }, ^(int ok) { (void)ok; fi_ticket_done(ticket); })) {
+    if (dr && fi_commit(f, 2, dr, ^int(id cb) { return present_blit_m4(cb, src, dr.texture, crop, f->uv[3], f->tab[3], flip); }, ^(int ok) { (void)ok; fi_ticket_done(ticket); })) {
 #if !TARGET_OS_SIMULATOR
         present_note(dr, ticket); fi_count_on(dr, &g_fi_on_real);
         if (mid_shown) [dr presentAfterMinimumDuration:half]; else [dr present];
@@ -305,7 +306,7 @@ static int fi_frame(id<MTLTexture> src, const int crop[4], CAMetalLayer *layer, 
     fi_crop cr = {0}; if (crop) { cr.has = 1; memcpy(cr.c, crop, sizeof cr.c); }
     const int *cp = cr.has ? cr.c : NULL;   // 块里用值拷贝
     if (fi_dup()) { dispatch_async(f->q, ^{ fi_job(f, layer, src, cr, flip, k, seq, period, ticket, 1, allow); }); return 1; }   // 拆账：不写输入
-    if (!fi_commit(f, 0, nil, ^int(id<MTL4CommandBuffer> cb) { fi_crop c2 = cr; const int *c = c2.has ? c2.c : NULL; (void)cp;
+    if (!fi_commit(f, 0, nil, ^int(id cb) { fi_crop c2 = cr; const int *c = c2.has ? c2.c : NULL; (void)cp;
             return fi_pass(cb, f->psoCopy, f->tab[0], f->uv[0], src, nil, f->in_tex[k], c, flip, 0, 0); },
         ^(int ok) { dispatch_async(f->q, ^{ fi_job(f, layer, src, cr, flip, k, seq, period, ticket, ok, allow); }); })) { fi_off("cannot write the interpolation input"); return -1; }
     return 1;
