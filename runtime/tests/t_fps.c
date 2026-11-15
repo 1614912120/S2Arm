@@ -32,17 +32,21 @@ int main(void) {
                "c main 0x100 word 3942f661 52800021\n"          // 改指令行：运行时跳过
                "slot 2041 f32 200 100\nslot 2042 i32 1\nspeed 2040 0.5 2.0\npresent30 if slot 2042 == 0\n");
     fclose(f);
-    {   // 11-14 撤我方 60 帧：缺省（没设 S2A_CAPS_OWN）包里的 fps.tsv 不装——60 帧开着也不写 w 行、不放开出图间隔。期望手写：main+0x1000 仍 0、DM_PRESENT_INTERVAL 不设。
-        //   旧实现：照装，w 行写 60、设 display → 红
+    {   // 11-14 撤我方 60 帧：缺省（没设 S2A_CAPS_OWN）我方帧率表照装、一律按「关」写——60 帧开着也一样（开关此后只管社区帧率补丁）。
+        //   期望手写（同下面「起局关」那组）：w 行 main+0x1000 不写（仍 0）、不设 DM_PRESENT_INTERVAL、slot 2041 写关时值 100、速度槽 2040 = 1.0、不算真帧率来源。
+        //   起初整张表不装：槽留 0，带表的包起局后游戏步长读到 0 停在加载黑屏（iPhone 实机）→ 槽两项红；旧实现照开 → w 行 / 间隔两项红
         fflush(stdout); pid_t p = fork(); if (p < 0) return 1;
         if (!p) {
-            fails = 0; unsetenv("S2A_CAPS_OWN"); unsetenv("DM_PRESENT_INTERVAL"); unsetenv("S2A_FPS_TABLE"); unsetenv("S2A_FPS"); setenv("S2A_FSTEP", "0", 1); setenv("S2A_FPS60", "1", 1);
+            fails = 0; dm_fps_state = NULL; unsetenv("S2A_CAPS_OWN"); unsetenv("DM_PRESENT_INTERVAL"); unsetenv("S2A_FPS_TABLE"); unsetenv("S2A_FPS"); setenv("S2A_FSTEP", "0", 1); setenv("S2A_FPS60", "1", 1);
             s2a_fps_start(dir); usleep(250000);
-            int32_t a; memcpy(&a, img + 0x1000, 4); expect("缺省不用我方帧率表：60 帧开也不写 w 行 main+0x1000（仍 0）", 0, a);
-            expect("缺省不用我方帧率表：不设 DM_PRESENT_INTERVAL", 0, getenv("DM_PRESENT_INTERVAL") != NULL);
+            int32_t a; memcpy(&a, img + 0x1000, 4); expect("缺省口径：60 帧开也不写我方 w 行 main+0x1000（仍 0）", 0, a);
+            expect("缺省口径：不设 DM_PRESENT_INTERVAL", 0, getenv("DM_PRESENT_INTERVAL") != NULL);
+            float f2; memcpy(&f2, img + 0x4000 + 2041 * 8, 4); expect("缺省口径：slot 2041 写关时值 100（×1000）", 100000, (long)(f2 * 1000));
+            memcpy(&f2, img + 0x4000 + 2040 * 8, 4); expect("缺省口径：速度槽 1.0（×100）", 100, lroundf(f2 * 100));
+            { int s2a_fps_real_source(void); expect("缺省口径：我方帧率表不算真帧率来源", 0, s2a_fps_real_source()); }
             _exit(fails);
         }
-        int st = 0; waitpid(p, &st, 0); expect("缺省不用我方帧率表子进程：不符项数", 0, WIFEXITED(st) ? WEXITSTATUS(st) : 99);
+        int st = 0; waitpid(p, &st, 0); expect("缺省口径子进程：不符项数", 0, WIFEXITED(st) ? WEXITSTATUS(st) : 99);
     }
     setenv("S2A_CAPS_OWN", "1", 1);   // 以下测我方帧率表装载机制本身（留给内部对照，S2A_CAPS_OWN=1 才装）
     {   // speed 行带秒槽（11-06 王国之泪布料 / 头发时钟改读实测秒数）。期望手算：33.3 ms → 步长 1.0、秒 1/30 = 0.0333；16.7 ms → 0.5、0.01667；
