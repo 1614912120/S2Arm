@@ -443,6 +443,7 @@
 "save.restored" = "Save restored. You can start the game to check your progress. A pre-restore backup was kept (none is created if there was no save before).";
 "save.serviceInvalid" = "The save service didn’t return a valid result. Close and reopen the app; your existing data is kept.";
 "save.start" = "Start game";
+"save.leave" = "Quit (open straight into the game next time)";
 "save.status.hasSave" = "Your current save can be exported. Importing first checks the game version, account ownership and file integrity, then asks you to confirm the restore.";
 "save.status.noSave" = "There’s no save to export yet. You can import a backup, or start the game to create a save.";
 "save.tempCleanupFailed" = "Couldn’t clean up a temporary copy, so it still takes up space. In Files, delete the temporary copy named “%@” inside the app.";
