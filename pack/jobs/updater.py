@@ -110,8 +110,8 @@ def network_error(error, what="连接 GitHub"):
             except ValueError:
                 wait = None
             minutes = max(1, (wait + 59) // 60) if wait and wait > 0 else None
-            return UpdateError("update_rate_limited", "GitHub 暂时限制了这个网络的查询次数" + (f"，约 {minutes} 分钟后恢复" if minutes else "，过一会儿会恢复")
-                               + "。当前版本没有变化，稍后再试，或打开下载页手动下载。", f"HTTP {error.code} {dict(headers)}")
+            return UpdateError("update_rate_limited", "GitHub 暂时限制了这个网络的查询次数" + (f"，约 {minutes} 分钟后恢复" if minutes else "，过一会儿会恢复")  # 非玩家句
+                               + "。当前版本没有变化，稍后再试，或打开下载页手动下载。", f"HTTP {error.code} {dict(headers)}")  # 非玩家句
         return UpdateError("update_server", f"GitHub 返回错误（HTTP {error.code}），当前版本没有变化。稍后再试，或打开下载页手动下载。", f"HTTP {error.code} {error.reason}")
     reason = getattr(error, "reason", None) or error
     kind = "超时" if isinstance(reason, TimeoutError) or "timed out" in str(reason) else type(reason).__name__
@@ -361,7 +361,7 @@ def feature_spotlight(platform, current, path=None, withdrawn=()):
             pages.append(dict(texts, layout="detail", image=image))
     if not pages:
         return None
-    out = {"kind": "feature", "id": ident, "badge": _bilingual(data.get("badge")) or {"zh-Hans": "新功能", "en": "New"}, "pages": pages}
+    out = {"kind": "feature", "id": ident, "badge": _bilingual(data.get("badge")) or {"zh-Hans": "新功能", "en": "New"}, "pages": pages}  # 非玩家句
     url = data.get("url")
     if isinstance(url, str):
         parts = urllib.parse.urlsplit(url)
@@ -442,17 +442,18 @@ def notes_from_markdown(text):
         m = re.match(r"\s+\*(.+)\*\s*$", line)
         if m and current["items"] and "en" not in current["items"][-1]:
             current["items"][-1]["en"] = plain(m.group(1))
-    highlights = [i for s in sections if s["title"] == "亮点" for i in s["items"]]
-    return notes_valid({"highlights": highlights, "sections": [s for s in sections if s["title"] != "亮点"]})
+    highlights = [i for s in sections if s["title"] == "亮点" for i in s["items"]]  # 非玩家句
+    return notes_valid({"highlights": highlights, "sections": [s for s in sections if s["title"] != "亮点"]})  # 非玩家句
 
 
 PLATFORMS = ("mac", "windows")
 
 
-def notice_messages(data, platform):
+def notice_messages(data, platform, current=None):
     """notice.json → 本平台的公告列表，最新的在前：[{id, level, text, url?}]。
     新版读 messages 数组（每条 id / level important|info / platforms / text / url，数组按最新在前排）；没有 messages 时把顶层那条（旧版也认）当一条全平台「重要」。
-    platforms 不写 = 全平台；写了只给列着的平台（11-12：Mac 上不再看到 Windows 的公告）"""
+    platforms 不写 = 全平台；写了只给列着的平台（11-12：Mac 上不再看到 Windows 的公告）。
+    maxVersion（11-14）：只给这一版及更早的本机看（如「0.3.9 及更早请下 dmg」不该一直挂在新版上）；current 给不出版本号时照常显示"""
     if not isinstance(data, dict) or data.get("schema") != 1:
         return []
     rows = data.get("messages") if isinstance(data.get("messages"), list) else None
@@ -464,6 +465,9 @@ def notice_messages(data, platform):
         item = notice_valid(dict(row, schema=1)) if isinstance(row, dict) else None
         platforms = row.get("platforms") if isinstance(row, dict) else None
         if item is None or (platforms is not None and (not isinstance(platforms, list) or platform not in platforms)):
+            continue
+        ceiling, mine = version_tuple(row.get("maxVersion") or ""), re.match(r"v?(\d+)\.(\d+)\.(\d+)", (current or "").strip())
+        if ceiling and mine and tuple(int(n) for n in mine.groups()) > ceiling:
             continue
         item["level"] = "important" if row.get("level") == "important" else "info"
         out.append(item)
@@ -552,7 +556,7 @@ def inbox_seen(private_root, update=None, after=None, notice=None, feature=None)
                                 ("noticeSeen", notice, r"[A-Za-z0-9._-]{1,80}"), ("featureSeen", feature, r"[A-Za-z0-9._-]{1,80}")):
         if value is not None:
             if not re.fullmatch(pattern, value):
-                raise ValueError(f"{key} 不对")
+                raise ValueError(f"{key} 不对")  # 非玩家句
             seen[key] = value
     save_json(seen_path(private_root), seen)
     return seen
@@ -752,7 +756,7 @@ def main(argv=None):
         data = notice_data()
         withdrawn = [i for i in data.get("featureWithdrawn") or [] if isinstance(i, str)] if isinstance(data.get("featureWithdrawn"), list) else []
         feature = feature_spotlight(a.platform, a.current, withdrawn=withdrawn)
-        print(json.dumps(inbox(a.platform, a.current, a.private_root, check, notice_messages(data, a.platform), feature), ensure_ascii=False))
+        print(json.dumps(inbox(a.platform, a.current, a.private_root, check, notice_messages(data, a.platform, a.current), feature), ensure_ascii=False))
         return 0
     if a.command == "inbox-seen":
         try:

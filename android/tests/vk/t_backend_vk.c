@@ -49,12 +49,14 @@ void nvn_plat_safepoint(void) {}
 static int g_plc_flag_off;   // C88：1 = 调试开关 nvk_pipe_cache 读成 0（管线缓存关）
 // C89（局中补写）：-1 = 用后端缺省；>= 0 = 把对应的调试开关读成这个值（后端在开会话时读一次，所以要在 open 之前设、open 之后撤）。
 static int g_plc_thr_new = -1, g_plc_thr_first_ms = -1, g_plc_thr_every_ms = -1;
+static int g_stg_std_flag = -1;   // C202：-1 = 后端缺省；>= 0 = 把调试开关 nvk_stg_std 读成这个值（后端在开会话时读一次，所以要在 open 之前设）
 static int g_ulist_flag = -1, g_fbdrop_flag = -1;   // C201：nvk_ulist：-1 = 生产缺省，>= 0 = 读成这个值；nvk_fbdrop：-1 = 自检档（整套用例的默认），-2 = 生产缺省，>= 0 = 读成这个值（改完要让后端的开关缓存作废：nvn_vk_dbg_view_stat(5)）
 int nvn_plat_flag(const char *name, int dflt) {
     if (!strcmp(name, "display_timing") && g_shown_timing_test) return 1;
     if (!strcmp(name, "nvk_ulist") && g_ulist_flag >= 0) return g_ulist_flag;
     // 整套用例在 nvk_fbdrop=2（自检档）下跑：视图销毁走快路之后再全表扫一遍，扫到残留（反查表没记到的帧缓冲）就报红，main 末尾核「残留 0」。
     if (!strcmp(name, "nvk_fbdrop") && g_fbdrop_flag != -2) return g_fbdrop_flag >= 0 ? g_fbdrop_flag : 2;   // -2 = 读成生产缺省（C201 核缺省档的行为）
+    if (!strcmp(name, "nvk_stg_std") && g_stg_std_flag >= 0) return g_stg_std_flag;
     if (!strcmp(name, "nvk_pipe_cache") && g_plc_flag_off) return 0;
     if (!strcmp(name, "nvk_plc_new") && g_plc_thr_new >= 0) return g_plc_thr_new;
     if (!strcmp(name, "nvk_plc_first_ms") && g_plc_thr_first_ms >= 0) return g_plc_thr_first_ms;
@@ -2131,6 +2133,73 @@ cleanup:
     for (int st = 0; st < 3; st++) { if (sh[st]) nvn_gpu_shader_release(sh[st]); free(mem[st]); }
 }
 
+// #696 分段验证（后端 + 真 GS）：回放层把「GS + 不带索引的三角带」按 GL 序展开成三角形列表交给后端。
+// 后端契约本来就不收 GS 配三角带（建管线回 UNSUPPORTED），这里先核这一条；再在 lavapipe 上用同一个 GS 画两份列表，base vertex 7、5 个顶点：
+//   ① GL 序索引 {0,1,2, 2,1,3, 2,3,4}（回放层对 5 个顶点展开的结果，期望同 t_nvn_replay）；
+//   ② Vulkan 原生三角带的顶点序 {i, i+(1+i%2), i+(2-i%2)} 写成的索引 {0,1,2, 1,3,2, 2,3,4}，即原生画时 GS 会拿到的顺序。
+// GS 把 gl_in[0..2] 的顶点号与 gl_PrimitiveIDIn 写进 4x1 目标的第 gl_PrimitiveIDIn 列。期望按规范手算：
+//   GL（§10.1.6）偶 i (i, i+1, i+2)、奇 i (i+1, i, i+2) → 列 0..2 = (7,8,9,0) (9,8,10,1) (9,10,11,2)；Vulkan 序第 1 列是 (8,10,9,1)。第 3 列没画，清成 0。
+static void t_gs_tstrip_pixels(const char *dir) {
+    static const char *names[3] = {"gs_tstrip.vert", "gs_tstrip.frag", "gs_tstrip.geom"};
+    nvn_gpu_shader sh[3] = {0}; void *mem[3] = {0}; nvn_gpu_err e = {0};
+    nvn_gpu_layout empty; memset(&empty, 0, sizeof empty);
+    nvn_gpu_pipe pipe = NULL;
+    for (int st = 0; st < 3; st++) {
+        char path[512]; size_t len = 0; snprintf(path, sizeof path, "%s/%s.spv", dir, names[st]); mem[st] = read_file(path, &len);
+        CHECK(mem[st] != NULL, "GS 三角带着色器 %d 存在", st); if (!mem[st]) goto cleanup;
+        nvn_gpu_shader_src src = {0}; src.stage = (nvn_gpu_stage)st; src.kind = NVN_GPU_BLOB_SPIRV;
+        src.blob = mem[st]; src.bytes = len; src.entry = "main"; src.layout = &empty;
+        nvn_gpu_rc r = nvn_gpu_shader_load(&src, &sh[st], &e);
+        CHECK(OK(r), "GS 三角带着色器 %d 载入：%d %s", st, r.code, e.why); if (!OK(r)) goto cleanup;
+    }
+    {
+        nvn_gpu_pipe_desc pd = {0}; pd.poly.mode = NVN_POLYGON_MODE_FILL; pd.color.logic_op = 3;
+        for (int st = 0; st < 3; st++) pd.st[st].sh = sh[st];
+        pd.cfmt[0] = NVN_FORMAT_RGBA8; pd.samples = 1; pd.prim = 5; pd.chmask.mask = 15;
+        nvn_gpu_pipe strip = NULL; memset(&e, 0, sizeof e);
+        nvn_gpu_rc r = nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &strip, &e);
+        CHECK(r.code == NVN_GPU_E_UNSUPPORTED && !strip, "GS 三角带 原生三角带配 GS：期望后端拒建 UNSUPPORTED → rc=%d why=%s", r.code, e.why);
+        printf("GS 三角带 原生三角带配 GS 建管线 rc=%d（%s）\n", r.code, e.why);
+        pd.prim = 4;
+        r = nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e);
+        CHECK(OK(r), "GS 三角带 列表管线：%d %s", r.code, e.why); if (!OK(r)) goto cleanup;
+    }
+    {
+        static const uint32_t idx[2][9] = {{0, 1, 2, 2, 1, 3, 2, 3, 4}, {0, 1, 2, 1, 3, 2, 2, 3, 4}};
+        nvn_gpu_buf ib = make_buf(sizeof idx, NVN_GPU_MEM_SHARED, idx);
+        nvn_gpu_tex tex = make_tex(4, 1, NVN_FORMAT_RGBA8, NVN_GPU_TEX_RENDER);
+        nvn_gpu_view view = make_view(tex); nvn_gpu_buf rb = make_buf(32, NVN_GPU_MEM_SHARED, NULL);
+        nvn_gpu_cmd cmd = begin_cmd();
+        for (int k = 0; k < 2; k++) {
+            nvn_gpu_pass_desc pass = {0}; pass.ncolor = 1; pass.color[0].view = view;
+            pass.color[0].load = NVN_GPU_LOAD_CLEAR; pass.color[0].store = NVN_GPU_STORE_STORE;
+            pass.w = 4; pass.h = 1; pass.layers = 1; nvn_gpu_pass_begin(cmd, &pass);
+            nvn_gpu_set_pipe(cmd, pipe);
+            nvn_gpu_dyn dyn = {0}; dyn.nvp = 1; dyn.vp[0][2] = 4; dyn.vp[0][3] = 1; dyn.vp[0][5] = 1;
+            dyn.has_sc = 1; dyn.sc[2] = 4; dyn.sc[3] = 1; nvn_gpu_set_dyn(cmd, &dyn);
+            nvn_gpu_draw_args draw = {0}; draw.instances = 1;
+            draw.prim = 4; draw.count = 9; draw.ibuf = ib; draw.ioff = (uint64_t)k * sizeof idx[0]; draw.itype = 2; draw.base_vertex = 7;
+            nvn_gpu_draw(cmd, &draw);
+            nvn_gpu_pass_end(cmd); nvn_gpu_copy_tex_buf(cmd, tex, 0, 0, NULL, rb, (uint64_t)k * 16, 16, 16);
+        }
+        nvn_gpu_rc r = nvn_gpu_cmd_commit(cmd, 2, on_done, NULL, &e); CHECK(OK(r), "GS 三角带 commit %d %s", r.code, e.why);   // 同一会话里 t_gs_pixels 用了围栏 1
+        r = nvn_gpu_fence_wait(2, 5000000000ull, &e); CHECK(OK(r), "GS 三角带 wait %d %s", r.code, e.why);
+        static const uint8_t want[2][4][4] = {{{7, 8, 9, 0}, {9, 8, 10, 1}, {9, 10, 11, 2}, {0, 0, 0, 0}},
+                                              {{7, 8, 9, 0}, {8, 10, 9, 1}, {9, 10, 11, 2}, {0, 0, 0, 0}}};
+        static const char *what[2] = {"列表（GL 序展开）", "列表（Vulkan 原生三角带序）"};
+        for (int k = 0; k < 2; k++) {
+            const uint8_t *v = buf_cpu(rb) + k * 16;
+            for (int i = 0; i < 4; i++)
+                CHECK(!memcmp(v + i * 4, want[k][i], 4), "GS 三角带 %s 第 %d 列：期望 (%u,%u,%u,%u) → 读到 (%u,%u,%u,%u)", what[k], i,
+                      want[k][i][0], want[k][i][1], want[k][i][2], want[k][i][3], v[i * 4], v[i * 4 + 1], v[i * 4 + 2], v[i * 4 + 3]);
+            printf("GS 三角带 %s：列 0..2 读到 (%u,%u,%u,%u) (%u,%u,%u,%u) (%u,%u,%u,%u)\n", what[k], v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11]);
+        }
+        nvn_gpu_buf_release(rb, NULL, NULL); nvn_gpu_view_release(view); nvn_gpu_tex_release(tex); nvn_gpu_buf_release(ib, NULL, NULL);
+    }
+cleanup:
+    for (int st = 0; st < 3; st++) { if (sh[st]) nvn_gpu_shader_release(sh[st]); free(mem[st]); }
+}
+
 // 使用生产请求经真实编译器和生产 parser 导出的同一组 Maxwell 模块。
 static void t_gs_compiler_pixels(const char *dir) {
     const char *names[3] = {"vs", "fs", "gs"}; nvn_gpu_shader sh[3] = {0}; void *mem[3] = {0};
@@ -3190,9 +3259,12 @@ static void c48_mismatch(const char *dir) {
 }
 
 
-static int restart_draw(const char *dir, int on, uint8_t *out, uint64_t sig) {
-    void *vsm = NULL, *fsm = NULL; nvn_gpu_shader vs = NULL, fs = NULL;
-    if (!load_shader_pair(dir, "quad.vert", "quad.frag", NULL, NULL, &vs, &fs, &vsm, &fsm)) return -1;
+// vs_in / fs_in 给出时用调用方的着色器（不释放），used 回报这次取到的管线对象；都给 NULL 即 C49 原样。
+static int restart_draw_with(const char *dir, int on, uint8_t *out, uint64_t sig,
+                             nvn_gpu_shader vs_in, nvn_gpu_shader fs_in, nvn_gpu_pipe *used) {
+    void *vsm = NULL, *fsm = NULL; nvn_gpu_shader vs = vs_in, fs = fs_in;
+    const int own = !vs_in;
+    if (own && !load_shader_pair(dir, "quad.vert", "quad.frag", NULL, NULL, &vs, &fs, &vsm, &fsm)) return -1;
     nvn_gpu_pipe_desc pd;
     memset(&pd, 0, sizeof pd); pd.poly.mode=NVN_POLYGON_MODE_FILL; pd.origin_ll = (uint8_t)!g_tri_origin_ul;
     pd.color.logic_op = 0x3;
@@ -3202,10 +3274,11 @@ static int restart_draw(const char *dir, int on, uint8_t *out, uint64_t sig) {
     pd.attr[1].fmt = NVN_FORMAT_RGBA32F; pd.attr[1].offset = 16; pd.attr[1].stream = 0;
     pd.stream[0].stride = 32;
     nvn_gpu_pipe pipe = NULL; nvn_gpu_err e;
-    if (!OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e))) { nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm); return -1; }
+    if (!OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e))) { if (own) { nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm); } return -1; }
+    if (used) *used = pipe;
     // 0x10000 个顶点，0xFFFF 是合法顶点；关重启时它会产生一条连接两段的三角形
     float *vb = calloc(0x10000 * 8, sizeof(float));
-    if (!vb) { nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm); return -1; }
+    if (!vb) { if (own) { nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm); } return -1; }
     const float V[7][8] = {
         {-1,-1,0,1, 1,0,0,1}, {-1,1,0,1, 1,0,0,1}, {-0.95f,-1,0,1, 1,0,0,1},
         {0.8f,1,0,1, 0,1,0,1}, {1,-1,0,1, 0,1,0,1}, {1,1,0,1, 0,1,0,1},
@@ -3243,8 +3316,12 @@ static int restart_draw(const char *dir, int on, uint8_t *out, uint64_t sig) {
     memcpy(out, buf_cpu(rb), 64 * 64 * 4);
     nvn_gpu_view_release(v); nvn_gpu_tex_release(t); nvn_gpu_buf_release(vbuf, NULL, NULL);
     nvn_gpu_buf_release(ib, NULL, NULL); nvn_gpu_buf_release(rb, NULL, NULL);
-    nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm);
+    if (own) { nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm); }
     return OK(r) ? 0 : (int)r.code;
+}
+
+static int restart_draw(const char *dir, int on, uint8_t *out, uint64_t sig) {
+    return restart_draw_with(dir, on, out, sig, NULL, NULL, NULL);
 }
 
 static void c49_restart(const char *dir) {
@@ -3255,6 +3332,38 @@ static void c49_restart(const char *dir) {
     CHECK(on[px] == 0 && on[px + 1] == 0 && on[px + 2] == 0, "C49 开重启时指定像素应保持清屏色");
     CHECK(off[px] != 0 || off[px + 1] != 0 || off[px + 2] != 0, "C49 关重启时 0xFFFF 顶点应多画出连接三角形（覆盖指定像素）");
     CHECK(memcmp(on, off, sizeof on) != 0, "C49 重启关闭与开启结果相同（重启没生效）");
+}
+
+// C49b：管线缓存按「实际交给 Vulkan 的重启」分（独占一个会话，围栏从 1 起）。同一对着色器、其余状态全同：
+//  * 条带开 / 关重启必须是两条管线，且各自画出 C49 的结果（共用一条时有一边画错）；
+//  * 列表图元上重启不生效，开 / 关必须共用同一条管线（不能多编一条一模一样的）。
+static void c49b_restart_pipe_cache(const char *dir) {
+    void *vsm = NULL, *fsm = NULL; nvn_gpu_shader vs = NULL, fs = NULL;
+    CHECK(load_shader_pair(dir, "quad.vert", "quad.frag", NULL, NULL, &vs, &fs, &vsm, &fsm), "C49b shader");
+    if (!vs || !fs) return;
+    uint8_t on[64 * 64 * 4], off[64 * 64 * 4];
+    nvn_gpu_pipe p_on = NULL, p_off = NULL;
+    CHECK(restart_draw_with(dir, 1, on, 1, vs, fs, &p_on) == 0, "C49b 条带开重启绘制失败");
+    CHECK(restart_draw_with(dir, 0, off, 2, vs, fs, &p_off) == 0, "C49b 条带关重启绘制失败");
+    CHECK(p_on && p_off && p_on != p_off, "C49b 条带开 / 关重启取到了同一条管线（缓存键漏了重启）");
+    const int px = (1 * 64 + 2) * 4;
+    CHECK(on[px] == 0 && on[px + 1] == 0 && on[px + 2] == 0, "C49b 开重启时指定像素应保持清屏色");
+    CHECK(off[px] != 0 || off[px + 1] != 0 || off[px + 2] != 0, "C49b 关重启时应多画出连接三角形（同着色器复用了开重启的管线）");
+    nvn_gpu_pipe_desc pd;
+    memset(&pd, 0, sizeof pd); pd.poly.mode = NVN_POLYGON_MODE_FILL; pd.origin_ll = (uint8_t)!g_tri_origin_ul;
+    pd.color.logic_op = 0x3;
+    pd.st[NVN_GPU_SH_VS].sh = vs; pd.st[NVN_GPU_SH_FS].sh = fs;
+    pd.cfmt[0] = NVN_FORMAT_RGBA8; pd.samples = 1; pd.prim = 4; pd.chmask.mask = 0xF;   // 三角形列表
+    pd.attr[0].fmt = NVN_FORMAT_RGBA32F; pd.attr[0].offset = 0; pd.attr[0].stream = 0;
+    pd.attr[1].fmt = NVN_FORMAT_RGBA32F; pd.attr[1].offset = 16; pd.attr[1].stream = 0;
+    pd.stream[0].stride = 32;
+    nvn_gpu_pipe l_on = NULL, l_off = NULL; nvn_gpu_err e;
+    pd.prim_restart = 1;
+    CHECK(OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &l_on, &e)), "C49b 列表开重启取管线：%d %s", e.rc.code, e.why);
+    pd.prim_restart = 0;
+    CHECK(OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &l_off, &e)), "C49b 列表关重启取管线：%d %s", e.rc.code, e.why);
+    CHECK(l_on && l_on == l_off, "C49b 列表图元开 / 关重启应共用一条管线（重启在列表上不生效）");
+    nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm);
 }
 
 static void c50_list_restart(const char *dir) {
@@ -4227,6 +4336,156 @@ static void c62_tsamp_cs(const char *dir) {
     nvn_gpu_shader_release(sh);
 }
 
+// P0-6（差距表）：≥6 层的方形二维数组被着色器当立方体读。6 层 4x4 R32F，第 k 层每个纹素 = k；立方体视图（6 层），
+// 按 +X -X +Y -Y +Z -Z 六个方向在面中心采样，期望读到面号 0 1 2 3 4 5（Vulkan 面序 = 层序）。
+// 修前后端只给 CUBEMAP / CUBEMAP_ARRAY 目标建立方体兼容的图，这种视图被拒（「cube view requested for a non-cube-compatible image」）。
+// 负对照：非方形（4x2）6 层二维数组不能当立方体，视图仍须被拒、不出句柄。
+static void cp06_cube_of_array(const char *dir) {
+    nvn_gpu_err e;
+    nvn_gpu_tex t = make_tex_target(4, 4, 6, NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_R32F, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
+    nvn_gpu_tex nsq = make_tex_target(4, 2, 6, NVN_TEXTURE_TARGET_2D_ARRAY, NVN_FORMAT_R32F, NVN_GPU_TEX_SAMPLED);
+    if (!t || !nsq) { if (t) nvn_gpu_tex_release(t); if (nsq) nvn_gpu_tex_release(nsq); return; }
+    nvn_gpu_cmd c = begin_cmd();
+    for (uint32_t k = 0; k < 6; k++) { float px[16]; for (int i = 0; i < 16; i++) px[i] = (float)k; nvn_gpu_tex_upload(c, t, 0, k, NULL, px, 16, 64); }
+    nvn_gpu_rc r = nvn_gpu_cmd_commit(c, 1, on_done, NULL, &e);
+    CHECK(OK(r) && OK(nvn_gpu_fence_wait(1, 5000000000ull, &e)), "P0-6 上传：%s", e.why);
+    view_t vv; memset(&vv, 0, sizeof vv);
+    vv.set_target = 1; vv.target = NVN_TEXTURE_TARGET_CUBEMAP; vv.set_layers = 1; vv.min_layer = 0; vv.nlayers = 6;
+    nvn_gpu_view bad = NULL; memset(&e, 0, sizeof e);
+    r = nvn_gpu_view_create(nsq, &vv, &bad, &e);
+    CHECK(!OK(r) && !bad, "P0-6 非方形二维数组的立方体视图：期望被拒 → rc=%d 句柄=%p", r.code, (void *)bad);
+    if (bad) nvn_gpu_view_release(bad);
+    nvn_gpu_view v = NULL; memset(&e, 0, sizeof e);
+    r = nvn_gpu_view_create(t, &vv, &v, &e);
+    CHECK(OK(r) && v, "P0-6 6 层方形二维数组的立方体视图：期望建成 → rc=%d %s", r.code, e.why);
+    if (v) {
+        samp_par sp; memset(&sp, 0, sizeof sp); sp.ws = sp.wt = sp.wr = NVN_WRAP_MODE_CLAMP_TO_EDGE;
+        nvn_gpu_samp samp = NULL; CHECK(OK(nvn_gpu_samp_create(&sp, &samp, &e)), "P0-6 采样器：%s", e.why);
+        nvn_gpu_layout_ent ents[3]; memset(ents, 0, sizeof ents);
+        ents[0].cls = NVN_GPU_RES_TEX_SAMP; ents[0].access = NVN_GPU_ACC_R; ents[0].binding = 0; ents[0].count = 1; ents[0].stages = 1u << NVN_GPU_SH_CS;
+        ents[1].cls = NVN_GPU_RES_SSBO; ents[1].access = NVN_GPU_ACC_R; ents[1].binding = 1; ents[1].count = 1; ents[1].stages = 1u << NVN_GPU_SH_CS;
+        ents[2].cls = NVN_GPU_RES_SSBO; ents[2].access = NVN_GPU_ACC_W; ents[2].binding = 2; ents[2].count = 1; ents[2].stages = 1u << NVN_GPU_SH_CS;
+        nvn_gpu_layout cl; memset(&cl, 0, sizeof cl); cl.ent = ents; cl.nent = 3;
+        nvn_gpu_shader sh = NULL; nvn_gpu_pipe cp = mk_cpipe(dir, "cube_at.comp", &cl, &sh);
+        static const float dirs[6][4] = {{1, 0, 0, 0}, {-1, 0, 0, 0}, {0, 1, 0, 0}, {0, -1, 0, 0}, {0, 0, 1, 0}, {0, 0, -1, 0}};
+        nvn_gpu_buf in = make_buf(sizeof dirs, NVN_GPU_MEM_SHARED, dirs), out = make_buf(6 * 16, NVN_GPU_MEM_SHARED, NULL);
+        if (cp && samp) {
+            c = begin_cmd(); nvn_gpu_set_pipe(c, cp);
+            nvn_gpu_binding bs[3]; memset(bs, 0, sizeof bs);
+            bs[0].ent = 0; bs[0].cls = NVN_GPU_RES_TEX_SAMP; bs[0].u.ts.view = v; bs[0].u.ts.samp = samp;
+            bs[1].ent = 1; bs[1].cls = NVN_GPU_RES_SSBO; bs[1].u.b.buf = in; bs[1].u.b.len = sizeof dirs;
+            bs[2].ent = 2; bs[2].cls = NVN_GPU_RES_SSBO; bs[2].u.b.buf = out; bs[2].u.b.len = 6 * 16;
+            nvn_gpu_bind(c, NVN_GPU_SH_CS, bs, 3); nvn_gpu_dispatch(c, cp, 6, 1, 1, NULL, 0);
+            r = nvn_gpu_cmd_commit(c, 2, on_done, NULL, &e);
+            CHECK(OK(r) && OK(nvn_gpu_fence_wait(2, 5000000000ull, &e)), "P0-6 采样：%s", e.why);
+            if (OK(r)) {
+                const float (*got)[4] = (const float (*)[4])(const void *)buf_cpu(out); int badf = 0;
+                for (int f = 0; f < 6; f++) if (got[f][0] != (float)f) badf++;
+                CHECK(!badf, "P0-6 立方体视图 ±X ±Y ±Z：期望面号 0 1 2 3 4 5 → 读到 %g %g %g %g %g %g", got[0][0], got[1][0], got[2][0], got[3][0], got[4][0], got[5][0]);
+                printf("P0-6 二维数组当立方体读：±X ±Y ±Z 期望 0 1 2 3 4 5 → 读到 %g %g %g %g %g %g\n", got[0][0], got[1][0], got[2][0], got[3][0], got[4][0], got[5][0]);
+            }
+        }
+        nvn_gpu_buf_release(in, NULL, NULL); nvn_gpu_buf_release(out, NULL, NULL);
+        if (sh) nvn_gpu_shader_release(sh);
+        if (samp) nvn_gpu_samp_release(samp);
+        nvn_gpu_view_release(v);
+    }
+    nvn_gpu_tex_release(t); nvn_gpu_tex_release(nsq);
+}
+
+// #976 采样器用例的公共部分：samp_at.comp 按 uv[i] 在第 0 级采样，读回 n 个 vec4。成功返回 1。
+static int samp_at(const char *dir, nvn_gpu_tex t, nvn_gpu_samp samp, const float (*uv)[2], int n, float (*got)[4], uint64_t signal) {
+    nvn_gpu_layout_ent ents[3];
+    memset(ents, 0, sizeof ents);
+    ents[0].set = 0; ents[0].cls = NVN_GPU_RES_TEX_SAMP; ents[0].access = NVN_GPU_ACC_R; ents[0].binding = 0; ents[0].count = 1; ents[0].stages = 1u << NVN_GPU_SH_CS;
+    ents[1].set = 0; ents[1].cls = NVN_GPU_RES_SSBO; ents[1].access = NVN_GPU_ACC_R; ents[1].binding = 1; ents[1].count = 1; ents[1].stages = 1u << NVN_GPU_SH_CS;
+    ents[2].set = 0; ents[2].cls = NVN_GPU_RES_SSBO; ents[2].access = NVN_GPU_ACC_W; ents[2].binding = 2; ents[2].count = 1; ents[2].stages = 1u << NVN_GPU_SH_CS;
+    nvn_gpu_layout cl; memset(&cl, 0, sizeof cl); cl.ent = ents; cl.nent = 3;
+    nvn_gpu_shader sh = NULL;
+    nvn_gpu_pipe cp = mk_cpipe(dir, "samp_at.comp", &cl, &sh);
+    CHECK(cp != NULL, "samp_at cpipe 为空");
+    if (!cp) return 0;
+    nvn_gpu_view v = make_view(t);
+    nvn_gpu_buf in = make_buf((uint64_t)n * 8, NVN_GPU_MEM_SHARED, uv);
+    nvn_gpu_buf out = make_buf((uint64_t)n * 16, NVN_GPU_MEM_SHARED, NULL);
+    nvn_gpu_cmd c = begin_cmd();
+    nvn_gpu_set_pipe(c, cp);
+    nvn_gpu_binding bs[3];
+    memset(bs, 0, sizeof bs);
+    bs[0].ent = 0; bs[0].cls = NVN_GPU_RES_TEX_SAMP; bs[0].u.ts.view = v; bs[0].u.ts.samp = samp;
+    bs[1].ent = 1; bs[1].cls = NVN_GPU_RES_SSBO; bs[1].u.b.buf = in; bs[1].u.b.len = (uint64_t)n * 8;
+    bs[2].ent = 2; bs[2].cls = NVN_GPU_RES_SSBO; bs[2].u.b.buf = out; bs[2].u.b.len = (uint64_t)n * 16;
+    nvn_gpu_bind(c, NVN_GPU_SH_CS, bs, 3);
+    nvn_gpu_dispatch(c, cp, (uint32_t)n, 1, 1, NULL, 0);
+    nvn_gpu_err e;
+    nvn_gpu_rc r = nvn_gpu_cmd_commit(c, signal, on_done, NULL, &e);
+    CHECK(OK(r), "samp_at commit：%d %s", r.code, e.why);
+    int ok = OK(r) && OK(nvn_gpu_fence_wait(signal, 5000000000ull, &e));
+    CHECK(ok, "samp_at wait：%s", e.why);
+    if (ok) memcpy(got, buf_cpu(out), (size_t)n * 16);
+    nvn_gpu_view_release(v);
+    nvn_gpu_buf_release(in, NULL, NULL); nvn_gpu_buf_release(out, NULL, NULL);
+    nvn_gpu_shader_release(sh);
+    return ok;
+}
+
+// C976m：镜像夹取环绕（#976）。4x1 R32F 纹素 {0,1,2,3}、最近点，读到的 r 就是纹素下标。
+// 期望按 Vulkan 规范的纹素选取手算（i = floor(u*4)；镜像 mirror(a) = a >= 0 ? a : -(1+a)）：
+//   MIRROR_CLAMP_TO_EDGE：i' = clamp(mirror(i), 0, 3)。u = 0.625 / -0.375 / -1.5 / 1.25 / -2.25 → 2 1 3 3 3
+//   （后三个落在纹素边界上，但两侧都夹到 3，期望不受舍入影响）。
+//   修前映成 MIRRORED_REPEAT：lavapipe 实测 u=-1.5 读到 2、u=-2.25 读到 1，红在这两处。
+// Vulkan 没有的 MIRROR_CLAMP / MIRROR_CLAMP_TO_BORDER：不论设备都回具名 UNSUPPORTED、不出句柄（近似由核心做、核心记账）。
+// 设备没有 VK_KHR_sampler_mirror_clamp_to_edge（模拟档 no_mirror_clamp；有扩展时本用例自己把启用位清零再问一次）：MIRROR_CLAMP_TO_EDGE 也回具名 UNSUPPORTED。
+#define C976_MCE_ENABLED g_dev.sampler_mirror_clamp_enabled
+static void c976m_mirror_clamp(const char *dir) {
+    printf("C976m 镜像夹取：设备 mirror_clamp_to_edge=%d\n", C976_MCE_ENABLED);
+    static const struct { uint8_t axis, wrap; const char *why; } no_vk[2] = {
+        {0, NVN_WRAP_MODE_MIRROR_CLAMP, "sampler_wrap_mirror_clamp："}, {1, NVN_WRAP_MODE_MIRROR_CLAMP_TO_BORDER, "sampler_wrap_mirror_clamp_to_border："}};
+    nvn_gpu_err e;
+    for (int k = 0; k < 2; k++) {
+        samp_par sp; memset(&sp, 0, sizeof sp);
+        if (no_vk[k].axis == 0) sp.ws = no_vk[k].wrap; else sp.wt = no_vk[k].wrap;
+        nvn_gpu_samp bad = NULL; memset(&e, 0, sizeof e);
+        nvn_gpu_rc r = nvn_gpu_samp_create(&sp, &bad, &e);
+        CHECK(r.code == NVN_GPU_E_UNSUPPORTED && !bad && !strncmp(e.why, no_vk[k].why, strlen(no_vk[k].why)),
+              "C976m 环绕 %u：期望 UNSUPPORTED「%s…」→ rc=%d 句柄=%p why=%s", no_vk[k].wrap, no_vk[k].why, r.code, (void *)bad, e.why);
+        if (bad) nvn_gpu_samp_release(bad);
+    }
+    samp_par sp; memset(&sp, 0, sizeof sp);   // 最近点
+    sp.ws = NVN_WRAP_MODE_MIRROR_CLAMP_TO_EDGE; sp.wt = NVN_WRAP_MODE_CLAMP_TO_EDGE; sp.wr = NVN_WRAP_MODE_CLAMP_TO_EDGE;
+    const int had = C976_MCE_ENABLED;
+    for (int pass = had ? 0 : 1; pass < 2; pass++) {
+        if (pass == 1) C976_MCE_ENABLED = 0;
+        nvn_gpu_samp samp = NULL; memset(&e, 0, sizeof e);
+        nvn_gpu_rc r = nvn_gpu_samp_create(&sp, &samp, &e);
+        if (pass == 1) {
+            C976_MCE_ENABLED = had;
+            CHECK(r.code == NVN_GPU_E_UNSUPPORTED && !samp && !strncmp(e.why, "sampler_mirror_clamp_to_edge：", strlen("sampler_mirror_clamp_to_edge：")),
+                  "C976m 没有扩展：期望 UNSUPPORTED「sampler_mirror_clamp_to_edge：…」→ rc=%d why=%s", r.code, e.why);
+            if (samp) nvn_gpu_samp_release(samp);
+            printf("C976m 没有扩展：MIRROR_CLAMP_TO_EDGE 建采样器 rc=%d（%s）\n", r.code, e.why);
+            break;
+        }
+        CHECK(OK(r) && samp, "C976m MIRROR_CLAMP_TO_EDGE 建采样器：%d %s", r.code, e.why);
+        if (!samp) continue;
+        static const float texels[4] = {0.0f, 1.0f, 2.0f, 3.0f};
+        static const float uv[5][2] = {{0.625f, 0.5f}, {-0.375f, 0.5f}, {-1.5f, 0.5f}, {1.25f, 0.5f}, {-2.25f, 0.5f}};
+        static const float want[5] = {2, 1, 3, 3, 3};
+        nvn_gpu_tex t = make_tex(4, 1, NVN_FORMAT_R32F, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
+        nvn_gpu_cmd c = begin_cmd();
+        nvn_gpu_tex_upload(c, t, 0, 0, NULL, texels, 16, 16);
+        r = nvn_gpu_cmd_commit(c, 1, on_done, NULL, &e);
+        CHECK(OK(r) && OK(nvn_gpu_fence_wait(1, 5000000000ull, &e)), "C976m 上传：%s", e.why);
+        float got[5][4] = {{0}};
+        if (samp_at(dir, t, samp, uv, 5, got, 2))
+            for (int i = 0; i < 5; i++)
+                CHECK(got[i][0] == want[i], "C976m MIRROR_CLAMP_TO_EDGE u=%.3f：期望下标 %.0f → 读到 %g", uv[i][0], want[i], got[i][0]);
+        printf("C976m MIRROR_CLAMP_TO_EDGE：u=0.625/-0.375/-1.5/1.25/-2.25 期望 2 1 3 3 3 → 读到 %g %g %g %g %g\n", got[0][0], got[1][0], got[2][0], got[3][0], got[4][0]);
+        nvn_gpu_tex_release(t);
+        nvn_gpu_samp_release(samp);
+    }
+}
+
 // C63：描述符数组元素位。t[2] 绑定 elem0=红、elem1=绿，着色器取 t[1] → 全绿。
 // 若后端把 elem 当 0 写，elem1 会盖到元素 0、t[1] 留空——本例必红。
 static void c63_desc_array_elem(const char *dir) {
@@ -5074,6 +5333,42 @@ static void c82_occlusion(const char *dir) {
     nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vm); free(fm);
 }
 
+// C90：无附件渲染通道（NVN 不挂任何目标照样绘制：片元只写存储 / 只为遮挡计数；真机一款大作每帧约 4 笔）。
+// 通道 0 个颜色槽、无深度，帧缓冲 32x24；管线不挂任何颜色格式；整屏三角形开遮挡计数。
+// 期望（手算）：后端声明 NVN_GPU_CAP_NO_ATTACH_PASS；槽 0 样本数 = 32 × 24 = 768（片元在零附件子通道里照样跑）。
+static uint64_t g_c90_occ; static uint32_t g_c90_n;
+static void c90_done(void *user, const nvn_gpu_done *d) { (void)user; g_c90_n = d->nocclusion; if (d->nocclusion && d->occlusion) g_c90_occ = d->occlusion[0]; on_done(NULL, d); }
+static void c90_no_attachment(const char *dir) {
+    nvn_gpu_caps caps; nvn_gpu_caps_get(&caps);
+    CHECK(caps.caps & NVN_GPU_CAP_NO_ATTACH_PASS, "C90 后端声明无附件通道");
+    nvn_gpu_shader vs = NULL, fs = NULL; void *vm = NULL, *fm = NULL;
+    if (!load_shader_pair(dir, "tri3.vert", "solid_green.frag", NULL, NULL, &vs, &fs, &vm, &fm)) { CHECK(0, "C90 读不到 solid_green"); return; }
+    nvn_gpu_buf vb = full_vb();
+    nvn_gpu_pipe_desc pd; nvn_gpu_err e; nvn_gpu_pipe pipe = NULL;
+    fill_gpipe_desc(&pd, vs, fs, 0); pd.cfmt[0] = 0; pd.chmask.mask = 0;
+    CHECK(OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e)), "C90 pipe：%d %s", e.rc.code, e.why);
+    nvn_gpu_cmd c = NULL; nvn_gpu_cmd_desc cd = {1, "C90"};
+    CHECK(OK(nvn_gpu_cmd_begin(&cd, &c, &e)), "C90 cmd_begin：%d %s", e.rc.code, e.why);
+    if (pipe && c) {
+        nvn_gpu_pass_desc p; memset(&p, 0, sizeof p);
+        p.ncolor = 0; p.w = 32; p.h = 24; p.layers = 1; p.occlusion = 1;
+        nvn_gpu_pass_begin(c, &p);
+        nvn_gpu_dyn dyn; full_dyn(&dyn); dyn.vp[0][2] = 32; dyn.vp[0][3] = 24; dyn.sc[2] = 32; dyn.sc[3] = 24;
+        nvn_gpu_draw_args da; memset(&da, 0, sizeof da); da.prim = 4; da.count = 3; da.instances = 1;
+        nvn_gpu_set_pipe(c, pipe); nvn_gpu_set_dyn(c, &dyn); nvn_gpu_set_vbuf(c, 0, vb, 0);
+        nvn_gpu_occlusion(c, 0); nvn_gpu_draw(c, &da); nvn_gpu_occlusion(c, -1);
+        nvn_gpu_pass_end(c);
+        g_c90_n = 0; g_c90_occ = ~0ull;
+        nvn_gpu_rc r = nvn_gpu_cmd_commit(c, 200, c90_done, NULL, &e);
+        CHECK(OK(r), "C90 commit：%d %s", r.code, e.why);
+        r = nvn_gpu_fence_wait(200, 5000000000ull, &e);
+        CHECK(OK(r), "C90 wait：%d %s", r.code, e.why);
+        CHECK(g_c90_n == 1 && g_c90_occ == 768, "C90 无附件通道样本数：%u 槽 %llu（期望 1 槽 768）", g_c90_n, (unsigned long long)g_c90_occ);
+    }
+    nvn_gpu_buf_release(vb, NULL, NULL);
+    nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vm); free(fm);
+}
+
 // C83：带缩放 / 换格式的贴图拷贝。
 // 期望（手算）：① 8x8 的 RGBA8 左半红右半蓝，最近点缩到 4x4 → 左两列红、右两列蓝；
 //   ② 2x2 的 R11G11B10F 全是 (0.5, 0.25, 1.0)（位模式 R 0x380、G 0x340、B 0x1E0），线性拷到 2x2 的 RGBA8 → (127 或 128, 64 ± 1, 255, 255)。
@@ -5427,6 +5722,76 @@ static void c87_resolve(const char *dir) {
     }
     nvn_gpu_view_release(av); nvn_gpu_view_release(bv); nvn_gpu_tex_release(a); nvn_gpu_tex_release(b);
     nvn_gpu_buf_release(rb, NULL, NULL); nvn_gpu_buf_release(vb, NULL, NULL);
+    nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm);
+}
+
+// C977b（#977）：实例除数。4 个实例各占 16 像素一列，颜色来自除数 2 的第 1 条流（每实例颜色 红 绿 蓝 红）：
+// 期望列色 {红, 红, 绿, 绿}；除数被丢成每实例一次时是 {红, 绿, 蓝, 红}。
+// 设备没有 VK_EXT_vertex_attribute_divisor（sim_tiers no_vertex_divisor 档）时，除数 2 的管线必须具名 UNSUPPORTED，不能静默退回。
+static int c977_dev_has_ext(const char *name) {
+    uint32_t n = 0; vkEnumerateDeviceExtensionProperties(g_dev.physical, NULL, &n, NULL);
+    VkExtensionProperties *x = calloc(n ? n : 1, sizeof *x); if (!x) return 0;
+    vkEnumerateDeviceExtensionProperties(g_dev.physical, NULL, &n, x);
+    int found = 0; for (uint32_t i = 0; i < n; i++) if (!strcmp(x[i].extensionName, name)) found = 1;
+    free(x); return found;
+}
+static void c977_divisor(const char *dir) {
+    void *vsm = NULL, *fsm = NULL; nvn_gpu_shader vs = NULL, fs = NULL; nvn_gpu_err e;
+    CHECK(load_shader_pair(dir, "div.vert", "quad.frag", NULL, NULL, &vs, &fs, &vsm, &fsm), "C977b shader");
+    if (!vs || !fs) { free(vsm); free(fsm); return; }
+    nvn_gpu_pipe_desc pd = {0}; pd.poly.mode = NVN_POLYGON_MODE_FILL; pd.origin_ll = (uint8_t)!g_tri_origin_ul;
+    pd.color.logic_op = 3; pd.st[NVN_GPU_SH_VS].sh = vs; pd.st[NVN_GPU_SH_FS].sh = fs;
+    pd.cfmt[0] = NVN_FORMAT_RGBA8; pd.samples = 1; pd.prim = 5; pd.chmask.mask = 0xf;
+    pd.attr[0].fmt = NVN_FORMAT_RGBA32F; pd.attr[0].stream = 0;
+    pd.attr[1].fmt = NVN_FORMAT_RGBA32F; pd.attr[1].stream = 1;
+    pd.stream[0].stride = 16; pd.stream[1].stride = 16; pd.stream[1].divisor = 2;
+    nvn_gpu_pipe pipe = NULL;
+    nvn_gpu_rc pr = nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e);
+    if (!c977_dev_has_ext("VK_EXT_vertex_attribute_divisor")) {
+        CHECK(pr.code == NVN_GPU_E_UNSUPPORTED && strstr(e.why, "实例除数 2"), "C977b 无除数扩展：期望具名 UNSUPPORTED，真结果 %d %s", pr.code, OK(pr) ? "" : e.why);
+        if (pr.code == NVN_GPU_E_UNSUPPORTED && strstr(e.why, "实例除数 2"))
+            printf("C977b 实例除数：本设备没有 VK_EXT_vertex_attribute_divisor，除数 2 具名 UNSUPPORTED（%s）\n", e.why);
+        goto out;
+    }
+    CHECK(OK(pr), "C977b 除数 2 管线：%d %s", pr.code, e.why);
+    if (!pipe) goto out;
+    {
+        static const float pos[4][4] = {{-1, -1, 0, 1}, {-1, 1, 0, 1}, {-0.5f, -1, 0, 1}, {-0.5f, 1, 0, 1}};
+        static const float col[4][4] = {{1, 0, 0, 1}, {0, 1, 0, 1}, {0, 0, 1, 1}, {1, 0, 0, 1}};
+        nvn_gpu_buf pb = make_buf(sizeof pos, NVN_GPU_MEM_SHARED, pos), cb = make_buf(sizeof col, NVN_GPU_MEM_SHARED, col);
+        nvn_gpu_tex out = make_tex(64, 64, NVN_FORMAT_RGBA8, NVN_GPU_TEX_RENDER);
+        nvn_gpu_view ov = make_view(out);
+        nvn_gpu_buf rb = make_buf(64 * 64 * 4, NVN_GPU_MEM_SHARED, NULL);
+        nvn_gpu_cmd c = begin_cmd(); nvn_gpu_pass_desc p = {0};
+        p.ncolor = 1; p.color[0].view = ov; p.color[0].load = NVN_GPU_LOAD_CLEAR; p.color[0].store = NVN_GPU_STORE_STORE;
+        p.color[0].clear.f[3] = 1.0f; p.w = 64; p.h = 64; p.layers = 1;
+        nvn_gpu_pass_begin(c, &p); nvn_gpu_set_pipe(c, pipe);
+        nvn_gpu_dyn dyn = {0}; dyn.origin_ll = pd.origin_ll; dyn.nvp = 1; dyn.vp[0][2] = 64; dyn.vp[0][3] = 64; dyn.vp[0][5] = 1;
+        dyn.has_sc = 1; dyn.sc[2] = 64; dyn.sc[3] = 64; nvn_gpu_set_dyn(c, &dyn);
+        nvn_gpu_set_vbuf(c, 0, pb, 0); nvn_gpu_set_vbuf(c, 1, cb, 0);
+        nvn_gpu_draw_args da = {0}; da.prim = 5; da.count = 4; da.instances = 4; nvn_gpu_draw(c, &da);
+        nvn_gpu_pass_end(c);
+        nvn_gpu_copy_tex_buf(c, out, 0, 0, NULL, rb, 0, 64 * 4, 64 * 64 * 4);
+        nvn_gpu_rc rc = nvn_gpu_cmd_commit(c, 1, on_done, NULL, &e);
+        CHECK(OK(rc), "C977b commit：%d %s", rc.code, e.why);
+        if (OK(rc)) {
+            CHECK(OK(nvn_gpu_fence_wait(1, 5000000000ull, &e)), "C977b wait：%s", e.why);
+            const uint8_t *px = buf_cpu(rb);
+            static const char *nm[4] = {"红", "红", "绿", "绿"};
+            static const uint8_t want[4][3] = {{255, 0, 0}, {255, 0, 0}, {0, 255, 0}, {0, 255, 0}};
+            char got[128] = {0}; int bad = 0;
+            for (int k = 0; k < 4; k++) {
+                const uint8_t *q = px + (32 * 64 + 16 * k + 8) * 4;
+                size_t l = strlen(got); snprintf(got + l, sizeof got - l, "%s%02x%02x%02x", k ? " " : "", q[0], q[1], q[2]);
+                if (q[0] != want[k][0] || q[1] != want[k][1] || q[2] != want[k][2]) bad++;
+            }
+            CHECK(!bad, "C977b 除数 2、实例 4：期望列色 {%s,%s,%s,%s}=ff0000 ff0000 00ff00 00ff00，真结果 %s", nm[0], nm[1], nm[2], nm[3], got);
+            if (!bad) printf("C977b 实例除数 2、实例 4：列色 %s = 期望 {c0,c0,c1,c1}\n", got);
+        }
+        nvn_gpu_view_release(ov); nvn_gpu_tex_release(out);
+        nvn_gpu_buf_release(rb, NULL, NULL); nvn_gpu_buf_release(pb, NULL, NULL); nvn_gpu_buf_release(cb, NULL, NULL);
+    }
+out:
     nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm);
 }
 
@@ -5855,6 +6220,94 @@ static void c86c_bc_3d_slice_copy(void) {
     CHECK(!memcmp(o + 48, init + 48, 8), "C86c ③ 第 2 级 %02x%02x%02x%02x…，期望 D = 40414243…", o[48], o[49], o[50], o[51]);
     nvn_gpu_tex_release(bc); nvn_gpu_tex_release(bm); nvn_gpu_tex_release(px); nvn_gpu_tex_release(p1);
     nvn_gpu_buf_release(ib, NULL, NULL); nvn_gpu_buf_release(rb, NULL, NULL);
+}
+
+// ---- C202（#1087）：命令段暂存缓冲的回收表只留标准大小（VK_ARENA_MIN = 256 KB）的块 ----
+// 背景：回收表 32 个位置，按「大小完全相同」取用。加载阶段留下的非标准大小块（每块大小各不相同）之后再没人要，会把位置占满，
+// 之后每帧要的标准块一半没命中：每帧各新建、销毁十来次（vkAllocateMemory / vkFreeMemory + 映射的缺页）。
+// 计数从 nvn_gpu_stats 读（stg_pool_hit / miss / kept / rejected / full，开会话清零）。一个命令段第一次 arena_alloc 占一块暂存缓冲，
+// 同时开着 n 个段就同时占 n 块；段做完放回一块。arena 大小 = max(bytes + 16, 256 KB)：1000 字节 → 标准块，300000 + 4096 i 字节 → 各不相同的非标准块。
+// 期望（手算，不取自被测实现；每个会话开始时表空、计数全 0）：
+//  缺省档（只留标准块）：
+//   ① 6 个段各要 1000 字节：没命中 6、命中 0；放回 6 块全留（留 6）；
+//   ② 再来一轮同样的 6 个段：命中 6、没命中仍 6；放回再留 6（累计留 12）；
+//   ③ 40 个段各要不同的非标准大小（分 5 批，每批 8 个同时开）：没命中 40（累计 46）；放回 40 块全因非标准没留（非标准没留 40、留仍 12、表满没留 0）；表里还是 6 块标准块；
+//   ④ 连续 3 轮、每轮 12 个段各要 1000 字节：第 1 轮命中 6、没命中 6（表里只有 6 块）、放回 12 块全留；第 2、3 轮命中 12、没命中 0、放回 12 块全留；表满没留 始终 0。
+//  对照档（nvk_stg_std = 0，旧行为：什么大小都留）：
+//   ①② 同上；③ 40 块非标准块没命中 40，放回时表里只剩 26 个空位：留 26（累计 38）、表满没留 14，非标准没留 0——表被 26 块谁也不会再要的块占着，连同 6 块标准块 = 32 满；
+//   ④ 每轮 12 个段：表里只有 6 块标准块 → 命中 6、没命中 6；放回 12 块只有 6 个空位 → 留 6、表满没留 6。每轮都新建 6 次、销毁 6 次，永远这样（真机世界场景每帧 11.8 次就是这个）。
+struct stg_stats { uint64_t hit, miss, kept, rej, full; int seen; };
+static void stg_stat_cb(void *u, const char *name, uint64_t v) {
+    struct stg_stats *o = (struct stg_stats *)u;
+    if (!strcmp(name, "stg_pool_hit")) { o->hit = v; o->seen++; }
+    else if (!strcmp(name, "stg_pool_miss")) { o->miss = v; o->seen++; }
+    else if (!strcmp(name, "stg_pool_kept")) { o->kept = v; o->seen++; }
+    else if (!strcmp(name, "stg_pool_rejected")) { o->rej = v; o->seen++; }
+    else if (!strcmp(name, "stg_pool_full")) { o->full = v; o->seen++; }
+}
+static struct stg_stats stg_read(void) { struct stg_stats s; memset(&s, 0, sizeof s); nvn_gpu_stats(stg_stat_cb, &s, 0); return s; }
+// 一轮：同时开 n 个段（n <= 16），第 i 个要 bytes0 + i * step 字节的暂存，各做一次 fill，按序提交（围栏号从 *fence 起递增），再等这 n 块都放回。
+static void stg_round(nvn_gpu_buf scratch, int n, uint64_t bytes0, uint64_t step, uint32_t *fence, const char *what) {
+    nvn_gpu_cmd cs[16]; nvn_gpu_err e; struct stg_stats s0 = stg_read();
+    for (int i = 0; i < n; i++) {
+        cs[i] = begin_cmd(); if (!cs[i]) return;
+        nvn_gpu_slice sl; nvn_gpu_rc r = nvn_gpu_arena_alloc(cs[i], bytes0 + (uint64_t)i * step, 16, &sl, &e);
+        CHECK(OK(r), "C202 %s 暂存 %d：%d %s", what, i, r.code, e.why);
+        nvn_gpu_fill_buf(cs[i], scratch, 0, 16, 0xA5A5A5A5u);
+    }
+    for (int i = 0; i < n; i++) {
+        nvn_gpu_rc r = nvn_gpu_cmd_commit(cs[i], (*fence)++, on_done, NULL, &e);
+        CHECK(OK(r), "C202 %s commit %d：%d %s", what, i, r.code, e.why);
+    }
+    CHECK(OK(nvn_gpu_fence_wait(*fence - 1, 5000000000ull, &e)), "C202 %s wait：%s", what, e.why);
+    for (int t = 0; t < 500; t++) {   // 放回在完成线程上、可能比围栏晚一点：等这 n 块都放回（留 / 没留 都算）
+        struct stg_stats s = stg_read();
+        if (s.kept + s.rej + s.full >= s0.kept + s0.rej + s0.full + (uint64_t)n) return;
+        sleep_ms(10);
+    }
+    CHECK(0, "C202 %s：5 秒内 %d 个段的暂存块没都放回", what, n);
+}
+static void c202_arm(int std_flag, const char *tag) {
+    g_stg_std_flag = std_flag;
+    if (!open_backend()) { g_stg_std_flag = -1; return; }
+    nvn_gpu_buf scratch = make_buf(64, NVN_GPU_MEM_SHARED, NULL);
+    uint32_t fence = 1; struct stg_stats s, p;
+    int std_on = std_flag != 0;   // 缺省档（-1）与显式 1 都是「只留标准块」
+    s = stg_read();
+    CHECK(s.seen == 5, "C202 %s：后端没报全暂存池读数（stg_pool_*），期望 5 项 → %d 项", tag, s.seen);
+    CHECK(s.hit == 0 && s.miss == 0 && s.kept == 0 && s.rej == 0 && s.full == 0, "C202 %s：开会话时计数期望全 0 → %llu/%llu/%llu/%llu/%llu", tag,
+          (unsigned long long)s.hit, (unsigned long long)s.miss, (unsigned long long)s.kept, (unsigned long long)s.rej, (unsigned long long)s.full);
+    stg_round(scratch, 6, 1000, 0, &fence, "① 6 个标准块");
+    s = stg_read();
+    CHECK(s.hit == 0 && s.miss == 6 && s.kept == 6 && s.rej == 0 && s.full == 0, "C202 %s ①：命中 0 / 没命中 6 / 留 6 / 非标准 0 / 表满 0 → %llu/%llu/%llu/%llu/%llu", tag,
+          (unsigned long long)s.hit, (unsigned long long)s.miss, (unsigned long long)s.kept, (unsigned long long)s.rej, (unsigned long long)s.full);
+    stg_round(scratch, 6, 1000, 0, &fence, "② 再来 6 个标准块");
+    s = stg_read();
+    CHECK(s.hit == 6 && s.miss == 6 && s.kept == 12 && s.rej == 0 && s.full == 0, "C202 %s ②：命中 6 / 没命中 6 / 留 12 / 非标准 0 / 表满 0 → %llu/%llu/%llu/%llu/%llu", tag,
+          (unsigned long long)s.hit, (unsigned long long)s.miss, (unsigned long long)s.kept, (unsigned long long)s.rej, (unsigned long long)s.full);
+    for (int b = 0; b < 5; b++) stg_round(scratch, 8, 300000 + (uint64_t)b * 8 * 4096, 4096, &fence, "③ 非标准块");   // 40 个大小各不相同
+    s = stg_read();
+    if (std_on) CHECK(s.hit == 6 && s.miss == 46 && s.kept == 12 && s.rej == 40 && s.full == 0, "C202 %s ③：命中 6 / 没命中 46 / 留 12 / 非标准没留 40 / 表满 0 → %llu/%llu/%llu/%llu/%llu", tag,
+                      (unsigned long long)s.hit, (unsigned long long)s.miss, (unsigned long long)s.kept, (unsigned long long)s.rej, (unsigned long long)s.full);
+    else CHECK(s.hit == 6 && s.miss == 46 && s.kept == 38 && s.rej == 0 && s.full == 14, "C202 %s ③：命中 6 / 没命中 46 / 留 38 / 非标准没留 0 / 表满 14 → %llu/%llu/%llu/%llu/%llu", tag,
+               (unsigned long long)s.hit, (unsigned long long)s.miss, (unsigned long long)s.kept, (unsigned long long)s.rej, (unsigned long long)s.full);
+    for (int r = 0; r < 3; r++) {
+        p = stg_read();
+        stg_round(scratch, 12, 1000, 0, &fence, "④ 12 个标准块");
+        s = stg_read();
+        uint64_t dh = s.hit - p.hit, dm = s.miss - p.miss, dk = s.kept - p.kept, df = s.full - p.full;
+        uint64_t wh = std_on ? (r == 0 ? 6 : 12) : 6, wm = std_on ? (r == 0 ? 6 : 0) : 6, wk = std_on ? 12 : 6, wf = std_on ? 0 : 6;
+        CHECK(dh == wh && dm == wm && dk == wk && df == wf, "C202 %s ④ 第 %d 轮：命中 %llu / 没命中 %llu / 留 %llu / 表满 %llu → %llu/%llu/%llu/%llu", tag, r + 1,
+              (unsigned long long)wh, (unsigned long long)wm, (unsigned long long)wk, (unsigned long long)wf,
+              (unsigned long long)dh, (unsigned long long)dm, (unsigned long long)dk, (unsigned long long)df);
+    }
+    nvn_gpu_buf_release(scratch, NULL, NULL);
+    nvn_gpu_err ce; CHECK(OK(nvn_gpu_close(5000000000ull, &ce)), "C202 %s close：%d %s", tag, ce.rc.code, ce.why);
+    g_stg_std_flag = -1;
+}
+static void c202_stg_pool(void) {
+    c202_arm(-1, "缺省档");
+    c202_arm(0, "对照档 nvk_stg_std=0");
 }
 
 // ---- C88：驱动管线缓存落盘与读回（#822）----
@@ -7112,6 +7565,13 @@ int main(int argc, char **argv) {
         s2a_vk_device_destroy(&g_dev, 1);
         return g_fail ? 1 : 0;
     }
+    if (getenv("S2A_TEST_STG_ONLY")) {   // 开发时只跑 C202（暂存缓冲回收表；run.sh 不设这个变量）
+        memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
+        c202_stg_pool();
+        printf("nvn_gpu Vulkan 后端 C202 单跑：%s（%d 处不符）\n", g_fail ? "红" : "绿", g_fail);
+        s2a_vk_device_destroy(&g_dev, 1);
+        return g_fail ? 1 : 0;
+    }
     if (getenv("S2A_TEST_LOGICOP_ONLY")) {
         if(argc < 2) return 2;
         memset(&g_desc,0,sizeof g_desc);g_desc.host_device=&g_dev;g_desc.app_label="logic-only";
@@ -7219,7 +7679,7 @@ int main(int argc, char **argv) {
     CHECK(caps.caps_id[0] | caps.caps_id[1] | caps.caps_id[15], "caps_id 全 0");
     CHECK(nvn_gpu_format_caps(0x1) != 0, "format_caps 对 R8 无能力位");   // NVN_FORMAT_R8
     if (argc > 2 && !strcmp(argv[2], "--gs-compiler")) t_gs_compiler_pixels(argv[1]);
-    else t_gs_pixels(argv[1]);
+    else { t_gs_pixels(argv[1]); t_gs_tstrip_pixels(argv[1]); }
     { nvn_gpu_err eg; CHECK(OK(nvn_gpu_close(5000000000ull, &eg)), "GS fixture close: %d %s", eg.rc.code, eg.why); }
     if (argc > 2 && (!strcmp(argv[2], "--gs-only") || !strcmp(argv[2], "--gs-compiler"))) {
         s2a_vk_device_destroy(&g_dev, 1);
@@ -7434,6 +7894,7 @@ int main(int argc, char **argv) {
     c87_resolve(argv[1]);
     c86b_3d_slice_attach();
     c86c_bc_3d_slice_copy();
+    c90_no_attachment(argv[1]);   // 篱笆值 200：排在 c86c（191）之后
     nvn_gpu_err e18;
     CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C56–C68 / C74 / C75 成功路径 close：%d %s", e18.rc.code, e18.why);
     for (int k = 0; k < 8; k++) {
@@ -7441,6 +7902,12 @@ int main(int argc, char **argv) {
         c87_resolve_reject(k);
         CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C87 拒绝 close：%s", e18.why);
     }
+    if (!open_backend()) return 1;   // 自己一个会话：围栏号 1、2
+    cp06_cube_of_array(argv[1]);
+    CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "P0-6 close：%s", e18.why);
+    if (!open_backend()) return 1;
+    c977_divisor(argv[1]);
+    CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C977b close：%s", e18.why);
     if (!open_backend()) return 1;
     c977_a2c(argv[1]);
     CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C977a close：%s", e18.why);
@@ -7480,6 +7947,9 @@ int main(int argc, char **argv) {
     if (!open_backend()) return 1;
     c69_dual_src_blend(argv[1]);
     CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C69 close：%d %s", e18.rc.code, e18.why);
+    if (!open_backend()) return 1;   // 自己一个会话：围栏号 1、2
+    c976m_mirror_clamp(argv[1]);
+    CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C976m close：%d %s", e18.rc.code, e18.why);
 
     if (!open_backend()) return 1;
     cube_array_one_face();
@@ -7492,6 +7962,7 @@ int main(int argc, char **argv) {
     c201_fb_scan(0);
     c201_fb_scan(1);
     CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C201 close：%d %s", e18.rc.code, e18.why);
+    c202_stg_pool();   // 缺省档与对照档各自开 / 关会话（围栏号从各自会话重新算）
 
     for (int sw = 0; sw < 2; sw++) {
         if (!open_backend()) return 1;
@@ -7504,6 +7975,10 @@ int main(int argc, char **argv) {
         attach_swizzle_subresource_case(argv[1], srgb);
         CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "attachment subresource close：%d %s", e18.rc.code, e18.why);
     }
+
+    if (!open_backend()) return 1;
+    c49b_restart_pipe_cache(argv[1]);
+    CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C49b close：%d %s", e18.rc.code, e18.why);
 
     c88_pipe_cache(argv[1]);   // 每个会话自己开 / 关（带不同的 cache_dir）
     c89_midrun_save(argv[1]);  // 同上；还会起子进程（被 SIGKILL 的那一局）

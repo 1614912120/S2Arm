@@ -39,6 +39,7 @@ class PatchesTests(unittest.TestCase):
             f"b/{SDK[:16]}": [it(b"sdk60", "pchtxt", "fps", "sdk60.pchtxt", [], [SDK])],   # sdk 构建号各游戏相同：不按它要包
         }
         self.publish()
+        self._base_was = os.environ.get("S2A_PATCH_BASE")   # 收尾放回原值（jobcase 给的「不连网」缺省），不 pop——同进程后面的出包用例别又去连网
         os.environ["S2A_PATCH_BASE"] = str(self.base)
 
     def publish(self, bad=None):
@@ -50,7 +51,9 @@ class PatchesTests(unittest.TestCase):
         (self.base / "index.json").write_text(json.dumps(dict(schema=2, generated=1, upstreams={}, bundles=man)))
 
     def tearDown(self):
-        os.environ.pop("S2A_PATCH_BASE", None); shutil.rmtree(self.t, ignore_errors=True)
+        if self._base_was is None: os.environ.pop("S2A_PATCH_BASE", None)
+        else: os.environ["S2A_PATCH_BASE"] = self._base_was
+        shutil.rmtree(self.t, ignore_errors=True)
 
     def test_ios_package_leaves_out_graphics_patches(self):
         # 期望手写：同一份统一包，Mac 收 fps / widescreen / gfx 三类，iPhone（target="ios"）不收 gfx（11-13 维护者「画面补丁 iOS 不进包」）
@@ -191,7 +194,8 @@ class PatchesTests(unittest.TestCase):
             cheats.main_build = lambda c, g: ""                                    # 没解过包：不知道版本，精确命中为空，只列各版本
             r = patches.match(self.c)
             self.assertEqual((r["build"], r["total"], r["version"]), ("", 0, ""), "没解过包不报版本号（不知道玩家是哪一版）")
-            self.assertEqual([o["version"] for o in r["others"]], ["1.3.0"])
+            self.assertEqual((r["port"], r["portVersions"]), (False, []), "没解过包不判移植（同版本的满屏会被说成移植）")
+            self.assertEqual([(o["version"], o["cats"]) for o in r["others"]], [("1.0", ["widescreen"]), ("1.3.0", ["fps"])])
         finally:
             cheats.main_build = real
 

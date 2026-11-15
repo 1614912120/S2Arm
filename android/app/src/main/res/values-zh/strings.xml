@@ -4,6 +4,7 @@
     <string name="preview_description">安卓宿主调试构建，尚未接入游戏运行。</string>
     <string name="native_unavailable">原生宿主无法启动，详情见 S2Arm 日志。</string>
     <string name="import_game">导入游戏包…</string>
+    <string name="import_progress">正在导入游戏：%1$d / %2$d MiB</string>
     <string name="fps_overlay_show">显示 FPS（成功提交速率）</string>
     <string name="fps_overlay_description">游戏帧成功提交速率，每秒更新；不是屏幕刷新率</string>
 
@@ -32,6 +33,9 @@
     <string name="export_diagnostics_running">正在导出诊断包…</string>
     <string name="export_diagnostics_done">诊断包已生成：%1$s</string>
     <string name="export_diagnostics_failed">诊断包导出失败：%1$s</string>
+    <string name="save_diagnostics">保存诊断包到文件…</string>
+    <string name="save_diagnostics_done">诊断包已保存：%1$s</string>
+    <string name="save_diagnostics_failed">诊断包保存失败：%1$s</string>
     <string name="touch_menu_import">导入布局…</string>
     <string name="touch_menu_export">导出布局…</string>
     <string name="touch_layout_imported">布局已导入</string>

@@ -13,6 +13,8 @@ int s2a_ios_caps_value(const char *cap);
 // 60 帧此刻实际开没开（设置页 / 社区补丁页开关如实显示用，与起局同一口径：玩家选过照选的，没选过 = 包里清单原因是否速度已验证）；
 //   s2a_ios_set_fps60：玩家拨开关（写 S2AFps60 + S2AFps60Manual，起局只认后者算「开」）
 BOOL s2a_ios_fps60_on(void);
+BOOL s2a_ios_fi_on(void);       // 补帧开关（这款；没设过 = 开）
+void s2a_ios_set_fi(BOOL on);
 void s2a_ios_set_fps60(BOOL on);
 @class NSString;
 // 同上，指定哪一款（游戏库里还没进游戏的款；nil = 正在跑的这款 / 单款壳）

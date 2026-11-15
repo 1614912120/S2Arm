@@ -5,6 +5,7 @@ import AppKit
 import Combine
 import Foundation
 import GameController
+import NXCore
 
 @MainActor
 final class NS2LauncherController: ObservableObject {
@@ -62,13 +63,15 @@ final class NS2LauncherController: ObservableObject {
 
     /// 弹窗标题：照连着的型号写；没连 / 还不知道型号时写通用的「Switch 手柄」（不分代：一代 Joy-Con 以后也在这里）（#520）
     /// 标题：一只写型号；一对 Joy-Con 2 合成一位写「Joy-Con 2 (L + R)」；其余两只以上写「N 个 NS2 手柄」（同蓝牙手柄那块写数量，玩家在玩家列表）
-    func title(simplifiedChinese zh: Bool) -> String {
+    func title(lang: String) -> String {
         if hasSystemController, let systemControllerName { return systemControllerName }   // #901：只有系统手柄连着时写它的真实名字
         let mergedPair = kind == 4 && players == 1
         let count = max(deviceCount, 0) + extras.reduce(0) { $0 + $1.devices.count }
-        if count >= 2 && !(mergedPair && count == 2) { return zh ? "\(count) 个 Switch 2 手柄" : "\(count) Switch 2 controllers" }
-        return Self.title(kind: kind, simplifiedChinese: zh)
+        if count >= 2 && !(mergedPair && count == 2) { return Self.text("s2arm.controller.countTitle", lang).replacingOccurrences(of: "{0}", with: "\(count)") }
+        return Self.title(kind: kind, lang: lang)
     }
+    /// 手柄面板文字（frontend/l10n 的 s2arm.controller.*）；lang 是界面语言代码（Lang.code：zh / en / 以后加的语言），单测可直接传字符串
+    nonisolated static func text(_ key: String, _ lang: String) -> String { L10n.string(key, Lang(lang)) }
     nonisolated static func players(from object: [String: Any]) -> Int { max(1, (object["players"] as? NSNumber)?.intValue ?? 1) }
     nonisolated static func playerKinds(from object: [String: Any]) -> [Int] {
         if let kinds = object["kinds"] as? [NSNumber] { return kinds.map(\.intValue).filter { $0 > 0 } }
@@ -79,13 +82,13 @@ final class NS2LauncherController: ObservableObject {
     nonisolated static func kind(from object: [String: Any]) -> Int {
         (object["kind"] as? NSNumber)?.intValue ?? 0
     }
-    nonisolated static func title(kind: Int, simplifiedChinese zh: Bool) -> String {
+    nonisolated static func title(kind: Int, lang: String) -> String {
         switch kind {
         case 1: return "Switch 2 Pro"
         case 2: return "Joy-Con 2 (L)"
         case 3: return "Joy-Con 2 (R)"
         case 4: return "Joy-Con 2 (L + R)"
-        default: return zh ? "Switch 手柄" : "Switch Controller"
+        default: return Self.text("s2arm.controller.generic", lang)
         }
     }
 
@@ -163,24 +166,24 @@ final class NS2LauncherController: ObservableObject {
     /// 连接程序报过蓝牙不可用（状态 6：关着 / 没给权限）；下次启动连接程序清掉
     @Published private(set) var bluetoothUnavailable = false
 
-    nonisolated static func statusText(_ status: Status, simplifiedChinese zh: Bool) -> String {
+    nonisolated static func statusText(_ status: Status, lang: String) -> String {
         switch status {
-        case .notConnected: return zh ? "未连接" : "Not connected"
-        case .searching: return zh ? "搜索中" : "Searching"
-        case .connecting: return zh ? "连接中" : "Connecting"
-        case .connected: return zh ? "已连接" : "Connected"
-        case .inUse: return zh ? "游戏使用中" : "In use by game"
-        case .failed: return zh ? "连接失败" : "Connection failed"
-        case .bluetoothUnavailable: return zh ? "蓝牙不可用" : "Bluetooth unavailable"
+        case .notConnected: return Self.text("s2arm.controller.status.notConnected", lang)
+        case .searching: return Self.text("s2arm.controller.status.searching", lang)
+        case .connecting: return Self.text("s2arm.controller.status.connecting", lang)
+        case .connected: return Self.text("s2arm.controller.status.connected", lang)
+        case .inUse: return Self.text("s2arm.controller.status.inUse", lang)
+        case .failed: return Self.text("s2arm.controller.status.failed", lang)
+        case .bluetoothUnavailable: return Self.text("s2arm.controller.status.bluetoothUnavailable", lang)
         }
     }
     /// 连接 / 断开合并成一个主按钮（稿）：未连接「连接」、搜索 / 连接中「停止」、连着「断开」、失败「重新连接」
-    nonisolated static func mainButton(_ status: Status, simplifiedChinese zh: Bool) -> String {
+    nonisolated static func mainButton(_ status: Status, lang: String) -> String {
         switch status {
-        case .notConnected: return zh ? "连接" : "Connect"
-        case .searching, .connecting: return zh ? "停止" : "Stop"
-        case .connected, .inUse: return zh ? "断开" : "Disconnect"
-        case .failed, .bluetoothUnavailable: return zh ? "重新连接" : "Reconnect"
+        case .notConnected: return Self.text("s2arm.controller.button.connect", lang)
+        case .searching, .connecting: return Self.text("s2arm.controller.button.stop", lang)
+        case .connected, .inUse: return Self.text("s2arm.controller.button.disconnect", lang)
+        case .failed, .bluetoothUnavailable: return Self.text("s2arm.controller.button.reconnect", lang)
         }
     }
     func mainAction() {
@@ -192,7 +195,7 @@ final class NS2LauncherController: ObservableObject {
     }
 
     /// 顶栏（#901）：只有系统手柄连着时写「已连接」、绿点；面板里 Switch 2 手柄那块仍照它自己的状态（status），连接按钮照常可用
-    var buttonStatus: String { hasSystemController ? "已连接" : Self.statusText(status, simplifiedChinese: true) }
+    var buttonStatus: String { hasSystemController ? "已连接" : Self.statusText(status, lang: "zh") }
     /// 状态点颜色（稿：灰 #8a857e 未连接、橙 #f0a43a 搜索 / 连接中、绿 #5fd068 已连接 / 游戏使用中、红 #e5534b 失败 / 蓝牙不可用）
     var buttonColor: NSColor { hasSystemController ? .systemGreen : Self.dotColor(status) }
     nonisolated static func dotColor(_ status: Status) -> NSColor {

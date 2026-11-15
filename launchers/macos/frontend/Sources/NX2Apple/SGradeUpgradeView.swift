@@ -26,8 +26,8 @@ struct SGradeUpgradeView: View {
     @State private var failure: String?
 
     var body: some View {
-        let lang = loc.lang == .zh ? "zh-Hans" : "en"
-        SGradeUpgradeBody(games: games, failure: failure, zh: loc.lang == .zh, busy: model.busy,
+        let lang = loc.lang.sharedCode
+        SGradeUpgradeBody(games: games, failure: failure.map(loc.backend), zh: loc.cjkPunctuation, busy: model.busy,   // 作业层原句按界面语言显示
                           x: { BackendText.launcherText("sgrade.upgrade." + $0, language: lang) },
                           upgrade: { mode in model.updatePhone(acceptStale: false, repack: [], language: lang, mode: mode, sgradeUpgrade: true); dismiss() },
                           close: { dismiss() })
@@ -118,10 +118,11 @@ struct SGradeUpgradeBody: View {
         return parts.joined(separator: zh ? "、" : ", ")
     }
 
+    // 分组标题与游戏行要一眼分得开（11-14 体验走查：同号同色粗体分不清哪行是标题）：标题小一号、金 / 灰色、带款数，游戏行缩进
     private func group(_ title: String, _ rows: [(String, String)], gold: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.manrope(13, .semibold)).foregroundStyle(gold ? SGradeCardView.gold : .primary)
-            list(rows)
+            Text("\(title) · \(rows.count)").font(.manrope(12, .semibold)).foregroundStyle(gold ? SGradeCardView.gold : .secondary)
+            list(rows).padding(.leading, 12)
         }
     }
 

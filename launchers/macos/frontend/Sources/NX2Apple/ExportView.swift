@@ -33,7 +33,6 @@ struct ExportView: View {
                     if sgradeNothing != game.id {   // 都没有（这个版本没命中、别的版本也没有）就整张不出（11-13 维护者「没匹配就什么都不显示」），换一款再出
                         SGradeCard(model: model, gameID: game.id, nothing: { sgradeNothing = game.id })   // S 级优化（Beta，11-13）：这款这个版本命中了哪些社区补丁，命中的出包时自动打入
                     }
-                    Text(BackendText.launcherText("batch.hint", language: loc.lang == .zh ? "zh-Hans" : "en")).font(.manrope(12.5)).foregroundStyle(.secondary)
                     platforms
                 }
                 .padding(.horizontal, 40).padding(.top, 22).padding(.bottom, 40)
@@ -150,7 +149,7 @@ struct ExportView: View {
         }
     }
 
-    private func x(_ id: String) -> String { BackendText.launcherText("export." + id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func x(_ id: String) -> String { BackendText.launcherText("export." + id, language: loc.lang.sharedCode) }
 
     /// 存放位置（游戏库结构 v3，像 Steam 的库文件夹）：这款游戏的文件夹放在哪；换了位置，出包前先整个搬过去（存档跟着走）。
     private var locationRow: some View {
@@ -174,7 +173,7 @@ struct ExportView: View {
                 }
                 .accessibilityIdentifier("export.location")
             }
-            if let slack = model.locationSlackText(location, language: loc.lang == .zh ? "zh-Hans" : "en") {   // #444：大分配单元 / 不是 APFS
+            if let slack = model.locationSlackText(location, language: loc.lang.sharedCode) {   // #444：大分配单元 / 不是 APFS
                 Label(slack, systemImage: "exclamationmark.triangle").font(.manrope(12)).foregroundStyle(LauncherPalette.building)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("export.location.slack")
             }

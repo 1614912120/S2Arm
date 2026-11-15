@@ -486,6 +486,7 @@ class ExecutionLockTests(unittest.TestCase):
             c = Context(request)
             c.r['libraryId'] = library.setup(c)['libraryId']
             other = Context(dict(c.r, taskId='other'))
+            other.lock_wait = 0.3   # 排队上限调短（同 test_filelock / test_probe_jobs 的 0.3 秒口径）：这里核的是「锁被占 → 报忙、不动东西」，不是等满产品缺省 30 秒（11-14 门禁提速：原先每例白等 30 秒）
             def fail_while_locked(actual):
                 self.assertIs(actual, c)
                 with self.assertRaises(Failure):

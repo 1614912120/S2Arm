@@ -187,10 +187,20 @@ public static class PackCases
         check(update["acceptStale"] is true && !update.ContainsKey("gameId") && (string?)update["shellDir"] == Path.GetFullPath(paths.Shell) &&
               (string?)update["resources"] == Path.GetFullPath(AppContext.BaseDirectory), "request: installUpdate needs no game, carries acceptStale, shell and resources");
         check(PackJobClient.Operations.Contains("delete"), "request: delete (remove the whole game, saves kept) is a launcher operation since library layout v3");
+        // #1149：App 里每个发出去的操作名（PackRequest("…") 字面量）都得在白名单里——漏一个，请求在进引擎前就被拒（S 级优化升级页一进就卡死）
+        {
+            var app = Path.Combine(Path.GetDirectoryName(SourceFile())!, "..", "App");
+            var appOps = Directory.GetFiles(app, "*.cs").SelectMany(f => System.Text.RegularExpressions.Regex.Matches(File.ReadAllText(f), "PackRequest\\(\"([A-Za-z]+)\"")
+                .Select(m => m.Groups[1].Value)).Distinct().ToList();
+            var missing = appOps.Where(o => !PackJobClient.Operations.Contains(o)).ToList();
+            check(appOps.Contains("sgradeScan") && appOps.Contains("community") && missing.Count == 0,
+                $"request: every operation the App sends is whitelisted (sent {appOps.Count}, missing: {string.Join(",", missing)})");
+            var scan = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "sgradeScan", ""), "win-7");
+            check((string?)scan["operation"] == "sgradeScan" && !scan.ContainsKey("gameId"), "request: sgradeScan scans the whole library, no game");
+        }
         foreach (var (operation, extra, label) in new (string, Dictionary<string, object?>?, string)[]
         {
             ("launch", null, "request: operations outside export / install / remove / library layout refused (Windows does not run games)"),
-            ("communitySave", null, "request: game options are not a launcher operation (维护者 11-07)"),
             ("install", new() { ["gameId"] = "other" }, "request: extra fields cannot replace the envelope")
         })
         {
@@ -230,4 +240,5 @@ public static class PackCases
             throw new Exception("accepted " + label);
         }
     }
+    private static string SourceFile([System.Runtime.CompilerServices.CallerFilePath] string path = "") => path;
 }

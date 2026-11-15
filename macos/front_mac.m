@@ -11,6 +11,7 @@
 #include "../runtime/include/s2a_qos.h"
 #include "../runtime/include/phone_axes.h"
 #include "joycon_imu.h"
+#include "motion_power.h"
 #import "input_guide.h"
 // 金手指（11-12）：Mac 宿主也起服务层金手指线程（services/S2A.Services/Cheats.cs）；目录由起局方 S2A_CHEATS_DIR 给（这款游戏文件夹的 cheats/，
 //   启动器「游戏设置 → 金手指」写开关），与 iOS ios/vpad_cheats.m 同一份代码、同一个登记点（runtime/src/loader.c s2a_cheats_host_enable）
@@ -26,6 +27,7 @@ __attribute__((constructor)) static void cheats_register_host(void) { void (*f)(
 #include "../graphics/metal/gal_abi.h"
 #include "../graphics/nvn/gfx/nvn/nvn_present_fit.h"   // pf_viewport / pf_out_aspect：直连上屏摆放（鼠标当触屏的画面矩形）
 #include <pthread.h>
+#include <dispatch/dispatch.h>   // 主队列踢采样（s2a_mac_ns2_input_changed）用
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
@@ -440,6 +442,7 @@ static GCExtendedGamepad *active_pad(NSArray *controllers) {
 //   手柄事件跟着排队（延迟管线调研：列为权衡而非缺陷）。改挂专用串行队列（对齐 iOS ios/controller.m 的 s2arm.controller.input），
 //   回调只走 pad_event_fast 快速路径：照槽位采样这一只、合键盘 / 鼠标快照发布，不碰主线程的 keys / mouse / config。
 //   120Hz 主线程定时器仍保留：键盘 / 鼠标的粘键核对、补装新连接的手柄、槽位重排、六轴 / 震动 / Home 退出都在那一轮。
+//   Switch 2 Pro 输入不靠定时器拉取：报文线程对变化经 s2a_mac_ns2_input_changed 踢主队列采样（见下，#771），到手即采样。
 // 没有扩展手柄描述、但通用物理描述里有按键的手柄（部分第三方手柄的某些模式、只给简易描述的手柄）：原先整只被忽略、游戏里没反应也没有提示。
 //   按标准键名从 physicalInputProfile 读（参照维护者提供的前端实现 Gamepad.swift 的读法）。六轴 / 震动 / Home 退出仍只认扩展手柄
 static BOOL pad_has_profile_buttons(GCController *c) { return !c.extendedGamepad && c.physicalInputProfile.buttons.count > 0; }
@@ -494,18 +497,17 @@ static GCMotion *g_motion_source;
 //   标记由读取方消费（主线程采样、HID 线程读，只改一帧样本可能被下一帧盖掉、读不到）；单只拔掉本来就是 known = 0，不另标
 static int g_motion_switched;   // 持 g_motion_mu
 static void set_motion_source(GCMotion *source) {
-    if (source == g_motion_source) return;
-    if (source && g_motion_source) { pthread_mutex_lock(&g_motion_mu); g_motion_switched = 1; pthread_mutex_unlock(&g_motion_mu); }
-    if (g_motion_source.sensorsRequireManualActivation) g_motion_source.sensorsActive = NO;
-    g_motion_source = source;
-    if (source.sensorsRequireManualActivation) source.sensorsActive = YES;
+    if (source != g_motion_source && source && g_motion_source) { pthread_mutex_lock(&g_motion_mu); g_motion_switched = 1; pthread_mutex_unlock(&g_motion_mu); }
+    s2a_motion_power_select(&g_motion_source, source, nil);
 }
 static void sample_motion(GCExtendedGamepad *pad) {
+    // Power requests must not depend on usable calibrated sample fields. Pro HID
+    // samples can be valid while its public profile lacks separated gravity.
     BOOL ns2 = ns2_leads();
     GCMotion *m = atomic_load(&g_motion_wanted) && !ns2 ? pad.controller.motion : nil;
-    set_motion_source(m.hasRotationRate && m.hasGravityAndUserAcceleration ? m : nil);
+    set_motion_source(m);
     s2a_pad_motion sample = {0};
-    int known = g_motion_source != nil;
+    int known = m.hasRotationRate && m.hasGravityAndUserAcceleration;
     if (known) {
         double gravity[3] = {m.gravity.x, m.gravity.y, m.gravity.z}, user[3] = {m.userAcceleration.x, m.userAcceleration.y, m.userAcceleration.z};
         double rotation[3] = {m.rotationRate.x, m.rotationRate.y, m.rotationRate.z};
@@ -523,7 +525,8 @@ __attribute__((visibility("default"), used)) void s2a_pad_set_motion_enabled(int
     int want = enabled != 0 && !(off && !strcmp(off, "0"));
     atomic_store(&g_motion_wanted, want);
     s2a_mac_ns2_set_motion_enabled(want);
-    // Joy-Con：系统 GCMotion 为 nil，改走 HID 全报告六轴（macos/joycon_imu.m）
+    // Framework-recognized Pro uses public sensor control plus passive HID data;
+    // Joy-Con / framework-unrecognized Pro retain their existing raw control path.
     s2a_joycon_imu_set_enabled(want);
 }
 // P1（槽 0）是一代 Joy-Con 单元时（#520，同 Joy-Con 2：P1 的体感 / 震动跟占 P1 的那只走）：定义在槽位表后面
@@ -872,7 +875,10 @@ static void map_pad_inputs(NSDictionary *cfg, NSDictionary *all, NSDictionary *a
     for (int i = 0; i < 4; i++) {
         NSDictionary *binding = cfg[@"axes"][names[i]];
         float v = [axes[binding[@"source"] ?: @""] floatValue];
-        if (fabsf(v) > dz) sticks[i] += (int32_t)(v * ([binding[@"invert"] boolValue] ? -32767 : 32767));
+        // 死区内线性重缩放（pad.c s2a_pad_axis_deadzone，iOS 物理手柄 s2a_pad_stick 同口径；11-14 卡顿诊断手柄项）：
+        //   原实现过阈直接 v×32767，小推杆一过死区输出从 0 突跳死区宽度（缺省 15%）的量，呈「突然窜一下」的阶跃感；
+        //   满幅、反向（invert）、死区宽度配置语义都不变
+        if (fabsf(v) > dz) sticks[i] += (int32_t)(s2a_pad_axis_deadzone(v, dz) * ([binding[@"invert"] boolValue] ? -32767 : 32767));
     }
     *out_buttons = buttons;
 }
@@ -971,14 +977,10 @@ static void sample_slot_motion(GCController *const owner_before[S2A_MAX_PADS]) {
     BOOL want = atomic_load(&g_motion_wanted);
     for (int s = 1; s < S2A_MAX_PADS; s++) {
         GCMotion *m = want ? pad_owner[s].motion : nil;
-        if (!(m.hasRotationRate && m.hasGravityAndUserAcceleration)) m = nil;
-        if (m != g_slot_motion_source[s]) {
-            if (g_slot_motion_source[s].sensorsRequireManualActivation && g_slot_motion_source[s] != g_motion_source) g_slot_motion_source[s].sensorsActive = NO;
-            g_slot_motion_source[s] = m;
-            if (m.sensorsRequireManualActivation) m.sensorsActive = YES;
-        }
+        s2a_motion_power_select(&g_slot_motion_source[s], m, g_motion_source);
+        BOOL known = m.hasRotationRate && m.hasGravityAndUserAcceleration;
         s2a_pad_motion sample = {0};
-        if (m) {
+        if (known) {
             double gravity[3] = {m.gravity.x, m.gravity.y, m.gravity.z}, user[3] = {m.userAcceleration.x, m.userAcceleration.y, m.userAcceleration.z};
             double rotation[3] = {m.rotationRate.x, m.rotationRate.y, m.rotationRate.z};
             float acceleration[3], gyro[3];
@@ -986,7 +988,7 @@ static void sample_slot_motion(GCController *const owner_before[S2A_MAX_PADS]) {
             sample = (s2a_pad_motion){clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000, acceleration[0], acceleration[1], acceleration[2], gyro[0], gyro[1], gyro[2]};
         }
         pthread_mutex_lock(&g_motion_mu);
-        g_slot_motion[s] = sample; g_slot_motion_known[s] = m != nil;
+        g_slot_motion[s] = sample; g_slot_motion_known[s] = known;
         pthread_mutex_unlock(&g_motion_mu);
     }
     (void)owner_before;
@@ -1351,6 +1353,21 @@ static void sample_input(void) {
     publish_keyboard(muted);   // R5：键盘区原始键态（先落键态再唤醒，泵醒来读到同一拍）
     pthread_mutex_unlock(&g_compose_mu);
 }
+// Switch 2 Pro 输入事件化（11-12 延迟管线调研，同 A2 的事件直达）：ns2_controller.c 的报文线程
+//   （直连传输回调 / 通道读线程）发现快照变化就调这里。此前 NS2 输入靠 120Hz 主线程定时器拉取快照，
+//   每次按键 / 摇杆变化平均多等半个采样周期（~4.2ms）、最坏一整个（~8.3ms），主线程忙于菜单动画时还要排队。
+//   sample_input 必须主线程跑（上面的键鼠 / 槽位表规则），所以这里踢到主队列，与键鼠 / GCController 事件串行；
+//   在途合并：已有一踢未跑就不再排——sample_input 读的永远是最新快照，合并不丢事件，整包心跳重发也不会排队风暴。
+static _Atomic int ns2_sample_pending;
+static void ns2_sample_kick_main(void *unused) {
+    (void)unused;
+    atomic_store(&ns2_sample_pending, 0);   // 先清再采样：采样进行中来的新变化会再排一踢，不会被吞
+    sample_input();
+}
+void s2a_mac_ns2_input_changed(void) {
+    if (atomic_exchange(&ns2_sample_pending, 1)) return;
+    dispatch_async_f(dispatch_get_main_queue(), NULL, ns2_sample_kick_main);
+}
 // 多手柄槽位（服务层 InputPump 按符号查；没导出时退回旧的单手柄 ABI）
 __attribute__((visibility("default"), used)) int s2a_vpad_pad_count(void) { return atomic_load(&pad_live); }
 __attribute__((visibility("default"), used)) uint32_t s2a_vpad_read_pad(int index, int32_t *sticks) {
@@ -1664,7 +1681,8 @@ static NSString *lan_warning(void) {
 @property(strong) S2AMacInputGuide *inputGuide;
 @property(strong) NSMenuItem *controllerStatus;
 @property BOOL ns2ReconnectPending;
-@property BOOL ns2RelayDisconnectNoticeShown;
+@property BOOL ns2RelayWasReady;   // 本局 Switch 2 手柄（Pro / Joy-Con 2）真连上过，断开时才提示
+@property ns2_kind ns2RelayReadyKind;   // 连上时的型号（断开后读不到），横幅标题用
 @property NSRect windowedFrame;   // 进全屏前的窗口位置大小，退全屏时放回
 @end
 static __weak S2AMacDelegate *g_delegate;
@@ -1692,7 +1710,8 @@ static __weak S2AMacDelegate *g_delegate;
     ns2_status controller = s2a_mac_ns2_status();
     if (controller == NS2_STATUS_READY) {
         self.ns2ReconnectPending = YES;
-        self.ns2RelayDisconnectNoticeShown = NO;
+        self.ns2RelayWasReady = YES;
+        self.ns2RelayReadyKind = s2a_mac_ns2_kind();
     }
     const char *relay = getenv("S2A_NS2_SOCKET");
     BOOL relayMode = relay && *relay;
@@ -1700,9 +1719,11 @@ static __weak S2AMacDelegate *g_delegate;
     if (self.ns2ReconnectPending && s2a_mac_ns2_relay_due(controller, relay)) s2a_mac_ns2_connect();
     if (self.ns2ReconnectPending && (controller == NS2_STATUS_ERROR || controller == NS2_STATUS_DISCONNECTED)) {
         if (relayMode) {
-            if (!self.ns2RelayDisconnectNoticeShown) {
-                [self.banner showTitle:@"Switch 2 Pro" body:@"S2Arm 手柄连接已中断；重新连接后游戏会自动接回。" accept:nil decline:nil seconds:12];
-                self.ns2RelayDisconnectNoticeShown = YES;
+            // 只在本局真连上过 Switch 2 手柄、之后断开时提示一次（接回后复位）；
+            //   没有 / 没连 Switch 2 手柄（用别的蓝牙手柄）时通道转来的「未连接」不算断开，不提示
+            if (self.ns2RelayWasReady) {
+                [self.banner showTitle:@(s2a_mac_ns2_kind_name(self.ns2RelayReadyKind)) body:@"S2Arm 手柄连接已中断；重新连接后游戏会自动接回。" accept:nil decline:nil seconds:12];
+                self.ns2RelayWasReady = NO;
             }
             // S2Arm may be starting a fresh helper; keep trying the stable relay socket.
             s2a_mac_ns2_connect();

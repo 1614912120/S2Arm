@@ -75,7 +75,10 @@ public static class PackJobClient
 {
     public static readonly IReadOnlySet<string> Operations =
         new HashSet<string>(StringComparer.Ordinal) { "export", "ipa", "installCheck", "install", "installRemove", "installRestore", "installMode", "installUpdate", "customize",
-            "moveGame", "relinkGame", "forgetGame", "clean", "delete", "spaceFree", "devCert" };
+            "moveGame", "relinkGame", "forgetGame", "clean", "delete", "spaceFree", "devCert",
+            // 金手指页（CheatsPage：community / communitySave）与「S 级优化升级」页（sgradeScan）：0.4.0 页面上了、这里漏了，
+            //   请求在进引擎前就被下面拒掉（#1149：S 级页一进就抛、页面重绘又发，UI 线程卡死）。App 里发的每个操作名都要在这里（Protocol.Tests 扫源码核对）
+            "community", "communitySave", "sgradeScan" };
 
     /// <param name="Secrets">Environment variables for this one job process only (the developer certificate password,
     /// pack/jobs/devcert.py); never written into the request file, and main.run_request drops them from its environment first.</param>
@@ -88,7 +91,7 @@ public static class PackJobClient
         if (!Operations.Contains(request.Operation)) throw new ArgumentException("Unsupported pack operation.", nameof(request));
         // The developer certificate and the install mode belong to this computer, installUpdate to the phone (install.update_phone): no game.
         // export 的游戏在计划里（plan.items，ExportStream），信封上不带
-        var perGame = request.Operation is not ("devCert" or "installMode" or "installUpdate" or "export");
+        var perGame = request.Operation is not ("devCert" or "installMode" or "installUpdate" or "export" or "sgradeScan");
         if (perGame && string.IsNullOrWhiteSpace(request.GameId)) throw new ArgumentException("A game is required.", nameof(request));
         var payload = new Dictionary<string, object?>
         {

@@ -487,9 +487,11 @@ static void fps_link(int on) {   // on = 选中档高于 60（开高刷）；包
     const char *pin = getenv("DM_PRESENT_LINK");
     static int owned = -1; if (owned < 0) owned = !pin;   // 第一次进来时启动环境没给，才归补丁管
     if (!owned) return;
-    setenv("DM_PRESENT_LINK", on ? "2" : "1", 1);   // 图形层还没初始化：mtl_init 读环境
+    // 关高刷（选回 60 档 / 关帧率）时：补帧开着（DM_PRESENT_FI=1）就回到「不建显示链」，画面交还补帧（nvn_mtl.m mtl_init 同口径）；否则回 60 Hz 显示链
+    const char *fi = getenv("DM_PRESENT_FI"); int off = fi && !strcmp(fi, "1") ? 0 : 1;
+    setenv("DM_PRESENT_LINK", on ? "2" : off ? "1" : "0", 1);   // 图形层还没初始化：mtl_init 读环境
     int *pl = (int *)dlsym(RTLD_DEFAULT, "g_dm_present_link");   // 直连图形层（nvn_mtl.m）已初始化：直接改，下一帧 link_sync 对齐；不链直连层的构建 / 单测里没有
-    if (pl) *pl = on ? 2 : 1;
+    if (pl) *pl = on ? 2 : off;
     // 出图节拍（模拟给游戏的垂直同步，graphics/nvn/gfx/nvn/hle_nvn.c present_cfg，缺省 60 Hz）也要跟上：游戏设间隔 1 时每拍出一帧，节拍不放开，
     //   只放开显示链游戏照样只出 60 帧（11-13 维护者实机：一款游戏开 120 帧补丁仍 60 帧，日志「present tick 60 Hz」）。启动环境显式给了 DM_PRESENT_HZ 的不动
     static int hz_owned = -1; if (hz_owned < 0) hz_owned = !getenv("DM_PRESENT_HZ");
@@ -565,6 +567,25 @@ void s2a_cpatch_fps_follow(int on) {
         snprintf(g_st[j].st, sizeof g_st[j].st, "%s", lit ? "开" : "关"); if (!lit) g_st[j].eff[0] = 0; any = 1; }
     if (any) st_flush_locked();
     pthread_mutex_unlock(&g_st_lock);
+}
+// 停帧救场（11-14 维护者「补丁导致停帧时在局内自动关掉、恢复出图」）：出图停住看门（runtime/src/ap_host.c）判到「首帧后 30 秒窗口新上屏 ≤ 15 帧」时调（s2a_ap_crawl_due）。
+//   社区帧率补丁开着 → 当场关（写回原值、出图链与节拍回 60 Hz），并记成「这款下次也关」——同「崩了自动关」一套规矩，从崩溃扩到停帧
+//   （停帧不崩溃，原先玩家只看到画面不动、声音照常）。补丁里只在起局时写一次的设定（如交换间隔）关掉后这局回不来，提示里叫玩家重开。
+//   记住：iOS 由 ios/settings.m 强定义的 s2a_cpatch_persist_fps_off 写这款设置；其余平台在 S2A_DOCS 下写 cpatch_stall_off，
+//   Mac 启动器收局后读（pack/jobs/cheats.py note_stall）。→ 1 关了；0 没开着帧率补丁（不是它）或这局已救过
+__attribute__((weak)) void s2a_cpatch_persist_fps_off(void) {
+    const char *d = getenv("S2A_DOCS"); if (!d || !*d) { LOG("【黄】停帧救场：没有 S2A_DOCS，下次启动不记关"); return; }
+    char p[1024]; snprintf(p, sizeof p, "%s/cpatch_stall_off", d);
+    FILE *f = fopen(p, "w"); if (f) { fputs("fps\n", f); fclose(f); } else LOG("【红】停帧救场：标记写不了 %s", p);
+}
+int s2a_cpatch_stall_rescue(void) {
+    static atomic_int done;
+    if (g_fps_on <= 0 || g_fps_target <= 0 || atomic_exchange(&done, 1)) return 0;
+    int t = g_fps_target;
+    s2a_cpatch_fps_follow(0);
+    s2a_cpatch_persist_fps_off();
+    LOG("停帧救场：画面停住时社区帧率补丁开着（目标 %d 帧），已当场关掉、出图链与节拍回 60 Hz，这款下次启动也关（玩家可在设置里再开）", t);
+    return 1;
 }
 // 玩家切档（设置页 / 局内菜单）：记下选的档；已在跟随（帧率补丁开着）就当场重选并切换，下一帧生效
 void s2a_cpatch_fps_pick(int target) {

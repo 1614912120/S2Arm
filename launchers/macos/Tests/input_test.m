@@ -55,6 +55,13 @@ static NSEvent *key_event(NSEventType type, unsigned short code, BOOL repeat) {
 }
 static BOOL physical_keys[128];
 static void poll_stale(void) { for (int n = 0; n < KEY_UP_POLLS; n++) release_stale_keys(); sample_input(); }   // 采样连续报松开满 KEY_UP_POLLS 次才删键
+// 排空主队列（NS2 输入事件化验证）：主队列块由主线程 runloop 跑，尾部再排一个标记块，标记跑到 = 之前入队的全跑完
+static void drain_main_queue(void) {
+    __block int drained = 0;
+    dispatch_async(dispatch_get_main_queue(), ^{ drained = 1; });
+    for (int i = 0; i < 200 && !drained; i++) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, true);
+    expect(drained, "main queue drains on the main runloop");
+}
 static bool key_state(CGEventSourceStateID state, CGKeyCode code) {
     expect(state == kCGEventSourceStateCombinedSessionState, "query current login session");
     return code < 128 && physical_keys[code];
@@ -491,19 +498,45 @@ static void test_capture_key_order(void) {
 }
 
 // 审计 P2-63：多个控制器时取最近有输入的扩展手柄；没有扩展手柄档的（遥控器等）跳过。假对象只答 active_pad 用到的两个方法
+@class FakeController;
 @interface FakePad : NSObject
 @property double lastEventTimestamp;
 @property(copy) void (^valueChangedHandler)(GCExtendedGamepad *, GCControllerElement *);
+@property(weak) FakeController *controller;
 @end
 @implementation FakePad
 @end
 @interface FakeController : NSObject
 @property(strong) FakePad *extendedGamepad;
 @property(strong) dispatch_queue_t handlerQueue;
+@property(strong) id motion;
 @end
 @implementation FakeController
 @end
-static FakeController *fake_controller(FakePad *pad) { FakeController *c = [FakeController new]; c.extendedGamepad = pad; return c; }
+static FakeController *fake_controller(FakePad *pad) { FakeController *c = [FakeController new]; c.extendedGamepad = pad; pad.controller = c; return c; }
+@interface FakeProSensor : NSObject
+@property BOOL sensorsRequireManualActivation, hasRotationRate, hasGravityAndUserAcceleration, sensorsActive;
+@end
+@implementation FakeProSensor
+@end
+static void test_pro_sensor_control(void) {
+    FakePad *pad = [FakePad new]; FakeController *c = fake_controller(pad);
+    FakeProSensor *m = [FakeProSensor new]; m.sensorsRequireManualActivation = YES; m.hasRotationRate = YES; c.motion = m;
+    atomic_store(&g_motion_wanted, 1);
+    sample_motion((GCExtendedGamepad *)pad);
+    expect(m.sensorsActive, "Pro public sensor control is requested even without separated gravity / usable calibrated samples");
+    expect(!g_motion_known, "uncalibrated Pro data still uses the existing raw sample path, not fabricated GC values");
+    atomic_store(&g_motion_wanted, 0); sample_motion(nil);
+    expect(!m.sensorsActive, "motion disable releases public Pro sensor request");
+    sample_motion(nil);
+    GCController *old = pad_owner[1]; pad_owner[1] = (GCController *)c;
+    atomic_store(&g_motion_wanted, 1); sample_slot_motion(NULL);
+    expect(m.sensorsActive && !g_slot_motion_known[1], "P2 sensor control also stays independent of calibrated sample availability");
+    atomic_store(&g_motion_wanted, 0); sample_slot_motion(NULL);
+    expect(!m.sensorsActive, "P2 motion disable releases its public request");
+    pad_owner[1] = old;
+    puts("Mac Pro motion: public activation independent of calibrated sample capability passed");
+}
 static void test_active_pad(void) {
     FakePad *old = [FakePad new], *recent = [FakePad new]; old.lastEventTimestamp = 10; recent.lastEventTimestamp = 20;
     NSArray *list = @[fake_controller(nil), fake_controller(old), fake_controller(recent)];
@@ -1097,6 +1130,9 @@ int main(int argc, const char **argv) {
     expect(s2a_hid_pad_hat_bits(0, 0, 7) == (1u << 13) && s2a_hid_pad_hat_bits(3, 0, 7) == ((1u << 15) | (1u << 14)) &&
            s2a_hid_pad_hat_bits(8, 0, 7) == 0 && s2a_hid_pad_hat_bits(1, 1, 8) == (1u << 13), "HID pad hat switch to d-pad bits");
     // 轴：0..65535 中点约 0；Y 反向（HID 向下为正）
+    // 接不接（#934 11-15）：名字带 Pro Controller 就接，任天堂原厂 0x057e 也接（macOS 27 上原厂一代 Pro 手柄系统认不出）；别的手柄名不接
+    expect(s2a_hid_pad_wants("Pro Controller", 0x057e) && s2a_hid_pad_wants("PowerA Wireless Pro Controller", 0) &&
+           !s2a_hid_pad_wants("Xbox Wireless Controller", 0x045e) && !s2a_hid_pad_wants(NULL, 0), "HID pad fallback takes Pro Controllers, Nintendo's own too");
     expect(s2a_hid_pad_axis(0, 0, 65535, 0) == -32767 && s2a_hid_pad_axis(65535, 0, 65535, 0) == 32767 &&
            s2a_hid_pad_axis(0, 0, 65535, 1) == 32767 && abs(s2a_hid_pad_axis(32768, 0, 65535, 0)) <= 1, "HID pad axis normalisation");
     char relayPath[96];
@@ -1129,7 +1165,13 @@ int main(int argc, const char **argv) {
     s2a_pad_motion ns2Motion = {0};
     for (int attempt = 0; attempt < 100 && !s2a_pad_read_motion(&ns2Motion); attempt++) usleep(1000);
     expect(ns2Motion.host_timestamp_us == 1234 && ns2Motion.gyro_x == 90 && ns2Motion.acceleration_z == 1,
-           "Switch 2 Pro motion reaches shared Mac six-axis entry");
+            "Switch 2 Pro motion reaches shared Mac six-axis entry");
+    {
+        FakePad *p=[FakePad new]; FakeController *c=fake_controller(p);
+        FakeProSensor *m=[FakeProSensor new]; m.sensorsRequireManualActivation=YES; m.hasRotationRate=YES; c.motion=m;
+        sample_motion((GCExtendedGamepad *)p);
+        expect(!m.sensorsActive,"NS2 lead transport does not activate an unrelated system motion source");
+    }
     // #520 A：游戏不用单只样式（扮 Pro）时，单只右 Joy-Con 的六轴在游戏端转成横握视角：(ax, az) → (−az, ax)、(gx, gz) → (−gz, gx)
     s2a_mac_ns2_set_game_style(1 << 0);
     expect(s2a_pad_read_motion(&ns2Motion) && ns2Motion.gyro_x == 0 && ns2Motion.gyro_z == 90 && ns2Motion.acceleration_x == -1 && ns2Motion.acceleration_z == 0,
@@ -1251,6 +1293,21 @@ int main(int argc, const char **argv) {
     sample_input();
     expect(!s2a_mac_ns2_player_present(1) && s2a_mac_ns2_player_present(0) && s2a_vpad_pad_count() == 1, "player 2 leaves: back to one slot");
     s2a_mac_ns2_set_game_style(1 << 4);
+    // Switch 2 Pro 输入事件化（11-12 延迟管线调研）：通道读线程对变化踢主队列采样（s2a_mac_ns2_input_changed → front_mac.m），
+    //   不再等 120Hz 定时器拉取。这里全程没有定时器在跑：排空主队列后，槽位也应已被采样
+    config = default_config(); keys = [NSMutableSet set]; mouse = [NSMutableSet set]; focused = YES;
+    ns2_relay_packet buttonPacket = motionPacket;
+    buttonPacket.state = (ns2_state){.buttons = 1, .lx = -32767};   // 实体 A + 左摇杆满左
+    expect(send(relayClient, &buttonPacket, sizeof buttonPacket, 0) == sizeof buttonPacket, "relay button packet sent");
+    uint32_t padButtons = 0; memset(padSticks, 0, sizeof padSticks);
+    for (int attempt = 0; attempt < 100; attempt++) {
+        drain_main_queue();   // 通道线程已入队的踢在这跑：没有定时器在跑，槽位也应已被采样
+        padButtons = s2a_vpad_read_pad(0, padSticks);
+        if (padButtons == 1 && padSticks[0] == -32767) break;
+        usleep(1000);   // 通道线程还没读到这一包：下一轮再试
+    }
+    expect(padButtons == 1 && padSticks[0] == -32767, "NS2 button/stick change reaches the pad slot via the main-queue kick, without polling");
+    focused = NO;   // 还原：后面的键鼠用例自带 focused / config 初始化
     // 旧版启动器（通道 v1）：游戏端断开、不猜字段，型号回到 NONE
     ns2_relay_packet oldPacket = motionPacket; oldPacket.version = 1;
     expect(send(relayClient, &oldPacket, sizeof oldPacket, 0) == sizeof oldPacket, "relay v1 packet sent");
@@ -1263,6 +1320,8 @@ int main(int argc, const char **argv) {
     close(relayListener);
     unlink(relayPath);
     unsetenv("S2A_NS2_SOCKET");
+    // 通道断开也会踢一次主队列采样（#771）：在这里排空，别让它留到后面的用例里按失焦发布全零
+    for (int i = 0; i < 5; i++) { usleep(5000); drain_main_queue(); }
     @autoreleasepool {
         if (argc == 2 && !strcmp(argv[1], "--input-config-only")) { test_shared_input_config(); return 0; }
         if (argc == 2 && !strcmp(argv[1], "--pad-latency-probe")) { pad_latency_probe(); return 0; }
@@ -1287,6 +1346,7 @@ int main(int argc, const char **argv) {
         if (argc == 2 && !strcmp(argv[1], "--guide-preview")) { guide_preview = YES; s2a_front_run(NULL); return 0; }
         test_shared_input_config();
         test_active_pad();
+        test_pro_sensor_control();
         test_pad_slots();
         // 同一个真实前端实现：通用 attach 先发布层，detach 先通知再清层；
         // 直连只发布/清层，不通知尚未初始化且不应初始化的通用 NxGal。

@@ -33,6 +33,9 @@ import S2ArmShellBridge
     }
     let json = #"{"schema":1,"games":[{"title_id":"0100000000010000","name":"A"},{"title_id":"0100000000020000","name":"B"},{"title_id":"0100000000030000","name":"C"}]}"#
     #expect(Catalogue.parse(Data(json.utf8), baseDirectory: base).tiles.map(\.sgrade) == [true, false, false])
+    // 只带随包金手指原文（补丁表只有表头）：也算打进了（11-14，同 Mac）
+    try "[x]\n04000000 0 1\n".write(to: base.appendingPathComponent("Games/0100000000020000/cheat-src.AABBCCDD00112233.txt"), atomically: true, encoding: .utf8)
+    #expect(Catalogue.parse(Data(json.utf8), baseDirectory: base).tiles.map(\.sgrade) == [true, true, false])
     try "编号\nfps:x\n".write(to: base.appendingPathComponent("cpatch.tsv"), atomically: true, encoding: .utf8)
     #expect(Catalogue.parse(Data(#"{"schema":1,"games":[{"title_id":"0100000000030000","name":"C"}]}"#.utf8), baseDirectory: base).tiles.map(\.sgrade) == [true])
 }
