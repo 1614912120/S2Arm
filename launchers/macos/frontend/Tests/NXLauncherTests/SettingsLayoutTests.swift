@@ -11,6 +11,77 @@ import S2ArmAppleAdapter
 
 /// Real SwiftUI pages with original, asset-free job responses; never reads the player's library.
 @MainActor final class SettingsLayoutTests: XCTestCase {
+    func testExportLocationSurvivesReopeningAndRestartingWithAnUnchangedList() async throws {
+        for language in [Lang.zh, .en] {
+            let fixture = try SettingsFixture()
+            defer { fixture.remove() }
+            let first = "/original/storage-default"
+            let chosen = "/original/storage-selected"
+            fixture.runner.storageResponse = ["locations": [
+                ["id": "default", "path": first, "default": true, "connected": true, "freeBytes": 1000000],
+                ["id": "selected", "path": chosen, "connected": true, "freeBytes": 2000000]
+            ], "last": "default"]
+            fixture.model.loadLocations()
+            for _ in 0..<100 where fixture.model.locations.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertEqual(fixture.model.locations.count, 2)
+            let game = GameSummary(id: "fixture", name: "Original location fixture",
+                location: GameLocation(catalog: ["state": "ok", "path": first]))
+            for stage in 0..<4 {
+                let model = stage < 2 ? fixture.model : S2ArmLauncherModel(client: fixture.model.provider.client)
+                if stage >= 2 {
+                    if stage == 3 { fixture.runner.storageResponse = ["locations": [], "last": ""] }
+                    model.loadLocations()
+                    try await Task.sleep(for: .milliseconds(100))
+                }
+                let dropdown = LauncherDropdownState()
+                let padFocus = PadFocus()
+                let page = AnyView(ExportView(model: model, covers: CoverCache(), game: game, install: {})
+                    .environmentObject(padFocus).padScope("main", padFocus)
+                    .environment(\.launcherDropdownHost, dropdown)
+                    .background(LauncherWindowMaterial()).foregroundStyle(LauncherTheme.Colors.text).preferredColorScheme(.dark)
+                    .frame(width: 1120, height: 900))
+                let (host, window) = try await render(page, fixture: fixture, language: language)
+                fixture.navigation.source.controllers = { [] }
+                fixture.navigation.attach(window)
+                defer { fixture.navigation.detach(); window.close() }
+                fixture.navigation.focus("export.location"); fixture.navigation.handle(.confirm)
+                try await Task.sleep(for: .milliseconds(80))
+                let request = try XCTUnwrap(dropdown.request)
+                let expected = stage == 0 ? first : chosen
+                print("export-location \(language.code)/stage-\(stage): \(request.selection)")
+                XCTAssertEqual(request.selection, expected, "缓存列表不变、重开页面及重启模型后都应显示已选位置")
+                XCTAssertTrue(request.options.contains { $0.value == expected }, "已选但尚未登记的文件夹也应有可见名称")
+                if stage == 0 { request.choose(chosen) }
+                dropdown.close()
+                if stage == 1 { try snapshot(host, "export-location-remembered-" + language.code) }
+            }
+            XCTAssertFalse(fixture.runner.requests.contains { $0["operation"] as? String == "exportPlan" }, "只选位置不能开始出包或搬游戏")
+        }
+    }
+
+    func testTitlebarActionsAlignWithTheHomeControls() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        fixture.model.gamepad.source.controllers = { [] }
+        for language in [Lang.zh, .en] {
+            for width: CGFloat in [800, 1120, 1440] {
+                let page = AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture").frame(width: width, height: 630))
+                let (host, window) = try await render(page, fixture: fixture, language: language)
+                defer { window.close() }
+                let targets = fixture.model.gamepad.controlTargets(in: window)
+                let report = try XCTUnwrap(targets.first { $0.id == "top.report" })
+                let refresh = try XCTUnwrap(targets.first { $0.id == "home.refresh" })
+                let bounds = window.convertToScreen(host.bounds)
+                print("titlebar-right-edge \(language.code)/\(width): report=\(bounds.maxX - report.frame.maxX), home=\(bounds.maxX - refresh.frame.maxX)")
+                XCTAssertEqual(report.frame.maxX, refresh.frame.maxX, accuracy: 0.5, "报修按钮应与游戏库控件共用右边缘")
+                XCTAssertEqual(bounds.maxX - report.frame.maxX, 48, accuracy: 0.5)
+                try snapshot(host, "titlebar-alignment-\(language.code)-\(Int(width))")
+            }
+        }
+    }
+
     func testHomeSearchDismissesOutsideClicksAndFocusLossWithoutClearingTheQuery() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
@@ -667,6 +738,11 @@ private final class SettingsRunner: JobProcessRunner {
     private var captured: [[String: Any]] = []
     private var gameCount = 1
     private var needsPreparation = false
+    private var storage: [String: Any] = [:]
+    var storageResponse: [String: Any] {
+        get { lock.withLock { storage } }
+        set { lock.withLock { storage = newValue } }
+    }
     var catalogNeedsPreparation: Bool {
         get { lock.withLock { needsPreparation } }
         set { lock.withLock { needsPreparation = newValue } }
@@ -681,6 +757,7 @@ private final class SettingsRunner: JobProcessRunner {
         let request = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: arguments.last!))) as! [String: Any]
         lock.withLock { captured.append(request) }
         var result: [String: Any] = [:]
+        if request["operation"] as? String == "locations" { result = storageResponse }
         if request["operation"] as? String == "catalog" {
             let copy: [String: Any] = [
                 "zh": ["title": "选择运行方案", "body": "以下为原创布局说明，用于验证长内容滚动", "points": (1...24).map { "原创说明第 \($0) 项：此处展示较长的方案说明，以检查窗口与底部操作的边界" },

@@ -48,7 +48,7 @@ class ReportButton(unittest.TestCase):
 
     def test_top_bar_last_button(self):   # ④
         mac = read(MAC / "LauncherView.swift")
-        top = mac[mac.index("private var topActions"):]; top = top[:top.index(".padding(.trailing, 8)")]
+        top = mac[mac.index("private var topActions"):]; top = top[:top.index(".fixedSize()")]
         last = top[top.rindex("Button {"):]
         self.assertIn('accessibilityIdentifier("top.report")', last); self.assertIn('"report.button"', last)
         win = read(WIN / "App/EnvironmentWindow.cs")

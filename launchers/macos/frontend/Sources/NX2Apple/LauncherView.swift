@@ -257,7 +257,7 @@ struct LauncherView: View {
                 .controllerButtonStyle(ConsoleIconButtonStyle()).help(txt("report.button"))
                 .controllerID("top.report").accessibilityIdentifier("top.report")
         }
-        .padding(.trailing, 8)
+        .padding(.trailing, LauncherTheme.Metrics.libraryInset)
         .fixedSize()   // 放在标题栏里没有宽度约束，不固定的话按钮文字会被压成省略号
         .labelStyle(.titleAndIcon)   // Popovers keep their text; icon styles are local to each toolbar button.
         .tint(LauncherPalette.cream)

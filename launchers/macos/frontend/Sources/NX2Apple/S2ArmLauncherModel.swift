@@ -1202,7 +1202,7 @@ public final class S2ArmLauncherModel: ObservableObject {
             guard let self else { return }
             do {
                 let r = try await self.provider.locations(probe: probe); self.readOK("s2arm.fail.locations")
-                self.locations = r.rows; self.lastLocation = r.last
+                self.lastLocation = r.last; self.locations = r.rows
                 if let probe, let slack = r.probeSlack { self.probedSlack[probe] = slack }
             } catch { self.reportFailure("s2arm.fail.locations", error, passive: true) }   // 读不到就保留上次的列表
         }
@@ -1225,10 +1225,15 @@ public final class S2ArmLauncherModel: ObservableObject {
         return BackendText.launcherText("export.location.slack_format", language: language)
     }
 
-    /// 出包页「存放位置」缺省选哪个：这款现在的位置 → 上次用的位置 → 默认位置。
+    /// 优先恢复上次手动选择；还没选过时沿用这款现在的位置、后端上次用的位置、默认位置。
     func defaultLocation(for game: GameSummary) -> String {
+        if let saved = provider.settings.exportLocation, !saved.isEmpty { return saved }
         if game.location.state == "ok" || game.location.state == "offline", !game.location.path.isEmpty { return game.location.path }
         return locations.first(where: { $0.id == lastLocation && $0.connected })?.path ?? locations.first(where: \.isDefault)?.path ?? ""
+    }
+
+    func rememberExportLocation(_ path: String) {
+        do { try provider.settings.setExportLocation(path) } catch { choiceError = error.localizedDescription }
     }
 
     /// 移动到其他位置（整个文件夹，存档跟着走）。

@@ -15,10 +15,8 @@ struct ExportView: View {
     @ObservedObject var covers: CoverCache
     @State private var renaming = false
     @State private var renameText = ""
-    /// 存放位置（游戏库结构 v3）：选中的文件夹路径；空 = 还没定（出现时按这款现在的 / 上次用的位置填）
+    /// 当前页面的选择；打开时恢复上次手动选择，没有时由模型选缺省位置。
     @State private var location = ""
-    /// 「选择其他文件夹…」选过、还不在位置表里的
-    @State private var pickedLocation: String?
     /// S 级优化卡片报了「这款什么都没有」的游戏号（整张卡不出）
     @State private var sgradeNothing: String?
     let game: GameSummary
@@ -158,8 +156,8 @@ struct ExportView: View {
             return (l.path, l.connected ? x("location.free").replacingOccurrences(of: "{0}", with: name).replacingOccurrences(of: "{1}", with: free ?? "?")
                                         : x("location.offline").replacingOccurrences(of: "{0}", with: name))
         }
-        if let picked = pickedLocation, !options.contains(where: { $0.value == picked }) {
-            options.append((picked, (picked as NSString).abbreviatingWithTildeInPath))
+        if !location.isEmpty, !options.contains(where: { $0.value == location }) {
+            options.append((location, (location as NSString).abbreviatingWithTildeInPath))
         }
         options.append((Self.otherFolder, x("location.other")))
         return VStack(alignment: .leading, spacing: 8) {
@@ -168,9 +166,9 @@ struct ExportView: View {
                 Text(x("location.title")).font(.manrope(13)).foregroundStyle(.secondary)
                 Spacer(minLength: 12)
                 LauncherDropdown(options: options, selection: location, label: x("location.title")) { value in
-                    if value == Self.otherFolder { chooseLocation() } else { location = value }
+                    if value == Self.otherFolder { chooseLocation() } else { selectLocation(value) }
                 }
-                .accessibilityIdentifier("export.location")
+                .controllerID("export.location")
             }
             if let slack = model.locationSlackText(location, language: loc.lang == .zh ? "zh-Hans" : "en") {   // #444：大分配单元 / 不是 APFS
                 Label(slack, systemImage: "exclamationmark.triangle").font(.manrope(12)).foregroundStyle(LauncherPalette.building)
@@ -180,17 +178,27 @@ struct ExportView: View {
         .padding(.horizontal, 14).padding(.vertical, 12)
         .background(LauncherPalette.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
         .padding(.top, 4)
-        .onAppear { model.loadLocations() }
+        .onAppear {
+            if location.isEmpty { location = model.defaultLocation(for: game) }
+            model.loadLocations()
+        }
         .onChange(of: model.locations) { _ in if location.isEmpty { location = model.defaultLocation(for: game) } }
+        .onChange(of: model.lastLocation) { _ in if location.isEmpty { location = model.defaultLocation(for: game) } }
     }
 
     private static let otherFolder = "__other__"
+
+    private func selectLocation(_ path: String) {
+        location = path
+        model.rememberExportLocation(path)
+    }
 
     private func chooseLocation() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
         panel.prompt = x("location.choose")
-        if panel.runModal() == .OK, let url = panel.url { pickedLocation = url.path; location = url.path; model.loadLocations(probe: url.path) }
+        if !location.isEmpty { panel.directoryURL = URL(fileURLWithPath: location, isDirectory: true) }
+        if panel.runModal() == .OK, let url = panel.url { selectLocation(url.path); model.loadLocations(probe: url.path) }
     }
 
 

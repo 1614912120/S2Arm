@@ -34,7 +34,7 @@ public struct LaunchSettingRow: Codable, Identifiable, Equatable {
     public var id: String { env }
 }
 
-/// 本适配层自己记的前端选择（<数据目录>/apple-frontend/launch-settings.json）：现在只有出包页的平台勾选。
+/// 本适配层自己记的前端选择（<数据目录>/apple-frontend/launch-settings.json）：出包平台、存放位置及前端设置。
 /// 这里没有每款的游戏选项：游戏语言、主机模式、帧率、满屏等逐款选项都在启动设置（LaunchSettingsSheet，共享定义表 + 作业层 community 存 launch.json；
 /// 游戏语言 11-14 维护者确认玩家可选，推翻 11-07「不给玩家选」）。旧文件里的 games（语言 / 底座）读时丢掉。
 public final class SettingsProvider {
@@ -44,6 +44,8 @@ public final class SettingsProvider {
     private let lock = NSLock()
     /// 出包页记住的平台勾选（同一个文件的 exportTargets；没存过为 nil，读旧启动器 preferences.exportTargets）。
     private var targets: [String]?
+    /// 出包页最后一次手动选择的文件夹；尚未出包、尚未登记的位置也要记住。
+    private var location: String?
     /// 「允许 AI 操作 S2Arm」（本机控制口，见 ControlPort）：缺省关；--control / S2ARM_CONTROL=1 启动时强制开、不写这里。
     private var ai: Bool
     /// iCloud 存档同步的云盘文件夹（玩家在环境页选的；iPhone 上选同一个）。没选 = 不同步
@@ -53,6 +55,7 @@ public final class SettingsProvider {
         self.client = client
         self.store = store ?? client.environment.privateRoot.appendingPathComponent("apple-frontend/launch-settings.json")
         targets = Self.read(self.store)
+        location = Self.object(self.store)?["exportLocation"] as? String
         ai = Self.object(self.store)?["aiControl"] as? Bool ?? false
         cloud = Self.object(self.store)?["cloudSavesFolder"] as? String
     }
@@ -93,11 +96,19 @@ public final class SettingsProvider {
         do { try write() } catch { lock.withLock { targets = before }; throw JobClientError("出包平台的勾选没能写进磁盘（\(error.localizedDescription)）。") }
     }
 
+    public var exportLocation: String? { lock.withLock { location } }
+
+    public func setExportLocation(_ path: String) throws {
+        let before = lock.withLock { () -> String? in let b = location; location = path; return b }
+        do { try write() } catch { lock.withLock { location = before }; throw JobClientError("出包存放位置没能写进磁盘（\(error.localizedDescription)）。") }
+    }
+
     private func write() throws {
         let dir = store.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         var file: [String: Any] = ["schema": 1]
         if let saved = lock.withLock({ targets }) { file["exportTargets"] = saved }
+        if let saved = lock.withLock({ location }) { file["exportLocation"] = saved }
         if lock.withLock({ ai }) { file["aiControl"] = true }
         if let folder = lock.withLock({ cloud }) { file["cloudSavesFolder"] = folder }
         let data = try JSONSerialization.data(withJSONObject: file, options: [.sortedKeys])
