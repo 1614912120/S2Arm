@@ -471,8 +471,71 @@ static class LibPack
     //   dsh_batch --libpack pack <输入目录> <输出目录> <链号> [<Vulkan 侧指纹>]：只打容器（PackFiles，不核两侧齐全、不核 -sdk、不出 ps_inputs / keys.tsv）：输入目录里的文件全部交给 PackFiles；
     //     给了指纹 = Vulkan 库（#783，t_lib_pack_vk.py）
     //     （认不出的按键文件照样报红），lib.NNN.pak + lib.idx 写进输出目录（不在就建）；汇总行进标准输出，报红进标准错误、退出 1。单测造容器用（t_lib_pack.py、graphics/nvn/tests/t_nvn_red.m）
+    // ---------------- 覆盖层（S 级升级给老包补可读瓦片版，宿主 lib_pack.inc lp_pick 读 <库目录>/bf/）----------------
+    /// <summary>读一份容器（lib.idx + lib.NNN.pak）：(键, 种类) → 段字节（按需读）</summary>
+    sealed class Packed
+    {
+        public readonly string Dir, Chain; readonly long[] ssize; public readonly Dictionary<(ulong Key, int K), (int S, ulong Off, uint Len)> Rec = new();
+        public Packed(string dir)
+        {
+            Dir = dir; var b = File.ReadAllBytes(Path.Combine(dir, "lib.idx"));
+            if (b.Length < 48 || Encoding.ASCII.GetString(b, 0, 6) != "S2ALIB" || BitConverter.ToUInt32(b, 8) != 1) throw new InvalidDataException($"{dir}/lib.idx 不是 S2ALIB 第 1 版");
+            uint n = BitConverter.ToUInt32(b, 12), ns = BitConverter.ToUInt32(b, 16);
+            if (b.Length != 48 + 16 * (long)ns + 24 * (long)n) throw new InvalidDataException($"{dir}/lib.idx 长度与记录数不符");
+            Chain = Encoding.ASCII.GetString(b, 24, 12).TrimEnd('\0');
+            ssize = new long[ns]; for (int i = 0; i < ns; i++) ssize[i] = (long)BitConverter.ToUInt64(b, 48 + 16 * i);
+            for (int i = 0, at = 48 + 16 * (int)ns; i < n; i++, at += 24) Rec[(BitConverter.ToUInt64(b, at), b[at + 8])] = (b[at + 9], BitConverter.ToUInt64(b, at + 16), BitConverter.ToUInt32(b, at + 12));
+        }
+        public byte[] Get(ulong key, int k)
+        {
+            if (!Rec.TryGetValue((key, k), out var r)) return null;
+            using var f = File.OpenRead(Path.Combine(Dir, $"lib.{r.S:D3}.pak")); f.Seek((long)r.Off, SeekOrigin.Begin);
+            var o = new byte[r.Len]; f.ReadExactly(o); return o;
+        }
+    }
+    /// <summary>反射去掉 fetch 后的规范文本（比较用）；解不了 → null</summary>
+    static string WithoutFetch(byte[] json)
+    {
+        try { var n = System.Text.Json.Nodes.JsonNode.Parse(json) as System.Text.Json.Nodes.JsonObject; if (n == null) return null; n.Remove("fetch"); return n.ToJsonString(); }
+        catch (JsonException) { return null; }
+    }
+    /// <summary>
+    /// 覆盖层：old = 玩家现有的主容器，fresh = 同一款用当前翻译器整份重出的容器（临时，不推）。只收「old 没有可读瓦片版、fresh 有」的键：
+    ///   它的 &lt;键&gt;_bf.metallib 与 fresh 的 &lt;键&gt;_b.json（带 fetch）进 outDir。条件：fresh 的反射去掉 fetch 后与 old 逐字相同——
+    ///   别的字段变了（批库名 fn_lib / 入口前缀等），覆盖层的 json 配不上主容器里的旧库，这个键不收（照旧整张快照，宁可不快不出错）。
+    ///   → (红行, 汇总行, 收的键数, 跳过的键数)
+    /// </summary>
+    public static (List<string> Bad, string Line, int Added, int Skipped) Overlay(string oldDir, string freshDir, string outDir)
+    {
+        var o = new Packed(oldDir); var f = new Packed(freshDir);
+        if (o.Chain != f.Chain) return (new() { $"两份容器链版本不同（{o.Chain} / {f.Chain}）：覆盖层只能补同链的库，要整款重新出包" }, "", 0, 0);
+        var files = new Dictionary<string, byte[]>(); int added = 0, skipped = 0;
+        foreach (var ((key, k), _) in f.Rec)
+        {
+            if (k != 2 || o.Rec.ContainsKey((key, 2))) continue;   // 只补 old 没有的 _bf
+            byte[] fj = f.Get(key, 1), oj = o.Get(key, 1);
+            string a = fj == null ? null : WithoutFetch(fj), b = oj == null ? null : WithoutFetch(oj);
+            if (a == null || b == null || a != b) { skipped++; continue; }
+            files[$"{key:x16}_bf.metallib"] = f.Get(key, 2); files[$"{key:x16}_b.json"] = fj; added++;
+        }
+        if (added == 0) return (new(), $"[直连库] 覆盖层：没有要补的可读瓦片版（跳过 {skipped} 个反射别处也变了的键）", 0, skipped);
+        Directory.CreateDirectory(outDir);
+        var (bad, line) = PackFiles(files.Keys, n => files.TryGetValue(n, out var v) ? v : null, outDir, f.Chain);
+        long bytes = files.Values.Sum(v => (long)v.Length);
+        return (bad, $"[直连库] 覆盖层：补 {added} 个键的可读瓦片版（{bytes / 1048576.0:F1} MB）；跳过 {skipped} 个反射别处也变了的键。{line}", added, skipped);
+    }
+
     public static int Cli(string[] argv)
     {
+        if (argv.Length == 4 && argv[0] == "overlay")   // dsh_batch --libpack overlay <现有容器目录> <重出容器目录> <覆盖层输出目录>
+        {
+            List<string> ob; string ol;
+            try { (ob, ol, _, _) = Overlay(argv[1], argv[2], argv[3]); }
+            catch (Exception x) when (x is IOException || x is InvalidDataException || x is UnauthorizedAccessException) { ob = new() { x.Message }; ol = ""; }
+            if (ob.Count > 0) { var pe = Console.OpenStandardError(); var pbs = Utf8Out.GetBytes(string.Join("\n", ob.Select(b => $"[RED] {b}")) + "\n"); pe.Write(pbs); pe.Flush(); return 1; }
+            var so2 = Console.OpenStandardOutput(); var sb2 = Utf8Out.GetBytes(ol + "\n"); so2.Write(sb2); so2.Flush();
+            return 0;
+        }
         if ((argv.Length == 4 || argv.Length == 5) && argv[0] == "pack")
         {
             var names = Directory.EnumerateFiles(argv[1]).Select(Path.GetFileName).ToList();
