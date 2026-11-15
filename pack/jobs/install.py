@@ -1192,10 +1192,12 @@ def export_phone(c, gid=None):
     if gid:
         if not img_pack(ios_pack(c, gid)):
             raise Failure("这款的 iPhone 包是旧格式，导出不了这款的 .img 文件：请重新「打 iPhone 包」后再导出。", code="pack_missing")
-    names = {g["id"].upper(): g.get("name") or g["id"] for g in c.catalog()["games"]}
+    games_all = c.catalog()["games"]
+    names = {g["id"].upper(): g.get("name") or g["id"] for g in games_all}
+    hidden = {g["id"].upper() for g in games_all if g.get("hidden")}   # 从游戏库删掉的（library.remove 只置 hidden）：不再导出（#1132：删了照样被带上）
     others, skipped = [], []
     for g in sorted(names):
-        if g == gid:
+        if g == gid or g in hidden:
             continue
         pack = layout.ios_pack(c, g)
         if not (layout.ios_kit(c, g) / "main.npdm").is_file() or not (pack / "manifest.json").is_file():
@@ -1204,6 +1206,19 @@ def export_phone(c, gid=None):
             skipped.append(names[g])
             continue
         others.append(g)
+    # 地址空间类型（#1132）：一个 App 里各款要同一类型（pack/ship_ext.py container 组装期拒、宿主 vawin.c 同判据）。导出把游戏库里能带的都带上，
+    #   原先只要库里有一款类型不同，点哪款导出都报「放不进同一个 App」、删光手机上的游戏也没用。现在按这次点的那款（没点 = 款数最多的那类）分组，
+    #   类型不同的这次不带、点名说明
+    kinds = {g: packer.kit_astype(c, g) for g in ([gid] if gid else []) + others}
+    if gid:
+        want = kinds[gid]
+    else:
+        counts = {}
+        for g in others:
+            counts[kinds[g]] = counts.get(kinds[g], 0) + 1
+        want = max(counts, key=lambda k: (counts[k], -min(i for i, g in enumerate(others) if kinds[g] == k))) if counts else None
+    apart = [g for g in others if kinds[g] != want] if want is not None else []   # 读不到这款类型：不分组，交组装期按真实原因报
+    others = [g for g in others if g not in apart]
     if not gid and not others:
         raise Failure("游戏库里还没有能导出的 iPhone 版：先给游戏「打 iPhone 包」。", code="job_failed")
     from rewrite_refresh import refresh_ios
@@ -1243,8 +1258,11 @@ def export_phone(c, gid=None):
     size = sum(p.stat().st_size for p in dest.iterdir() if p.is_file())
     if skipped:
         c.diagnostic("这几款没放进这次导出（要按新版重新「打 iPhone 包」）：" + "、".join(skipped), code="container_stale", severity="warning")
+    if apart:
+        c.diagnostic("这几款和这次导出的游戏地址空间类型不同，放不进同一个 App，这次没带：" + "、".join(names[g] for g in apart)
+                     + "（要玩它们就单独点它们导出，导出的 S2Arm 会换成只含同一类的游戏）", code="container_incompatible", severity="warning")
     return dict(exported=True, outputPath=str(dest), ipa=str(dest / "S2Arm.ipa"), readme=str(dest / readme), sgrade=patches_results(c),
-                games=[x["gameId"] for x in listed], files=listed, skipped=skipped, exportBytes=size)
+                games=[x["gameId"] for x in listed], files=listed, skipped=skipped + [names[g] for g in apart], exportBytes=size)
 
 
 def readiness(c):
