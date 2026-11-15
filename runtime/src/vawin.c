@@ -940,7 +940,7 @@ typedef struct { uint64_t a, n; } tl_seg;
 static pthread_mutex_t g_tl_mu = PTHREAD_MUTEX_INITIALIZER;
 static tl_seg g_tl_free[TL_MAXSEG]; static int g_tl_nfree;
 static uint64_t g_tl_base, g_tl_size, g_tl_used, g_tl_peak, g_tl_segfull;
-static struct { uint64_t live, peak, n, fb_n, fb_bytes; } g_tl_u[S2A_TAIL_NUSER];
+static struct { uint64_t live, peak, n, fb_n, fb_bytes, fb_live, fb_peak; } g_tl_u[S2A_TAIL_NUSER];   // fb_live / fb_peak：退回低区的那部分此刻在用 / 峰值（#0d51a7）
 static const char *const g_tl_uname[S2A_TAIL_NUSER] = {"Metal 缓冲", "Ryujinx 内存块", "线程栈", "信号备用栈", "写跟踪页表", "托管大块暂存"};
 static int tail_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("S2A_TAIL"); v = !(e && *e == '0'); } return v; }
 static int tl_map(uint64_t a, uint64_t n, int prot, int user) {   // user < 0 = 还回（PROT_NONE、不打标签）
@@ -970,13 +970,20 @@ void *s2a_tail_map(uint64_t len, int user, int prot) {
     if (!r) { g_tl_u[user].fb_n++; g_tl_u[user].fb_bytes += n; }
     pthread_mutex_unlock(&g_tl_mu);
     if (r || only) return r;
-    void *p = mmap(NULL, len, prot, MAP_PRIVATE | MAP_ANON, -1, 0);   // 退回：普通匿名映射（落低区）
-    return p == MAP_FAILED ? NULL : p;
+    // 退回：普通匿名映射（落低区）。照样打这个使用者的标签、记在用量（#0d51a7：窗口尾部没接管的款每一笔都走这里，原先不带标签，
+    //   低区按标签合计里全算「标签 0」、低区账里全算「拦不到的」——长局低区从 2 GB 缩到 12 MB 时看不出是谁）
+    void *p = mmap(NULL, len, prot, MAP_PRIVATE | MAP_ANON, VM_MAKE_TAG(S2A_TAIL_TAG0 + user), 0);
+    if (p == MAP_FAILED) return NULL;
+    pthread_mutex_lock(&g_tl_mu); g_tl_u[user].fb_live += n; if (g_tl_u[user].fb_live > g_tl_u[user].fb_peak) g_tl_u[user].fb_peak = g_tl_u[user].fb_live; pthread_mutex_unlock(&g_tl_mu);
+    return p;
 }
 void s2a_tail_unmap(void *p, uint64_t len, int user) {   // 尾部里的映射回 PROT_NONE 并还进空闲表；不在尾部的（退回路径给的）照常 munmap
     if (!p || !len) return;
-    if (!s2a_tail_has(p)) { munmap(p, len); return; }
     user &= ~S2A_TAIL_ONLY; if (user < 0 || user >= S2A_TAIL_NUSER) user = 0;
+    if (!s2a_tail_has(p)) {   // 退回路径给的（落低区）：照常 munmap，扣落低区在用量
+        uint64_t m = (len + TL_PAGE - 1) & ~(TL_PAGE - 1); munmap(p, len);
+        pthread_mutex_lock(&g_tl_mu); g_tl_u[user].fb_live = g_tl_u[user].fb_live >= m ? g_tl_u[user].fb_live - m : 0; pthread_mutex_unlock(&g_tl_mu);
+        return; }
     uint64_t a = (uint64_t)p, n = (len + TL_PAGE - 1) & ~(TL_PAGE - 1);
     pthread_mutex_lock(&g_tl_mu);
     tl_map(a, n, PROT_NONE, -1);
@@ -993,14 +1000,17 @@ void s2a_tail_unmap(void *p, uint64_t len, int user) {   // 尾部里的映射�
 // 尾部账一行：接管、已用 / 剩余 / 最大空闲块、峰值；按使用者：在用 / 峰值 / 次数 / 退回（次数、字节）
 void s2a_tail_note(char *o, size_t cap) {
     pthread_mutex_lock(&g_tl_mu);
-    if (!g_tl_size) { snprintf(o, cap, "窗口尾部分配：未接管（%s）", tail_on() ? "尾部为 0 或窗口没占到" : "S2A_TAIL=0 应急关"); pthread_mutex_unlock(&g_tl_mu); return; }
-    uint64_t big = 0; for (int i = 0; i < g_tl_nfree; i++) if (g_tl_free[i].n > big) big = g_tl_free[i].n;
-    int k = snprintf(o, cap, "窗口尾部分配：接管 %llu MB，已用 %.1f MB、剩余 %.1f MB（最大空闲块 %.1f MB、空闲段 %d）、峰值 %.1f MB",
-                     (unsigned long long)(g_tl_size >> 20), g_tl_used / 1048576.0, (g_tl_size - g_tl_used) / 1048576.0, big / 1048576.0, g_tl_nfree, g_tl_peak / 1048576.0);
+    int k;
+    if (!g_tl_size) k = snprintf(o, cap, "窗口尾部分配：未接管（%s），各使用者全部落低区", tail_on() ? "尾部为 0 或窗口没占到" : "S2A_TAIL=0 应急关");
+    else { uint64_t big = 0; for (int i = 0; i < g_tl_nfree; i++) if (g_tl_free[i].n > big) big = g_tl_free[i].n;
+        k = snprintf(o, cap, "窗口尾部分配：接管 %llu MB，已用 %.1f MB、剩余 %.1f MB（最大空闲块 %.1f MB、空闲段 %d）、峰值 %.1f MB",
+                     (unsigned long long)(g_tl_size >> 20), g_tl_used / 1048576.0, (g_tl_size - g_tl_used) / 1048576.0, big / 1048576.0, g_tl_nfree, g_tl_peak / 1048576.0); }
+    // 按使用者：尾部里在用 / 峰值 / 次数，退回低区的次数、累计字节与此刻在用 / 峰值（未接管时只有后者）
     for (int u = 0; u < S2A_TAIL_NUSER && k > 0 && (size_t)k < cap; u++)
         if (g_tl_u[u].n || g_tl_u[u].fb_n)
-            k += snprintf(o + k, cap - k, "；%s 在用 %.1f MB 峰值 %.1f MB 共 %llu 次、退回低区 %llu 次 %.1f MB", g_tl_uname[u], g_tl_u[u].live / 1048576.0,
-                          g_tl_u[u].peak / 1048576.0, (unsigned long long)g_tl_u[u].n, (unsigned long long)g_tl_u[u].fb_n, g_tl_u[u].fb_bytes / 1048576.0);
+            k += snprintf(o + k, cap - k, "；%s 在用 %.1f MB 峰值 %.1f MB 共 %llu 次、退回低区 %llu 次 %.1f MB（落低区在用 %.1f MB 峰值 %.1f MB）", g_tl_uname[u], g_tl_u[u].live / 1048576.0,
+                          g_tl_u[u].peak / 1048576.0, (unsigned long long)g_tl_u[u].n, (unsigned long long)g_tl_u[u].fb_n, g_tl_u[u].fb_bytes / 1048576.0,
+                          g_tl_u[u].fb_live / 1048576.0, g_tl_u[u].fb_peak / 1048576.0);
     if (g_tl_segfull && k > 0 && (size_t)k < cap) snprintf(o + k, cap - k, "；空闲段表满丢地址 %llu 次", (unsigned long long)g_tl_segfull);
     pthread_mutex_unlock(&g_tl_mu);
 }
@@ -1177,7 +1187,9 @@ void s2a_low_tags(char *out, size_t cap) {
     }
     int o = snprintf(out, cap, "按标签（含尾部）：文件页 %llu MB", (unsigned long long)(file >> 20));
     for (int r = 0; r < 6 && o > 0 && (size_t)o < cap; r++) { int m = -1; for (int i = 0; i < NTAG; i++) if (bytag[i] && (m < 0 || bytag[i] > bytag[m])) m = i; if (m < 0) break;
-        o += snprintf(out + o, cap - (size_t)o, "、标签 %d %llu MB", m, (unsigned long long)(bytag[m] >> 20)); bytag[m] = 0; }
+        if (m >= S2A_TAIL_TAG0 && m < S2A_TAIL_TAG0 + S2A_TAIL_NUSER) o += snprintf(out + o, cap - (size_t)o, "、%s（标签 %d）%llu MB", g_tl_uname[m - S2A_TAIL_TAG0], m, (unsigned long long)(bytag[m] >> 20));
+        else o += snprintf(out + o, cap - (size_t)o, "、标签 %d %llu MB", m, (unsigned long long)(bytag[m] >> 20));
+        bytag[m] = 0; }
 }
 
 // 低区文件映射按目录合计单独打（低区账骤降时调；10-26 巫师3 测试设备1：文件页 60 秒涨约 400 MB，只在 C# 初始化后列过一次、崩溃时宿主自己崩了没打出来，
