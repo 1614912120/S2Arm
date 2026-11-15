@@ -273,6 +273,16 @@
       "reason": "上游 Ryujinx（MIT）原样提交的预编译 SPIR-V 着色器、JIT 支持库与自制程序 npdm，构建要用。"
     },
     {
+      "id": "generated_synthetic_systemdata_tar",
+      "categories": [
+        "uncovered_unreviewed_type"
+      ],
+      "paths": [
+        "services/S2A.Services/systemdata_synth.tar"
+      ],
+      "reason": "本库 tools/make_sysdata_synth_tar.py 从 pack/sysdata_synth.py 常量生成的空结构系统数据，不读取游戏、固件或密钥；tests/sysdata_synth_tar_test.py 逐字节重算核对。仅保留这一精确路径的未扫描正文边界，不泛化到其他 tar。"
+    },
+    {
       "id": "upstream_nuget_packages",
       "categories": [
         "uncovered_unreviewed_type"

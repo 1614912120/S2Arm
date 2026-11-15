@@ -291,7 +291,7 @@ def launch(c):
                 if trial:   # 新宿主试玩：TRIAL_OK_SECONDS 内异常退出 = 不认这款，下次退回原来的；玩过这么久才崩不怪宿主
                     host_update.settle(c, game["id"], host, ok=time.monotonic() - started >= host_update.TRIAL_OK_SECONDS)
                 if f.code == "tool_exit":   # 游戏进程自己非 0 退出（多为崩溃，139 = 段错误）：给启动页一个说人话的码，原文与退出码随错误摘要带走
-                    import cheats   # 开着金手指 / 画面补丁时退出：记下，下次开始前启动器问要不要先关掉（不自动关）
+                    import cheats   # 开着金手指 / 补丁时退出：当场关掉、记下，下次开始时启动器通知关了哪几条（11-13 维护者改定：不问，cheats.note_crash）
                     cheats.note_crash(c, game)
                     broken = missing_after_crash(c, runtime, manifest)
                     if broken:   # 起局前没逐个核（v0.3.1）：退出后再核，运行文件缺 / 坏了就直说，别让玩家以为是游戏崩了
