@@ -1104,6 +1104,9 @@ int main(int argc, const char **argv) {
     expect(s2a_hid_pad_hat_bits(0, 0, 7) == (1u << 13) && s2a_hid_pad_hat_bits(3, 0, 7) == ((1u << 15) | (1u << 14)) &&
            s2a_hid_pad_hat_bits(8, 0, 7) == 0 && s2a_hid_pad_hat_bits(1, 1, 8) == (1u << 13), "HID pad hat switch to d-pad bits");
     // 轴：0..65535 中点约 0；Y 反向（HID 向下为正）
+    // 接不接（#934 11-15）：名字带 Pro Controller 就接，任天堂原厂 0x057e 也接（macOS 27 上原厂一代 Pro 手柄系统认不出）；别的手柄名不接
+    expect(s2a_hid_pad_wants("Pro Controller", 0x057e) && s2a_hid_pad_wants("PowerA Wireless Pro Controller", 0) &&
+           !s2a_hid_pad_wants("Xbox Wireless Controller", 0x045e) && !s2a_hid_pad_wants(NULL, 0), "HID pad fallback takes Pro Controllers, Nintendo's own too");
     expect(s2a_hid_pad_axis(0, 0, 65535, 0) == -32767 && s2a_hid_pad_axis(65535, 0, 65535, 0) == 32767 &&
            s2a_hid_pad_axis(0, 0, 65535, 1) == 32767 && abs(s2a_hid_pad_axis(32768, 0, 65535, 0)) <= 1, "HID pad axis normalisation");
     char relayPath[96];

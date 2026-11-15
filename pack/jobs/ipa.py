@@ -602,6 +602,36 @@ def container_custom(c):
     return out
 
 
+def kit_astype(c, gid):
+    """这款 iPhone 版 kit 的 main.npdm 地址空间类型（头 +0x0C 位 1–3，同 pack/ship_ext.py npdm_ident / runtime/src/vawin.c astype_of）；读不到回 None"""
+    try:
+        b = (layout.ios_kit(c, gid) / "main.npdm").read_bytes()
+    except OSError:
+        return None
+    return (b[0x0C] >> 1) & 7 if len(b) > 0x0C and b[:4] == b"META" else None
+
+
+def incompatible_message(text, gid, names):
+    """各款地址空间类型不一致（pack/ship_ext.py container 的红行「…装不进同一个窗口：<游戏号> 类型 <t>、…」）→ 点名手机上和这款类型不同的那几款（#1132：原先只说「删掉不兼容的那款」，玩家不知道是哪款）。
+    读不出红行就退回原句。gid 为 None（只组手机上已有的几款）时按游戏库名字列出各类型分组"""
+    m = re.search(r"装不进同一个窗口：(.+)", text)
+    kinds = dict(re.findall(r"([0-9A-Fa-f]{16}) 类型 (\d+)", m.group(1))) if m else {}
+    kinds = {g.upper(): t for g, t in kinds.items()}
+    name = lambda g: "「" + names.get(g, g) + "」"
+    if gid and gid.upper() in kinds:
+        mine = kinds[gid.upper()]
+        others = [g for g, t in kinds.items() if t != mine]
+        if others:
+            return (f"{name(gid.upper())}和手机上的{''.join(name(g) for g in others)}地址空间类型不同，放不进同一个 App。"
+                    f"要装这款，先从 iPhone 删掉{''.join(name(g) for g in others)}再装。")
+    if len(set(kinds.values())) > 1:
+        groups = {}
+        for g, t in kinds.items():
+            groups.setdefault(t, []).append(name(g))
+        return "这几款游戏地址空间类型不同，放不进同一个 App：" + " / ".join("".join(v) for v in groups.values()) + "；只能留其中一组。"
+    return "这款和手机上已有的游戏地址空间类型不同，放不进同一个 App。"
+
+
 def assemble(c, gid, others=(), *, failed=(), root=None, dest=None, agreed=None):
     """现组容器（一个 App 装多款）：本版 iPhone 壳 + 这款和 others（这台手机上已有的各款）的容器件（pack/ship_ext.py container），出 S2Arm.app + S2Arm.ipa 到 dest
     （缺省游戏库同盘临时目录，由调用方装上后再放到默认位置根）。不再在上一次的底包上加款：底包和各款镜像会不一致，且换壳时要整包重出。
@@ -617,7 +647,7 @@ def assemble(c, gid, others=(), *, failed=(), root=None, dest=None, agreed=None)
         roots[gid] = Path(root) if root else usable_kit(c, gid, sid, failed)
         if roots[gid] is None:
             raise Failure("这款的 iPhone 版不是这一版 S2Arm 出的（或还没出）：先「打 iPhone 包」，再装到 iPhone。", code="container_stale")
-    in_library = {g["id"].upper() for g in c.catalog()["games"]}
+    in_library = {g["id"].upper() for g in c.catalog()["games"] if not g.get("hidden")}   # 从游戏库删掉的（hidden）按已删处理：不再放进容器
     stale, deleted, missing = [], [], set()
     names = {g["id"].upper(): g.get("name") or g["id"] for g in c.catalog()["games"]}
     for g in others:
@@ -672,7 +702,7 @@ def assemble(c, gid, others=(), *, failed=(), root=None, dest=None, agreed=None)
     except Failure as e:
         text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
         if e.code == "tool_exit" and "地址空间类型不一致" in text:
-            raise Failure("这款和手机上已有的游戏地址空间类型不同，放不进同一个 App。", code="container_incompatible") from e
+            raise Failure(incompatible_message(text, gid, names), code="container_incompatible") from e
         raise
     finish_container(c, app, log)
     write_container_ipa(c, app, ipa, log)
