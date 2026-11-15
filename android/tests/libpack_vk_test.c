@@ -358,6 +358,49 @@ int main(void) {
                   "记录越出分片 → REJECT（不是按长度盲读）");
             s2a_libpack_close(l2);
         }
+
+        // 尺寸表 ABI 2（离线翻译器认为宿主有贴图尺寸表）：支撑缓冲要 3776 字节，安卓不填表、整块清零 → 着色器走倍率 1 的旧路径。
+        // 期望（手算，见 graphics/nvn/gfx/nvn/nvn_size_abi.inc）：2608 + 73 × 16 = 3776；没有这一项的程序仍是缺省 2608；不认识的 ABI 拒收。
+        {
+            static const char *PS_ABI2 =   // 标准片元夹具 + 缩放访问的贴图与尺寸表 ABI 2（绑定与 .spv 对得上）
+                "{\"key\":\"1032547698badcfe_b\",\"stage\":\"ps\",\"dm_ctl\":\"1032547698badcfe\",\"bindings\":["
+                "{\"msl_name\":\"fp_c3\",\"kind\":\"cbuf\",\"reg\":0,\"arg_id\":0},"
+                "{\"msl_name\":\"fp_t_sep\",\"kind\":\"tex\",\"reg\":128,\"arg_id\":1},"
+                "{\"msl_name\":\"fp_i0\",\"kind\":\"img\",\"reg\":2,\"arg_id\":2}],"
+                "\"tex_scales\":[[2,\"tex\",1]],\"resolution_scale_abi\":2}";
+            static const char *PS_ABI9 =
+                "{\"key\":\"1032547698badcfe_b\",\"stage\":\"ps\",\"dm_ctl\":\"1032547698badcfe\",\"bindings\":[],\"resolution_scale_abi\":9}";
+            const char *ps[3] = { PS_JSON, PS_ABI2, PS_ABI9 };
+            const uint32_t want[3] = { 2608, 3776, 0 };
+            for (int t = 0; t < 3; t++) {
+                struct trec r5[4] = {
+                    { .key = 0x0123456789abcdef, .kind = 1,  .len = (uint32_t)strlen(VS_JSON) },
+                    { .key = 0x0123456789abcdef, .kind = 52, .len = sizeof libpack_vert_spv },
+                    { .key = 0x1032547698badcfe, .kind = 1,  .len = (uint32_t)strlen(ps[t]) },
+                    { .key = 0x1032547698badcfe, .kind = 52, .len = sizeof libpack_frag_spv },
+                };
+                const uint8_t *p5[4] = { (const uint8_t *)VS_JSON, libpack_vert_spv, (const uint8_t *)ps[t], libpack_frag_spv };
+                size_t n5[4] = { strlen(VS_JSON), sizeof libpack_vert_spv, strlen(ps[t]), sizeof libpack_frag_spv };
+                CHECK(mk_pack(r5, 4, p5, n5, 1) == 0, "size-abi pack written");
+                l2 = NULL;
+                CHECK(s2a_libpack_open(&l2, g_dir) == 1, "open size-abi pack");
+                j = NULL; jl = 0;
+                int rc5 = s2a_libpack_program_v1(l2, keys, 0x3, 1, "h", "c", &j, &jl, w, sizeof w);
+                if (!want[t]) {
+                    CHECK(rc5 == -1 && !j, "resolution_scale_abi 9（不认识）→ REJECT");
+                } else {
+                    CHECK(rc5 == 0 && j, t ? "ABI 2 + tex_scales 程序 → HIT（不再拒收）" : "无尺寸表 ABI 的程序 → HIT");
+                    CHECK(t ? has(j, "\"supportLayout\":{\"requiredSize\":3776}") : !has(j, "supportLayout"),
+                          t ? "ABI 2 → v1 带 supportLayout.requiredSize 3776" : "无 ABI → v1 不带 supportLayout");
+                    struct fd_program p5p; char pw5[192] = ""; memset(&p5p, 0, sizeof p5p);
+                    CHECK(nvn_vk_program_parse_graphics(j, jl, &p5p, pw5, sizeof pw5) == 0 && p5p.support_bytes == want[t],
+                          t ? "解析后支撑缓冲 3776 字节（2608 + 73×16）" : "解析后支撑缓冲缺省 2608 字节");
+                    nvn_vk_program_free(&p5p);
+                }
+                free(j); j = NULL;
+                s2a_libpack_close(l2);
+            }
+        }
     }
 
     // ---- .spv 声明的绑定为准（11-14 真机：图形预编全部漏绑 support_buffer，整屏画黑） ----

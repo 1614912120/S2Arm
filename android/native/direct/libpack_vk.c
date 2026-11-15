@@ -413,9 +413,13 @@ static int lp_json_has_binding(struct s2a_jv top, int stage_no, uint32_t binding
     }
     return 0;
 }
+// 支撑缓冲长度：离线库的翻译器回答「宿主有贴图尺寸表」（ABI 2，translator/dmsh_xlate Accessor），程序的支撑块声明到 3776 字节，
+//   偏移 2608 起是 73 项 × 16 字节的尺寸表。安卓宿主不填这张表：按 3776 分配、回放核心整块清零，表项全 0 时着色器走旧路径
+//   （倍率恒 1，与机上现编同口径）。只按 2608 绑的话越界读到的是未定义值（设备没开 robustBufferAccess）
+#define LP_SUPPORT_ABI2_BYTES 3776u
 static int lp_stage_emit(struct s2a_libpack *lp, const uint8_t key[8], unsigned nvn, int compute,
                          struct jw *stages, struct jw *binds, int *bind_sep, uint32_t *stage_mask,
-                         char *why, size_t why_size) {
+                         uint32_t *support_bytes, char *why, size_t why_size) {
     const char *lib_stage = lp_nvn_stage_name(nvn);
     if (!lib_stage) return 1;   // gs/tcs/tes：vk 库不出此阶段，整个程序按 miss
     char khex[17];
@@ -455,10 +459,12 @@ static int lp_stage_emit(struct s2a_libpack *lp, const uint8_t key[8], unsigned 
                 if (!s2a_jv_arr_item(vi, i, &ve) && !jf_u32(ve, "location", &loc) && loc < 32) mask |= 1u << loc;
             }
         }
-        // tex_scales 非空：scaled-access 绑定映射还没接——如实拒绝不静默丢
-        struct s2a_jv ts;
-        if (!s2a_jv_obj_find(top, "tex_scales", &ts) && s2a_jv_is_array(ts) && s2a_jv_arr_count(ts) > 0)
-            { lp_fail(why, why_size, "%s has tex_scales entries (scaled-access bindings not mapped)", khex); goto done; }
+        {   // 尺寸表 ABI：2 = 读支撑缓冲 2608 起的尺寸表，要 3776 字节（见 LP_SUPPORT_ABI2_BYTES）；没有这一项 = 不读表
+            uint32_t abi = 0;
+            if (!jf_u32(top, "resolution_scale_abi", &abi) && abi == 2) { if (*support_bytes < LP_SUPPORT_ABI2_BYTES) *support_bytes = LP_SUPPORT_ABI2_BYTES; }
+            else if (abi && abi != 2) { lp_fail(why, why_size, "%s resolution_scale_abi %u unknown", khex, abi); goto done; }
+        }
+        // tex_scales（缩放访问的贴图）不再拒收：ABI 2 下换算在着色器里经支撑缓冲的尺寸表做，表项全 0 走倍率 1 的旧路径，与现编同口径
         const char *v1_stage = lp_v1_stage_name(st);
         if (lp_emit_bindings(binds, top, st, stage_no, v1_stage, compute, bind_sep, why, why_size)) goto done;
         {   // 以 .spv 声明的绑定为准：support_buffer 补出（_b.json 没列时），其余每个绑定号都得在 _b.json 里有出处，否则整个程序拒收退回现编
@@ -506,11 +512,11 @@ int s2a_libpack_program_v1(const struct s2a_libpack *lp_c, const uint8_t keys[6]
     }
     int worst = S2A_LIBPACK_HIT;
     struct jw st = {0}, bd = {0};
-    int sep = 0; uint32_t got = 0;
+    int sep = 0; uint32_t got = 0, support = 0;
     for (unsigned nvn = 0, idx = 0; nvn < 6 && idx < 6; nvn++) {
         if (!(stages & (1u << nvn))) continue;
         char sw[192] = "";
-        int rc = lp_stage_emit(lp, keys[idx], nvn, 0, &st, &bd, &sep, &got, sw, sizeof sw);
+        int rc = lp_stage_emit(lp, keys[idx], nvn, 0, &st, &bd, &sep, &got, &support, sw, sizeof sw);
         idx++;
         if (rc == 0) continue;
         // 半程序不命中：任一所需阶段拿不到，整个程序按该段的 miss/reject 计
@@ -529,7 +535,9 @@ int s2a_libpack_program_v1(const struct s2a_libpack *lp_c, const uint8_t keys[6]
         jw_put(&j, st.b ? (char *)st.b : "", st.n);
         jw_str(&j, "],\"bindings\":[");
         jw_put(&j, bd.b ? (char *)bd.b : "", bd.n);
-        jw_str(&j, "]}}");
+        jw_str(&j, "]");
+        if (support) jw_fmt(&j, ",\"supportLayout\":{\"requiredSize\":%u}", support);
+        jw_str(&j, "}}");
         if (j.oom) { free(j.b); lp_fail(why, why_size, "v1 synthesis out of memory"); worst = S2A_LIBPACK_REJECT; goto out; }
         *json = j.b; *json_len = j.n;
         worst = S2A_LIBPACK_HIT;
@@ -560,7 +568,8 @@ int s2a_libpack_compute_v1(const struct s2a_libpack *lp_c, const uint8_t key[8],
     *json = NULL; *json_len = 0;
     struct jw st = {0}, bd = {0};
     int sep = 0; uint32_t got = 0;
-    int rc = lp_stage_emit(lp, key, 5, 1, &st, &bd, &sep, &got, why, why_size);
+    uint32_t csupport = 0;
+    int rc = lp_stage_emit(lp, key, 5, 1, &st, &bd, &sep, &got, &csupport, why, why_size);
     if (rc == 0 && got != (1u << 5)) rc = S2A_LIBPACK_MISS;
     if (rc == 0) {
         struct jw j = {0};
@@ -570,7 +579,7 @@ int s2a_libpack_compute_v1(const struct s2a_libpack *lp_c, const uint8_t key[8],
         jw_put(&j, st.b ? (char *)st.b : "", st.n);
         jw_str(&j, "],\"bindings\":[");
         jw_put(&j, bd.b ? (char *)bd.b : "", bd.n);
-        jw_fmt(&j, "],\"supportLayout\":{\"requiredSize\":%u}}}", SUPPORT_DEFAULT_BYTES);
+        jw_fmt(&j, "],\"supportLayout\":{\"requiredSize\":%u}}}", csupport > SUPPORT_DEFAULT_BYTES ? csupport : SUPPORT_DEFAULT_BYTES);
         if (j.oom) { free(j.b); lp_fail(why, why_size, "v1 synthesis out of memory"); rc = S2A_LIBPACK_REJECT; }
         else { *json = j.b; *json_len = j.n; }
     } else if (rc > 0) rc = S2A_LIBPACK_MISS;
