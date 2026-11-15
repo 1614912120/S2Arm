@@ -241,6 +241,35 @@ def collect_pipeline_seed(c, game_id, docs):
             pass
 
 
+def keep_runtime_nros(c, game_id, source):
+    """宿主这局留下的 NRO（runtime/src/loader.c s2a_nro_keep：包里没有改写映像、游戏解开的整份 <SHA-256>.nro）收进游戏库 games/<号>/nro_kept/，
+    下次准备这款时改写进包（#8be819）。只收文件名 = 内容 SHA-256 的；收到新的就告诉玩家重新准备一次。失败不改变本局结果。→ 新收的个数"""
+    import hashlib
+    new = 0
+    try:
+        files = sorted(p for p in Path(source).glob("*.nro") if p.is_file() and not p.is_symlink() and len(p.name) == 68)
+    except OSError:
+        return 0
+    for f in files:
+        try:
+            data = f.read_bytes()
+            if hashlib.sha256(data).hexdigest() != f.name[:64]:
+                continue
+            dest = layout.nro_kept(c, game_id, create=True) / f.name
+            if dest.is_file() and dest.stat().st_size == len(data):
+                continue
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            tmp = dest.with_name(dest.name + ".tmp"); tmp.write_bytes(data); os.replace(tmp, dest); new += 1
+        except OSError as error:
+            print(f"[s2a] 收运行时留下的 NRO {f.name[:8]}… 失败：{error}", file=sys.stderr)
+    if new:
+        try:
+            c.emit("message", f"这款游戏有 {new} 个代码模块要在运行中才能取到，已经收下，正在自动补上")
+        except Cancelled:
+            pass
+    return new
+
+
 def launch(c):
     require_automatic_memory(c)
     with c.lock("execution"):
@@ -249,8 +278,9 @@ def launch(c):
         recover(c, game, override=c.r.get("overrideRecovery") is True)   # 回退失败：玩家单独确认「仍要启动」才放行（同 iPhone，审计 18:00 P0-3）
         runtime = layout.image_mac(c, game["id"], create=False)
         # 改写器修过的话：起局前按本引擎改写器核一遍这款，受影响的只换改写产物（rewrite_refresh.py；核不了不挡起局）
-        from rewrite_refresh import refresh_mac
+        from rewrite_refresh import refresh_mac, kept_nros_mac
         refresh_mac(c, game["id"], runtime)
+        kept_nros_mac(c, game["id"], runtime)   # 运行时留下、还没补进的 NRO（#8be819）：上次收局没补成的这里再补
         c.begin("验证运行文件")
         manifest = validate_runtime(c, runtime, files=False)   # 只核主程序 / 程序描述（QUICK_FILES），其余直接起（v0.3.1）
         print("[起局] 只核主程序与程序描述，其余文件不逐个核（真读到坏的、游戏退出后再核、说清缺什么）", file=sys.stderr, flush=True)
@@ -310,6 +340,8 @@ def launch(c):
             if seed:
                 finish_seed(c, game["id"], log)
             collect_pipeline_seed(c, game["id"], env["S2A_DOCS"])
+            if keep_runtime_nros(c, game["id"], Path(env["S2A_DOCS"]) / "wire" / game["id"].upper() / "nro"):
+                kept_nros_mac(c, game["id"], runtime)   # 收局就补上（#8be819），玩家再点开始就能玩，不用判断要重出什么
             import cheats   # 停帧救场：局内画面停住时帧率补丁已被运行时关掉、留了标记 → 这款「帧率」写关，下次开始时通知（正常退出 / 崩溃都要读）
             cheats.note_stall(c, game, env["S2A_DOCS"])
             # Context.run waits for the host, including failure/cancellation.
@@ -767,6 +799,7 @@ def prepare(c):
         extraction = ensure_extract(c, game, packages, env, logs, valid=unpack_ok)
         import patches   # 金手指 / 社区补丁（11-12）：解包后按真构建号查库，交改写阶段（S2A_CHEATS_DIRS / S2A_CPATCH_DIRS）
         patches.prepare(c, game, extraction, env)
+        env["S2A_NRO_KEPT_DIR"] = str(layout.nro_kept(c, game["id"]))   # 运行时留下的 NRO（#8be819），没有 = 改写阶段当无
         # The memory table is collected from the repository table and the recent run logs only; the previously
         # installed table is not fed back (its values would never age out once the host stops needing them)
         if not (root / "roots" / (game["id"] + "@现行")).exists() and not seed_from_sibling(c, game, root / "roots", game["id"]):  # 非玩家句
