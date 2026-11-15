@@ -498,19 +498,45 @@ static void test_capture_key_order(void) {
 }
 
 // 审计 P2-63：多个控制器时取最近有输入的扩展手柄；没有扩展手柄档的（遥控器等）跳过。假对象只答 active_pad 用到的两个方法
+@class FakeController;
 @interface FakePad : NSObject
 @property double lastEventTimestamp;
 @property(copy) void (^valueChangedHandler)(GCExtendedGamepad *, GCControllerElement *);
+@property(weak) FakeController *controller;
 @end
 @implementation FakePad
 @end
 @interface FakeController : NSObject
 @property(strong) FakePad *extendedGamepad;
 @property(strong) dispatch_queue_t handlerQueue;
+@property(strong) id motion;
 @end
 @implementation FakeController
 @end
-static FakeController *fake_controller(FakePad *pad) { FakeController *c = [FakeController new]; c.extendedGamepad = pad; return c; }
+static FakeController *fake_controller(FakePad *pad) { FakeController *c = [FakeController new]; c.extendedGamepad = pad; pad.controller = c; return c; }
+@interface FakeProSensor : NSObject
+@property BOOL sensorsRequireManualActivation, hasRotationRate, hasGravityAndUserAcceleration, sensorsActive;
+@end
+@implementation FakeProSensor
+@end
+static void test_pro_sensor_control(void) {
+    FakePad *pad = [FakePad new]; FakeController *c = fake_controller(pad);
+    FakeProSensor *m = [FakeProSensor new]; m.sensorsRequireManualActivation = YES; m.hasRotationRate = YES; c.motion = m;
+    atomic_store(&g_motion_wanted, 1);
+    sample_motion((GCExtendedGamepad *)pad);
+    expect(m.sensorsActive, "Pro public sensor control is requested even without separated gravity / usable calibrated samples");
+    expect(!g_motion_known, "uncalibrated Pro data still uses the existing raw sample path, not fabricated GC values");
+    atomic_store(&g_motion_wanted, 0); sample_motion(nil);
+    expect(!m.sensorsActive, "motion disable releases public Pro sensor request");
+    sample_motion(nil);
+    GCController *old = pad_owner[1]; pad_owner[1] = (GCController *)c;
+    atomic_store(&g_motion_wanted, 1); sample_slot_motion(NULL);
+    expect(m.sensorsActive && !g_slot_motion_known[1], "P2 sensor control also stays independent of calibrated sample availability");
+    atomic_store(&g_motion_wanted, 0); sample_slot_motion(NULL);
+    expect(!m.sensorsActive, "P2 motion disable releases its public request");
+    pad_owner[1] = old;
+    puts("Mac Pro motion: public activation independent of calibrated sample capability passed");
+}
 static void test_active_pad(void) {
     FakePad *old = [FakePad new], *recent = [FakePad new]; old.lastEventTimestamp = 10; recent.lastEventTimestamp = 20;
     NSArray *list = @[fake_controller(nil), fake_controller(old), fake_controller(recent)];
@@ -1104,6 +1130,9 @@ int main(int argc, const char **argv) {
     expect(s2a_hid_pad_hat_bits(0, 0, 7) == (1u << 13) && s2a_hid_pad_hat_bits(3, 0, 7) == ((1u << 15) | (1u << 14)) &&
            s2a_hid_pad_hat_bits(8, 0, 7) == 0 && s2a_hid_pad_hat_bits(1, 1, 8) == (1u << 13), "HID pad hat switch to d-pad bits");
     // 轴：0..65535 中点约 0；Y 反向（HID 向下为正）
+    // 接不接（#934 11-15）：名字带 Pro Controller 就接，任天堂原厂 0x057e 也接（macOS 27 上原厂一代 Pro 手柄系统认不出）；别的手柄名不接
+    expect(s2a_hid_pad_wants("Pro Controller", 0x057e) && s2a_hid_pad_wants("PowerA Wireless Pro Controller", 0) &&
+           !s2a_hid_pad_wants("Xbox Wireless Controller", 0x045e) && !s2a_hid_pad_wants(NULL, 0), "HID pad fallback takes Pro Controllers, Nintendo's own too");
     expect(s2a_hid_pad_axis(0, 0, 65535, 0) == -32767 && s2a_hid_pad_axis(65535, 0, 65535, 0) == 32767 &&
            s2a_hid_pad_axis(0, 0, 65535, 1) == 32767 && abs(s2a_hid_pad_axis(32768, 0, 65535, 0)) <= 1, "HID pad axis normalisation");
     char relayPath[96];
@@ -1136,7 +1165,13 @@ int main(int argc, const char **argv) {
     s2a_pad_motion ns2Motion = {0};
     for (int attempt = 0; attempt < 100 && !s2a_pad_read_motion(&ns2Motion); attempt++) usleep(1000);
     expect(ns2Motion.host_timestamp_us == 1234 && ns2Motion.gyro_x == 90 && ns2Motion.acceleration_z == 1,
-           "Switch 2 Pro motion reaches shared Mac six-axis entry");
+            "Switch 2 Pro motion reaches shared Mac six-axis entry");
+    {
+        FakePad *p=[FakePad new]; FakeController *c=fake_controller(p);
+        FakeProSensor *m=[FakeProSensor new]; m.sensorsRequireManualActivation=YES; m.hasRotationRate=YES; c.motion=m;
+        sample_motion((GCExtendedGamepad *)p);
+        expect(!m.sensorsActive,"NS2 lead transport does not activate an unrelated system motion source");
+    }
     // #520 A：游戏不用单只样式（扮 Pro）时，单只右 Joy-Con 的六轴在游戏端转成横握视角：(ax, az) → (−az, ax)、(gx, gz) → (−gz, gx)
     s2a_mac_ns2_set_game_style(1 << 0);
     expect(s2a_pad_read_motion(&ns2Motion) && ns2Motion.gyro_x == 0 && ns2Motion.gyro_z == 90 && ns2Motion.acceleration_x == -1 && ns2Motion.acceleration_z == 0,
@@ -1311,6 +1346,7 @@ int main(int argc, const char **argv) {
         if (argc == 2 && !strcmp(argv[1], "--guide-preview")) { guide_preview = YES; s2a_front_run(NULL); return 0; }
         test_shared_input_config();
         test_active_pad();
+        test_pro_sensor_control();
         test_pad_slots();
         // 同一个真实前端实现：通用 attach 先发布层，detach 先通知再清层；
         // 直连只发布/清层，不通知尚未初始化且不应初始化的通用 NxGal。

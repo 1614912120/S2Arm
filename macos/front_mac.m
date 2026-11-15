@@ -11,6 +11,7 @@
 #include "../runtime/include/s2a_qos.h"
 #include "../runtime/include/phone_axes.h"
 #include "joycon_imu.h"
+#include "motion_power.h"
 #import "input_guide.h"
 // 金手指（11-12）：Mac 宿主也起服务层金手指线程（services/S2A.Services/Cheats.cs）；目录由起局方 S2A_CHEATS_DIR 给（这款游戏文件夹的 cheats/，
 //   启动器「游戏设置 → 金手指」写开关），与 iOS ios/vpad_cheats.m 同一份代码、同一个登记点（runtime/src/loader.c s2a_cheats_host_enable）
@@ -496,18 +497,17 @@ static GCMotion *g_motion_source;
 //   标记由读取方消费（主线程采样、HID 线程读，只改一帧样本可能被下一帧盖掉、读不到）；单只拔掉本来就是 known = 0，不另标
 static int g_motion_switched;   // 持 g_motion_mu
 static void set_motion_source(GCMotion *source) {
-    if (source == g_motion_source) return;
-    if (source && g_motion_source) { pthread_mutex_lock(&g_motion_mu); g_motion_switched = 1; pthread_mutex_unlock(&g_motion_mu); }
-    if (g_motion_source.sensorsRequireManualActivation) g_motion_source.sensorsActive = NO;
-    g_motion_source = source;
-    if (source.sensorsRequireManualActivation) source.sensorsActive = YES;
+    if (source != g_motion_source && source && g_motion_source) { pthread_mutex_lock(&g_motion_mu); g_motion_switched = 1; pthread_mutex_unlock(&g_motion_mu); }
+    s2a_motion_power_select(&g_motion_source, source, nil);
 }
 static void sample_motion(GCExtendedGamepad *pad) {
+    // Power requests must not depend on usable calibrated sample fields. Pro HID
+    // samples can be valid while its public profile lacks separated gravity.
     BOOL ns2 = ns2_leads();
     GCMotion *m = atomic_load(&g_motion_wanted) && !ns2 ? pad.controller.motion : nil;
-    set_motion_source(m.hasRotationRate && m.hasGravityAndUserAcceleration ? m : nil);
+    set_motion_source(m);
     s2a_pad_motion sample = {0};
-    int known = g_motion_source != nil;
+    int known = m.hasRotationRate && m.hasGravityAndUserAcceleration;
     if (known) {
         double gravity[3] = {m.gravity.x, m.gravity.y, m.gravity.z}, user[3] = {m.userAcceleration.x, m.userAcceleration.y, m.userAcceleration.z};
         double rotation[3] = {m.rotationRate.x, m.rotationRate.y, m.rotationRate.z};
@@ -525,7 +525,8 @@ __attribute__((visibility("default"), used)) void s2a_pad_set_motion_enabled(int
     int want = enabled != 0 && !(off && !strcmp(off, "0"));
     atomic_store(&g_motion_wanted, want);
     s2a_mac_ns2_set_motion_enabled(want);
-    // Joy-Con：系统 GCMotion 为 nil，改走 HID 全报告六轴（macos/joycon_imu.m）
+    // Framework-recognized Pro uses public sensor control plus passive HID data;
+    // Joy-Con / framework-unrecognized Pro retain their existing raw control path.
     s2a_joycon_imu_set_enabled(want);
 }
 // P1（槽 0）是一代 Joy-Con 单元时（#520，同 Joy-Con 2：P1 的体感 / 震动跟占 P1 的那只走）：定义在槽位表后面
@@ -976,14 +977,10 @@ static void sample_slot_motion(GCController *const owner_before[S2A_MAX_PADS]) {
     BOOL want = atomic_load(&g_motion_wanted);
     for (int s = 1; s < S2A_MAX_PADS; s++) {
         GCMotion *m = want ? pad_owner[s].motion : nil;
-        if (!(m.hasRotationRate && m.hasGravityAndUserAcceleration)) m = nil;
-        if (m != g_slot_motion_source[s]) {
-            if (g_slot_motion_source[s].sensorsRequireManualActivation && g_slot_motion_source[s] != g_motion_source) g_slot_motion_source[s].sensorsActive = NO;
-            g_slot_motion_source[s] = m;
-            if (m.sensorsRequireManualActivation) m.sensorsActive = YES;
-        }
+        s2a_motion_power_select(&g_slot_motion_source[s], m, g_motion_source);
+        BOOL known = m.hasRotationRate && m.hasGravityAndUserAcceleration;
         s2a_pad_motion sample = {0};
-        if (m) {
+        if (known) {
             double gravity[3] = {m.gravity.x, m.gravity.y, m.gravity.z}, user[3] = {m.userAcceleration.x, m.userAcceleration.y, m.userAcceleration.z};
             double rotation[3] = {m.rotationRate.x, m.rotationRate.y, m.rotationRate.z};
             float acceleration[3], gyro[3];
@@ -991,7 +988,7 @@ static void sample_slot_motion(GCController *const owner_before[S2A_MAX_PADS]) {
             sample = (s2a_pad_motion){clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000, acceleration[0], acceleration[1], acceleration[2], gyro[0], gyro[1], gyro[2]};
         }
         pthread_mutex_lock(&g_motion_mu);
-        g_slot_motion[s] = sample; g_slot_motion_known[s] = m != nil;
+        g_slot_motion[s] = sample; g_slot_motion_known[s] = known;
         pthread_mutex_unlock(&g_motion_mu);
     }
     (void)owner_before;
@@ -1684,7 +1681,8 @@ static NSString *lan_warning(void) {
 @property(strong) S2AMacInputGuide *inputGuide;
 @property(strong) NSMenuItem *controllerStatus;
 @property BOOL ns2ReconnectPending;
-@property BOOL ns2RelayDisconnectNoticeShown;
+@property BOOL ns2RelayWasReady;   // 本局 Switch 2 手柄（Pro / Joy-Con 2）真连上过，断开时才提示
+@property ns2_kind ns2RelayReadyKind;   // 连上时的型号（断开后读不到），横幅标题用
 @property NSRect windowedFrame;   // 进全屏前的窗口位置大小，退全屏时放回
 @end
 static __weak S2AMacDelegate *g_delegate;
@@ -1712,7 +1710,8 @@ static __weak S2AMacDelegate *g_delegate;
     ns2_status controller = s2a_mac_ns2_status();
     if (controller == NS2_STATUS_READY) {
         self.ns2ReconnectPending = YES;
-        self.ns2RelayDisconnectNoticeShown = NO;
+        self.ns2RelayWasReady = YES;
+        self.ns2RelayReadyKind = s2a_mac_ns2_kind();
     }
     const char *relay = getenv("S2A_NS2_SOCKET");
     BOOL relayMode = relay && *relay;
@@ -1720,9 +1719,11 @@ static __weak S2AMacDelegate *g_delegate;
     if (self.ns2ReconnectPending && s2a_mac_ns2_relay_due(controller, relay)) s2a_mac_ns2_connect();
     if (self.ns2ReconnectPending && (controller == NS2_STATUS_ERROR || controller == NS2_STATUS_DISCONNECTED)) {
         if (relayMode) {
-            if (!self.ns2RelayDisconnectNoticeShown) {
-                [self.banner showTitle:@"Switch 2 Pro" body:@"S2Arm 手柄连接已中断；重新连接后游戏会自动接回。" accept:nil decline:nil seconds:12];
-                self.ns2RelayDisconnectNoticeShown = YES;
+            // 只在本局真连上过 Switch 2 手柄、之后断开时提示一次（接回后复位）；
+            //   没有 / 没连 Switch 2 手柄（用别的蓝牙手柄）时通道转来的「未连接」不算断开，不提示
+            if (self.ns2RelayWasReady) {
+                [self.banner showTitle:@(s2a_mac_ns2_kind_name(self.ns2RelayReadyKind)) body:@"S2Arm 手柄连接已中断；重新连接后游戏会自动接回。" accept:nil decline:nil seconds:12];
+                self.ns2RelayWasReady = NO;
             }
             // S2Arm may be starting a fresh helper; keep trying the stable relay socket.
             s2a_mac_ns2_connect();
