@@ -115,6 +115,37 @@ static const uint32_t CS_SPV[5] = { 0x07230203u, 0x00010000u, 0u, 1u, 0u };
 
 static int has(const uint8_t *j, const char *sub) { return j && strstr((const char *)j, sub) != NULL; }
 
+// 片元输出映射用例（spirv-as 汇编、spirv-val 过）：FO1 = location 1 vec4 + location 3 vec2 带 Component 1 + FragDepth 内建；
+//   FO2 = location 0 的 vec4[2] 数组输出（读不懂）
+static const uint32_t FO1_SPV[] = {
+    0x07230203u, 0x00010300u, 0x00070000u, 0x0000000eu, 0x00000000u, 0x00020011u, 0x00000001u, 0x0003000eu,
+    0x00000000u, 0x00000001u, 0x0008000fu, 0x00000004u, 0x00000001u, 0x6e69616du, 0x00000000u, 0x00000002u,
+    0x00000003u, 0x00000004u, 0x00030010u, 0x00000001u, 0x00000007u, 0x00040047u, 0x00000002u, 0x0000001eu,
+    0x00000001u, 0x00040047u, 0x00000003u, 0x0000001eu, 0x00000003u, 0x00040047u, 0x00000003u, 0x0000001fu,
+    0x00000001u, 0x00040047u, 0x00000004u, 0x0000000bu, 0x00000016u, 0x00020013u, 0x00000005u, 0x00030021u,
+    0x00000006u, 0x00000005u, 0x00030016u, 0x00000007u, 0x00000020u, 0x00040017u, 0x00000008u, 0x00000007u,
+    0x00000004u, 0x00040017u, 0x00000009u, 0x00000007u, 0x00000002u, 0x00040020u, 0x0000000au, 0x00000003u,
+    0x00000008u, 0x00040020u, 0x0000000bu, 0x00000003u, 0x00000009u, 0x00040020u, 0x0000000cu, 0x00000003u,
+    0x00000007u, 0x0004003bu, 0x0000000au, 0x00000002u, 0x00000003u, 0x0004003bu, 0x0000000bu, 0x00000003u,
+    0x00000003u, 0x0004003bu, 0x0000000cu, 0x00000004u, 0x00000003u, 0x00050036u, 0x00000005u, 0x00000001u,
+    0x00000000u, 0x00000006u, 0x000200f8u, 0x0000000du, 0x000100fdu, 0x00010038u,
+};
+static const uint32_t FO2_SPV[] = {
+    0x07230203u, 0x00010300u, 0x00070000u, 0x00000013u, 0x00000000u, 0x00020011u, 0x00000001u, 0x0003000eu,
+    0x00000000u, 0x00000001u, 0x0006000fu, 0x00000004u, 0x00000001u, 0x6e69616du, 0x00000000u, 0x00000002u,
+    0x00030010u, 0x00000001u, 0x00000007u, 0x00040047u, 0x00000002u, 0x0000001eu, 0x00000000u, 0x00040047u,
+    0x00000003u, 0x0000001eu, 0x00000001u, 0x00040047u, 0x00000004u, 0x0000001eu, 0x00000003u, 0x00040047u,
+    0x00000004u, 0x0000001fu, 0x00000001u, 0x00040047u, 0x00000005u, 0x0000000bu, 0x00000016u, 0x00020013u,
+    0x00000006u, 0x00030021u, 0x00000007u, 0x00000006u, 0x00030016u, 0x00000008u, 0x00000020u, 0x00040017u,
+    0x00000009u, 0x00000008u, 0x00000004u, 0x00040017u, 0x0000000au, 0x00000008u, 0x00000002u, 0x00040020u,
+    0x0000000bu, 0x00000003u, 0x00000009u, 0x00040020u, 0x0000000cu, 0x00000003u, 0x0000000au, 0x00040020u,
+    0x0000000du, 0x00000003u, 0x00000008u, 0x0004003bu, 0x0000000bu, 0x00000003u, 0x00000003u, 0x0004003bu,
+    0x0000000cu, 0x00000004u, 0x00000003u, 0x0004003bu, 0x0000000du, 0x00000005u, 0x00000003u, 0x00040015u,
+    0x0000000eu, 0x00000020u, 0x00000000u, 0x0004002bu, 0x0000000eu, 0x0000000fu, 0x00000002u, 0x0004001cu,
+    0x00000010u, 0x00000009u, 0x0000000fu, 0x00040020u, 0x00000011u, 0x00000003u, 0x00000010u, 0x0004003bu,
+    0x00000011u, 0x00000002u, 0x00000003u, 0x00050036u, 0x00000006u, 0x00000001u, 0x00000000u, 0x00000007u,
+    0x000200f8u, 0x00000012u, 0x000100fdu, 0x00010038u,
+};
 int main(void) {
     const char *tmp = getenv("TMPDIR"); if (!tmp || !*tmp) tmp = "/tmp";
     char tmpl[320];
@@ -214,6 +245,7 @@ int main(void) {
             CHECK(p.stage[0].present && p.stage[1].present &&
                   p.stage[0].spirv_bytes == sizeof libpack_vert_spv && p.stage[0].attr_mask == 10,
                   "fd vs+fs present + spirv + attr_mask=10");
+            CHECK(p.stage[1].fragment_output_map == 0xFu, "合成 v1 的片元阶段带 info.fragmentOutputMap（location 0 vec4 → 0xF，不是缺省全 1）");
             CHECK(p.binding_count == 7, "6+3 条反射 -1 采样器半边 -1 ubolen = 7 条 v1 绑定");
             struct fd_binding *b0 = NULL, *b6 = NULL, *b12 = NULL, *b24 = NULL, *b10 = NULL, *b16 = NULL;
             for (int i = 0; i < p.binding_count; i++) {
@@ -569,6 +601,14 @@ int main(void) {
     snprintf(cleanup, sizeof cleanup, "%s/bad/lib.idx", tmpl); unlink(cleanup);
     snprintf(cleanup, sizeof cleanup, "%s/bad", tmpl); rmdir(cleanup);
     rmdir(tmpl);
+    {   // 片元输出映射：期望值按汇编源手算（location 1 vec4 = 0xF0；location 3 分量 1..2 = 0x6000；FragDepth 不占颜色目标）
+        uint32_t m = 0;
+        CHECK(s2a_libpack_spv_frag_outputs((const uint8_t *)FO1_SPV, sizeof FO1_SPV, &m) == 0 && m == 0x60F0u, "片元输出映射：loc1 vec4 + loc3.yz → 0x60F0，内建深度不占");
+        m = 0;
+        CHECK(s2a_libpack_spv_frag_outputs(libpack_frag_spv, sizeof libpack_frag_spv, &m) == 0 && m == 0xFu, "片元输出映射：样本片元 location 0 vec4 → 0xF");
+        CHECK(s2a_libpack_spv_frag_outputs((const uint8_t *)FO2_SPV, sizeof FO2_SPV, &m) != 0, "片元输出映射：数组输出读不懂 → 不出");
+        CHECK(s2a_libpack_spv_frag_outputs(libpack_frag_spv, 12, &m) != 0, "片元输出映射：截断模块拒");
+    }
     if (fails) { printf("libpack_vk_test: %d FAIL\n", fails); return 1; }
     printf("libpack_vk_test: all checks passed\n");
     return 0;
