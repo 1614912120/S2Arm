@@ -61,7 +61,7 @@ void s2a_ios_apply_overlay_settings(NSUserDefaults *defaults) {
 //   以及撑不住就问玩家的「问过」与「本款原生 60 帧」记号——原先全在 App 级，一款游戏自动退回 16:9、关 60 帧会串到所有游戏
 NSArray *s2a_ios_per_game_keys(void) {
     return @[@"S2AResolutionScale", @"S2AAntiAliasing", @"S2AScalingFilter", @"S2AFrameRateLimit", @"S2AWidescreen", @"S2AFps60",
-             @"S2AFps60Manual", @"S2ADockedMode", @"S2ACommunityPatches", @"S2AWidescreenAsked", @"S2AFps60Asked", @"S2AFpsNative60", @"S2AFpsPick", S2AGameLanguageKey, @"S2AFrameInterp"];
+             @"S2AFps60Manual", @"S2ADockedMode", @"S2ACommunityPatches", @"S2AWidescreenAsked", @"S2AFps60Asked", @"S2AFpsNative60", @"S2AFpsPick", S2AGameLanguageKey, @"S2AFrameInterp", @"S2AGameVolume"];
 }
 NSArray<NSString *> *s2a_ios_game_languages(void) {
     return @[@"system", @"SimplifiedChinese", @"TraditionalChinese", @"AmericanEnglish", @"BritishEnglish", @"Japanese", @"Korean", @"French", @"CanadianFrench", @"German",
@@ -406,6 +406,15 @@ void s2a_ios_apply_graphics_settings(NSUserDefaults *defaults) {
         id v = [defaults objectForKey:@"S2ACommunityPatches"];
         NSString *on = [v isKindOfClass:NSArray.class] ? ([(NSArray *)v count] ? [(NSArray *)v componentsJoinedByString:@","] : @"none") : [v isKindOfClass:NSString.class] ? v : nil;
         if (on) { apply_environment("S2A_CPATCH_ON", on); fprintf(stderr, "[S2A 画面设置] S2A_CPATCH_ON=%s（本 App 设置：社区补丁）\n", on.UTF8String); }
+    }
+    // 游戏音量（#1186，按游戏存的 S2AGameVolume 0–100；没设过 / 100 不设，输出层整段跳过）→ S2A_AUDIO_VOLUME（runtime/src/game_volume.c）；
+    //   局中改走齿轮菜单 S2A_AudioSetVolume，当场生效。启动环境显式给的优先
+    if (!getenv("S2A_AUDIO_VOLUME")) {
+        id v = [defaults objectForKey:@"S2AGameVolume"];
+        if ([v isKindOfClass:NSNumber.class] && [v integerValue] < 100) {
+            NSInteger p = MAX(0, [v integerValue]);
+            apply_environment("S2A_AUDIO_VOLUME", [NSString stringWithFormat:@"%ld", (long)p]); fprintf(stderr, "[S2A 声音设置] S2A_AUDIO_VOLUME=%ld（本 App 设置：游戏音量）\n", (long)p);
+        }
     }
     // 开着社区宽屏 / 自适应满屏补丁（编号 widescreen: / wsauto:）：游戏自己按屏幕比例画宽画面，S2Arm 的满屏让开、不拉宽两次（同 Mac pack/jobs/community.py launch_env）；
     //   启动环境显式给了 S2A_WIDESCREEN 的照它
