@@ -11,11 +11,12 @@ struct HomeSearchControl: View {
     @Binding var isExpanded: Bool
     @Binding var text: String
     let width: CGFloat
-    let edit: () -> Void
+    let edit: (@escaping () -> Void) -> Void
     @EnvironmentObject private var loc: Localizer
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var focused: Bool
     @State private var hovered = false
+    @State private var editingWithController = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -29,32 +30,33 @@ struct HomeSearchControl: View {
                     .background(.white.opacity(hovered ? 0.08 : 0), in: Circle())
                     .contentShape(Circle())
             }
-            .controllerButtonStyle(.plain).controllerID("home.search")
+            .buttonStyle(.plain).controllerControl(id: "home.search", activate: editFromController)
+            .controllerID("home.search")
             .onHover { hovered = $0 }
             .help(loc.t(isExpanded ? "home.collapseSearch" : "home.search"))
             .accessibilityLabel(loc.t(isExpanded ? "home.collapseSearch" : "home.search"))
             .accessibilityValue(text).accessibilityAddTraits(isExpanded ? .isSelected : [])
-            if isExpanded {
-                HStack(spacing: LauncherTheme.Space.xSmall) {
-                    TextField("", text: $text, prompt: Text(loc.t(width <= LauncherControl.width ? "home.search.compact" : "home.search"))
-                        .foregroundColor(LauncherTheme.Colors.secondary))
-                        .textFieldStyle(.plain).font(LauncherTheme.TypeStyle.body)
-                        .focused($focused).onAppear { focused = true }
-                        .onExitCommand { focused = false; isExpanded = false }
-                        .controllerControl(id: "home.search.field", activate: edit)
-                        .accessibilityLabel(loc.t("home.search")).accessibilityIdentifier("home.search.field")
-                    if !text.isEmpty {
-                        Button { text = ""; focused = true } label: {
-                            Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                                .frame(width: 28, height: 36).contentShape(Rectangle())
-                        }
-                        .controllerButtonStyle(.plain).controllerID("home.search.clear")
-                        .help(loc.t("home.clearSearch")).accessibilityLabel(loc.t("home.clearSearch"))
+            // Keep the field mounted so focus changes target an existing native text control,
+            // including while the capsule animates or the screen keyboard owns the key window.
+            HStack(spacing: LauncherTheme.Space.xSmall) {
+                TextField("", text: $text, prompt: Text(loc.t(width <= LauncherControl.width ? "home.search.compact" : "home.search"))
+                    .foregroundColor(LauncherTheme.Colors.secondary))
+                    .textFieldStyle(.plain).font(LauncherTheme.TypeStyle.body)
+                    .focused($focused)
+                    .onExitCommand { focused = false; isExpanded = false }
+                    .controllerControl(id: "home.search.field", activate: editFromController)
+                    .accessibilityLabel(loc.t("home.search")).accessibilityIdentifier("home.search.field")
+                if !text.isEmpty {
+                    Button { text = ""; focused = true } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                            .frame(width: 28, height: 36).contentShape(Rectangle())
                     }
+                    .controllerButtonStyle(.plain).controllerID("home.search.clear")
+                    .help(loc.t("home.clearSearch")).accessibilityLabel(loc.t("home.clearSearch"))
                 }
-                .padding(.leading, LauncherTheme.Space.xSmall).padding(.trailing, LauncherTheme.Space.medium)
-                .transition(.opacity)
             }
+            .padding(.leading, LauncherTheme.Space.xSmall).padding(.trailing, LauncherTheme.Space.medium)
+            .opacity(isExpanded ? 1 : 0).disabled(!isExpanded).allowsHitTesting(isExpanded).accessibilityHidden(!isExpanded)
         }
         // Keep the icon in the same leading slot while the outer capsule reveals the field.
         .frame(width: width, height: 40, alignment: .leading)
@@ -63,11 +65,24 @@ struct HomeSearchControl: View {
         .background(.thinMaterial, in: Capsule())
         .overlay(Capsule().strokeBorder(.white.opacity(focused || hovered ? 0.4 : 0.12)))
         .clipShape(Capsule())
-        .background(HomeSearchDismissal(isExpanded: isExpanded) { focused = false; isExpanded = false })
+        .background(HomeSearchDismissal(isExpanded: isExpanded && !editingWithController) {
+            guard !editingWithController else { return }
+            focused = false; isExpanded = false
+        })
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: isExpanded)
-        .onChange(of: isExpanded) { if !$0 { focused = false } }
-        .onChange(of: focused) { if !$0 { isExpanded = false } }
+        .onChange(of: isExpanded) { focused = $0 && !editingWithController }
+        .onChange(of: focused) { if !$0 && !editingWithController { isExpanded = false } }
         .accessibilityElement(children: .contain).accessibilityIdentifier("home.search.control")
+    }
+
+    private func editFromController() {
+        editingWithController = true
+        isExpanded = true
+        focused = false
+        edit {
+            editingWithController = false
+            focused = true
+        }
     }
 }
 

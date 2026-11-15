@@ -13,6 +13,7 @@ import LauncherPadBridge
     @Published var symbols = false
     let panel: NSPanel
     private let applyValue: (String) -> Void
+    private let onClose: () -> Void
     private weak var owner: NSWindow?
     private weak var navigation: LauncherPadNavigation?
     private let previousFocus: String?
@@ -24,12 +25,13 @@ import LauncherPadBridge
         self.init(value: S2ALauncherAX.value(element) as? String ?? "", label: S2ALauncherAX.label(element) ?? "", owner: owner, navigation: navigation, protected: S2ALauncherAX.secure(element),
                   apply: { S2ALauncherAX.setValue($0, element: element) })
     }
-    init(value: String, label: String, owner: NSWindow, navigation: LauncherPadNavigation, protected: Bool = false, apply: @escaping (String) -> Void) {
+    init(value: String, label: String, owner: NSWindow, navigation: LauncherPadNavigation, protected: Bool = false, onClose: @escaping () -> Void = {}, apply: @escaping (String) -> Void) {
         self.applyValue = apply; self.owner = owner; self.navigation = navigation
+        self.onClose = onClose
         previousFocus = navigation.focusedID
         self.value = value; self.label = label
         secure = protected || label.localizedCaseInsensitiveContains("password") || label.contains("密码")
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 670, height: 410), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: LauncherTheme.Metrics.settingsWidth, height: 410), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         super.init()
         panel.isReleasedWhenClosed = false
         panel.title = navigation.text("home.keyboard.title")
@@ -55,6 +57,7 @@ import LauncherPadBridge
         let navigation = navigation
         navigation?.keyboard = nil
         if let previousFocus { navigation?.focus(previousFocus) }
+        onClose()
     }
     func windowShouldClose(_ sender: NSWindow) -> Bool { close(apply: false); return false }
     func handle(_ action: LauncherPadAction) -> Bool {
@@ -76,11 +79,8 @@ private struct LauncherPadKeyboardView: View {
     }
     var body: some View {
         VStack(spacing: 10) {
-            HStack {
-                Text(keyboard.label.isEmpty ? keyboard.t("home.keyboard.title") : keyboard.label).font(.manrope(13, .semibold)).foregroundStyle(.secondary)
-                Spacer()
-                Text("X ⌫    Y ␣    B ✓").font(.manrope(12)).foregroundStyle(.secondary)
-            }
+            Text(keyboard.label.isEmpty ? keyboard.t("home.keyboard.title") : keyboard.label)
+                .font(.manrope(13, .semibold)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
             Text(keyboard.secure ? String(repeating: "•", count: keyboard.value.count) : keyboard.value + "│")
                 .font(.manrope(19, .medium)).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading).padding(10)
                 .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 8)).accessibilityHidden(true)
@@ -108,7 +108,7 @@ private struct LauncherPadKeyboardView: View {
                     .controllerShortcut(.back)
                 Button(keyboard.t("home.keyboard.done")) { keyboard.close(apply: true) }
                     .controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.primary)
-            }.controllerButtonStyle(LauncherSecondaryButtonStyle()).font(.manrope(12.5, .semibold))
-        }.padding(LauncherTheme.Space.section).launcherSheet(.form, height: 410)
+            }.controllerButtonStyle(LauncherSecondaryButtonStyle()).fixedSize(horizontal: true, vertical: false)
+        }.padding(LauncherTheme.Space.section).launcherSheet(.settings, height: 410)
     }
 }

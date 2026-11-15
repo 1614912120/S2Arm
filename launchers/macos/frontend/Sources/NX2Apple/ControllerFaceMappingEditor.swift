@@ -12,7 +12,7 @@ struct ControllerFaceMappingEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(zh ? "主玩家四键映射" : "Primary player buttons").font(.manrope(15, .semibold))
+            Text(zh ? "四键布局" : "Button layout").font(.manrope(15, .semibold))
             Text(zh ? "实体按键 → Switch" : "Physical button → Switch")
                 .font(.manrope(12)).foregroundStyle(.secondary)
             let positions = family.diamond

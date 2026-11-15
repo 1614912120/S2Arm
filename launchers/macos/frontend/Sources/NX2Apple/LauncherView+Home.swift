@@ -96,8 +96,9 @@ extension LauncherView {
                 .controllerID("library.sgradeUpgrade")
                 .help(txt("sgrade.upgrade.button")).accessibilityLabel(txt("sgrade.upgrade.button"))
             HomeSearchControl(isExpanded: $showHomeSearch, text: $home.search,
-                              width: size.width < 1000 ? LauncherControl.width : LauncherTheme.Metrics.navigationWidth) {
-                navigation.editText(value: home.search, label: loc.t("home.search")) { home.search = $0 }
+                              width: size.width < 1000 ? LauncherControl.width : LauncherTheme.Metrics.navigationWidth) { finished in
+                navigation.focus("home.search.field")
+                navigation.editText(value: home.search, label: loc.t("home.search"), onClose: finished) { home.search = $0 }
             }
             Button { model.refresh() } label: { Image(systemName: "arrow.clockwise") }
                 .controllerButtonStyle(ConsoleIconButtonStyle()).disabled(model.loading).controllerID("home.refresh")
@@ -266,9 +267,8 @@ extension LauncherView {
             case .nextGroup: home.cycle(1); return true
             case .details: if let game = homeSelected { moreFor = game.id }; return true
             case .search:
-                showHomeSearch = true
                 navigation.focus("home.search")
-                navigation.editText(value: home.search, label: loc.t("home.search")) { home.search = $0 }; return true
+                navigation.activateFocused(); return true
             case .back:
                 if showHomeSearch { showHomeSearch = false; navigation.focus("home.search") }
                 else if !home.search.isEmpty { home.search = "" }

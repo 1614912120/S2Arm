@@ -119,7 +119,14 @@ final class LauncherPadInputTests: XCTestCase {
         _ = NSApplication.shared
         let owner = NSWindow(contentRect: NSRect(x: 50, y: 50, width: 800, height: 500), styleMask: [.borderless], backing: .buffered, defer: false)
         owner.isReleasedWhenClosed = false
-        let navigation = LauncherPadNavigation(); navigation.attach(owner)
+        let navigation = LauncherPadNavigation()
+        let stringsURL = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appendingPathComponent("frontend/l10n/en.json")
+        let strings = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: stringsURL)) as? [String: Any])
+        // Size the keyboard with the real interface copy, as LauncherView configures it.
+        navigation.text = { strings[$0] as? String ?? $0 }
+        navigation.source.controllers = { [] }
+        navigation.attach(owner); navigation.source.stop()
         defer { navigation.detach(); owner.close() }
         var result = "old"
         navigation.editText(value: result, label: "Query") { result = $0 }
@@ -129,6 +136,7 @@ final class LauncherPadInputTests: XCTestCase {
         navigation.handle(.confirm)
         XCTAssertEqual(keyboard.value, "oldq", "屏幕键盘的 A 必须实际输入当前焦点字母")
         navigation.focus("pad.keyboard.symbols"); navigation.handle(.confirm)
+        XCTAssertTrue(keyboard.symbols)
         try await Task.sleep(for: .milliseconds(50))
         navigation.focus("pad.key.#"); navigation.handle(.confirm)
         XCTAssertEqual(keyboard.value, "oldq#", "密码与路径需要能输入符号页的字符")

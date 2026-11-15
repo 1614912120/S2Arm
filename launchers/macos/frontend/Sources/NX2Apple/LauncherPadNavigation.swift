@@ -409,9 +409,9 @@ enum LauncherPadSpatial {
         guard let window = activeWindow, let target = targets(in: window).first(where: { $0.id == focusedID }) else { return }
         edit(target, window: window)
     }
-    func editText(value: String, label: String, apply: @escaping (String) -> Void) {
+    func editText(value: String, label: String, onClose: @escaping () -> Void = {}, apply: @escaping (String) -> Void) {
         guard keyboard == nil, let window = activeWindow else { return }
-        keyboard = LauncherPadKeyboard(value: value, label: label, owner: window, navigation: self, apply: apply)
+        keyboard = LauncherPadKeyboard(value: value, label: label, owner: window, navigation: self, onClose: onClose, apply: apply)
         keyboard?.show()
     }
     private func edit(_ target: LauncherPadTarget, window: NSWindow) {

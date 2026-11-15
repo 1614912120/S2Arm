@@ -472,13 +472,24 @@ import S2ArmAppleAdapter
                 let page = AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture").frame(width: width, height: 630))
                 let (host, window) = try await render(page, fixture: fixture, language: language)
                 navigation.attach(window)
+                navigation.source.stop()
+                window.makeKeyAndOrderFront(nil)
                 defer { navigation.detach(); window.close() }
+                func toggleSearch() throws {
+                    let target = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.search" })
+                    let rect = window.convertFromScreen(target.frame)
+                    try click(CGPoint(x: rect.midX, y: rect.midY), in: window)
+                }
                 let initialWindows = Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber))
                 XCTAssertFalse(navigation.controlTargets(in: window).contains { $0.id == "home.filter" }, "首页不再显示重复的筛选按钮")
-                navigation.focus("home.search"); navigation.handle(.confirm)
+                try toggleSearch()
                 try await Task.sleep(for: .milliseconds(350))
                 let field = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.search.field" }, "搜索框应直接在首页展开")
                 XCTAssertEqual(Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber)), initialWindows, "展开搜索不能创建 popup")
+                let editor = try XCTUnwrap(window.firstResponder as? NSTextView, "鼠标展开后必须直接接受文本输入")
+                editor.insertText("Original", replacementRange: NSRange(location: NSNotFound, length: 0))
+                try await Task.sleep(for: .milliseconds(80))
+                XCTAssertEqual(fixture.model.home.search, "Original", "输入必须写回真实首页查询")
                 XCTAssertTrue(window.convertToScreen(host.bounds).contains(field.frame))
                 for id in ["home.search", "home.refresh", "library.sgradeUpgrade", "home.group.all", "home.group.ready", "home.group.recent", "home.group.favorites"] {
                     let control = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == id })
@@ -488,11 +499,11 @@ import S2ArmAppleAdapter
                 fixture.model.home.search = "Original"
                 try await Task.sleep(for: .milliseconds(80))
                 try snapshot(host, "home-search-expanded-\(language.code)-\(Int(width))")
-                navigation.focus("home.search"); navigation.handle(.confirm)
+                try toggleSearch()
                 try await Task.sleep(for: .milliseconds(350))
                 XCTAssertFalse(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" })
                 XCTAssertEqual(fixture.model.home.search, "Original", "收起搜索保留筛选条件")
-                navigation.focus("home.search"); navigation.handle(.confirm)
+                try toggleSearch()
                 try await Task.sleep(for: .milliseconds(350))
                 navigation.focus("home.search.clear"); navigation.handle(.confirm)
                 try await Task.sleep(for: .milliseconds(80))
@@ -508,6 +519,105 @@ import S2ArmAppleAdapter
                 XCTAssertEqual(fixture.model.home.group.rawValue, "ready")
                 fixture.model.home.group = .all
             }
+        }
+    }
+
+    func testHomeSearchControllerOpensKeyboardAndRestoresTextFocus() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let navigation = fixture.model.gamepad
+        navigation.source.controllers = { [] }
+        for language in [Lang.zh, .en] {
+            navigation.source.controllers = { [] }
+            let (host, window) = try await render(AnyView(LauncherView(model: fixture.model, brand: "Original search fixture")
+                .frame(width: 1120, height: 630)), fixture: fixture, language: language)
+            window.makeKeyAndOrderFront(nil)
+            navigation.attach(window); navigation.source.stop()
+            defer { navigation.detach(); window.close() }
+            let controller = GCController.withExtendedGamepad(), pad = try XCTUnwrap(controller.extendedGamepad)
+            navigation.source.controllers = { [controller] }; navigation.source.isActive = { true }
+            navigation.source.tick(now: 0)
+            navigation.focus("home.search")
+            pad.buttonA.setValue(1); navigation.source.tick(now: 0.01)
+            pad.buttonA.setValue(0); navigation.source.tick(now: 0.02)
+            try await Task.sleep(for: .milliseconds(350))
+            let keyboard = try XCTUnwrap(navigation.keyboard, "手柄确认展开搜索时应自动弹出屏幕键盘")
+            XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" }, "键盘不能使搜索框失焦收起")
+            XCTAssertTrue(navigation.activeWindow === keyboard.panel)
+            keyboard.value = "Original"
+            navigation.focus("pad.key.q"); navigation.handle(.confirm)
+            XCTAssertEqual(keyboard.value, "Originalq")
+            try snapshot(try XCTUnwrap(keyboard.panel.contentView), "search-keyboard-" + language.code)
+            navigation.handle(.menu)
+            try await Task.sleep(for: .milliseconds(350))
+            XCTAssertNil(navigation.keyboard)
+            XCTAssertEqual(fixture.model.home.search, "Originalq")
+            XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" })
+            XCTAssertEqual(navigation.focusedID, "home.search.field", "关闭键盘后，手柄焦点应回到输入框")
+            XCTAssertTrue(window.firstResponder is NSTextView, "关闭键盘后恢复原生文本焦点")
+            navigation.handle(.confirm)
+            try await Task.sleep(for: .milliseconds(100))
+            let cancelled = try XCTUnwrap(navigation.keyboard)
+            cancelled.value = "discarded"
+            navigation.handle(.back)
+            try await Task.sleep(for: .milliseconds(150))
+            XCTAssertEqual(fixture.model.home.search, "Originalq", "B 取消不改变查询")
+            XCTAssertTrue(window.firstResponder is NSTextView)
+            navigation.handle(.back)
+            try await Task.sleep(for: .milliseconds(300))
+            XCTAssertFalse(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" })
+            navigation.handle(.search)
+            try await Task.sleep(for: .milliseconds(150))
+            let shortcutKeyboard = try XCTUnwrap(navigation.keyboard, "搜索快捷键与搜索按钮共用屏幕键盘入口")
+            let key = try XCTUnwrap(navigation.controlTargets(in: shortcutKeyboard.panel).first { $0.id == "pad.key.q" })
+            let rect = shortcutKeyboard.panel.convertFromScreen(key.frame)
+            let beforeClick = shortcutKeyboard.value
+            try click(CGPoint(x: rect.midX, y: rect.midY), in: shortcutKeyboard.panel)
+            XCTAssertEqual(shortcutKeyboard.value, beforeClick + "q", "点击屏幕键盘不能使下方搜索收起")
+            XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" })
+            navigation.handle(.back)
+            try await Task.sleep(for: .milliseconds(150))
+            XCTAssertEqual(fixture.model.home.search, "Originalq")
+            try snapshot(host, "search-controller-return-" + language.code)
+        }
+    }
+
+    func testOnScreenKeyboardKeepsCompleteActionLabelsWithAndWithoutControllerHints() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        let (_, window) = try await render(AnyView(Color.black.frame(width: 1120, height: 630)), fixture: fixture, language: .en)
+        let navigation = fixture.navigation
+        navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
+        defer { navigation.detach(); window.close() }
+        for language in [Lang.zh, .en] {
+            let loc = Localizer(language)
+            navigation.text = { loc.t($0) }
+            navigation.editText(value: "Original", label: "Name") { _ in }
+            let keyboard = try XCTUnwrap(navigation.keyboard)
+            for connected in [false, true] {
+                navigation.presentation.connected = connected
+                navigation.presentation.symbols = ControllerFaceMapping.identity.symbols(for: .playstation)
+                try await Task.sleep(for: .milliseconds(120))
+                let targets = navigation.controlTargets(in: keyboard.panel)
+                let shortcuts = navigation.shortcutTargets(in: keyboard.panel)
+                for (shortcut, key) in [(PadShortcut.tertiary, "space"), (.back, "cancel"), (.primary, "done")] {
+                    let id = try XCTUnwrap(shortcuts[shortcut]?.first)
+                    let target = try XCTUnwrap(targets.first { $0.id == id })
+                    let label = NSHostingView(rootView: Text(loc.t("home.keyboard." + key)).font(.manrope(13, .semibold)))
+                    let needed = label.fittingSize.width + 32 + (connected ? 22 : 0)
+                    let actual = (target.unclippedFrame ?? target.frame).width
+                    print("keyboard-label \(language.code)/\(connected)/\(key): needed=\(needed) actual=\(actual)")
+                    XCTAssertGreaterThanOrEqual(actual + 0.5, needed, "\(language.code)/\(key)：完整文字、图标与内边距必须放得下")
+                }
+                let bounds = keyboard.panel.convertToScreen(try XCTUnwrap(keyboard.panel.contentView).bounds)
+                for target in targets {
+                    XCTAssertTrue(bounds.insetBy(dx: -0.5, dy: -0.5).contains(target.unclippedFrame ?? target.frame), "键盘不能裁切按钮")
+                }
+                try snapshot(try XCTUnwrap(keyboard.panel.contentView), "keyboard-labels-\(language.code)-\(connected)")
+            }
+            keyboard.close(apply: false)
         }
     }
 
@@ -1094,7 +1204,7 @@ private struct SearchControlPreview: View {
             Spacer()
             Button("Outside") { state.outsideClicks += 1 }
                 .controllerButtonStyle(.plain).controllerID("search-test.outside")
-            HomeSearchControl(isExpanded: $state.expanded, text: $state.query, width: 300, edit: {})
+            HomeSearchControl(isExpanded: $state.expanded, text: $state.query, width: 300, edit: { finished in finished() })
         }
         .padding(30).frame(width: 600, height: 120).background(Color.black)
     }
