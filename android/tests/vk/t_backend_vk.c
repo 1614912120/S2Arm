@@ -47,6 +47,11 @@ static int g_memo_on;
 static int g_shown_timing_test;
 void nvn_plat_safepoint(void) {}
 static int g_plc_flag_off;   // C88：1 = 调试开关 nvk_pipe_cache 读成 0（管线缓存关）
+// C207：诊断读数互不清零。g_c207_gputime = 1 时调试开关 nvk_gputime 读成 1（开会话之后才置，免得会话开着 GPU 时间戳）；
+// g_c207_cap = 1 时 nvn_plat_log 把「近 300 帧」读数里的描述符行存下来（g_c207_win），并核每一行「每笔读数」的每笔描述符条数 / 组数（g_c207_nlog、g_c207_badlog）。
+static atomic_int g_c207_gputime, g_c207_cap;   // 别的线程（回放 / 完成 / 录制）也会调 nvn_plat_flag / nvn_plat_log：这两个用原子读写
+static char g_c207_win[12][512]; static int g_c207_nwin;   // 下面几个只由绘制 / 呈现所在的（测试）线程写
+static int g_c207_nlog, g_c207_badlog; static char g_c207_firstbad[512];
 // C89（局中补写）：-1 = 用后端缺省；>= 0 = 把对应的调试开关读成这个值（后端在开会话时读一次，所以要在 open 之前设、open 之后撤）。
 static int g_plc_thr_new = -1, g_plc_thr_first_ms = -1, g_plc_thr_every_ms = -1;
 static int g_stg_std_flag = -1;   // C202：-1 = 后端缺省；>= 0 = 把调试开关 nvk_stg_std 读成这个值（后端在开会话时读一次，所以要在 open 之前设）
@@ -58,6 +63,7 @@ int nvn_plat_flag(const char *name, int dflt) {
     if (!strcmp(name, "nvk_fbdrop") && g_fbdrop_flag != -2) return g_fbdrop_flag >= 0 ? g_fbdrop_flag : 2;   // -2 = 读成生产缺省（C201 核缺省档的行为）
     if (!strcmp(name, "nvk_stg_std") && g_stg_std_flag >= 0) return g_stg_std_flag;
     if (!strcmp(name, "nvk_pipe_cache") && g_plc_flag_off) return 0;
+    if (!strcmp(name, "nvk_gputime") && atomic_load_explicit(&g_c207_gputime, memory_order_relaxed)) return 1;
     if (!strcmp(name, "nvk_plc_new") && g_plc_thr_new >= 0) return g_plc_thr_new;
     if (!strcmp(name, "nvk_plc_first_ms") && g_plc_thr_first_ms >= 0) return g_plc_thr_first_ms;
     if (!strcmp(name, "nvk_plc_every_ms") && g_plc_thr_every_ms >= 0) return g_plc_thr_every_ms;
@@ -69,6 +75,17 @@ static int g_shown_empty_logged;
 void nvn_plat_log(int level, const char *cls, const char *text) {
     (void)level;
     if (text && strstr(text, "分时（实际上屏）") && strstr(text, "帧率= ") && strstr(text, "扩展未启用或不支持")) g_shown_empty_logged++;
+    if (atomic_load_explicit(&g_c207_cap, memory_order_relaxed) && text) {   // C207：下面两种行只由绘制 / 呈现所在的（测试）线程打，不加锁
+        if (strstr(text, "描述符细分（每帧毫秒，近 300 帧）")) {
+            if (g_c207_nwin < 12) snprintf(g_c207_win[g_c207_nwin], sizeof g_c207_win[0], "%s", text);
+            g_c207_nwin++;
+        } else if (strstr(text, "后端逐笔（微秒/笔，共 ")) {
+            const char *d = strstr(text, "描述符更新 "); double per = -1, sets = -1;
+            if (d) sscanf(d, "描述符更新 %lf 笔/笔（%lf 套）", &per, &sets);
+            g_c207_nlog++;
+            if (!(per > 1.995 && per < 2.005 && sets > 0.95 && sets < 1.05) && !g_c207_badlog++) snprintf(g_c207_firstbad, sizeof g_c207_firstbad, "%s", text);
+        }
+    }
     printf("[%s] %s\n", cls ? cls : "", text ? text : "");
 }
 static int g_tri_origin_ul;   // 1 = 按 NVN 窗口原点在左上画（视口翻转）：期望上下对调。缺省 0 = 原点在左下（Vulkan 的自然方向）
@@ -174,6 +191,7 @@ extern uint32_t nvn_gpu_vk_test_cmd_refseen_hits(nvn_gpu_cmd c);   // #1194：�
 extern void nvn_gpu_vk_test_ref_seen(int on);               // #1194：对照档：0 = 备忘关（每次都走原路径），1 = 产品行为
 extern void nvn_gpu_vk_test_emit_counts(nvn_gpu_cmd c, uint32_t out[9]);   // #708：管线、视口、裁剪、混合常量、模板、深度偏移、顶点缓冲、索引缓冲、push 各录了几次
 extern void nvn_gpu_vk_test_set_fault(int mode);
+extern void nvn_gpu_vk_test_diag_timing(int on, uint64_t draw_log_ns);   // C207：直接开 / 关诊断计时，并改逐笔读数的周期（0 = 还原 5 秒）
 extern void nvn_gpu_vk_test_fail_fence(uint64_t signal);
 extern void nvn_gpu_vk_test_delay_segment(uint64_t signal, uint32_t ms);
 
@@ -8031,6 +8049,97 @@ static void c205_all(const char *dir) {
     printf("C205 图形管线散列表：增长 / 多次翻倍 / 增长失败沿用旧表 / 逐字节逐字段 / 先比散列 / 两条退路已核对\n");
 }
 
+// C207：诊断读数（nvk_gputime 开着才有）互不清零。「近 300 帧」读数（nvn_gpu_present 里）与「每 5 秒一次的逐笔读数」（nvn_gpu_draw 末尾）
+// 读同一批累加器（g_desc_* / g_draw_ns）。原先两处各自 exchange 清零，各自只看到对方上次清零之后的那一段：
+// 真机同一局里「每帧重写 867 组」对回收读数的「每帧取用 1750 组」差一倍（#1096 之前的 b28 包，世界场景），每帧毫秒、每笔微秒、条数都偏小。
+// 一帧 = 一段、K 笔绘制，每笔换一次纹理视图（该组变脏 1 个，写 2 条描述符：纹理 + 采样器），所以每帧恒为脏组 K 个、描述符 2K 条，
+// 每笔恒为 2 条、1 组。逐笔读数的周期用测试钩子缩到 20 毫秒，每帧睡 1 毫秒，保证一个 300 帧窗口里它至少触发十几次。
+// 期望（互不清零）：①头一个读数窗口可能不满（计时中途才开），之后每个窗口读数「每帧重写 K 组、写 2K 条描述符」整数相等；
+// ②逐笔读数的每一行都是「2.00 笔/笔（1.0 套）」（分子分母同窗口）。互相清零时 ① 只剩最后一次清零之后的一小段，② 里每个 300 帧窗口的整点那一行偏小。
+// 备忘开着（S2A_TEST_DESC_MEMO）时内容相同的组不再写，条数 / 组数不再是定值，只跑不核。
+#define C207_K 40
+static void c207_diag_readers(const char *dir) {
+    nvn_gpu_layout_ent ents[2]; memset(ents, 0, sizeof ents);
+    ents[0].set = 0; ents[0].cls = NVN_GPU_RES_TEX; ents[0].access = NVN_GPU_ACC_R; ents[0].binding = 0; ents[0].count = 1; ents[0].stages = 1u << NVN_GPU_SH_FS;
+    ents[1].set = 0; ents[1].cls = NVN_GPU_RES_SAMP; ents[1].access = NVN_GPU_ACC_R; ents[1].binding = 1; ents[1].count = 1; ents[1].stages = 1u << NVN_GPU_SH_FS;
+    nvn_gpu_layout fl, vl; memset(&fl, 0, sizeof fl); memset(&vl, 0, sizeof vl); fl.ent = ents; fl.nent = 2;
+    void *vsm = NULL, *fsm = NULL; nvn_gpu_shader vs = NULL, fs = NULL;
+    if (!load_shader_pair(dir, "tri.vert", "tri.frag", &vl, &fl, &vs, &fs, &vsm, &fsm)) { CHECK(0, "C207 读不到着色器"); return; }
+    nvn_gpu_pipe_desc pd; memset(&pd, 0, sizeof pd); pd.poly.mode = NVN_POLYGON_MODE_FILL; pd.origin_ll = (uint8_t)!g_tri_origin_ul; pd.color.logic_op = 0x3;
+    pd.st[NVN_GPU_SH_VS].sh = vs; pd.st[NVN_GPU_SH_FS].sh = fs; pd.cfmt[0] = NVN_FORMAT_RGBA8; pd.samples = 1; pd.prim = 4; pd.chmask.mask = 0xF;
+    pd.attr[0].fmt = NVN_FORMAT_RG32F; pd.attr[0].offset = 0; pd.attr[0].stream = 0; pd.attr[1].fmt = NVN_FORMAT_RG32F; pd.attr[1].offset = 8; pd.attr[1].stream = 0;
+    pd.stream[0].stride = 16;
+    nvn_gpu_err e; memset(&e, 0, sizeof e); nvn_gpu_pipe pipe = NULL;
+    CHECK(OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e)), "C207 pipe：%d %s", e.rc.code, e.why);
+    nvn_gpu_surface sf = NULL;
+    CHECK(OK(nvn_gpu_surface_attach((void *)1, &sf, &e)) && sf, "C207 attach：%s", e.why);
+    if (!pipe || !sf) goto done;
+    const float verts[3][4] = {{-1, -1, 0, 0}, {3, -1, 2, 0}, {-1, 3, 0, 2}};
+    nvn_gpu_buf vb = make_buf(sizeof verts, NVN_GPU_MEM_SHARED, verts);
+    nvn_gpu_tex red = make_tex(1, 1, NVN_FORMAT_RGBA8, NVN_GPU_TEX_SAMPLED), blue = make_tex(1, 1, NVN_FORMAT_RGBA8, NVN_GPU_TEX_SAMPLED);
+    nvn_gpu_tex out = make_tex(16, 16, NVN_FORMAT_RGBA8, NVN_GPU_TEX_RENDER);
+    nvn_gpu_tex shown = make_tex(64, 36, NVN_FORMAT_RGBA8, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_RENDER | NVN_GPU_TEX_CPU_UPLOAD);
+    nvn_gpu_view rv = make_view(red), bv = make_view(blue), ov = make_view(out), sv = make_view(shown);
+    samp_par sp = {0}; nvn_gpu_samp samp = NULL; CHECK(OK(nvn_gpu_samp_create(&sp, &samp, &e)), "C207 sampler：%s", e.why);
+    nvn_gpu_binding binds[2]; memset(binds, 0, sizeof binds);
+    binds[0].ent = 0; binds[0].cls = NVN_GPU_RES_TEX; binds[1].ent = 1; binds[1].cls = NVN_GPU_RES_SAMP; binds[1].u.samp = samp;
+    nvn_gpu_dyn dyn; memset(&dyn, 0, sizeof dyn); dyn.origin_ll = (uint8_t)!g_tri_origin_ul; dyn.nvp = 1; dyn.vp[0][2] = 16; dyn.vp[0][3] = 16; dyn.vp[0][5] = 1; dyn.has_sc = 1; dyn.sc[2] = 16; dyn.sc[3] = 16;
+    nvn_gpu_draw_args da; memset(&da, 0, sizeof da); da.prim = 4; da.count = 3; da.instances = 1;
+    nvn_gpu_present_desc pdsc; memset(&pdsc, 0, sizeof pdsc); pdsc.src = sv; pdsc.filter = 1;
+    uint64_t sig = 20700;
+    {   // 首段：上传两张 1×1 采样图和上屏用的图（计时还没开；GPU 时间戳的开关在进程里第一次提交时读一次，这里先让它读成 0）
+        nvn_gpu_cmd c = begin_cmd(); const uint8_t r4[4] = {255, 0, 0, 255}, b4[4] = {0, 0, 255, 255}; static uint8_t px[64 * 36 * 4]; memset(px, 0x80, sizeof px);
+        nvn_gpu_tex_upload(c, red, 0, 0, NULL, r4, 4, 4); nvn_gpu_tex_upload(c, blue, 0, 0, NULL, b4, 4, 4); nvn_gpu_tex_upload(c, shown, 0, 0, NULL, px, 64 * 4, sizeof px);
+        CHECK(OK(nvn_gpu_cmd_commit(c, sig, on_done, NULL, &e)), "C207 首段 commit：%s", e.why);
+        CHECK(OK(nvn_gpu_fence_wait(sig, 5000000000ull, &e)), "C207 首段 wait：%s", e.why); sig++;
+    }
+    g_c207_nwin = g_c207_nlog = g_c207_badlog = 0; g_c207_firstbad[0] = 0;
+    atomic_store(&g_c207_cap, 1); atomic_store(&g_c207_gputime, 1);
+    nvn_gpu_vk_test_diag_timing(1, 20000000ull);
+    int frames = 0;
+    for (; frames < 1500 && g_c207_nwin < 3; frames++) {
+        nvn_gpu_cmd c = begin_cmd();
+        nvn_gpu_pass_desc pass; memset(&pass, 0, sizeof pass); pass.ncolor = 1; pass.w = 16; pass.h = 16; pass.layers = 1;
+        pass.color[0].view = ov; pass.color[0].load = NVN_GPU_LOAD_CLEAR; pass.color[0].store = NVN_GPU_STORE_STORE;
+        nvn_gpu_pass_begin(c, &pass); nvn_gpu_set_pipe(c, pipe); nvn_gpu_set_vbuf(c, 0, vb, 0); nvn_gpu_set_dyn(c, &dyn);
+        for (int d = 0; d < C207_K; d++) { binds[0].u.view = (d & 1) ? bv : rv; nvn_gpu_bind(c, NVN_GPU_SH_FS, binds, 2); nvn_gpu_draw(c, &da); }
+        nvn_gpu_pass_end(c);
+        if (!OK(nvn_gpu_cmd_commit(c, sig, on_done, NULL, &e)) || !OK(nvn_gpu_fence_wait(sig, 5000000000ull, &e))) { CHECK(0, "C207 帧 %d commit / wait：%s", frames, e.why); break; }
+        sig++;
+        nvn_gpu_drawable dr; memset(&dr, 0, sizeof dr);
+        if (!OK(nvn_gpu_drawable_acquire(sf, 1000000000ull, NULL, &dr, &e)) || !OK(nvn_gpu_present(sf, &dr, &pdsc, 30000 + (uint64_t)frames, NULL, NULL, &e))) { CHECK(0, "C207 帧 %d 呈现：%s", frames, e.why); break; }
+        struct timespec nap = {0, 1000000}; nanosleep(&nap, NULL);
+    }
+    nvn_gpu_vk_test_diag_timing(0, 0);
+    atomic_store(&g_c207_gputime, 0); atomic_store(&g_c207_cap, 0);
+    CHECK(g_c207_nwin >= 3, "C207 近 300 帧读数期望至少打出 3 次（头一次可能不满）→ %d 次（跑了 %d 帧）", g_c207_nwin, frames);
+    CHECK(g_c207_nlog >= 15, "C207 逐笔读数期望至少 15 行（周期 20 毫秒，跑了 %d 帧、每帧睡 1 毫秒）→ %d 行", frames, g_c207_nlog);
+    if (!g_memo_on) {
+        int bad_win = 0; double sets_seen = 0, desc_seen = 0;
+        for (int i = 1; i < g_c207_nwin && i < 12; i++) {
+            const char *a = strstr(g_c207_win[i], "每帧重写 "), *b = strstr(g_c207_win[i], "、写 ");
+            double s = -1, w = -1; if (a) s = strtod(a + strlen("每帧重写 "), NULL); if (b) w = strtod(b + strlen("、写 "), NULL);
+            sets_seen = s; desc_seen = w;
+            if (s != (double)C207_K || w != (double)(2 * C207_K)) { bad_win++; printf("C207 窗口 %d 读数不符：%s\n", i, g_c207_win[i]); }
+        }
+        CHECK(bad_win == 0, "C207 完整的 300 帧窗口读数期望「每帧重写 %d 组、写 %d 条描述符」→ 最后一个 %.0f 组 / %.0f 条，%d 个窗口不符", C207_K, 2 * C207_K, sets_seen, desc_seen, bad_win);
+        CHECK(g_c207_badlog == 0, "C207 逐笔读数每一行期望「描述符更新 2.00 笔/笔（1.0 套）」→ %d / %d 行不符，第一条：%s", g_c207_badlog, g_c207_nlog, g_c207_firstbad);
+    }
+    nvn_gpu_view_release(rv); nvn_gpu_view_release(bv); nvn_gpu_view_release(ov); nvn_gpu_view_release(sv);
+    nvn_gpu_tex_release(red); nvn_gpu_tex_release(blue); nvn_gpu_tex_release(out); nvn_gpu_tex_release(shown);
+    nvn_gpu_samp_release(samp); nvn_gpu_buf_release(vb, NULL, NULL);
+done:
+    if (sf) CHECK(OK(nvn_gpu_surface_detach(sf, 5000000000ull, &e)), "C207 detach：%s", e.why);
+    nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm);
+}
+static void c207_all(const char *dir) {
+    nvn_gpu_err e = {0};
+    if (!open_backend()) { CHECK(0, "C207 open"); return; }
+    c207_diag_readers(dir);
+    CHECK(OK(nvn_gpu_close(5000000000ull, &e)), "C207 close：%d %s", e.rc.code, e.why);
+    printf("C207 诊断读数互不清零：近 300 帧读数与逐笔读数各自读增量、不清零共享累加器，已核对\n");
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);   // 经 tee 的管道默认整块缓冲：超时被杀时最后一行不是卡点；按行刷新才看得出卡在哪
     if (getenv("S2A_TEST_COUNT_ONLY")) return c658_main(argc, argv);
@@ -8079,6 +8188,13 @@ int main(int argc, char **argv) {
         memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
         c205_all(argv[1]);
         printf("nvn_gpu Vulkan 后端 C205 单跑：%s（%d 处不符）\n", g_fail ? "红" : "绿", g_fail);
+        s2a_vk_device_destroy(&g_dev, 1);
+        return g_fail ? 1 : 0;
+    }
+    if (getenv("S2A_TEST_C207_ONLY") && argc > 1) {   // 开发时只跑 C207（诊断读数；run.sh 不设这个变量）
+        memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
+        c207_all(argv[1]);
+        printf("nvn_gpu Vulkan 后端 C207 单跑：%s（%d 处不符）\n", g_fail ? "红" : "绿", g_fail);
         s2a_vk_device_destroy(&g_dev, 1);
         return g_fail ? 1 : 0;
     }
@@ -8479,6 +8595,7 @@ int main(int argc, char **argv) {
     c206_ref_seen();   // C206 段内已引用句柄备忘：缺省档与对照档各三个会话
 
     c205_all(argv[1]);   // C205 图形管线散列表：每个臂自己一个会话
+    c207_all(argv[1]);   // C207 诊断读数互不清零：自己一个会话（计时开关、逐笔读数周期都在用例里开 / 还原）
 
     for (int sw = 0; sw < 2; sw++) {
         if (!open_backend()) return 1;
