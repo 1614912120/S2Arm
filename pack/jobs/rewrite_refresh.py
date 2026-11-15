@@ -172,7 +172,8 @@ def sgrade_rewrite(c, game, base, exefs, target, work):
     import patches
     gid = game["id"].upper()
     root = Path(work) / "root"; root.mkdir()
-    (root / "exefs").symlink_to(Path(exefs).resolve())
+    # 拷不链（#1153）：Windows 建目录软链要开发者模式 / 管理员（WinError 1314，玩家每款都「补丁打入失败」）；exefs 只是几个程序模块，拷一份不费事，网络盘也行
+    shutil.copytree(Path(exefs).resolve(), root / "exefs")
     skip = tuple("." + e for e in OUTPUTS)
     for p in Path(base).iterdir():   # 逐款表照拷（出表读 fps.tsv 判「本款已有我方帧率表」、改写读 widen_sites.tsv）；改写产物与旧补丁表不拷
         if p.is_file() and not p.name.endswith(skip) and not p.name.startswith(("cpatch", "cheat-src.")) and p.suffix != ".log":
