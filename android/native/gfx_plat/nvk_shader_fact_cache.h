@@ -112,14 +112,13 @@ static const struct rp_prog *fact_cache_find(const struct s2a_input_identity *id
     return NULL;
 }
 
-static void fact_cache_keep(const struct s2a_input_identity *id, const uint8_t base[32],
-                            const uint8_t *bytes, size_t len, const struct rp_prog *pg) {
-    uint32_t mask[4];
-    if (!fact_cache_mask(bytes, len, pg, mask)) return;
+/* Mask already computed from the result bytes (the caller may have freed them). */
+static void fact_cache_keep_mask(const struct s2a_input_identity *id, const uint8_t base[32],
+                                 const uint32_t mask[4], const struct rp_prog *pg) {
     struct fact_variant *v = calloc(1, sizeof *v);
     if (!v) return;
     if (!fact_cache_hash(id, mask, v->key)) { free(v); return; }
-    memcpy(v->mask, mask, sizeof mask); v->prog = pg;
+    memcpy(v->mask, mask, sizeof v->mask); v->prog = pg;
     v->next = nvn_hm_get(&g_fact_variants, base);
     nvn_hm_put(&g_fact_variants, base, v);
 }

@@ -65,6 +65,8 @@ struct s2a_vk_device {
     uint32_t depth_subst_mask;
     // #975：VK_EXT_4444_formats 已启用（formatA4B4G4R4）；16 位打包格式走退回格式的位（nvn_vk_format.h k_p16 序）。
     int formats_4444_enabled;
+    // VK_EXT_depth_clip_control 已启用（depthClipControl）：管线可把裁剪深度设成 [-1, 1]（nvn_backend.h NVN_GPU_CAP_DEPTH_CLIP_CTL）
+    int depth_clip_control_enabled;
     uint32_t p16_fallback_mask;
     int bc_decode_forced;   // S2A_VK_BC_DECODE=force（仅 debug 构建生效）
     // VK_EXT_external_memory_host：把 host 指针（guest 内存池直映射地址）导入成 VkBuffer 内存的零拷贝路径。

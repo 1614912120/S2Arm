@@ -30,7 +30,7 @@ const struct rp_prog *nvk_shader_last_test_find(uint64_t key);
 static int checks, failures, compiler_calls, diag_enabled, diag_lines, diag_queries;
 static unsigned fake_array_count;
 static int separate_fixture;
-static int fake_gs_success, fake_gs_result_mode, gs_loads[6], fake_geometry_enabled = 1;
+static int fake_gs_success, fake_gs_result_mode, gs_loads[6], fake_geometry_enabled = 1, fake_depth_clip;
 static int fake_gs_fact_deps;
 static int fixture_depth_zero, fixture_origin_lower_left, shader_load_count, shader_release_count;
 static int fake_cs_success, cs_loads;
@@ -49,6 +49,8 @@ static uint8_t gs_keys[6][8], gs_stages[6], gs_keys_ok;
 #define CHECK(c, ...) do { checks++; if (!(c)) { failures++; fprintf(stderr, "FAIL: "); fprintf(stderr, __VA_ARGS__); fputc('\n', stderr); } } while (0)
 
 void nvn_plat_safepoint(void) {}
+// 宿主夹具没有跨局缓存目录：程序预热清单不落盘（nvk_prog_warm 只读平台目录，不读环境变量）。
+const char *nvn_plat_dir(int which) { (void)which; return NULL; }
 int nvn_plat_flag(const char *name, int dflt) {
     if (!strcmp(name, "nvk_texpool_log")) { diag_queries++; return diag_enabled; }
     return dflt;
@@ -79,7 +81,7 @@ const prog_t *nvn_prog_snap_get(uint64_t serial, uint8_t keys[6][8], uint8_t *ok
     memcpy(keys, gs_keys, sizeof gs_keys); memcpy(stage, gs_stages, sizeof gs_stages); *ok = gs_keys_ok;
     return &gs_program;
 }
-void nvn_gpu_caps_get(nvn_gpu_caps *out) { memset(out, 0, sizeof *out); out->caps = fake_geometry_enabled ? NVN_GPU_CAP_GEOMETRY : 0; }
+void nvn_gpu_caps_get(nvn_gpu_caps *out) { memset(out, 0, sizeof *out); out->caps = (fake_geometry_enabled ? NVN_GPU_CAP_GEOMETRY : 0) | (fake_depth_clip ? NVN_GPU_CAP_DEPTH_CLIP_CTL : 0); }
 int rp_tex_snap_by_id(int id, tex_t *t, view_t *v, int *h) {
     // 77：带视图（改目标为 RECTANGLE）；78 / 79：同一组格式 / 目标 / 深度的两个不同句柄（快路按事实认，不按句柄认）。
     if (!separate_fixture || (id != 77 && id != 78 && id != 79 && !(separate_fixture == 2 && id == 0))) return 0;
@@ -453,6 +455,9 @@ static int emit_real_request(const char *profile_path, const char *closure, cons
     external_profile[pn] = 0; snprintf(external_closure, sizeof external_closure, "%s", closure);
     struct s2a_jv profile_obj = {external_profile, pn}, hash_field;
     if (s2a_jv_obj_find(profile_obj, "profileHash", &hash_field) || s2a_jv_str(hash_field, external_profile_hash, sizeof external_profile_hash)) return 1;
+    // GS 整链（--emit-real 及其复用变体）：生成的请求要与 vk/t_replay_gs 在 lavapipe 上发出的逐字节相同；lavapipe 有 VK_EXT_depth_clip_control，
+    //   有这项能力时现编不改写 z（nvk_shader.c fill_facts），所以这里同样报有（设备没有时 t_replay_gs 的逐字节比对会直接红）
+    fake_depth_clip = tbuf == 0 || tbuf >= 3;   // GS 整链的基准（0）、执行复用（3）、三种宽松输入（4–6）同一口径，内容才可比；贴图缓冲链（1 / 2）不变
     rp_state_reset(); rp_shader_reset(); s2a_source_clear();
     uint8_t keys[3][8];
     for (unsigned st = 0; st < 3; st++) {
