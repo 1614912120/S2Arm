@@ -669,6 +669,17 @@ int main(void) {
         CHECK(r2 == 1 && !stat(okf, &st2) && stat(fifo, &st2) && stat(locked, &st2) && !access(g2, W_OK) && sh(c) != 0,
               "读不到的跳过、读得到的照搬：返回 1、ok.bin 在新目录、管道与 000 文件不在、新目录可写、新树没残留（实际 %d「%s」）", r2, s2a_games_repair_detail());
         snprintf(c, sizeof c, "chmod -R u+rw '%s'/.s2a-unwritable-* 2>/dev/null", base); sh(c);
+        { // 审计 P1-180：读不到的是存档（S2A/ 下，000），目录又写不进 → 不换树（换上去活动目录里就没有这份存档了），资源包读不到照旧可跳过。
+          //   期望手写：返回负数；活动目录 games 原样（存档文件还在原处、还是 000 读不到）；没留 .s2a-games-new-*；原因里写「存档」
+          char g3[600]; snprintf(g3, sizeof g3, "%s/games/0100000000FED000", base);
+          snprintf(c, sizeof c, "mkdir -p '%s/S2A/ryujinx/bis/user/save/1' && printf sv > '%s/S2A/ryujinx/bis/user/save/1/data' && chmod 0 '%s/S2A/ryujinx/bis/user/save/1/data' && chmod 555 '%s'", g3, g3, g3, g3);
+          CHECK(sh(c) == 0, "P1-180 造：写不进的游戏目录里一份读不到的存档");
+          int r3 = s2a_games_repair(base);
+          char sv[700]; snprintf(sv, sizeof sv, "%s/S2A/ryujinx/bis/user/save/1/data", g3); struct stat st3;
+          snprintf(c, sizeof c, "ls -d '%s'/.s2a-games-new-* >/dev/null 2>&1", base);
+          CHECK(r3 < 0 && !stat(sv, &st3) && st3.st_size == 2 && sh(c) != 0 && strstr(s2a_games_repair_detail(), "存档"),
+                "P1-180 存档读不到：不换树（返回 %d）、存档还在原处、没残留新树、原因写存档（「%s」）", r3, s2a_games_repair_detail());
+          snprintf(c, sizeof c, "chmod 755 '%s'; chmod 644 '%s'; rm -rf '%s'", g3, sv, g3); sh(c); }
 #endif
         chmod(root, 0755);
         snprintf(c, sizeof c, "chmod -R u+w '%s' 2>/dev/null; rm -rf '%s'", base, base); sh(c);

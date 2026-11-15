@@ -436,7 +436,12 @@ static int games_unwritable(const char *games, char *bad, size_t n, struct stat 
 #include <sys/clonefile.h>
 #endif
 // 读不到的那一项跳过、计数（反防御：读得到的都搬过去照常装；缺的文件由资源包核对报出来，从电脑重装补齐）
+// 存档读不到（审计 P1-180）：本款文档根 S2A/ 下的（存档、账号）不是电脑重装能补回来的——跳过它换上新树，活动目录里就没有这份存档了。
+//   记下第一项，repair_tree 见到就不换树（旧树原样当活动目录，数据都在）；资源包文件读不到照旧跳过、资源包核对会报出来
+static unsigned g_repair_save_skipped; static char g_repair_save1[700];
+static int is_save_path(const char *p) { const char *s = strstr(p, "/S2A"); return s && (s[4] == '/' || !s[4]); }
 static void clone_skip(const char *what, const char *path, int err) {
+    if (is_save_path(path) && !g_repair_save_skipped++) snprintf(g_repair_save1, sizeof g_repair_save1, "%s %s：%s", what, path, err ? strerror(err) : "不是普通文件 / 目录 / 链接");
     if (!g_repair_skipped++) snprintf(g_repair_skip1, sizeof g_repair_skip1, "%s %s：%s", what, path, err ? strerror(err) : "不是普通文件 / 目录 / 链接");
     LOG("【黄】游戏目录迁移：%s %s 读不到（%s），跳过", what, path, err ? strerror(err) : "不是普通文件 / 目录 / 链接");
 }
@@ -496,8 +501,9 @@ static int repair_tree(const char *proc_docs) {
     char fresh[2100], keep[2100], why[1600] = ""; snprintf(fresh, sizeof fresh, "%s/.s2a-games-new-%s", proc_docs, ts); snprintf(keep, sizeof keep, "%s/.s2a-unwritable-%s", proc_docs, ts);
     { struct stat x; for (int k = 2; (!lstat(fresh, &x) || !lstat(keep, &x)) && k < 1000; k++) {   // 同一秒里第二次迁（上一回的旧目录还在）：名字加序号，不撞
         snprintf(fresh, sizeof fresh, "%s/.s2a-games-new-%s-%d", proc_docs, ts, k); snprintf(keep, sizeof keep, "%s/.s2a-unwritable-%s-%d", proc_docs, ts, k); } }
-    unsigned files = 0; uint64_t bytes = 0; uint64_t t0 = now_ns(); g_repair_skipped = 0; g_repair_skip1[0] = 0;
+    unsigned files = 0; uint64_t bytes = 0; uint64_t t0 = now_ns(); g_repair_skipped = 0; g_repair_skip1[0] = 0; g_repair_save_skipped = 0; g_repair_save1[0] = 0;
     int rc = clone_tree(games, fresh, &files, &bytes, why, sizeof why);
+    if (!rc && g_repair_save_skipped) { snprintf(why, sizeof why, "存档读不到（%u 项，第一项 %s），换上新树存档就缺了：没换，旧目录照旧在用", g_repair_save_skipped, g_repair_save1); rc = -4; }
     if (!rc && rename(games, keep)) { snprintf(why, sizeof why, "把旧目录改名成 %s：%s", keep, strerror(errno)); rc = -2; }
     if (!rc && rename(fresh, games)) {
         int e = errno; int back = rename(keep, games);
@@ -512,7 +518,7 @@ static int repair_tree(const char *proc_docs) {
     }
     LOG("游戏目录：迁好了：%u 个文件 %llu MB 克隆进新目录（%.1f 秒），旧的改名为 %s%s%s", files, (unsigned long long)(bytes >> 20), (now_ns() - t0) / 1e9, keep,
         g_repair_skipped ? "；读不到跳过的第一项：" : "", g_repair_skipped ? g_repair_skip1 : "");
-    if (g_repair_skipped) LOG("【黄】游戏目录：%u 项读不到没搬（缺的文件资源包核对会报出来，从电脑重新装这款补齐）", g_repair_skipped);
+    if (g_repair_skipped) LOG("【黄】游戏目录：%u 项资源包文件读不到没搬（缺的文件资源包核对会报出来，从电脑重新装这款补齐）", g_repair_skipped);
     return 1;
 }
 // 资源包那棵（Library 下）：主位置 Library/Application Support/S2Arm 这条链 App 建不出 / 写不进（iOS 27 玩家机上 Application Support/S2Arm 归 root，
