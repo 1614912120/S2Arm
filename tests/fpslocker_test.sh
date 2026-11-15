@@ -7,6 +7,7 @@
 #   ③ bytes：uint32 列表按小端连写
 #   ④ DECLARATIONS：变量排在变量区（8 对齐）、初值非 0 才写；ALL_FPS 里 [VARIABLE, $名] 换成 [MAIN, 偏移]；block 丢弃
 #   ⑤ 调 FPSLocker 自带帮助函数 _fpsLock() → 不收（Unsupported）
+#   ⑥ 汇编器起不来（Windows 没有 xcrun，FileNotFoundError）→ 这份不收（Unsupported），不冲垮补丁出表（#1173）
 set -u; H=$(cd "$(dirname "$0")/.." && pwd)
 python3 - "$H" <<'EOF'
 import struct, subprocess, sys
@@ -84,6 +85,19 @@ try:
 except F.Unsupported as e:
     ok = '_fpsLock' in str(e)
 ck('⑤ 自带帮助函数不收', ok)
+# ⑥ #1173：汇编器起不来（Windows 没有 xcrun → FileNotFoundError WinError 2）→ 这份不收（Unsupported），不让异常冲垮整个补丁出表
+real = subprocess.run
+def gone(*a, **k): raise FileNotFoundError(2, '系统找不到指定的文件。')
+subprocess.run = gone
+try:
+    F._assemble(['nop']); ok = False
+except F.Unsupported as e:
+    ok = 'xcrun' in str(e)
+except Exception:
+    ok = False
+finally:
+    subprocess.run = real
+ck('⑥ 没有汇编器：这份不收、不抛别的异常', ok)
 print(('🔴 fpslocker_test 有不通项' if bad else '✅ fpslocker_test 全过'))
 sys.exit(bad)
 EOF
