@@ -64,13 +64,11 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
         if (bs.count > NVN_REFL_MAXARG) FAIL("%lu bindings, over the argument buffer limit %d", (unsigned long)bs.count, NVN_REFL_MAXARG);   // each binding takes at least one entry
         if (!(o->b = calloc(bs.count ? bs.count : 1, sizeof *o->b))) FAIL("allocation of %lu bindings failed", (unsigned long)bs.count);
         o->route_b = 1; o->abi = 0;   // spirv-cross set 0 → [[buffer(0)]]
-        NSMutableDictionary<NSString *, NSNumber *> *by_name = [NSMutableDictionary dictionary], *lead_for = [NSMutableDictionary dictionary];   // #798 TBLEAD：成员名 → 下标；前导项下标 → 它所属的成员名
         for (NSDictionary *b in bs) {
             NSString *k = b[@"kind"]; nvn_rbind *r = &o->b[o->nb];
             id rg = b[@"reg"]; int reg = [rg isKindOfClass:[NSNumber class]] ? [rg intValue] : -1, aid = [b[@"arg_id"] intValue];
             r->aid = (uint16_t)aid; r->reg = reg < 0 ? 0 : (uint16_t)reg;
             NSString *nm = b[@"msl_name"], *ty = b[@"msl_type"];
-            if ([nm isKindOfClass:[NSString class]]) by_name[nm] = @(o->nb);
             // Ryujinx's fallback for a handle it cannot trace to one slot (handle type 4: <stage>_<t|tb|s>_cb0_40000000, declared array<element, n>); the build leaves it without a slot
             // ('tbuf' / 'tex' with no reg, '?' for the samplers). Octopath Traveler 0's vertex shaders pick one of several c2 table slots at run time (61 shaders, slots 0-10)
             NSString *el; int n = arr_len(ty, &el);
@@ -139,8 +137,6 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
             else if ([k isEqualToString:@"lb"]) r->kind = NVN_RB_LB;   // S2Arm #800 sampler LOD bias table (dmsh_red.py fs_lb)
             else if ([k isEqualToString:@"ubolen"]) r->kind = NVN_RB_UBOLEN;   // #1204 T1 uniform buffer length table (gal_spvx.m direct form)
             else if ([k isEqualToString:@"sbsize"]) r->kind = NVN_RB_SBSZ;     // SPIRV-Cross storage buffer byte sizes (by argument id)
-            else if ([k isEqualToString:@"tblead"]) { if (![b[@"for"] isKindOfClass:[NSString class]]) FAIL("B binding %s: texel buffer lead without its buffer", [nm description].UTF8String);
-                r->kind = NVN_RB_TBLEAD; lead_for[@(o->nb)] = b[@"for"]; }   // #798（nvn_refl.h TBLEAD）
             else if ([k isEqualToString:@"c1"]) r->kind = NVN_RB_C1;
             // 常量库 c[24 + k]：NVN2（Ampere）的推常量槽 k（nvn2_cmd.h；PushGraphics / ComputeConstants 推进来的那 256 字节），不是驱动段
             else if ([k isEqualToString:@"drvcb"] && [b[@"bank"] intValue] >= 24 && [b[@"bank"] intValue] < 32) { r->kind = NVN_RB_PUSH; r->reg = (uint16_t)([b[@"bank"] intValue] - 24); }
@@ -150,12 +146,6 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
                 FAIL("B binding %s has no resolved slot number", [b[@"msl_name"] UTF8String]);
             if (r->kind == NVN_RB_TEXU || r->kind == NVN_RB_SAMPU || r->kind == NVN_RB_TBUFU || r->kind == NVN_RB_IMGU) pair_from_name(nm, r);   // the second word of a separate handle
             o->nb++;
-        }
-        for (NSNumber *li in lead_for) {   // #798：前导项配给它的纹素缓冲（名字对上、且是纹素缓冲那几种）
-            NSNumber *ti = by_name[lead_for[li]]; int L = li.intValue, T = ti ? ti.intValue : -1;
-            if (T < 0 || T >= o->nb || !(o->b[T].kind == NVN_RB_TBUF || o->b[T].kind == NVN_RB_TBUFU || (o->b[T].kind == NVN_RB_TEX && o->b[T].dtt == (uint8_t)MTLTextureTypeTextureBuffer)))
-                FAIL("B binding gal_tbl_%s: no texel buffer of that name", [lead_for[li] description].UTF8String);
-            o->b[T].tbl = (uint16_t)(L + 1); o->b[L].tbl = (uint16_t)(T + 1); o->has_tbl = 1;
         }
         NSDictionary *dr = j[@"drv_reads"];
         if ([dr isKindOfClass:[NSDictionary class]]) { o->drv_read[0] = dr[@"0"] != nil; o->drv_read[2] = dr[@"2"] != nil; }
