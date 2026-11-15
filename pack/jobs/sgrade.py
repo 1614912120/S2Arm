@@ -279,7 +279,7 @@ def write_kit_state(c, gid, kit):
     try:
         kit = Path(kit)
         rows = community._rows(kit / "cpatch.tsv")
-        ids = [r.get("编号") or "" for r in rows]
+        ids = [r.get("编号") or "" for r in rows]   # 非玩家句（表列名）
         m = _match(c, gid)
         vers = lambda cat: {"mine": m.get("version") or "", "available": [o["version"] for o in m.get("others") or [] if cat in o.get("cats", [])],
                             "exact": int((m.get("exact") or {}).get(cat) or 0)}

@@ -233,7 +233,8 @@ NSArray<NSDictionary *> *s2a_ios_crash_decide_for(NSString *gid) {
     }
     [d removeObjectForKey:@"S2ACrashHostOnce"];
     NSMutableArray *rec = [NSMutableArray array];
-    for (NSDictionary *it in items) [rec addObject:@{@"kind": it[@"kind"], @"key": it[@"key"], @"name": it[@"name"] ?: @""}];
+    NSNumber *now = @((long long)NSDate.date.timeIntervalSince1970);
+    for (NSDictionary *it in items) [rec addObject:@{@"kind": it[@"kind"], @"key": it[@"key"], @"name": it[@"name"] ?: @"", @"cause": @"crash", @"at": now}];
     [d setObject:@{@"ver": app_version(), @"items": rec} forKey:@"S2ACrashAutoOff"];
     return items;
 }
@@ -279,3 +280,48 @@ void s2a_ios_crash_turn_off_for(NSString *gid, NSArray<NSDictionary *> *items) {
     if (cheats) s2a_ios_cheats_write_enabled(dir, con);
 }
 void s2a_ios_crash_turn_off(NSArray<NSDictionary *> *items) { s2a_ios_crash_turn_off_for(current_gid(), items); }
+
+
+// S 级按类状态（同 pack/jobs/sgrade.py state 的形状与状态码，iPhone 设置页 / 游戏库读；界面与文案归体验梳理线）：
+//   随包表：sgrade_state.json（出包 pack/jobs/sgrade.py write_kit_state 写进 iOS kit：版本对照、满屏来源、出包时选不打入；组装时拷进 App）
+//   开关、上一局是否生效（cpatch_status.tsv）、自动关（S2ACrashAutoOff，崩溃 / 停帧救场记）由本机算。→ {platform, widescreen, fps, gfx, cheats}，每类 {state, …}
+NSDictionary *s2a_ios_sgrade_state(NSString *gid) {
+    NSData *raw = [NSData dataWithContentsOfFile:[s2a_ios_game_dir(gid) stringByAppendingPathComponent:@"sgrade_state.json"]];
+    NSDictionary *kit = raw ? [NSJSONSerialization JSONObjectWithData:raw options:0 error:nil] : nil; if (![kit isKindOfClass:NSDictionary.class]) kit = nil;
+    BOOL opted = [kit[@"optedOut"] boolValue];
+    NSUserDefaults *d = s2a_ios_settings_defaults_for(gid);
+    NSDictionary *ao = [d dictionaryForKey:@"S2ACrashAutoOff"]; NSMutableDictionary *autoOff = [NSMutableDictionary dictionary];
+    for (NSDictionary *it in ao[@"items"]) autoOff[[NSString stringWithFormat:@"%@\t%@", it[@"kind"], it[@"key"]]] = @{@"cause": it[@"cause"] ?: @"crash", @"at": it[@"at"] ?: @0};
+    NSDictionary *st = s2a_ios_cpatch_status_for(gid);
+    BOOL (^bad)(NSArray *) = ^BOOL(NSArray *x) { return x.count >= 2 && ([x[0] isEqual:@"不配套"] || [x[0] isEqual:@"表不认"] || [x[1] isEqual:@"unfilled"]); };   // 非玩家句（运行时状态值）
+    NSString *(^missing)(NSString *) = ^NSString *(NSString *cat) {
+        if (!kit) return @"unknown";
+        NSDictionary *v = kit[cat][@"versions"]; if ([v[@"exact"] intValue] > 0) return @"pending";
+        return [v[@"available"] count] ? @"version" : @"none";
+    };
+    NSArray<S2ACPatchGroup *> *groups = patch_groups(gid);
+    BOOL fam = NO, fpsP = NO; NSMutableArray *wsIds = [NSMutableArray array];
+    for (S2ACPatchGroup *g in groups) for (S2ACPatchItem *it in g.items) { if (it.followsFullscreen) fam = YES; else if (it.followsFps60) fpsP = YES; else if ([g.kind isEqual:@"widescreen"]) [wsIds addObject:it.ident]; }
+    NSMutableDictionary *out = [@{@"platform": @"ios"} mutableCopy];
+    // 满屏：补丁 → 我方通用满屏（宽屏已验证）→ 没有
+    BOOL fs = NO; int blocked = s2a_ios_fullscreen_state(gid, &fs);
+    NSString *src = (fam || wsIds.count) ? @"patch" : [kit[@"widescreen"][@"source"] isEqual:@"own"] ? @"own" : @"none";
+    NSDictionary *wsAuto = autoOff[@"fs\tfullscreen"]; for (NSString *k in wsIds) if (!wsAuto) wsAuto = autoOff[[@"patch\t" stringByAppendingString:k]];
+    NSArray *wsSt = nil; for (NSString *k in st) if ([k hasPrefix:@"wsauto:"] || [k hasPrefix:@"widescreen:"]) { wsSt = st[k]; if ([wsSt[0] isEqual:@"开"]) break; }   // 非玩家句
+    NSString *s = opted ? @"opted_out" : [src isEqual:@"none"] ? missing(@"widescreen") : (blocked || !fs) ? (wsAuto ? @"off_auto" : @"off_user") : bad(wsSt) ? @"ineffective" : @"on";
+    out[@"widescreen"] = @{@"state": s, @"source": src, @"active": fam ? @"adaptive" : wsIds.count ? @"fixed" : [src isEqual:@"own"] ? @"own" : @"",
+                           @"lastRun": s2a_ios_cpatch_result(wsSt) ?: @"", @"autoOff": wsAuto ?: NSNull.null, @"versions": kit[@"widescreen"][@"versions"] ?: @{}};
+    // 帧率：跟「帧率」开关
+    BOOL fon = s2a_ios_fps60_on_for(gid); NSDictionary *fAuto = autoOff[@"fps\tfps60"];
+    NSArray *fSt = nil; for (NSString *k in st) if ([k hasPrefix:@"fps:"] && [st[k][0] isEqual:@"开"]) { fSt = st[k]; break; }   // 非玩家句
+    s = opted ? @"opted_out" : !fpsP ? missing(@"fps") : !fon ? (fAuto ? @"off_auto" : @"off_user") : @"on";
+    out[@"fps"] = @{@"state": s, @"lastRun": s2a_ios_cpatch_result(fSt) ?: @"", @"autoOff": fAuto ?: NSNull.null, @"versions": kit[@"fps"][@"versions"] ?: @{}};
+    // 画面：iPhone 一律不打
+    out[@"gfx"] = @{@"state": opted ? @"opted_out" : @"mac_only"};
+    // 金手指
+    NSString *dir = s2a_ios_cheats_dir_for(gid); NSSet *con = cheats_enabled(dir); NSArray *ents = s2a_ios_cheat_entries(dir);
+    NSDictionary *cAuto = nil; for (NSDictionary *e in ents) if (!cAuto) cAuto = autoOff[[@"cheat\t" stringByAppendingString:e[@"key"]]];
+    s = opted ? @"opted_out" : !ents.count ? missing(@"cheats") : con.count ? @"on" : (cAuto ? @"off_auto" : @"off_user");
+    out[@"cheats"] = @{@"state": s, @"active": con.allObjects ?: @[], @"autoOff": cAuto ?: NSNull.null, @"versions": kit[@"cheats"][@"versions"] ?: @{}};
+    return out;
+}

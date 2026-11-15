@@ -206,7 +206,13 @@ BOOL s2a_ios_fps60_on(void) { return s2a_ios_fps60_on_for(current_gid()); }
 BOOL s2a_ios_fi_on(void) { id v = [s2a_ios_settings_defaults() objectForKey:@"S2AFrameInterp"]; return v ? [v boolValue] : YES; }
 void s2a_ios_set_fi(BOOL on) { [s2a_ios_settings_defaults() setBool:on forKey:@"S2AFrameInterp"]; }
 // 停帧救场记住关（runtime/src/cpatch.c s2a_cpatch_stall_rescue 的强定义）：这款「帧率」写关，下次启动不再开帧率补丁，设置页同步显示关
-void s2a_cpatch_persist_fps_off(void) { s2a_ios_set_fps60_for(current_gid(), NO); }
+void s2a_cpatch_persist_fps_off(void) {   // 停帧救场：关「帧率」并记进自动关（原因 stall，S 级状态 off_auto；game_options.m s2a_ios_sgrade_state 读）
+    NSString *g = current_gid(); s2a_ios_set_fps60_for(g, NO);
+    NSUserDefaults *d = s2a_ios_settings_defaults_for(g); NSMutableDictionary *ao = [[d dictionaryForKey:@"S2ACrashAutoOff"] mutableCopy] ?: [@{@"ver": [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @""} mutableCopy];
+    NSMutableArray *items = [ao[@"items"] mutableCopy] ?: [NSMutableArray array];
+    [items addObject:@{@"kind": @"fps", @"key": @"fps60", @"name": @"", @"cause": @"stall", @"at": @((long long)NSDate.date.timeIntervalSince1970)}];
+    ao[@"items"] = items; [d setObject:ao forKey:@"S2ACrashAutoOff"];
+}
 void s2a_ios_set_fps60(BOOL on) { s2a_ios_set_fps60_for(current_gid(), on); }
 
 // 满屏（自适应：按这台设备的屏幕比例铺满，11-13 合并原「宽屏」与「宽屏强制启用」两个开关）：
