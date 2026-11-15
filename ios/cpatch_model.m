@@ -120,3 +120,13 @@ void S2ACPatchSetEnabled(NSArray<S2ACPatchGroup *> *groups, NSUserDefaults *defa
             if ([set containsObject:it.ident]) [out addObject:it.ident];
     [defaults setObject:out forKey:S2ACPatchDefaultsKey];
 }
+
+NSString *S2ACrashTag(NSDictionary *item) { return [NSString stringWithFormat:@"%@\t%@", item[@"kind"], item[@"key"]]; }
+NSArray<NSDictionary *> *S2ACrashNarrow(NSArray<NSDictionary *> *on, NSSet<NSString *> *good) {
+    if (good) {
+        NSArray *fresh = [on filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *it, id _) { return ![good containsObject:S2ACrashTag(it)]; }]];
+        if (fresh.count) return fresh;
+    }
+    NSArray *unv = [on filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *it, id _) { return [it[@"kind"] isEqual:@"cheat"] || ![it[@"verified"] boolValue]; }]];
+    return unv.count ? unv : on;
+}

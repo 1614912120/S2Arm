@@ -181,6 +181,23 @@ enum { MAP_ALIAS = 1 };   // 栈映射（ST_STACK）的 h：1 = 目标与源共�
 // 局内峰值（游戏地址用量行报；10-21 缩窗口尾部的前提：堆 / 栈区 / 可随机区各要「峰值 × 2 ≤ 区大小」）：当前字节、峰值字节、用到的最高区内偏移
 static uint64_t g_cur_st, g_cur_sh, g_pk_st, g_pk_sh, g_pk_st_end, g_pk_sh_end, g_pk_heap;
 static uint64_t g_pk_heap_request, g_pk_alias_end;
+// 学跨度只认「装得进窗口」的地址（#1143 续，11-15 诊断普查）：窗口放在 2^39 以下最大空洞的顶上，任何一局的窗口都不会超过这块空洞（vawin.c g_fit）。
+//   游戏在别名区高处做的物理映射（窗口外、远端影子代管）离窗口基址超过空洞大小，哪一局都装不进窗口，算进跨度只会把记录撑到整个布局：
+//   某机 49 GB 窗口那局别名高水位 66.6 GB，记下 73 GB，此后每局窗口不缩、宿主只留 3 GB，低区碰底崩（1312 / 2954 局学到的跨度 ≥ 空洞）。
+//   g_span_lim = 空洞大小（vawin.c 占窗后经 s2a_mem_span_limit 给；0 = 不限，安卓 / 单测）；g_pk_alias_in = 别名区映射末端截到这个界内的最高偏移
+static uint64_t g_span_lim, g_pk_alias_in;
+void s2a_mem_span_limit(uint64_t lim) { g_span_lim = lim; }
+static void alias_in_note(uint64_t a, uint64_t size) {
+    uint64_t e = a + size, cap = g_span_lim ? L.win_base + g_span_lim : UINT64_MAX;
+    if (e > cap) e = cap;
+    if (e > a && e - L.alias_base > g_pk_alias_in) g_pk_alias_in = e - L.alias_base;
+}
+// 跨度 = 各分量末端里离窗口基址最远、且不超过界的那个（超界的整项不算：截到界上等于学成「整块空洞」，宿主照旧只剩 3 GB）。纯函数，t_svc_mem 测
+uint64_t s2a_span_pick(uint64_t win_base, uint64_t lim, const uint64_t *ends, int n) {
+    uint64_t best = 0;
+    for (int i = 0; i < n; i++) { if (ends[i] <= win_base) continue; uint64_t o = ends[i] - win_base; if (lim && o > lim) continue; if (o > best) best = o; }
+    return best;
+}
 static _Atomic uint64_t g_va_short;   // 映射落在宿主没占到的地址、回了内存不足的次数（win_has / va_short）
 static void addr_need_report(void) {
     LOG("地址需求 v2：程序号 %016llx 堆请求 %llu 字节 堆成功 %llu 字节 别名高水位 %llu 字节",
@@ -399,13 +416,14 @@ uint64_t s2a_mem_mod_base(const char *npdm) { layout_prepare(npdm); return g_mod
 //   别名区高水位、堆峰值、栈区 / 可随机区用到的最高偏移、模块末（在窗口内的）。vawin.c 记进 wire/<程序号>/span_peak，下一局窗口放不下标准布局时按它给窗口。布局没定 = 0
 uint64_t s2a_mem_span_now(void) {
     if (!g_lay_ok) return 0;
-    uint64_t top = 0;
-    if (g_pk_alias_end && L.alias_base + g_pk_alias_end > top) top = L.alias_base + g_pk_alias_end;
-    if (g_pk_heap && (uint64_t)g_heap + g_pk_heap > top) top = (uint64_t)g_heap + g_pk_heap;
-    if (g_pk_st_end && L.stack_base + g_pk_st_end > top) top = L.stack_base + g_pk_st_end;
-    if (g_pk_sh_end && L.aslr_base + g_pk_sh_end > top) top = L.aslr_base + g_pk_sh_end;
-    for (int i = 0; i < g_nmod; i++) { uint64_t e = (uint64_t)g_mod[i].base + g_mod[i].size; if (e > top && e <= L.win_base + L.win_size) top = e; }
-    return top > L.win_base ? top - L.win_base : 0;
+    uint64_t e[5]; int n = 0, mm = 0; uint64_t mtop = 0;
+    if (g_pk_alias_in) e[n++] = L.alias_base + g_pk_alias_in;
+    if (g_pk_heap) e[n++] = (uint64_t)g_heap + g_pk_heap;
+    if (g_pk_st_end) e[n++] = L.stack_base + g_pk_st_end;
+    if (g_pk_sh_end) e[n++] = L.aslr_base + g_pk_sh_end;
+    for (int i = 0; i < g_nmod; i++) { uint64_t m = (uint64_t)g_mod[i].base + g_mod[i].size; if (m <= L.win_base + L.win_size && m > mtop) { mtop = m; mm = 1; } }   // 模块：窗口内的最高末端
+    if (mm) e[n++] = mtop;
+    return s2a_span_pick(L.win_base, g_span_lim, e, n);
 }
 // 本款标准布局的窗口大小（vawin.c 构造函数占窗口用，早于 s2a_mem_init）：读不到 0
 uint64_t s2a_npdm_window_need(const char *npdm) {
@@ -825,7 +843,7 @@ void s2a_mem_test_setup(uint64_t alias_base, uint64_t alias_size, uint64_t win_b
     punch_reset_locked();
 #endif
     g_nmap = 0; g_nspan = 0; g_nmod = 0; g_phys = 0; g_tlr_next = 0; free(g_perm); g_perm = NULL; g_nperm = 0; free(g_attr); g_attr = NULL; g_nattr = 0;
-    g_cur_st = g_cur_sh = g_pk_st = g_pk_sh = g_pk_st_end = g_pk_sh_end = g_pk_alias_end = 0;
+    g_cur_st = g_cur_sh = g_pk_st = g_pk_sh = g_pk_st_end = g_pk_sh_end = g_pk_alias_end = g_pk_alias_in = 0;
     g_pk_heap_request = g_pk_heap = heap_cur;
 #ifdef __ANDROID__
     // 夹具 setup 等价于一次新会话：先清空 refs / 整文件打洞，再按本布局的地址空间上界 open（只增不缩）。
@@ -840,6 +858,7 @@ void s2a_mem_test_map(uint64_t b, uint64_t n) { map_add(b, n, 0, ST_STACK, 0); }
 void s2a_mem_test_sysres(uint64_t v, uint64_t heap_region) { L.sys_resource_size = v; L.heap_size = heap_region; }
 uint64_t s2a_mem_test_phys(void) { return g_phys; }
 void s2a_mem_test_svc_perm(int num, int on) { if (on) g_svc_perm[num >> 6] |= 1ull << (num & 63); else g_svc_perm[num >> 6] &= ~(1ull << (num & 63)); }
+uint64_t s2a_mem_test_alias_in(void) { return g_pk_alias_in; }
 void s2a_mem_test_peaks(uint64_t *heap_request, uint64_t *alias_end) { *heap_request = g_pk_heap_request; *alias_end = g_pk_alias_end; }
 #endif
 
@@ -991,6 +1010,25 @@ int s2a_va_short_last(uint64_t fa, int *num, uint64_t *a, uint64_t *n, uint64_t 
     uint64_t a0 = atomic_load(&g_vs_a), n0 = atomic_load(&g_vs_n);
     if (!n0 || fa < a0 || fa - a0 >= n0) return 0;
     *num = atomic_load(&g_vs_num); *a = a0; *n = n0; *count = atomic_load(&g_va_short); return 1;
+}
+// 最近 32 次 UnmapPhysicalMemory（崩溃现场归因用，诊断#ff9a04：游戏读别名区里当前未映射的一页崩了，那段是游戏自己早先解除的（悬空指针），
+//   还是从没解除过、是我方弄丢的，原先判不了）。只在成功解除后记；崩溃处理里无锁读，读到半新不旧也只是诊断
+#define UNMAP_RING 32
+static struct { _Atomic uint64_t a, n, ms; } g_unmap_ring[UNMAP_RING];
+static _Atomic uint64_t g_unmap_seq;
+static uint64_t mono_ms(void) { struct timespec t; return clock_gettime(CLOCK_MONOTONIC, &t) ? 0 : (uint64_t)t.tv_sec * 1000 + (uint64_t)t.tv_nsec / 1000000; }
+static void unmap_ring_note(uint64_t a, uint64_t n) {
+    uint64_t k = atomic_fetch_add(&g_unmap_seq, 1) % UNMAP_RING;
+    atomic_store(&g_unmap_ring[k].n, 0); atomic_store(&g_unmap_ring[k].a, a); atomic_store(&g_unmap_ring[k].ms, mono_ms()); atomic_store(&g_unmap_ring[k].n, n);
+}
+// fa 落在最近 32 次里哪一次解除的段：命中返回 1（取最近的一次，*back = 倒数第几次、*ago_ms = 多久前），*total = 本局解除总次数
+int s2a_phys_unmap_hit(uint64_t fa, uint64_t *a, uint64_t *n, uint64_t *back, uint64_t *ago_ms, uint64_t *total) {
+    uint64_t seq = atomic_load(&g_unmap_seq), now = mono_ms(); *total = seq;
+    for (uint64_t i = 1; i <= UNMAP_RING && i <= seq; i++) {
+        uint64_t k = (seq - i) % UNMAP_RING, a0 = atomic_load(&g_unmap_ring[k].a), n0 = atomic_load(&g_unmap_ring[k].n);
+        if (n0 && fa >= a0 && fa - a0 < n0) { uint64_t t = atomic_load(&g_unmap_ring[k].ms); *a = a0; *n = n0; *back = i; *ago_ms = now > t ? now - t : 0; return 1; }
+    }
+    return 0;
 }
 static uint64_t va_short(int num, uint64_t a, uint64_t n, const char *region) {
     uint64_t k = atomic_fetch_add(&g_va_short, 1) + 1;
@@ -1824,6 +1862,7 @@ static int svc_mem_impl(int num, uint64_t *regs, uint64_t orig) {
             }
             if (run) perm_set(run, a + size, -1);
             if (a + size - L.alias_base > g_pk_alias_end) g_pk_alias_end = a + size - L.alias_base;
+            alias_in_note(a, size);
         } else {
             for (uint64_t p = a; p < a + size; p += 0x1000) {
                 uint8_t *m = amask_at(p), bit = (uint8_t)(1u << ((p & (HPG - 1)) >> 12));
@@ -1891,6 +1930,7 @@ static int svc_mem_impl(int num, uint64_t *regs, uint64_t orig) {
         }
         (void)lo; (void)hi;
         if (mapping && a + size - L.alias_base > g_pk_alias_end) g_pk_alias_end = a + size - L.alias_base;
+        if (mapping) alias_in_note(a, size);
 #endif
 #ifndef __ANDROID__
         if (t_unmap0 && !clock_gettime(CLOCK_MONOTONIC, &t_unmap_ts)) { uint64_t dt = (uint64_t)t_unmap_ts.tv_sec * 1000000000ull + (uint64_t)t_unmap_ts.tv_nsec - t_unmap0; g_unmap_n++; g_unmap_ns += dt; if (dt > g_unmap_max_ns) g_unmap_max_ns = dt; static int said; if (dt >= 200000000 && said < 20) { said++; LOG("#258 解除物理映射 %#llx +%llu MB 持锁 %llu ms", (unsigned long long)a, (unsigned long long)(size >> 20), (unsigned long long)(dt / 1000000)); } }
@@ -1900,6 +1940,7 @@ static int svc_mem_impl(int num, uint64_t *regs, uint64_t orig) {
         if (rel_hi > we) rel_hi = we;
         if (rel_hi > rel_lo) backing_changed(rel_lo, rel_hi - rel_lo);
 #endif
+        if (num == 0x2D) unmap_ring_note(a, size);
         regs[0] = 0; return 1;
     }
     case 0x07: session_guest_end("游戏调 ExitProcess"); s2a_host_shutdown("游戏调 ExitProcess"); for (;;) pause();
@@ -2254,7 +2295,7 @@ void s2a_mem_session_reset(void) {
     free(g_perm); g_perm = NULL; g_nperm = 0; free(g_attr); g_attr = NULL; g_nattr = 0;
     memset(g_span, 0, sizeof g_span); g_nspan = 0;
     g_cur_st = g_cur_sh = g_pk_st = g_pk_sh = 0;
-    g_pk_st_end = g_pk_sh_end = g_pk_heap = g_pk_heap_request = g_pk_alias_end = 0;
+    g_pk_st_end = g_pk_sh_end = g_pk_heap = g_pk_heap_request = g_pk_alias_end = g_pk_alias_in = 0;
     g_tlr_next = 0; g_tlr_free = NULL;
     g_user_exception_context = g_det_arena_top = 0;
     memset(g_entropy, 0, sizeof g_entropy); g_entropy_ready = 0;

@@ -245,6 +245,15 @@ static const char *mtk_sync_why(NvShader *ts, NvShader *ms, NvShader *fs) {
     if (R.rt.depth && !rt_seen_steady(R.rt.depth)) return "a target not drawn in the last two frames";
     return NULL;
 }
+// 一条网格管线第一次画（两条路：已编好直接取 / 丢不起的那笔等后台编好）：记本机记录、打「first drawn」、进本提交的 GPU 出错嫌疑（quar_built）。
+//   #1208：网格管线多在后台编、晚几帧才第一次画，隔离原先只收「本提交当场新编的普通管线」，网格管线首画那次提交挂死时嫌疑为空、什么都不隔离，下一局挂在同一处；
+//   丢不起的那笔经 mtk_wait 画出时连「first drawn」都不打
+static uint64_t g_mtk_quar_skip;
+static void mtk_first_drawn(id p, const mtk_key *mk, NvShader *ts, NvShader *ms, NvShader *fs, int merged) {
+    [g_mtk_drawn addObject:p]; mtk_record(mk, ts, ms, fs, merged); quar_built(ms, fs);
+    MLOG("task / mesh pipeline first drawn at frame %llu: %s; still building %d", (unsigned long long)atomic_load_explicit(&g_cur_frame, memory_order_relaxed),
+         mtk_name(p), atomic_load(&g_mtk_inflight));
+}
 static id<MTLRenderPipelineState> mtk_pso(NvProg *raster) {
     NvShader *ts = g_mtk.ts, *ms = g_mtk.ms, *fs = raster->sh[1]; int merged = g_pso_lmap != NULL;
     mtk_key mk; memset(&mk, 0, sizeof mk); pso_key *k = &mk.k;
@@ -259,15 +268,16 @@ static id<MTLRenderPipelineState> mtk_pso(NvProg *raster) {
     //   only the locations the mesh does not write get (0,0,0,1)); until it is ready the pair's draws are skipped as before, then the pipeline is built with it (its own cache entry)
     uint32_t want = fs && (fs->rf.has_user & 2) ? fs->rf.user_in : 0; id<MTLFunction> pf = want ? vp_fn(ms, want) : nil;
     if (pf) mk.pad = want;
+    // GPU 挂死隔离（#1208）：先前让 GPU 出错的网格管线（网格 + 片元两键，同普通管线的 quar_name）这局起跳过，不再画
+    if (quar_has(ms, fs)) { g_mtk_quar_skip++; static int qn; if (qn++ < 4) MLOG("【红】 GPU error quarantine: task / mesh pipeline (task %s mesh %s fragment %s) skipped (it faulted the GPU before)",
+                                                                           ts ? ts->key : "-", ms->key, fs ? fs->key : "-"); return nil; }
     os_unfair_lock_lock(&g_pso_mtk_lock); __unsafe_unretained id ps = hm_get_id(&g_pso_mtk, &mk);
     if (!ps) { if (!g_pso_mtk_building) g_pso_mtk_building = [NSObject new]; hm_put_id(&g_pso_mtk, &mk, g_pso_mtk_building); }
     os_unfair_lock_unlock(&g_pso_mtk_lock);
     if (ps == NSNull.null && !mk.pad && want) vp_ask(S.prog, ms, want);   // refused unpadded: ask for the padded variant (once; a variant that cannot be made stays failed)
     if (ps && ps != NSNull.null && ps != g_pso_mtk_building) {   // #770: the first draw of each pipeline, with the frame and how many are still building
         if (!g_mtk_drawn) g_mtk_drawn = [NSMutableSet set];
-        if (![g_mtk_drawn containsObject:ps]) { [g_mtk_drawn addObject:ps]; mtk_record(&mk, ts, ms, fs, merged);
-            MLOG("task / mesh pipeline first drawn at frame %llu: %s; still building %d", (unsigned long long)atomic_load_explicit(&g_cur_frame, memory_order_relaxed),
-                 mtk_name(ps), atomic_load(&g_mtk_inflight)); }
+        if (![g_mtk_drawn containsObject:ps]) mtk_first_drawn(ps, &mk, ts, ms, fs, merged);
     }
     if (ps == NSNull.null) return nil;
     if (ps && ps != g_pso_mtk_building) return ps;
@@ -285,7 +295,7 @@ static id<MTLRenderPipelineState> mtk_pso(NvProg *raster) {
     if (!why) return nil;   // building in the background, and this draw may wait for it
     __unsafe_unretained id p = mtk_wait(&mk, why);
     if (p) { if (!g_mtk_drawn) g_mtk_drawn = [NSMutableSet set];
-        if (![g_mtk_drawn containsObject:p]) { [g_mtk_drawn addObject:p]; mtk_record(&mk, ts, ms, fs, merged); } }
+        if (![g_mtk_drawn containsObject:p]) mtk_first_drawn(p, &mk, ts, ms, fs, merged); }
     return p;
 }
 static void mtk_encode(id en_) {

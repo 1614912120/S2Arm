@@ -52,7 +52,7 @@ def _get(url):
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
         data = r.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
-        raise ValueError("太大")
+        raise ValueError("太大")  # 非玩家句
     return data
 
 
@@ -295,12 +295,12 @@ def prepare(c, game, extraction, env, target="mac"):
 #   读产物根里编译器自己的记录（pack/cpatch.py plan / prune）：cpatch.tsv = 最终打进去的；cpatch_plan.log 的「收 / 不收 / 移植不了」行与
 #   cpatch_excluded.tsv（改写器缺口剔掉的）= 没打上的及原因。原因翻成玩家看得懂的话；本来就不该打的（版本不对、同画幅已收另一份、本款有我方帧率表）不算失败、不列
 _WHY = (   # (原因里出现的字样, 给玩家的话)；None = 不算失败
-    (("版本不对", "同画幅", "我方帧率表"), None),
-    (("与 ", "改同一处"), "result.why.conflict"),
-    (("超出模块映像", "不在可写数据区", "代码段末页", "原值不符", "数据格式", "不配套", "位表", "不认"), "result.why.mismatch"),
-    (("改写器", "我方改写点", "填充区", "不翻译", "跳转", "解不出", "落点"), "result.why.translate"),
-    (("挂满", "64 份", "用尽"), "result.why.full"),
-    (("移植不了",), "result.why.port"),
+    (("版本不对", "同画幅", "我方帧率表"), None),  # 非玩家句
+    (("与 ", "改同一处"), "result.why.conflict"),  # 非玩家句
+    (("超出模块映像", "不在可写数据区", "代码段末页", "原值不符", "数据格式", "不配套", "位表", "不认"), "result.why.mismatch"),  # 非玩家句
+    (("改写器", "我方改写点", "填充区", "不翻译", "跳转", "解不出", "落点"), "result.why.translate"),  # 非玩家句
+    (("挂满", "64 份", "用尽"), "result.why.full"),  # 非玩家句
+    (("移植不了",), "result.why.port"),  # 非玩家句
 )
 
 
@@ -308,7 +308,7 @@ def _why(text):
     for keys, say in _WHY:
         if say is None and any(k in text for k in keys):
             return None
-        if say == "result.why.conflict" and "改同一处" in text:
+        if say == "result.why.conflict" and "改同一处" in text:  # 非玩家句
             return say
         if say not in (None, "result.why.conflict") and any(k in text for k in keys):
             return say
@@ -340,19 +340,19 @@ def outcome(root):
     log = root / "cpatch_plan.log"
     lines = log.read_text(encoding="utf-8", errors="replace").splitlines() if log.is_file() else []
     ex = root / "cpatch_excluded.tsv"
-    lines += [f"不收\t{l}" for l in (ex.read_text(encoding="utf-8", errors="replace").splitlines() if ex.is_file() else []) if "\t" in l]
+    lines += [f"不收\t{l}" for l in (ex.read_text(encoding="utf-8", errors="replace").splitlines() if ex.is_file() else []) if "\t" in l]  # 非玩家句
     for line in lines:
         col = line.split("\t")
-        if col[0] == "收" and len(col) >= 4:
+        if col[0] == "收" and len(col) >= 4:  # 非玩家句
             names[col[1]] = col[3]
     for line in lines:
         col = line.split("\t")
-        if col[0] == "不收" and len(col) >= 5:
+        if col[0] == "不收" and len(col) >= 5:  # 非玩家句
             uid, name, text = col[1], col[3], col[4]
-        elif col[0] == "不收" and len(col) == 3:   # 改写器缺口（prune / cpatch_excluded.tsv）：名字取它当初「收」的那一行
+        elif col[0] == "不收" and len(col) == 3:   # 改写器缺口（prune / cpatch_excluded.tsv）：名字取它当初「收」的那一行  # 非玩家句
             uid, text = col[1], col[2]; name = names.get(uid, uid)
-        elif col[0] == "移植不了" and len(col) >= 5:
-            uid, name, text = col[1], col[3], "移植不了：" + col[4]
+        elif col[0] == "移植不了" and len(col) >= 5:  # 非玩家句
+            uid, name, text = col[1], col[3], "移植不了：" + col[4]  # 非玩家句
         else:
             continue
         say = _why(text)
@@ -450,13 +450,29 @@ def match(c):
                 others.setdefault(v, set()).add(cat)
     # 满屏跨版本（11-13 维护者「画幅补丁扩大泛化性」，pack/cpatch.py scan 末尾 port_writes）：这份主程序没有同版本的满屏补丁时，出包会把同款别的版本的满屏补丁
     #   按原指令移植过来，移植成的打入。所以别的版本的满屏补丁不算「不会打入」：单列 port（出包时尝试移植的那几版），others 里去掉满屏这一类（帧率 / 画面 / 金手指才要版本对上）
-    port = foreign_ws and not exact["widescreen"]
+    # 没解过包（build 空）不知道玩家是哪一版：所有满屏补丁都会被算成「别的版本」，卡片就会把同版本的说成「尝试移植」（v0.4.0 候选：游戏 1.4.0、补丁 1.4.0，卡片写
+    #   「补丁库里是 1.4.0 版的，出包时尝试移植」）。解过包才判移植；没解过时满屏照常留在各版本清单里
+    port = bool(build) and foreign_ws and not exact["widescreen"]
     key = lambda kv: [int(x) if x.isdigit() else 0 for x in re.split(r"[.]", kv[0])]
     port_versions = [v for v, cs in sorted(others.items(), key=key) if "widescreen" in cs] if port else []
     if port:
         others = {v: cs - {"widescreen"} for v, cs in others.items() if cs - {"widescreen"}}
-    return dict(build=build, version=version, exact=exact, total=sum(exact.values()), port=port, portVersions=port_versions,
+    return dict(build=build, version=version, exact=exact, total=sum(exact.values()), port=port, portVersions=port_versions, ownWiden=own_widen(c, gid, build),
                 others=[dict(version=v, cats=[k for k in CATS if k in cs]) for v, cs in sorted(others.items(), key=key)])
+
+
+def own_widen(c, gid, build):
+    """这一版在宽屏已验证名单（graphics/widen/tables/verified.tsv，程序号 + main 构建号 + apple）→ 没有社区满屏补丁时用我方通用满屏（维护者 11-15「两者合成一套」）。
+    build = 主程序构建号（前 16 位即可，按前缀对）；没解过包 = False"""
+    if not build:
+        return False
+    try:
+        text = (Path(c.engine) / "graphics/widen/tables/verified.tsv").read_text(encoding="utf-8")
+    except (OSError, AttributeError, TypeError):
+        return False
+    b = build.lower()[:16]
+    return any(f[0].upper() == gid.upper() and f[1].lower().startswith(b) and f[3].lower() == "apple"
+               for f in (l.split("\t") for l in text.splitlines() if l.strip() and not l.startswith("#")) if len(f) >= 4)
 
 
 def display_version(c, game):   # 解包目录删了：退回游戏库记的版本（catalog version，同游戏库卡片）
@@ -467,11 +483,13 @@ def display_version(c, game):   # 解包目录删了：退回游戏库记的版�
         from build import shared_dir
         for line in (shared_dir(c, game) / "extract/unpack.tsv").read_text(encoding="utf-8").splitlines():
             k, _, v = line.partition("\t")
-            if k == "display_version":
+            if k == "display_version" and v.strip():
                 return v.strip()
     except (OSError, ImportError, UnicodeDecodeError, Failure):
         pass
-    return str(game.get("version") or game.get("display") or "").lstrip("vV")
+    # 旧版库（11-10 前出包）catalog 顶层没记 version / display：按包列表取实际跑的版本（有更新取最新更新），同游戏库卡片
+    import community
+    return str(game.get("version") or game.get("display") or community._version(game) or "").lstrip("vV")
 
 
 def bid_hit(build16, theirs):

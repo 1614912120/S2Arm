@@ -5,6 +5,14 @@
 #include "nvn_backend.h"
 
 enum { RP_PROG_STAGES = 3, RP_PROG_ENT_MAX = 128 };   // 顶点、片元、几何
+// 句柄放在游戏用户常量缓冲里的绑定（NVN_RB_TEXU / NVN_RB_TBUFU，语义照 iOS nvn_refl.h / nvn_mtl.m ubo_packed）的来源。
+//   一个字：用户常量槽 reg 的字节 off 处的 32 位字；sid = 它是采样器号（读出后左移 20）；pair = 同一 Ryujinx 句柄的另一半
+//   （pair_reg / pair_off 处的字，pair_sid 时左移 20），两半相或 = 打包句柄：低 20 位纹理号、高 12 位采样器号。
+struct rp_uword { uint8_t reg, sid, pair, pair_sid, pair_reg; uint16_t off, pair_off; };
+// 一项的完整来源：tex = 贴图句柄字；samp_kind = 组合采样的采样器来源（0 = 着色器没有采样器半边；NVN_RB_SAMPU = samp 处的字；
+//   NVN_RB_SAMPI = 常量采样器号 samp_reg；NVN_RB_SAMP = NVN 采样器槽 samp_reg 绑的句柄）。布局项的 src_reg2 = 本表下标。
+struct rp_usrc { struct rp_uword tex, samp; uint8_t samp_kind; uint16_t samp_reg; };
+enum { RP_PROG_USRC_MAX = 64 };
 struct rp_prog {
     nvn_gpu_shader sh[RP_PROG_STAGES];                        // 0 顶点 1 片元 2 几何
     nvn_gpu_layout_ent ent[RP_PROG_STAGES][RP_PROG_ENT_MAX];  // 与交给后端装载的布局同一份：核心按 src_kind / src_reg 逐项绑定
@@ -16,6 +24,7 @@ struct rp_prog {
     uint32_t color_out_mask;                                  // 片元着色器写了哪些输出分量：每个颜色目标 4 位（RGBA）。没有片元阶段 / 不知道 = 全 1
     uint8_t c1[RP_PROG_STAGES][0x100]; uint8_t c1_ok;         // NVN_RB_C1：着色器自带的常量段（位 i = 阶段 i 有）
     uint8_t is_compute;                                       // 计算程序：只有 sh[0] / ent[0]，绑定取 NVN 阶段 5 的状态
+    struct rp_usrc usrc[RP_PROG_USRC_MAX]; uint32_t nusrc;    // NVN_RB_TEXU / TBUFU 项的句柄来源（布局项 src_reg2 指向这里）
 };
 struct rp_shader_req {
     uint32_t prim;              // NVNdrawPrimitive

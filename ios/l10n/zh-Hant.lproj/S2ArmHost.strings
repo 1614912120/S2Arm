@@ -193,6 +193,8 @@
 "vpad.menu.ns2pro" = "啟用 Switch 2 Pro 手把";
 "vpad.menu.pad" = "手把與體感";
 "vpad.menu.rumble" = "震動";
+"vpad.menu.volume" = "聲音";
+"vpad.volume.mute" = "靜音";
 "vpad.menu.rumble.note" = "手機馬達和手把共用；選擇強度時會以該強度震一下";
 "vpad.menu.saves" = "存檔管理";
 "vpad.menu.stickFixed.note" = "關閉 = 以手指按下的位置為中心";
@@ -414,6 +416,7 @@
 "save.restored" = "存檔已回復。可開始遊戲檢查進度；回復前備份已保留（先前沒有存檔時不會產生備份）。";
 "save.serviceInvalid" = "存檔服務沒有傳回有效結果。請關閉後重新開啟 App，現有資料會保留。";
 "save.start" = "開始遊戲";
+"save.leave" = "退出（下次開啟直接進遊戲）";
 "save.status.hasSave" = "目前的存檔可以匯出。匯入時會先檢查遊戲版本、帳號歸屬和檔案完整性，再由你確認回復。";
 "save.status.noSave" = "還沒有可匯出的存檔。可以匯入備份，或開始遊戲建立存檔。";
 "save.tempCleanupFailed" = "暫存副本清除失敗，仍佔用裝置空間。請在「檔案」中刪除 App 內名為「%@」的暫存副本。";
@@ -429,6 +432,7 @@
 "settings.fps.knownIssue.message" = "此遊戲開啟 60 幀有已知問題，如果遊戲速度異常請關閉";
 "settings.fps.native" = "本遊戲原生 60 幀";
 "settings.group.dev" = "開發";
+"settings.devEntry" = "開發與診斷";
 "settings.notStarted" = "遊戲未啟動";
 "settings.restart.message" = "要立即重新啟動遊戲嗎？未儲存的進度會遺失，請確認已在遊戲內儲存進度。";
 "settings.restart.messageLater" = "儲存的設定會在下次啟動遊戲時生效。";
@@ -467,6 +471,9 @@
 "settings.language.zhHans" = "简体中文";
 "settings.language.zhHant" = "繁體中文";
 "settings.language.en" = "English";
+"settings.language.ja" = "日本語";
+"settings.language.es" = "Español";
+"settings.language.fr" = "Français";
 "settings.language.restart" = "關閉 S2Arm 再重新開啟後生效。";
 "settings.gameLanguage" = "遊戲語言";
 "settings.gameLanguage.system" = "跟隨系統";
@@ -488,6 +495,8 @@
 "crash.off.body" = "上次開著 %@ 時遊戲退出了，這次已為你關掉。想用的話，可以在設定裡重新開啟。";
 "crash.off.prompt" = "上次開著 %@ 時遊戲退出了，這次已為你關掉，想用的話可以在設定裡重新開啟。\n\n把這次的診斷發給我們，能幫我們修好它。診斷包裡只有執行日誌，不含存檔、金鑰和遊戲檔案。";
 "crash.off.title" = "已關掉上次出問題的設定";
+"crash.restored.title" = "已重新開啟上次當機時關掉的設定";
+"crash.restored.body" = "上次遊戲當機時自動關掉的 %@，新版 S2Arm 已重新開啟。再當機會再自動關。";
 "sgrade.title" = "S 級優化";
 "sgrade.note" = "開著補丁如遇到不相容導致遊戲當機，下次啟動會自動將當機補丁關掉以確保您正常遊戲。";
 "sgrade.counts" = "已開 %ld · 共 %ld";

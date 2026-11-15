@@ -157,6 +157,86 @@ class CheatsTests(unittest.TestCase):
         self.assertIs(community.load_launch(self.c, GID)["settings"].get("fps60"), False)
         self.assertEqual([x["kind"] for x in cheats.crashed(self.c, self.game)], ["fps"])
 
+    def _two_patches(self, verified_b):
+        from layout import image_mac
+        tsv = image_mac(self.c, GID) / "cpatch.tsv"; tsv.parent.mkdir(parents=True, exist_ok=True)
+        head = "编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式"
+        tsv.write_text(head + f"\nwidescreen:A1\tmain\t0\twidescreen\t满屏 A\tMIT\to/r\t\t1\t\t\t\ngfx:B1\tmain\t1\tgfx\t画面 B\tMIT\to/r\t\t{verified_b}\t\t\t\n"
+                       "fps:F1\tmain\t2\tfps\t60 帧\tMIT\to/r\t\t1\t60\t\t\n", encoding="utf-8")
+        self.d.mkdir(parents=True, exist_ok=True)
+        (self.d / f"{BID}.txt").write_text(TEXT)
+
+    def _on(self):
+        launch = community.load_launch(self.c, GID)
+        cheats_on = sorted(it["key"] for it in cheats.listing(self.c, self.game)["items"] if it["enabled"])
+        return cheats_on, sorted(k for k in ("widescreen:A1", "gfx:B1") if launch["patches"].get(k) is not False), launch["settings"].get("fps60", True) is not False
+
+    def test_crash_turns_off_only_what_was_newly_turned_on(self):
+        # v0.4.1：上次好好收局时开着 A1、B1、帧率；这局新开一条金手指后崩了 → 只关那条金手指，补丁与帧率不动。期望手写
+        self._two_patches(1)
+        cheats.note_good(self.c, self.game)
+        cheats.save(self.c, self.game, {f"{BID}.txt/Gold x2": True})
+        cheats.note_crash(self.c, self.game)
+        self.assertEqual(self._on(), ([], ["gfx:B1", "widescreen:A1"], True))
+        self.assertEqual([(x["kind"], x["name"]) for x in cheats.crashed(self.c, self.game)], [("cheat", "Gold x2")])
+
+    def test_crash_escalates_unverified_then_all(self):
+        # 没有新开的：先关没验过的（B1 缺省开 = 0、金手指），再崩才全关（验过的 A1、帧率）。期望手写
+        self._two_patches(0)
+        cheats.save(self.c, self.game, {f"{BID}.txt/Gold x2": True})
+        cheats.note_good(self.c, self.game)
+        cheats.note_crash(self.c, self.game)                                        # 第 1 次：和上次收局一样，没有新开的 → 没验过的
+        self.assertEqual(self._on(), ([], ["widescreen:A1"], True))
+        cheats.note_crash(self.c, self.game)                                        # 第 2 次：剩下的都验过 → 全关
+        self.assertEqual(self._on(), ([], [], False))
+        self.assertEqual(sorted(x["kind"] for x in cheats.crashed(self.c, self.game)), ["fps", "patch"])
+
+    def test_crash_without_good_record_and_all_verified_turns_all_off(self):
+        # 从没好好收过局（第一次开就崩）、开着的都验过 → 全关（与原做法一致）。期望手写
+        self._two_patches(1)
+        cheats.note_crash(self.c, self.game)
+        self.assertEqual(self._on(), ([], [], False))
+
+    def test_crash_turns_off_adaptive_fullscreen_switch(self):
+        # 11-15 候选自测：自适应满屏一族（wsauto:）跟「满屏」开关、不在 packed_patches 里，原先崩了不关。现在算一条 kind fs，关 = 满屏开关写关。期望手写
+        from layout import image_mac
+        tsv = image_mac(self.c, GID) / "cpatch.tsv"; tsv.parent.mkdir(parents=True, exist_ok=True)
+        tsv.write_text("编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\n"
+                       "wsauto:ab12:w\tmain\t0\twidescreen\t自适应满屏\tMIT\to/r\t\t0\t\t\t\nwsauto:ab12:n\tmain\t1\twidescreen\t自适应满屏\tMIT\to/r\t\t0\t\t\t\n", encoding="utf-8")
+        cheats.note_crash(self.c, self.game)
+        self.assertIs(community.load_launch(self.c, GID)["settings"].get("widescreen"), False)
+        self.assertEqual([x["kind"] for x in cheats.crashed(self.c, self.game)], ["fs"])
+
+    def test_host_crash_spares_first_then_turns_off(self):
+        # 11-15：运行时写的落点是 host（两头都在宿主代码）= 多半是 S2Arm 自己的毛病：第一次不关、只记；同一组开关再崩才关。落点 game 照常关。期望手写
+        self._two_patches(1)
+        docs = self.t / "docs"; docs.mkdir()
+        (docs / "crash_where").write_text("host\n")
+        cheats.note_crash(self.c, self.game, docs)
+        self.assertEqual(self._on(), ([], ["gfx:B1", "widescreen:A1"], True))           # 第一次：没关
+        self.assertFalse((docs / "crash_where").exists())                              # 落点读完删
+        self.assertEqual(cheats.crashed(self.c, self.game), [])
+        (docs / "crash_where").write_text("host\n")
+        cheats.note_crash(self.c, self.game, docs)
+        self.assertEqual(self._on(), ([], [], False))                                  # 同组再崩：照常关（都验过、没收局记录 → 全关）
+        self._two_patches(1); community.launch_path(self.c, GID).unlink()
+        (docs / "crash_where").write_text("game\n")
+        cheats.note_crash(self.c, self.game, docs)
+        self.assertEqual(self._on(), ([], [], False))                                  # 落点在游戏：第一次就关
+
+    def test_auto_off_comes_back_after_update(self):
+        # 自动关时记下引擎版本；换了版本起局前重开一次（只开当时关的），记录删掉；同版本不动。期望手写
+        self._two_patches(1)
+        (self.c.engine / "engine.json").write_text(json.dumps({"version": "0.4.1"}))
+        cheats.note_crash(self.c, self.game)
+        self.assertEqual(self._on(), ([], [], False))
+        self.assertEqual(cheats.restore_after_update(self.c, self.game), [])           # 同版本：不动
+        (self.c.engine / "engine.json").write_text(json.dumps({"version": "0.4.2"}))
+        back = cheats.restore_after_update(self.c, self.game)
+        self.assertEqual(sorted(back), [("fps", "fps60"), ("patch", "gfx:B1"), ("patch", "widescreen:A1")])
+        self.assertEqual(self._on(), ([], ["gfx:B1", "widescreen:A1"], True))
+        self.assertEqual(cheats.restore_after_update(self.c, self.game), [])           # 只重开一次
+
     def test_crash_with_nothing_on_records_nothing(self):
         cheats.note_crash(self.c, self.game)
         self.assertEqual(cheats.crashed(self.c, self.game), [])

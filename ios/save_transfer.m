@@ -122,7 +122,7 @@ int s2a_ios_save_management_requested(void) {
 @property(copy) void (^startGame)(void);
 @property(strong) NSDictionary *game;
 @property(strong) UILabel *status;
-@property(strong) UIButton *importButton, *exportButton, *backupButton, *startButton, *overrideButton;
+@property(strong) UIButton *importButton, *exportButton, *backupButton, *startButton, *overrideButton, *quitButton;
 @property(strong) UIActivityIndicatorView *spinner;
 @property(strong) NSDictionary *preview;
 @property(copy) NSString *importPath, *backupPath, *temporaryExportPath;
@@ -183,7 +183,9 @@ int s2a_ios_save_management_requested(void) {
     self.startButton = [self button:S2AL(@"save.start") action:@selector(start)];
     // 恢复失败时才出现：单独确认后放开「开始游戏」（审计 P0-1：失败分支不放开，玩家这次安装就再也进不了游戏）
     self.overrideButton = [self button:S2AL(@"save.override") action:@selector(confirmOverride)];
-    for (UIButton *button in @[self.exportButton, self.importButton, self.backupButton, self.startButton, self.overrideButton]) [stack addArrangedSubview:button];
+    // #1206「退出」：清掉「下次先进存档管理」直接退出，下次打开照常进游戏（多款容器进游戏库）；有待恢复事务时不出
+    self.quitButton = [self button:S2AL(@"save.leave") action:@selector(quitManagement)];
+    for (UIButton *button in @[self.exportButton, self.importButton, self.backupButton, self.startButton, self.overrideButton, self.quitButton]) [stack addArrangedSubview:button];
     [stack addArrangedSubview:where];
     self.dataRoot = data_root();
     where.text = save_location(self.dataRoot);
@@ -208,7 +210,7 @@ int s2a_ios_save_management_requested(void) {
     struct s2a_save_buttons b = s2a_save_buttons(self.phase, self.recoveryOverridden, self.game != nil, self.hasSave, self.busy);
     self.importButton.enabled = b.import; self.exportButton.enabled = b.export_;
     self.backupButton.enabled = !self.busy && self.backupPath.length;
-    self.startButton.enabled = b.start; self.overrideButton.hidden = !b.override;
+    self.startButton.enabled = b.start; self.overrideButton.hidden = !b.override; self.quitButton.hidden = !b.quit;
     if (self.busy) [self.spinner startAnimating]; else [self.spinner stopAnimating];
 }
 // 恢复失败：说清楚数据在哪、怎么拷走，并给「仍要开始游戏」（单独确认）。事务记录原样保留，下次打开照常先试恢复（新版本可能恢复得了）
@@ -314,11 +316,20 @@ int s2a_ios_save_management_requested(void) {
         }];
     } else [self finishManagement];
 }
-- (void)finishManagement {
+- (void)clearManageFlags {
     [NSUserDefaults.standardUserDefaults setBool:NO forKey:ManageKey];
     [NSUserDefaults.standardUserDefaults setBool:NO forKey:game_manage_key()];
     [NSUserDefaults.standardUserDefaults synchronize];
+}
+- (void)finishManagement {
+    [self clearManageFlags];
     self.startGame();
+}
+// 宿主还没起（这页在起宿主之前）：没有游戏状态要收，不走 s2a_host_shutdown 的收局流程，复位开关后直接结束进程
+- (void)quitManagement {
+    if (!s2a_save_buttons(self.phase, self.recoveryOverridden, self.game != nil, self.hasSave, self.busy).quit) return;
+    [self clearManageFlags];
+    exit(0);
 }
 - (void)presentExport:(NSString *)path {
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[[NSURL fileURLWithPath:path]] asCopy:YES];

@@ -243,10 +243,10 @@ def preflight_windows(c):
     try:
         report = json.loads(r.stdout)
     except ValueError:
-        raise Failure("Windows 环境检查没有给出结果：" + (r.stderr or r.stdout).strip()[-300:], code="win_check_failed")
+        raise Failure("Windows 环境检查没有给出结果：" + (r.stderr or r.stdout).strip()[-300:], code="win_check_failed")  # 非玩家句
     if report.get("error") or not report.get("checks"):   # winenv 自己报错（请求 / 错误码合同）= 检查没做成，不能当成一份空清单转给启动器
         err = report.get("error") or {}
-        raise Failure("Windows 环境检查没做成：" + str(err.get("message") or "清单为空") + "（" + str(err.get("code") or "") + "）", code="win_check_failed")
+        raise Failure("Windows 环境检查没做成：" + str(err.get("message") or "清单为空") + "（" + str(err.get("code") or "") + "）", code="win_check_failed")  # 非玩家句
     return dict(checks=report["checks"], ready=report["ready"], engineInfo={"inputConfig": False, "inputConfigReason": "Windows 版不出 Mac 宿主"},
                 canUninstallMetal=False)
 
@@ -328,7 +328,7 @@ def preflight(c):
     if has_xcode:   # 打 iPhone 包 / 装到 iPhone 都要（出壳 ShellUI、申请开发描述文件走 xcodebuild 真机目标）；只在 Mac 上玩不需要
         platform_ok, sdk, why, platform_action = ios_platform(c)
         with c.last_log.open("a") as log:
-            log.write(c.redact(f"iOS 平台组件判据：{why}") + "\n")
+            log.write(c.redact(f"iOS 平台组件判据：{why}") + "\n")  # 非玩家句
         if platform_ok is not None:
             if platform_ok:
                 message = f"已装 Xcode 的 iOS {sdk} 平台组件。"
@@ -359,16 +359,16 @@ def preflight(c):
                 why = "内置引擎里没有准备工具清单"
         except (Failure, OSError) as e:   # 原因写进检查项和日志，不再只剩一个 FAIL（v0.2.0 前回归时查不到为什么）
             ready_tools, why = False, str(e)
-            c.emit("message", "S2Arm 游戏准备工具不可用：" + why)
+            c.emit("message", "S2Arm 游戏准备工具不可用：" + why)  # 非玩家句
         add("pack_tools", "S2Arm 游戏准备工具", ready_tools, "应用内置着色器翻译器、资源索引器和 GAL 工具。" + ("（" + why + "）" if why else ""))
     for module in ("capstone", "lz4", "numpy", "zstandard"):   # zstandard：读 zstd 存储的 Switch 2 .nup（pack/ns2_nup.py；内置 Python 3.12 没有 compression.zstd）
         ok, _ = probe(c, [sys.executable, "-c", "import " + module])
-        add("python_" + module.lower(), "Python / " + module, ok, "应用内置 " + module + "；组件损坏时请重新安装完整应用。")
+        add("python_" + module.lower(), "Python / " + module, ok, "应用内置 " + module + "；组件损坏时请重新安装完整应用。")  # 非玩家句
     # timeout 实跑一次限时命令判可用（#1133：内附的 tools/bin/timeout 不认 --version、返回 125，探 --version 把可用的它判成缺）
     for command, args in (("zstd", ["--version"]), ("spirv-as", ["--version"]), ("spirv-val", ["--version"]), ("timeout", ["5", "/usr/bin/true"])):
         ok, _ = probe(c, [command, *args])
         add(command.replace("-", "_"), command, ok,
-            "应用内置 " + command + "。" if packaged else "构建环境缺少 " + command + "。")
+            "应用内置 " + command + "。" if packaged else "构建环境缺少 " + command + "。")  # 非玩家句
     # 打 iPhone 包要现编 iOS 版 C# 库：需要 .NET 10 SDK（用户目录 ~/.dotnet，一键安装不要管理员密码）。只算「打 iPhone 包」的条件，不挡 Mac 打包和启动
     #   发版应用不要：C# 件随发版预编为原生单文件、iOS 壳随包（Resources/Shell），运行不要任何 .NET；只有源码树开发构建要
     if not packaged:
@@ -404,7 +404,7 @@ def download_metal(c):
             text = Path(log).read_text(encoding="utf-8", errors="replace")[-16000:] if log else ""
         except OSError:
             text = ""
-        code = log_cause([("下载日志", text)], log)[0]
+        code = log_cause([("下载日志", text)], log)[0]  # 非玩家句
         if code:
             raise Failure(PLAYER_REASON.get(code) or str(e), code=code) from e
         raise
@@ -507,14 +507,14 @@ def ios_platform(c):
     if rows is None:
         return None, ver, "读不到已装的 iOS 运行时", None
     have = [f"{v}（{b or '?'}）" for v, b, _ in rows]
-    why = (f"SDK {ver}（{build}）可配运行时 {sorted(allowed)}，已装 {have or '无'}" if allowed else
-           f"SDK {ver}（{build or '?'}）没有配套表，按同版本号比；已装 {have or '无'}")
+    why = (f"SDK {ver}（{build}）可配运行时 {sorted(allowed)}，已装 {have or '无'}" if allowed else  # 非玩家句
+           f"SDK {ver}（{build or '?'}）没有配套表，按同版本号比；已装 {have or '无'}")  # 非玩家句
     ready = [r for r in rows if r[2] and _runtime_matches(ver, allowed, r[0], r[1])]
     pending = [r for r in rows if not r[2] and _runtime_matches(ver, allowed, r[0], r[1])]
     if ready:
         return True, ver, why, None
     if pending:
-        return False, ver, why + "；有已下载、还没就绪的镜像", "recheck"
+        return False, ver, why + "；有已下载、还没就绪的镜像", "recheck"  # 非玩家句
     return False, ver, why, "downloadIosPlatform"
 
 
@@ -595,7 +595,7 @@ def install_dotnet(c):
             got = archive.stat().st_size if archive.exists() else 0
             if got:
                 c.emit(done=float(got), total=float(total or got), unit="B")
-                print(f"  .NET SDK 已下载 {got >> 20} MB" + (f" / {total >> 20} MB" if total else ""), file=sys.stderr, flush=True)
+                print(f"  .NET SDK 已下载 {got >> 20} MB" + (f" / {total >> 20} MB" if total else ""), file=sys.stderr, flush=True)  # 非玩家句
     t = threading.Thread(target=watch, daemon=True); t.start()
     try:
         c.run(args, env=env)

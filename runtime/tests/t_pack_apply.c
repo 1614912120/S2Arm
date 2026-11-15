@@ -519,6 +519,12 @@ int main(void) {
         CHECK(sh(c) == 0, "⑭c 造完整包");
         CHECK(s2a_img_scan(D6) == 1, "⑭c 完整包认领");
         char g6[1500]; snprintf(g6, sizeof g6, "%s/games/0100ABCD00000008", D6);
+        { // ⑭d 本体认领了还没解开时放更新包：不套、不报错、原样留着（诊断#fe33c2：套到一半被解开时的目录整理删掉 → ENOENT）；解开后下一次扫描再套（见下面 ⑭c）
+          snprintf(c, sizeof c, "python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/先到的更新包.img' --gid 0100abcd00000008 --pack-id img801 > /dev/null"
+                   " && printf '\002' | dd of='%s/放这里导入/先到的更新包.img' bs=1 seek=8 conv=notrunc 2>/dev/null", R, D, D6, D6);
+          CHECK(sh(c) == 0, "⑭d 造更新包");
+          CHECK(s2a_img_scan(D6) == 0 && !s2a_img_scan_code()[0], "⑭d 本体没解开：更新包不套、不给失败码（实际 %s「%s」）", s2a_img_scan_code(), s2a_img_scan_failure());
+          snprintf(c, sizeof c, "test -e '%s/放这里导入/先到的更新包.img' && rm '%s/放这里导入/先到的更新包.img'", D6, D6); CHECK(sh(c) == 0, "⑭d 更新包原样留着"); }
         CHECK(s2a_pack_apply(g6) == 0, "⑭c 完整包解开");
         snprintf(c, sizeof c, "test \"$(cat '%s/资源包/shaders/a.metallib')\" = x", g6); CHECK(sh(c) == 0, "⑭c 完整包解出 a.metallib = x");
         snprintf(c, sizeof c, "python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/某游戏 着色器更新包.img' --gid 0100abcd00000008 --pack-id img801 > /dev/null"
@@ -532,6 +538,26 @@ int main(void) {
         CHECK(sh(c) == 0, "⑭c 更新包删掉、a.metallib = y、本体目录表没有 shaders/、本体整长 = 文件长、index.tsv 记新派生件");
         CHECK(s2a_pack_apply(g6) == 0, "⑭c 套更新包后解包成功");
         snprintf(c, sizeof c, "test \"$(cat '%s/资源包/shaders/a.metallib')\" = y", g6); CHECK(sh(c) == 0, "⑭c 再次应用后 a.metallib 仍是 y（旧的没回写）");
+        { // ⑭f 审计 P1-169：更新包写派生件失败（派生件 shaders/a.metallib 的位置被一个非空目录占着，改名进不去）→ 失败、不能把这款从库里弄没：
+          //   期望手写：返回 0 个、给失败码；清单 manifest.json 与 .applied 都还在、内容不变；本体 game.img 逐字节不变；更新包留在导入文件夹
+          snprintf(c, sizeof c, "set -e; g='%s/资源包'; cp \"$g/manifest.json\" '%s/mf.bak'; cp \"$g/.applied\" '%s/ap.bak'; cp \"$g/game.img\" '%s/img.bak';"
+                   " rm -f \"$g/shaders/a.metallib\"; mkdir -p \"$g/shaders/a.metallib/占位\"; echo z > \"$g/shaders/a.metallib/占位/f\";"
+                   " python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/坏更新包.img' --gid 0100abcd00000008 --pack-id img801 > /dev/null"
+                   " && printf '\\002' | dd of='%s/放这里导入/坏更新包.img' bs=1 seek=8 conv=notrunc 2>/dev/null", g6, T, T, T, R, D, D6, D6);
+          CHECK(sh(c) == 0, "⑭f 造：派生件位置被目录占着 + 一个更新包");
+          int pf = s2a_img_scan(D6);
+          snprintf(c, sizeof c, "g='%s/资源包'; cmp -s \"$g/manifest.json\" '%s/mf.bak' && cmp -s \"$g/.applied\" '%s/ap.bak' && cmp -s \"$g/game.img\" '%s/img.bak' && test -e '%s/放这里导入/坏更新包.img'", g6, T, T, T, D6);
+          CHECK(pf == 0 && s2a_img_scan_code()[0] && sh(c) == 0, "⑭f 写派生件失败：认领 0 个（实际 %d）、给码（%s）、清单 / .applied / 本体都不变、更新包留着", pf, s2a_img_scan_code());
+          snprintf(c, sizeof c, "rm -rf '%s/资源包/shaders/a.metallib' '%s/放这里导入/坏更新包.img'", g6, D6); sh(c); }
+        { // ⑭e 审计 P1-169：认领完整包时改名进不去（资源包里 game.img 的位置被一个非空目录占着）→ 失败，这款不能从库里消失：
+          //   期望手写：认领 0 个、给失败码；manifest.json 与 .applied 都还在、内容不变；源 IMG 留在导入文件夹
+          snprintf(c, sizeof c, "set -e; g='%s/资源包'; cp \"$g/manifest.json\" '%s/mf2.bak'; cp \"$g/.applied\" '%s/ap2.bak'; mv \"$g/game.img\" '%s/img2.bak'; mkdir -p \"$g/game.img/占位\"; echo z > \"$g/game.img/占位/f\";"
+                   " python3 '%s/pack/img.py' build - '%s/src/others_sh.tsv' '%s/放这里导入/新完整.img' --gid 0100abcd00000008 --pack-id img802 > /dev/null", g6, T, T, T, R, D, D6);
+          CHECK(sh(c) == 0, "⑭e 造：game.img 位置被目录占着 + 一个新完整包");
+          int pe = s2a_img_scan(D6);
+          snprintf(c, sizeof c, "g='%s/资源包'; cmp -s \"$g/manifest.json\" '%s/mf2.bak' && cmp -s \"$g/.applied\" '%s/ap2.bak' && test -e '%s/放这里导入/新完整.img'", g6, T, T, D6);
+          CHECK(pe == 0 && s2a_img_scan_code()[0] && sh(c) == 0, "⑭e 改名失败：认领 0 个（实际 %d）、给码（%s）、清单 / .applied 不变、源 IMG 留着", pe, s2a_img_scan_code());
+          snprintf(c, sizeof c, "g='%s/资源包'; rm -rf \"$g/game.img\" '%s/放这里导入/新完整.img'; mv '%s/img2.bak' \"$g/game.img\"", g6, D6, T); sh(c); }
         snprintf(c, sizeof c, "python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/错版.img' --gid 0100abcd00000008 --pack-id img999 > /dev/null"
                  " && printf '\002' | dd of='%s/放这里导入/错版.img' bs=1 seek=8 conv=notrunc 2>/dev/null", R, D, D6, D6);
         CHECK(sh(c) == 0, "⑭c 造资源包号不同的更新包");
@@ -541,7 +567,18 @@ int main(void) {
                  " && printf '\002' | dd of='%s/放这里导入/没本体.img' bs=1 seek=8 conv=notrunc 2>/dev/null", D6, D6, R, D, D6, D6);
         CHECK(sh(c) == 0, "⑭c 错版原样留着；造本机没本体的更新包");
         CHECK(s2a_img_scan(D6) == 0 && !strcmp(s2a_img_scan_code(), "ios_import_update_no_base") && strstr(s2a_img_scan_failure(), "完整"),
-              "⑭c 没本体：不收、给码、原因说先导完整包（实际 %s「%s」）", s2a_img_scan_code(), s2a_img_scan_failure()); } }
+              "⑭c 没本体：不收、给码、原因说先导完整包（实际 %s「%s」）", s2a_img_scan_code(), s2a_img_scan_failure());
+        // ⑭e 完整包与更新包同一次放（诊断#0787f1 D-YY32）：更新包放在先扫的「放这里导入」、完整包放在后扫的「Import Here」，旧代码按目录顺序先看更新包 → 报 no_base。
+        //   期望手写：认领 1 个（完整包）、不给失败码、更新包原样留着等本体解开后再套
+        { char D7[1300]; snprintf(D7, sizeof D7, "%s/img_docs7", T);
+          snprintf(c, sizeof c, "mkdir -p '%s/放这里导入' '%s/Import Here'"
+                   " && python3 '%s/pack/img.py' build - '%s/src/others_sh.tsv' '%s/Import Here/某游戏.img' --gid 0100abcd0000000a --pack-id imga01 > /dev/null"
+                   " && python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/某游戏 着色器更新包.img' --gid 0100abcd0000000a --pack-id imga01 > /dev/null"
+                   " && printf '\002' | dd of='%s/放这里导入/某游戏 着色器更新包.img' bs=1 seek=8 conv=notrunc 2>/dev/null", D7, D7, R, D, D7, R, D, D7, D7);
+          CHECK(sh(c) == 0, "⑭e 造同时放的完整包与更新包");
+          int n7 = s2a_img_scan(D7);
+          CHECK(n7 == 1 && !s2a_img_scan_code()[0], "⑭e 同时放：认领完整包 1 个、不报没本体（实际 %d、%s「%s」）", n7, s2a_img_scan_code(), s2a_img_scan_failure());
+          snprintf(c, sizeof c, "test -e '%s/放这里导入/某游戏 着色器更新包.img'", D7); CHECK(sh(c) == 0, "⑭e 更新包原样留着、等本体解开"); } } }
     // iOS 装机剃刀 #27 / #38：闸门与游戏库同一条快判。夹具：.applied = 清单、程序描述在、.incoming 里还留着一个写完的包（推送端盖残批的空包）。
     //   期望 s2a_import_state 判就绪 0（旧闸门先看 .incoming 判待导入 1，库却说能玩）。
     // 剃刀 #29：有 game.img、清单被推送开头置空、index.tsv 里的文件都在 → 期望不判就绪（旧代码清单读不出时当「不用解」→ 就绪 0）
@@ -632,6 +669,17 @@ int main(void) {
         CHECK(r2 == 1 && !stat(okf, &st2) && stat(fifo, &st2) && stat(locked, &st2) && !access(g2, W_OK) && sh(c) != 0,
               "读不到的跳过、读得到的照搬：返回 1、ok.bin 在新目录、管道与 000 文件不在、新目录可写、新树没残留（实际 %d「%s」）", r2, s2a_games_repair_detail());
         snprintf(c, sizeof c, "chmod -R u+rw '%s'/.s2a-unwritable-* 2>/dev/null", base); sh(c);
+        { // 审计 P1-180：读不到的是存档（S2A/ 下，000），目录又写不进 → 不换树（换上去活动目录里就没有这份存档了），资源包读不到照旧可跳过。
+          //   期望手写：返回负数；活动目录 games 原样（存档文件还在原处、还是 000 读不到）；没留 .s2a-games-new-*；原因里写「存档」
+          char g3[600]; snprintf(g3, sizeof g3, "%s/games/0100000000FED000", base);
+          snprintf(c, sizeof c, "mkdir -p '%s/S2A/ryujinx/bis/user/save/1' && printf sv > '%s/S2A/ryujinx/bis/user/save/1/data' && chmod 0 '%s/S2A/ryujinx/bis/user/save/1/data' && chmod 555 '%s'", g3, g3, g3, g3);
+          CHECK(sh(c) == 0, "P1-180 造：写不进的游戏目录里一份读不到的存档");
+          int r3 = s2a_games_repair(base);
+          char sv[700]; snprintf(sv, sizeof sv, "%s/S2A/ryujinx/bis/user/save/1/data", g3); struct stat st3;
+          snprintf(c, sizeof c, "ls -d '%s'/.s2a-games-new-* >/dev/null 2>&1", base);
+          CHECK(r3 < 0 && !stat(sv, &st3) && st3.st_size == 2 && sh(c) != 0 && strstr(s2a_games_repair_detail(), "存档"),
+                "P1-180 存档读不到：不换树（返回 %d）、存档还在原处、没残留新树、原因写存档（「%s」）", r3, s2a_games_repair_detail());
+          snprintf(c, sizeof c, "chmod 755 '%s'; chmod 644 '%s'; rm -rf '%s'", g3, sv, g3); sh(c); }
 #endif
         chmod(root, 0755);
         snprintf(c, sizeof c, "chmod -R u+w '%s' 2>/dev/null; rm -rf '%s'", base, base); sh(c);
@@ -691,7 +739,7 @@ int main(void) {
         CHECK(sh(c) == 0, "⑮⑧ 造：新位置就绪（q0）+ 旧位置一份清单 q9 的新推送");
         snprintf(c, sizeof c, "grep -q q9 '%s/manifest.json' && test -s '%s/n' && test ! -e '%s/资源包'", N1, N1, G1);
         CHECK(s2a_pack_migrate_one(G1) == 1 && sh(c) == 0, "⑮⑧ 清单不同：旧位置的新推送换掉新位置（新位置清单 = q9、旧位置没了）");
-        snprintf(c, sizeof c, "set -e; printf q9 > '%s/.applied'; mkdir -p '%s/资源包/.incoming'; head -c 1024 /dev/zero > '%s/资源包/.incoming/1_000.tar'", N1, G1, G1);
+        snprintf(c, sizeof c, "set -e; printf q9 > '%s/.applied'; mkdir -p '%s/资源包/.incoming'; echo t > '%s/资源包/.incoming/t.txt'; tar -cf '%s/资源包/.incoming/1_000.tar' -C '%s/资源包/.incoming' t.txt; rm '%s/资源包/.incoming/t.txt'", N1, G1, G1, G1, G1, G1);
         sh(c);
         snprintf(c, sizeof c, "test -s '%s/.incoming/1_000.tar' && test ! -e '%s/资源包'", N1, G1);
         CHECK(s2a_pack_migrate_one(G1) == 1 && sh(c) == 0, "⑮⑧ 旧位置有待解包：换掉新位置（待解包到了新位置、旧位置没了）");
@@ -705,6 +753,14 @@ int main(void) {
         snprintf(c, sizeof c, "rm -rf '%s/资源包'", G1); sh(c);
         snprintf(c, sizeof c, "set -e; printf '{\"index_sha256\": \"abc\"}' > '%s/manifest.json'; printf abc > '%s/.applied'; mkdir -p '%s/exefs'; head -c 100 /dev/urandom > '%s/exefs/main.npdm'; rm -rf '%s/.incoming'", N1, N1, N1, N1, N1);
         sh(c);
+        // ⑧e 审计 P1-169 余项（改前读数要的那一款）：新位置已就绪（清单 abc、.applied abc、本体 game.img 在），旧位置 .incoming 里只有一个 1024 字节全零 tar
+        //   （空包：只有归档结束块，没有一个条目）、没有清单。期望按规则手写：空包不算新推送 → 新位置已就绪 → 删旧的重复（返回 1）；新位置的 game.img 还在、清单还是 abc
+        snprintf(c, sizeof c, "set -e; printf img > '%s/game.img'; mkdir -p '%s/资源包/.incoming'; head -c 1024 /dev/zero > '%s/资源包/.incoming/1_000.tar'", N1, G1, G1);
+        CHECK(sh(c) == 0, "⑮⑧e 造：新位置就绪带 game.img + 旧位置只有一个空 tar");
+        int r8e = s2a_pack_migrate_one(G1);
+        snprintf(c, sizeof c, "test \"$(cat '%s/game.img')\" = img && grep -q abc '%s/manifest.json' && test ! -e '%s/资源包'", N1, N1, G1);
+        CHECK(r8e == 1 && sh(c) == 0, "⑮⑧e 空 tar 不算新推送：返回 1（实际 %d）、新位置 game.img 与清单都在、旧位置删掉", r8e);
+        snprintf(c, sizeof c, "rm -f '%s/game.img'", N1); sh(c);
         // ⑤ 迁到一半被杀：30 款，子进程迁、几毫秒后 SIGKILL，再迁一次 → 30 款都在新位置、每款 50 个文件一个不少、存档都在
         snprintf(c, sizeof c, "set -e; for i in $(seq 10 39); do d='%s/games/0100BBBB000000'$i; mkdir -p \"$d/资源包/f\" \"$d/S2A/ryujinx/bis/user/save\"; "
                  "for j in $(seq 1 50); do echo $i$j > \"$d/资源包/f/$j\"; done; echo s$i > \"$d/S2A/ryujinx/bis/user/save/s\"; done", P);

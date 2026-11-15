@@ -1357,15 +1357,15 @@ public sealed partial class EnvironmentWindow
     {
         var lines = new List<string>
         {
-            "S2Arm 出包失败报告", "",
-            "游戏：" + game.Name,
-            "版本：" + game.Version,
-            "程序号：" + game.Id,
-            "原包大小：" + FormatBytes(game.TotalBytes),
+            T("failcopy.title"), "",
+            T("failcopy.game").Replace("{0}", game.Name),
+            T("failcopy.version").Replace("{0}", game.Version),
+            T("failcopy.titleId").Replace("{0}", game.Id),
+            T("failcopy.size").Replace("{0}", FormatBytes(game.TotalBytes)),
             "",
-            "本体 / 更新 / DLC：" + (game.BaseVersion ?? "-") + " / " + (game.UpdateVersion ?? "-") + " / " + game.DlcCount,
+            T("failcopy.parts").Replace("{0}", game.BaseVersion ?? "-").Replace("{1}", game.UpdateVersion ?? "-").Replace("{2}", game.DlcCount.ToString()),
             "",
-            "错误：", packSummary,
+            T("failcopy.error"), B(packSummary),
             "", packDiagnostics
         };
         return string.Join("\n", lines);

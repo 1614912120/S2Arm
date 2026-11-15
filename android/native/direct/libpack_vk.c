@@ -104,8 +104,12 @@ int s2a_libpack_get(const struct s2a_libpack *lp, const uint8_t key[8], unsigned
 
 // 阶段名 ↔ StageNo（DshVk.cs StageNo 表同值）/ NVN 位序 ↔ v1 阶段名
 static int lp_stage_no(const char *s) {
-    if (!strcmp(s, "vs")) return 0; if (!strcmp(s, "hs")) return 1; if (!strcmp(s, "ds")) return 2;
-    if (!strcmp(s, "gs")) return 3; if (!strcmp(s, "ps")) return 4; if (!strcmp(s, "cs")) return 5;
+    if (!strcmp(s, "vs")) return 0;
+    if (!strcmp(s, "hs")) return 1;
+    if (!strcmp(s, "ds")) return 2;
+    if (!strcmp(s, "gs")) return 3;
+    if (!strcmp(s, "ps")) return 4;
+    if (!strcmp(s, "cs")) return 5;
     return -1;
 }
 // NVN 位 → 库内阶段名（vk 库只出 vs/ps/cs；gs/tcs/tes 给出 NULL → 程序 MISS）
@@ -177,6 +181,70 @@ static int lp_fail(char *why, size_t why_size, const char *fmt, ...) {
     return -1;
 }
 
+// 句柄放在游戏用户常量缓冲里的绑定（_b.json tex_ubo / tbuf_ubo / samp_ubo，iOS nvn_refl.h NVN_RB_TEXU / TBUFU / SAMPU）：
+//   句柄字 = 用户常量槽 reg 的字节 off 处的 32 位字；sid = 这个字是采样器号（SAMPU，Ryujinx SeparateSamplerId，读出后左移 20）；
+//   pair = 同一个 Ryujinx 句柄的另一半（nvn_refl.m pair_from_name 原样移植：从绑定名解出，自己这半的 reg/off 要与名字对上才配）。
+struct lp_uword { uint32_t reg, off, pair_reg, pair_off; int sid, pair, pair_sid; };
+static int lp_isword(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_'; }
+// 名字形如 <stage>_<t|i>…_cb<slots>_<HEX>（正则 ^[a-z]+_[ti]\w*?_cb(\d+)_([0-9A-F]+)）：slots = 纹理缓冲 | (采样器缓冲 + 1) << 16，
+//   HEX = 纹理字 | 采样器字 << 14 | 类型 << 28（字偏移；缓冲 c3..c16 = 用户槽 0..13）。只有类型 1 / 2 有第二个字
+static void lp_pair_from_name(const char *name, int is_samp, struct lp_uword *w) {
+    char nm[64]; size_t n = strlen(name);
+    if (n >= sizeof nm) return;
+    memcpy(nm, name, n + 1);
+    if (n > 5 && !strcmp(nm + n - 5, "Smplr")) nm[n - 5] = 0;
+    const char *p = nm;
+    if (!(*p >= 'a' && *p <= 'z')) return;
+    while (*p >= 'a' && *p <= 'z') p++;
+    if (*p++ != '_' || (*p != 't' && *p != 'i')) return;
+    p++;
+    unsigned long long slots = 0, h = 0; int ok = 0;
+    for (const char *q = p; *q && !ok; q++) {   // \w*? 懒匹配：第一个能接上 _cb<数字>_<大写十六进制> 的位置
+        if (q[0] == '_' && q[1] == 'c' && q[2] == 'b' && q[3] >= '0' && q[3] <= '9') {
+            const char *r = q + 3; unsigned long long sl = 0;
+            while (*r >= '0' && *r <= '9') sl = sl * 10 + (unsigned)(*r++ - '0');
+            if (r[0] == '_' && ((r[1] >= '0' && r[1] <= '9') || (r[1] >= 'A' && r[1] <= 'F'))) {
+                unsigned long long hv = 0;
+                for (r++; (*r >= '0' && *r <= '9') || (*r >= 'A' && *r <= 'F'); r++) hv = hv * 16 + (unsigned)(*r <= '9' ? *r - '0' : *r - 'A' + 10);
+                slots = sl; h = hv; ok = 1; break;
+            }
+        }
+        if (!lp_isword(*q)) return;
+    }
+    if (!ok) return;
+    long long tb = (long long)(slots & 0xffff), sb = (slots >> 16) ? (long long)(slots >> 16) - 1 : tb;
+    long long o0 = (long long)(h & 0x3fff) * 4, o1 = (long long)((h >> 14) & 0x3fff) * 4, ty = (long long)(h >> 28);
+    if ((ty != 1 && ty != 2) || tb < 3 || tb > 16 || sb < 3 || sb > 16) return;
+    if (is_samp) { if ((long long)w->reg != sb - 3 || (long long)w->off != o1) return; w->pair_reg = (uint32_t)(tb - 3); w->pair_off = (uint32_t)o0; w->pair_sid = 0; }
+    else { if ((long long)w->reg != tb - 3 || (long long)w->off != o0) return; w->pair_reg = (uint32_t)(sb - 3); w->pair_off = (uint32_t)o1; w->pair_sid = ty == 2; }
+    w->pair = 1;
+}
+// 读一条 *_ubo 成员的句柄字来源（reg / off / sid）并按名字配另一半
+static int lp_uword_read(struct s2a_jv b, const char *msl, int is_samp, struct lp_uword *w) {
+    memset(w, 0, sizeof *w);
+    uint32_t sid = 0;
+    if (jf_u32(b, "reg", &w->reg) || jf_u32(b, "off", &w->off) || w->reg >= 16 || w->off > 0xffff) return -1;
+    if (is_samp && !jf_bool(b, "sid", &sid)) w->sid = sid != 0;
+    lp_pair_from_name(msl, is_samp, w);
+    return 0;
+}
+// v1：{"slot":r,"offset":o[,"sid":true][,"pair":{"slot":r2,"offset":o2,"sid":bool}]}
+static void lp_uword_emit(struct jw *j, const struct lp_uword *w) {
+    jw_fmt(j, "{\"slot\":%u,\"offset\":%u", w->reg, w->off);
+    if (w->sid) jw_str(j, ",\"sid\":true");
+    if (w->pair) jw_fmt(j, ",\"pair\":{\"slot\":%u,\"offset\":%u,\"sid\":%s}", w->pair_reg, w->pair_off, w->pair_sid ? "true" : "false");
+    jw_str(j, "}");
+}
+// 同一个 bindings[] 里按 msl_name 找成员（tex_ubo 的采样器半边 = <名>Smplr）
+static int lp_find_member(struct s2a_jv arr, const char *name, struct s2a_jv *out) {
+    int n = s2a_jv_arr_count(arr);
+    for (int i = 0; i < n; i++) {
+        char msl[72] = "";
+        if (!s2a_jv_arr_item(arr, i, out) && !jf_str(*out, "msl_name", msl, sizeof msl) && !strcmp(msl, name)) return 0;
+    }
+    return -1;
+}
+
 // 一个键的 _b.json bindings[] → v1 content.bindings[]（追加进 jw；sep 管逗号）
 // stage_no = 本段 StageNo（绑定号换算用它），v1_stage = v1 阶段名标签
 static int lp_emit_bindings(struct jw *j, struct s2a_jv top, const char *lib_stage,
@@ -198,14 +266,43 @@ static int lp_emit_bindings(struct jw *j, struct s2a_jv top, const char *lib_sta
         size_t ml = strlen(msl);
         int sampler_half = (ml > 5 && !strcmp(msl + ml - 5, "Smplr"));
         const char *v1kind = NULL; uint32_t slot = 0; int has_slot = 0;
-        char provenance[96] = "";   // storage 三元出处（nvnSlot / uboSlot+uboOffset / uboPtr）
+        char provenance[320] = "";   // storage 三元出处（nvnSlot / uboSlot+uboOffset / uboPtr）；texture 的 uboHandle / sampler
         if (sampler_half) continue;
         if (!strcmp(kind, "tex") || !strcmp(kind, "tbuf") || !strcmp(kind, "tex_pool")) {
             uint32_t reg = 0; int has_reg = !jf_u32(b, "reg", &reg);
             v1kind = "texture";
             if (has_reg && strcmp(kind, "tex_pool")) { slot = lp_tex_slot_word(reg); has_slot = 1; }
-        } else if (!strcmp(kind, "tex_ubo") || !strcmp(kind, "tbuf_ubo") || !strcmp(kind, "tex_c2a")) {
-            v1kind = "texture";   // 句柄在游戏 UBO 里：v1 无对应字段，出绑定不挂槽（按缺席槽位如实）
+        } else if (!strcmp(kind, "tex_ubo") || !strcmp(kind, "tbuf_ubo")) {
+            v1kind = "texture";
+            // 句柄在游戏用户常量缓冲里（iOS NVN_RB_TEXU / TBUFU）：v1 带 uboHandle（句柄字来源 + 另一半），
+            //   tex_ubo 再带组合采样的采样器来源 sampler（取自 <名>Smplr 半边：samp_ubo / samp_id / samp，同 Dsh.cs DecodeUboTex 的三种）。
+            //   数组（array<…>，按 8k 逐项取句柄）还没接：照旧不挂来源，消费端如实拒
+            char ty[96] = "";
+            if (jf_str(b, "msl_type", ty, sizeof ty) || strncmp(ty, "array<", 6)) {
+                struct lp_uword w;
+                if (lp_uword_read(b, msl, 0, &w)) return lp_fail(why, why_size, "%s bindings[%u] %s: %s without reg 0..15 / off", lib_stage, i, msl, kind);
+                struct jw u = {0};
+                jw_str(&u, ",\"uboHandle\":"); lp_uword_emit(&u, &w);
+                char sn[72]; struct s2a_jv sb;
+                snprintf(sn, sizeof sn, "%sSmplr", msl);
+                if (!strcmp(kind, "tex_ubo") && !lp_find_member(arr, sn, &sb)) {
+                    char sk[24] = ""; uint32_t sreg = 0;
+                    if (jf_str(sb, "kind", sk, sizeof sk)) { free(u.b); return lp_fail(why, why_size, "%s bindings[%u] %s: sampler half without kind", lib_stage, i, msl); }
+                    if (!strcmp(sk, "samp_ubo")) {
+                        struct lp_uword sw;
+                        if (lp_uword_read(sb, sn, 1, &sw)) { free(u.b); return lp_fail(why, why_size, "%s %s: samp_ubo without reg 0..15 / off", lib_stage, sn); }
+                        jw_str(&u, ",\"sampler\":{\"source\":\"ubo\",\"handle\":"); lp_uword_emit(&u, &sw); jw_str(&u, "}");
+                    } else if (!strcmp(sk, "samp_id") && !jf_u32(sb, "reg", &sreg) && sreg <= 0xffff) {
+                        jw_fmt(&u, ",\"sampler\":{\"source\":\"id\",\"id\":%u}", sreg);
+                    } else if (!strcmp(sk, "samp") && !jf_u32(sb, "reg", &sreg) && sreg < 128) {
+                        jw_fmt(&u, ",\"sampler\":{\"source\":\"slot\",\"slot\":%u}", sreg);
+                    } else { free(u.b); return lp_fail(why, why_size, "%s %s kind '%s' not mappable as a uniform-handle sampler", lib_stage, sn, sk); }
+                }
+                if (u.oom || !u.b || u.n >= sizeof provenance) { free(u.b); return lp_fail(why, why_size, "%s %s: handle source too long", lib_stage, msl); }
+                memcpy(provenance, u.b, u.n + 1); free(u.b);
+            }
+        } else if (!strcmp(kind, "tex_c2a")) {
+            v1kind = "texture";   // 驱动表句柄数组：v1 无对应字段，出绑定不挂槽（按缺席槽位如实）
         } else if (!strcmp(kind, "samp") || !strcmp(kind, "samp_id") || !strcmp(kind, "samp_ubo")
                    || !strcmp(kind, "samp_c2a") || !strcmp(kind, "samp_pool") || !strcmp(kind, "samp_tex")) {
             continue;   // 采样器半边/独立采样器句柄：v1 是合并纹理模型，不出行

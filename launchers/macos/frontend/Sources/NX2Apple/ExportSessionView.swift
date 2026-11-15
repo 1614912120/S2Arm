@@ -370,7 +370,7 @@ struct ExportSessionView: View {
                     Text(x(succeeded.contains(.ios) ? "done.ios" : "done.mac")).font(.manrope(18)).foregroundStyle(.secondary)
                 }
                 if let boost = succeeded.compactMap({ run.outcomes[$0]?.boost }).first(where: { $0.values.contains { $0 > 0 } }) {
-                    BoostBanner(boost: boost, text: x)   // 自动配好了金手指 / 补丁：S 级加强生效（开不开玩家在启动设置里定）
+                    BoostBanner(boost: boost, text: { BackendText.launcherText($0, language: uiLanguage) })   // 自动配好了金手指 / 补丁：S 级加强生效（开不开玩家在启动设置里定）。横幅里的键已带「export.」前缀，不能再过 x（v0.4.0 候选完成页显示成 [export.export.boost.title]）
                 }
                 // 补丁打入结果（11-14）：逐条列打上 / 没打上（带原因）；两端都出了就分 Mac / iPhone 写
                 SGradeResultView(results: succeeded.compactMap { p in run.outcomes[p].map { o in var r = o.sgrade; r.cheats = 0; return SGradeGameResult(name: p == .ios ? "iPhone" : "Mac", outcome: r) } },   // 金手指条数横幅里已写
@@ -580,22 +580,25 @@ struct ExportSessionView: View {
     /// 剩余：一分钟以上只写到分（倒数时不让秒数跳），「约 6 分钟」/「6 min」。
     private func duration(_ seconds: Double, exact: Bool = false) -> String {
         let s = max(0, Int(seconds.rounded()))
-        let zh = loc.lang == .zh
-        if s >= 3600 {
-            let h = s / 3600, m = s % 3600 / 60
-            return zh ? "\(h) 小时 \(m) 分" : "\(h)h \(m)m"
+        return Self.duration(seconds: s, exact: exact, language: loc.lang.sharedCode)
+    }
+
+    /// 时长的写法在共享文案表 duration.*（两端同一份，跟随界面语言）：{0} {1} 是数字
+    static func duration(seconds s: Int, exact: Bool, language: String) -> String {
+        func f(_ id: String, _ a: Int, _ b: Int = 0) -> String {
+            BackendText.launcherText("duration." + id, language: language).replacingOccurrences(of: "{0}", with: "\(a)").replacingOccurrences(of: "{1}", with: "\(b)")
         }
+        if s >= 3600 { return f("hm", s / 3600, s % 3600 / 60) }
         if s >= 60 {
             let m = exact ? s / 60 : Int((Double(s) / 60).rounded(.up)), r = s % 60
-            if exact { return zh ? "\(m) 分 \(r) 秒" : "\(m)m \(r)s" }
-            return zh ? "\(m) 分钟" : "\(m) min"
+            return exact ? f("ms", m, r) : f("m", m)
         }
-        return zh ? "\(s) 秒" : "\(s)s"
+        return f("s", s)
     }
 
     private func time(_ date: Date) -> String {
         let f = DateFormatter()
-        f.locale = Locale(identifier: loc.lang == .zh ? "zh_CN" : "en_US")
+        f.locale = Locale(identifier: loc.lang.sharedCode)
         f.dateStyle = .none; f.timeStyle = .short
         return f.string(from: date)
     }

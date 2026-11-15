@@ -109,6 +109,9 @@ struct PhoneOutcome: Equatable {
     var exportFolder = ""
     var exportGames = 0
     var exportBytes: Int64? = nil
+    /// 这次新写的 .img 与沿用的款数（#1132）：有沿用才在完成页点名「.img 只要拷这几个」
+    var exportFresh: [String] = []
+    var exportReused = 0
     /// 完成页「推到手机」（11-13）：推进手机上自签 S2Arm 的 .img 文件名（空 = 还没推）；推不成时作业给的一句「缺什么、怎么做」
     var pushed: [String] = []
     var pushNote = ""
@@ -364,6 +367,36 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
     }
 
+    /// 手机插着、启动器开着时（#8be819）：每 2 分钟把手机上宿主留下的代码模块（游戏运行中才取到的 NRO）拉回游戏库（phoneKeptPull 作业），
+    ///   有还没补进 iPhone 件的就自动发起「更新 iPhone」：只改程序、只推程序部分，玩家不用判断要重出什么。同一批只自动发起一次，
+    ///   没成（要确认 / 失败）就留给游戏库右上角的「更新 iPhone」按钮（phoneUpdates 列着这台）。有局 / 任务在跑、装法是导出时不发起
+    func keptModulesLoop() {
+        guard !keptLoopStarted else { return }
+        keptLoopStarted = true
+        Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 120 * 1_000_000_000)
+                guard let self else { return }
+                await self.keptModulesTick()
+            }
+        }
+    }
+
+    /// keptModulesLoop 的一次（单测直接调）：→ 这次有没有发起「更新 iPhone」
+    @discardableResult func keptModulesTick() async -> Bool {
+        if busy || installMode.mode == "export" { return false }
+        guard let r = try? await provider.client.perform("phoneKeptPull").result else { return false }
+        let kept = (r["kept"] as? [String]) ?? [], device = r["device"] as? String ?? ""
+        if kept.isEmpty || device.isEmpty { return false }
+        if r["running"] as? Bool != false { return false }   // 手机上 S2Arm 正在跑（或查不清）：装 App 会杀掉玩家这一局，等它退了下一轮再推（这一批不记已试）
+        let batch = device + ":" + kept.sorted().joined(separator: ",")
+        if keptAutoTried.contains(batch) || busy { return false }
+        keptAutoTried.insert(batch)
+        let language = provider.client.environment.uiLanguage ?? "zh-Hans"
+        refresh { [weak self] in self?.updatePhone(acceptStale: false, repack: [], language: language, device: device, ask: false) }
+        return true
+    }
+
     public func refresh(_ done: (() -> Void)? = nil) {
         guard !loading else { refreshAgain = (refreshAgain ?? []) + (done.map { [$0] } ?? []); return }
         if let done { refreshWaiters.append(done) }
@@ -385,7 +418,7 @@ public final class S2ArmLauncherModel: ObservableObject {
             case .success(let games):
                 self.games = games; self.libraryError = nil; self.showingSnapshot = false
                 self.phoneUpdates = self.provider.library.phoneUpdates
-                if startup { self.sgradeMacInBackground() }
+                if startup { self.sgradeMacInBackground(); self.keptModulesLoop() }
                 if self.selectedID == nil || !games.contains(where: { $0.id == self.selectedID }) { self.selectedID = games.first?.id }
             case .failure(let error):
                 self.libraryError = error.message
@@ -990,6 +1023,7 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// 上一次「更新手机上的 S2Arm」的参数：失败页「重试」按它再来
     var lastUpdateArgs: UpdateArgs?
     var sgradeMacFlag = false
+    var keptLoopStarted = false, keptAutoTried: Set<String> = []   // keptModulesLoop（#8be819）
     func retryPhoneUpdate() {
         guard let a = lastUpdateArgs else { return }
         updatePhone(acceptStale: a.acceptStale, repack: a.repack, language: a.language, device: a.device, accept: a.accept, mode: a.mode, sgradeUpgrade: a.sgradeUpgrade)   // 已确认过的照带
@@ -1016,7 +1050,8 @@ public final class S2ArmLauncherModel: ObservableObject {
             do {
                 let r = try await self?.provider.install(gameId: game.id, teamId: teamId, device: device, accept: accept, events: sink)
                 if let r, !r.exportFolder.isEmpty {   // 导出模式：没装手机，打开放好的文件夹
-                    self?.phoneOutcome = PhoneOutcome(skipped: r.skipped, exportFolder: r.exportFolder, exportGames: r.exportGames, exportBytes: r.exportBytes)
+                    self?.phoneOutcome = PhoneOutcome(skipped: r.skipped, exportFolder: r.exportFolder, exportGames: r.exportGames, exportBytes: r.exportBytes,
+                                                     exportFresh: r.exportFresh, exportReused: r.exportReused)
                     NSWorkspace.shared.open(URL(fileURLWithPath: r.exportFolder))
                 } else if let r {
                     self?.installedTo = Self.deviceLabel(kind: r.deviceKind, name: r.deviceName)
@@ -1095,8 +1130,9 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     private func crashedBeforePlay(_ gameID: String) async throws -> [String] {
         let result = try await saveJob("community", gameID: gameID, extra: [:])
-        // 帧率补丁那条（kind fps，作业层 cheats.note_crash / note_stall）没有补丁名：交 CrashPromptHost 按界面语言写「帧率」
-        return (result["crashed"] as? [[String: Any]] ?? []).compactMap { ($0["kind"] as? String) == "fps" ? CrashPrompt.fpsName : $0["name"] as? String }
+        // 帧率补丁那条（kind fps）、满屏开关那条（kind fs，自适应满屏一族跟它走）没有补丁名（作业层 cheats.note_crash / note_stall）：交 CrashPromptHost 按界面语言写「帧率」「满屏」
+        return (result["crashed"] as? [[String: Any]] ?? []).compactMap {
+            switch $0["kind"] as? String { case "fps": return CrashPrompt.fpsName; case "fs": return CrashPrompt.fullscreenName; default: return $0["name"] as? String } }
     }
 
     private func playChecked(_ game: GameSummary, uiLanguage: String?) {

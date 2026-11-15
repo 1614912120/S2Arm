@@ -1,7 +1,9 @@
 """社区资源（pack/jobs/community.py，10-27 维护者 01:4x 口径）：宽屏 / 60 帧是宿主开关（缺省开、可关），版本不符走跨版本定位不判死，
 画面同互斥组单选；Mac 启动按选择设 S2A_WIDESCREEN=0 / S2A_FPS60=0。期望按规则手写"""
+import importlib.util
 import json, os, shutil, sys, tempfile, unittest
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import community
 import layout
@@ -89,6 +91,10 @@ class CommunityTests(unittest.TestCase):
         self.assertEqual(community.nacp_languages(nacp(0, 2, 13, 14)), ["AmericanEnglish", "Japanese", "TraditionalChinese", "SimplifiedChinese"])
         self.assertEqual(community.nacp_languages(nacp()), [])            # 合成的 nacp 不声明：不知道
         self.assertEqual(community.nacp_languages(b"short"), [])
+        # #1209：导入合成的 nacp（ns2_dump.synth_nacp）支持表只写了美式英语、显示版本「?」——不是真表，当不知道，下拉列全部（选得到中文）
+        spec = importlib.util.spec_from_file_location("ns2_dump", REPO / "pack/ns2_dump.py"); ns2 = importlib.util.module_from_spec(spec); spec.loader.exec_module(ns2)
+        self.assertEqual(community.nacp_languages(ns2.synth_nacp(0x0400486024DEC000, "x")), [])
+        self.assertEqual(community.nacp_languages(nacp(0)), ["AmericanEnglish"])   # 真表只声明英语（显示版本不是「?」）：照真表
         ctl = layout.image_mac(self.c, GID) / "ctl" / "control.nacp"
         self.assertNotIn("choices", community.mac_settings(self.c, GID)["language"])   # 还没出包（没有 nacp）：照旧列全部
         write(ctl, ""); ctl.write_bytes(nacp(0, 2, 14))                      # 美英、日、简中
@@ -262,7 +268,10 @@ class MacDisplayTests(unittest.TestCase):
         # 满屏明确开 = 没验证过也铺满（同 iPhone settings.m）；明确关 = 16:9；强信号判坏的款明确开也不开
         self.caps()
         self.save(widescreen=True)
-        self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
+        # 11-15：我方通用满屏缺省不用（runtime/src/widen.c），满屏明确开只在旧口径（S2A_CAPS_OWN=1）强开
+        self.assertEqual(community.launch_env(self.c, GID), {})
+        with mock.patch.dict(os.environ, {"S2A_CAPS_OWN": "1"}):
+            self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
         self.save(widescreen=False)
         self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDESCREEN": "0"})
         self.caps("widen\t1\t# 默认开：widen_verified.tsv\ndirect\t1\n")
@@ -316,7 +325,9 @@ class MacDisplayTests(unittest.TestCase):
         self.caps()
         write(community.launch_path(self.c, GID), json.dumps({"schema": 1, "settings": {"widenForce": True}, "patches": {}}))
         self.assertTrue(self.mac()["widescreen"]["value"])
-        self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
+        self.assertEqual(community.launch_env(self.c, GID), {})   # 11-15 缺省口径：我方通用满屏不用
+        with mock.patch.dict(os.environ, {"S2A_CAPS_OWN": "1"}):
+            self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
 
     def test_fps60_off_and_manual_on_over_a_red_game(self):
         self.caps()

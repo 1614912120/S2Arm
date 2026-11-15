@@ -80,6 +80,7 @@ static void on_shown(void *user, const nvn_gpu_shown *s) {   // 持 g_pmu 的 pr
 
 uint64_t nvn_be_present(const tex_t *t, double period_s, const int crop[4]) {
     (void)period_s;
+    rp_tm_frame_end();   // 一帧结束：刚结束的是采样帧就记一帧，再定下一帧要不要逐步计时（分时抽样，#1103）
     pthread_mutex_lock(&g_pmu);
     uint64_t ticket = ++g_ticket; double zero = 0;
     __atomic_store(&g_shown[ticket % PT_RING], &zero, __ATOMIC_RELEASE);
@@ -122,6 +123,7 @@ uint64_t nvn_be_present(const tex_t *t, double period_s, const int crop[4]) {
             if (now - t_last >= 5000000000ull) {
                 uint64_t pf[RP_PERF_N], nd = 0, nsk = 0; rp_perf_take(pf); rp_draw_stats(&nd, &nsk);
                 uint64_t fr = g_n_shown + 1 - n_last; double sec = (double)(now - t_last) / 1e9, f = fr ? (double)fr : 1.0;
+                const double fs = pf[RP_PERF_TM_FRAMES] ? (double)pf[RP_PERF_TM_FRAMES] : 1.0;   // 逐步计时那几项只在采样帧里计：按计时过的帧数求每帧值（#1103）
                 char b[640]; snprintf(b, sizeof b, "分时：%.1f 秒上屏 %llu 帧（每秒 %.1f）；每帧：绘制 %.0f 笔、队列提交 %.1f 次共 %.1f 毫秒（其中交后端 %.1f）、等围栏 %.1f 次共 %.1f 毫秒（其中等同步 %.1f 次 %.1f 毫秒、Finish %.1f 次 %.1f 毫秒）；段从提交到完成平均 %.1f 毫秒；回放分三段：开段 %.1f / 回放 %.1f / 收尾 %.1f 毫秒、等已完成 %.1f 次、没真等 %.1f 次；GPU 忙 %.1f 毫秒；通道 %.1f 个、交上屏 %.1f 毫秒",
                                       sec, (unsigned long long)fr, (double)fr / sec, (double)(nd - d_last) / f, (double)pf[RP_PERF_SUBS] / f, (double)pf[RP_PERF_SUBMIT_NS] / 1e6 / f, (double)pf[RP_PERF_COMMIT_NS] / 1e6 / f,
                                       (double)(pf[RP_PERF_WAIT_N] + pf[RP_PERF_WAIT_FIN_N]) / f, (double)(pf[RP_PERF_WAIT_NS] + pf[RP_PERF_WAIT_FIN_NS]) / 1e6 / f,
@@ -133,7 +135,7 @@ uint64_t nvn_be_present(const tex_t *t, double period_s, const int crop[4]) {
                                       (double)pf[RP_PERF_PASSES] / f, (double)pf[RP_PERF_PRESENT_NS] / 1e6 / f);
                 nvn_plat_log(NVN_PLAT_LOG_INFO, "present", b);
                 snprintf(b, sizeof b, "分时（绘制各步，每帧毫秒）：取程序 %.1f、顶点流与索引 %.1f、取贴图视图 %.1f、开通道与取管线 %.1f、动态状态与顶点缓冲 %.1f、绑定 %.1f、后端绘制 %.1f、收尾 %.1f；回放按命令分：绘制类 %.1f、其余 %.1f",
-                         (double)pf[RP_PERF_D_PROG] / 1e6 / f, (double)pf[RP_PERF_D_PREP] / 1e6 / f, (double)pf[RP_PERF_D_TEX] / 1e6 / f, (double)(pf[RP_PERF_D_PASS] + pf[RP_PERF_D_PIPE]) / 1e6 / f, (double)pf[RP_PERF_D_DYN] / 1e6 / f, (double)pf[RP_PERF_D_BIND] / 1e6 / f, (double)pf[RP_PERF_D_DRAW] / 1e6 / f, (double)pf[RP_PERF_D_TAIL] / 1e6 / f,
+                         (double)pf[RP_PERF_D_PROG] / 1e6 / fs, (double)pf[RP_PERF_D_PREP] / 1e6 / fs, (double)pf[RP_PERF_D_TEX] / 1e6 / fs, (double)(pf[RP_PERF_D_PASS] + pf[RP_PERF_D_PIPE]) / 1e6 / fs, (double)pf[RP_PERF_D_DYN] / 1e6 / fs, (double)pf[RP_PERF_D_BIND] / 1e6 / fs, (double)pf[RP_PERF_D_DRAW] / 1e6 / fs, (double)pf[RP_PERF_D_TAIL] / 1e6 / fs,
                           (double)pf[RP_PERF_EXEC_DRAW_NS] / 1e6 / f, (double)pf[RP_PERF_EXEC_OTHER_NS] / 1e6 / f);
                 nvn_plat_log(NVN_PLAT_LOG_INFO, "present", b);
                 { char ops[420]; rp_exec_dump_ops(ops, sizeof ops); char lb[1200];
@@ -143,12 +145,16 @@ uint64_t nvn_be_present(const tex_t *t, double period_s, const int crop[4]) {
                            (double)pf[RP_PERF_SETRT_END_NS] / 1e6 / f, (double)pf[RP_PERF_PASSEND_N] / f);
                   nvn_plat_log(NVN_PLAT_LOG_INFO, "present", lb); }
                 nvn_plat_log(NVN_PLAT_LOG_INFO, "present", b);
+                {   // 抽样说明（另起一行、不改原有各行的格式）：绘制各步 / 开通道细分 / 贴图解析的等锁与持锁三处按计时过的帧数求每帧值（#1103）
+                    char tb[260]; snprintf(tb, sizeof tb, "分时（计时抽样）：每 %u 帧完整计 1 帧，本窗口计了 %llu 帧；绘制各步、开通道细分、贴图解析的等锁与持锁按计时的帧数求每帧毫秒（nvk_tm_full=1 每帧都计）",
+                                           rp_tm_stride(), (unsigned long long)pf[RP_PERF_TM_FRAMES]);
+                    nvn_plat_log(NVN_PLAT_LOG_INFO, "present", tb); }
                 snprintf(b, sizeof b, "分时（开通道与取管线细分，每帧毫秒）：开通道 %.2f、取管线 %.2f（其中后端取与设 %.2f）；全部通道开始：取附件视图 %.2f、屏障 %.2f、后端开通道 %.2f、记写过 %.2f",
-                         (double)pf[RP_PERF_D_PASS] / 1e6 / f, (double)pf[RP_PERF_D_PIPE] / 1e6 / f, (double)pf[RP_PERF_D_PGET] / 1e6 / f,
-                         (double)pf[RP_PERF_PB_VIEW] / 1e6 / f, (double)pf[RP_PERF_PB_BAR] / 1e6 / f, (double)pf[RP_PERF_PB_BE] / 1e6 / f, (double)pf[RP_PERF_PB_MARK] / 1e6 / f);
+                         (double)pf[RP_PERF_D_PASS] / 1e6 / fs, (double)pf[RP_PERF_D_PIPE] / 1e6 / fs, (double)pf[RP_PERF_D_PGET] / 1e6 / fs,
+                         (double)pf[RP_PERF_PB_VIEW] / 1e6 / fs, (double)pf[RP_PERF_PB_BAR] / 1e6 / fs, (double)pf[RP_PERF_PB_BE] / 1e6 / fs, (double)pf[RP_PERF_PB_MARK] / 1e6 / fs);
                 nvn_plat_log(NVN_PLAT_LOG_INFO, "present", b);
                 snprintf(b, sizeof b, "分时（贴图解析，每帧）：等锁 %.2f 毫秒、持锁 %.2f 毫秒、没见过的序号 %.1f 个、新建视图 %.1f 个、内容检查按纪元跳过 %.0f 次；影子附件 %.2f 毫秒；新贴图：后端建 %.2f 毫秒、扫存储 %.2f 毫秒、上传 %.1f 张 %.2f 毫秒、填零 %.1f 张 %.2f 毫秒、改由通道清零 %.1f 张",
-                         (double)pf[RP_PERF_RES_LOCK] / 1e6 / f, (double)pf[RP_PERF_RES_INIT] / 1e6 / f, (double)pf[RP_PERF_RES_NEW] / f, (double)pf[RP_PERF_RES_VIEWMAKE] / f, (double)pf[RP_PERF_TEX_EPOCH] / f, (double)pf[RP_PERF_PB_SHADOW] / 1e6 / f,
+                         (double)pf[RP_PERF_RES_LOCK] / 1e6 / fs, (double)pf[RP_PERF_RES_INIT] / 1e6 / fs, (double)pf[RP_PERF_RES_NEW] / f, (double)pf[RP_PERF_RES_VIEWMAKE] / f, (double)pf[RP_PERF_TEX_EPOCH] / f, (double)pf[RP_PERF_PB_SHADOW] / 1e6 / f,
                          (double)pf[RP_PERF_RES_MAKE] / 1e6 / f, (double)pf[RP_PERF_RES_SCAN] / 1e6 / f, (double)pf[RP_PERF_RES_UPN] / f, (double)pf[RP_PERF_RES_UP] / 1e6 / f, (double)pf[RP_PERF_RES_ZERON] / f, (double)pf[RP_PERF_RES_ZERO] / 1e6 / f, (double)pf[RP_PERF_RES_ZDEFER] / f);
                 nvn_plat_log(NVN_PLAT_LOG_INFO, "present", b);
                 snprintf(b, sizeof b, "分时（通道，每帧）：%.1f 个，共 %.1f 百万像素；颜色附件载入 %.1f 个；挂深度模板的 %.1f 个，其中整个通道没用到它的 %.1f 个；只有 0–1 笔绘制的 %.1f 个（挂深度模板 %.1f / 不挂 %.1f，共 %.1f 百万像素；一笔都没画的 %.1f 个）；同目标续接 %.1f 次、挂起清除 %.1f 条、缩小区域 %.1f 个（共 %.1f 百万像素）、影子附件 %.1f 个；开着的通道被结束的原因：换目标 %.1f、通道中途的整屏清除 %.1f、同一提交里第二次同步 %.1f",
@@ -190,11 +196,19 @@ uint64_t nvn_be_present(const tex_t *t, double period_s, const int crop[4]) {
                     snprintf(b, sizeof b, "分时（写跟踪）：每帧缺页 %.0f 次、宿主写前解保护 %.0f 页、改保护 %.0f 次共 %.0f 页 %.1f 毫秒", (double)(fl - f0) / f, (double)(pr - p0) / f, (double)(mc - c0) / f, (double)(mpg - g0) / f, (double)(mns - n0) / 1e6 / f);
                     nvn_plat_log(NVN_PLAT_LOG_INFO, "present", b);
                     f0 = fl; p0 = pr; c0 = mc; g0 = mpg; n0 = mns; }
-                {   // 线程内备忘（#974）：写跟踪取范围 / 池查找各命中多少；计数是调用线程自己的，这里读到的是打印这一行的线程（回放线程）的
-                    static uint64_t sh0, ss0, ph0, pl0; uint64_t sh = 0, ss = 0, ph = 0, pl = 0; nvn_dirty_span_memo_stats(&sh, &ss); rp_pool_memo_stats(&ph, &pl);
-                    snprintf(b, sizeof b, "分时（线程内备忘，每帧）：写跟踪取范围 命中 %.0f 次、线性扫 %.0f 次；池查找 备忘命中 %.0f 次 / 共 %.0f 次", (double)(sh - sh0) / f, (double)(ss - ss0) / f, (double)(ph - ph0) / f, (double)(pl - pl0) / f);
+                {   // 写跟踪取范围的有序索引（#1133）：索引答了多少次、每次访问几个节点、退回线性扫几次；池数与这一窗口的登记数。
+                    // 计数是调用线程自己的，这里读到的是打印这一行的线程（回放线程）的；池数 / 登记数是全局的
+                    static uint64_t xh0, xs0, xn0, ad0; uint64_t xh = 0, xs = 0, xn = 0; nvn_dirty_span_stats(&xh, &xs, &xn);
+                    int dl = 0, du = 0; uint64_t da = 0; nvn_dirty_slot_stats(&dl, &du, &da);
+                    snprintf(b, sizeof b, "分时（取范围索引，每帧）：索引答 %.0f 次（平均每次访问 %.1f 个节点）、退回线性扫 %.0f 次；池 %d 个（占用槽 %d）、本窗口登记 %.1f 次",
+                             (double)(xh - xh0) / f, xh > xh0 ? (double)(xn - xn0) / (double)(xh - xh0) : 0.0, (double)(xs - xs0) / f, dl, du, (double)(da - ad0) / f);
                     nvn_plat_log(NVN_PLAT_LOG_INFO, "present", b);
-                    sh0 = sh; ss0 = ss; ph0 = ph; pl0 = pl; }
+                    xh0 = xh; xs0 = xs; xn0 = xn; ad0 = da; }
+                {   // 线程内备忘（#974）：池查找命中多少；计数是调用线程自己的，这里读到的是打印这一行的线程（回放线程）的
+                    static uint64_t ph0, pl0; uint64_t ph = 0, pl = 0; rp_pool_memo_stats(&ph, &pl);
+                    snprintf(b, sizeof b, "分时（线程内备忘，每帧）：池查找 备忘命中 %.0f 次 / 共 %.0f 次", (double)(ph - ph0) / f, (double)(pl - pl0) / f);
+                    nvn_plat_log(NVN_PLAT_LOG_INFO, "present", b);
+                    ph0 = ph; pl0 = pl; }
                 t_last = now; n_last = g_n_shown + 1; d_last = nd;
             }
         }

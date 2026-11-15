@@ -33,7 +33,7 @@ def main():
         if (sysinc/name).exists() and not (include/name).exists():
             (include/name).symlink_to(sysinc/name)
     inc = (include, ROOT/'runtime/include', native, native/'nvn', native/'direct', gfx, gfx/'replay', gfx/'gfx/nvn',
-           gfx/'gfx/nvn/include', ROOT/'android/tests/vkhost')
+           gfx/'gfx/nvn/include', ROOT/'android/tests/vkhost', native/'gfx_plat')
     libs = [gfx/'replay/nvn_unimpl.c', gfx/'replay/rp_state.c', native/'nvn/nvn_vk_compute_request.c']
     libs += [ROOT/'runtime/src/direct_host.c']
     libs += [native/'direct'/f for f in ('source_store.c', 'control.c', 'input_identity.c',
@@ -84,7 +84,7 @@ def main():
         assert before_lines[1] == after_lines[1], 'legacy S2AI1 bytes changed'
         print(f'legacy request and canonical identity byte-for-byte unchanged versus {base_sha}')
         return 0
-    if len(sys.argv) == 6 and sys.argv[1] in ('--emit-real', '--emit-real-tbuf', '--execute-tbuf', '--emit-compute-tbuf', '--execute-compute-tbuf'):
+    if len(sys.argv) == 6 and sys.argv[1] in ('--emit-reuse-texture', '--emit-reuse-rt', '--emit-reuse-inactive', '--emit-real', '--emit-real-tbuf', '--execute-tbuf', '--emit-compute-tbuf', '--execute-compute-tbuf'):
         result = run('emit-real', original, args=sys.argv[1:])
         sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)
         return result.returncode
@@ -115,6 +115,10 @@ def main():
         print('NEGATIVE CONTROL PASS: removing TBUF replay guards fails graphics and compute assertions')
         return 0
 
+    if len(sys.argv) == 6 and sys.argv[1] == '--execute-reuse':
+        result = run('execute-reuse', original, args=tuple(sys.argv[1:]))
+        sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)
+        return result.returncode
     if sys.argv[1:] == ['--withdraw']:
         text = original.read_text(encoding='utf-8')
         changes = [
@@ -180,6 +184,12 @@ def main():
             ('cs-separate-omitted', 'MIX(sep_fact_sig(5));', '(void)0;', 1, 'changed CS separate texture fact recompiles'),
             ('cs-separate-generation-omitted', 'const uint64_t sg = rp_tex_sep_gen[st], rg = rp_tex_reg_gen();',
              'const uint64_t sg = st == 5 ? 0 : rp_tex_sep_gen[st], rg = rp_tex_reg_gen();', 1, 'changed CS separate texture fact recompiles'),
+            # 图形 / 计算共用的快表（#1146）：桶数退回 512，「同一旧桶里的 5 个键共存」必须变红；收尾不释放表，「会话收尾释放」必须变红；
+            # 存项时不分配（表永远建不起来），所有访问都落空，同一条必须变红。
+            ('last-table-512', 'enum { LAST_BITS = 12,', 'enum { LAST_BITS = 9,', 1, 'coexist in the fast table'),
+            ('last-table-kept', 'free(g_last_tab); g_last_tab = NULL;', '(void)g_last_tab;', 1, 'released at session retirement'),
+            ('last-table-never-built', 'if (!g_last_tab && !(g_last_tab = calloc(1, sizeof *g_last_tab))) return;',
+             'if (!g_last_tab) return;', 1, 'coexist in the fast table'),
         ]
         for name, before, after, count, expected in changes:
             assert text.count(before) == count, (name, 'mutation anchor')
@@ -189,6 +199,39 @@ def main():
             assert result.returncode != 0 and expected in result.stderr, (name, result.stdout, result.stderr)
             print(f'{name}: expected assertion failure: {expected}', flush=True)
         print(f'PASS: {len(changes)} negative controls')
+        return 0
+    if sys.argv[1:] == ['--withdraw-fact-reuse']:
+        text = original.read_text()
+        before = 'if (!e && reusable) {'
+        assert text.count(before) == 1
+        path = out/'fact-reuse-withdraw.c'
+        path.write_text(text.replace(before, 'if (0 && !e && reusable) {'))
+        # The extracted source keeps its normal local header search path.
+        base.append('-I'+str(native/'gfx_plat'))
+        result = run('fact-reuse-withdraw', path)
+        assert result.returncode and 'unqueried combined texture reuses compiled program' in result.stderr, result.stderr
+        print('PASS: disabling dependency reuse fails the production-producer regression')
+        return 0
+    if sys.argv[1:] == ['--withdraw-fact-reset']:
+        text = original.read_text()
+        assert text.count('    fact_cache_reset();') == 1
+        path = out/'fact-reset-withdraw.c'
+        path.write_text(text.replace('    fact_cache_reset();', '    (void)fact_cache_reset;'))
+        base.append('-I'+str(native/'gfx_plat'))
+        result = run('fact-reset-withdraw', path)
+        assert result.returncode and 'reset clears aliases and dependency index' in result.stderr, result.stderr
+        print('PASS: keeping stale dependency indexes across reset fails the production-producer regression')
+        return 0
+    if sys.argv[1:] == ['--withdraw-inactive-ubo']:
+        text = original.read_text()
+        before = 'for (int st = 0; st < nst; st++) { uint32_t m = 0;'
+        assert text.count(before) == 1
+        path = out/'inactive-ubo-withdraw.c'
+        path.write_text(text.replace(before, 'for (int st = 0; st < 6; st++) { uint32_t m = 0;'))
+        base.append('-I'+str(native/'gfx_plat'))
+        result = run('inactive-ubo-withdraw', path)
+        assert result.returncode and 'inactive stage UBO keeps graphics identity' in result.stderr, result.stderr
+        print('PASS: restoring inactive UBO identity fails the production-producer regression')
         return 0
     if sys.argv[1:]:
         raise ValueError('usage: nvk_shader_pool_test.py [--withdraw]')

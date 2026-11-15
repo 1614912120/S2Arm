@@ -26,8 +26,8 @@ struct SGradeUpgradeView: View {
     @State private var failure: String?
 
     var body: some View {
-        let lang = loc.lang == .zh ? "zh-Hans" : "en"
-        SGradeUpgradeBody(games: games, failure: failure, zh: loc.lang == .zh, busy: model.busy,
+        let lang = loc.lang.sharedCode
+        SGradeUpgradeBody(games: games, failure: failure.map(loc.backend), zh: loc.cjkPunctuation, busy: model.busy,   // 作业层原句按界面语言显示
                           x: { BackendText.launcherText("sgrade.upgrade." + $0, language: lang) },
                           upgrade: { mode in model.updatePhone(acceptStale: false, repack: [], language: lang, mode: mode, sgradeUpgrade: true); dismiss() },
                           close: { dismiss() })
@@ -94,11 +94,10 @@ struct SGradeUpgradeBody: View {
                 Text(x("macNote")).font(.manrope(12.5)).foregroundStyle(.secondary)
                 if yes.contains(where: \.iphone) {
                     Text(x("iphoneNote")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 10) {
-                        Button(x("install")) { upgrade("device") }   // 装法取值同作业层 install.INSTALL_MODES（device / export）.buttonStyle(.borderedProminent).accessibilityIdentifier("sgrade.upgrade.install")
-                        Button(x("export")) { upgrade("export") }.buttonStyle(.bordered).accessibilityIdentifier("sgrade.upgrade.export")
-                        Spacer()
-                        Button(x("close")) { close() }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    // 英 / 日 / 法两个按钮横排放不下会截成「…」（v0.4.1 六语走查 W2）：放不下就竖排，每个按钮整句显示
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 10) { installButton; exportButton; Spacer(); closeButton }
+                        VStack(alignment: .leading, spacing: 8) { installButton; exportButton; closeButton }
                     }.disabled(busy)
                 } else {
                     okRow
@@ -141,4 +140,11 @@ struct SGradeUpgradeBody: View {
     private var okRow: some View {
         HStack { Spacer(); Button(x("ok")) { close() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
     }
+    private var installButton: some View {   // 装法取值同作业层 install.INSTALL_MODES（device / export）
+        Button(x("install")) { upgrade("device") }.buttonStyle(.borderedProminent).accessibilityIdentifier("sgrade.upgrade.install").fixedSize()
+    }
+    private var exportButton: some View {
+        Button(x("export")) { upgrade("export") }.buttonStyle(.bordered).accessibilityIdentifier("sgrade.upgrade.export").fixedSize()
+    }
+    private var closeButton: some View { Button(x("close")) { close() }.buttonStyle(.plain).foregroundStyle(.secondary).fixedSize() }
 }

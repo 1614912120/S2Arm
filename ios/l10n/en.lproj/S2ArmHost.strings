@@ -84,6 +84,8 @@
 "crash.off.body" = "The game quit last time while %@ was on, so it’s off this time. You can turn it back on in Settings.";
 "crash.off.prompt" = "The game quit last time while %@ was on, so it’s off this time. You can turn it back on in Settings.\n\nSending us the diagnostics helps us fix it. The bundle contains only run logs — no saves, keys or game files.";
 "crash.off.title" = "Turned off what was on when the game quit";
+"crash.restored.title" = "Turned back on what was switched off after a crash";
+"crash.restored.body" = "%@ was switched off after the game crashed; this version of S2Arm turns it back on. If it crashes again it will be switched off again.";
 "sgrade.title" = "S-grade enhancements";
 "sgrade.note" = "If a patch is incompatible and makes the game crash, it is turned off automatically the next time you launch, so you can keep playing.";
 "sgrade.counts" = "%ld on · %ld in all";
@@ -220,6 +222,8 @@
 "vpad.menu.ns2pro" = "Enable Switch 2 Pro Controller";
 "vpad.menu.pad" = "Controllers & Motion";
 "vpad.menu.rumble" = "Rumble";
+"vpad.menu.volume" = "Sound";
+"vpad.volume.mute" = "Mute";
 "vpad.menu.rumble.note" = "Shared by the phone motor and controllers; picking a level plays a sample";
 "vpad.menu.saves" = "Manage saves";
 "vpad.menu.stickFixed.note" = "Off = the stick centers where your finger lands";
@@ -441,6 +445,7 @@
 "save.restored" = "Save restored. You can start the game to check your progress. A pre-restore backup was kept (none is created if there was no save before).";
 "save.serviceInvalid" = "The save service didn’t return a valid result. Close and reopen the app; your existing data is kept.";
 "save.start" = "Start game";
+"save.leave" = "Quit (open straight into the game next time)";
 "save.status.hasSave" = "Your current save can be exported. Importing first checks the game version, account ownership and file integrity, then asks you to confirm the restore.";
 "save.status.noSave" = "There’s no save to export yet. You can import a backup, or start the game to create a save.";
 "save.tempCleanupFailed" = "Couldn’t clean up a temporary copy, so it still takes up space. In Files, delete the temporary copy named “%@” inside the app.";
@@ -456,6 +461,7 @@
 "settings.fps.knownIssue.message" = "60 FPS has known issues in this game. Turn it off if the game runs at the wrong speed.";
 "settings.fps.native" = "Native 60 FPS in this game";
 "settings.group.dev" = "Development";
+"settings.devEntry" = "Developer & diagnostics";
 "settings.notStarted" = "Game not started";
 "settings.restart.message" = "Restart the game now? Unsaved progress will be lost, so make sure you’ve saved in the game.";
 "settings.restart.messageLater" = "Your saved settings take effect the next time you start the game.";
@@ -497,6 +503,9 @@
 "settings.language.zhHans" = "简体中文";
 "settings.language.zhHant" = "繁體中文";
 "settings.language.en" = "English";
+"settings.language.ja" = "日本語";
+"settings.language.es" = "Español";
+"settings.language.fr" = "Français";
 "settings.language.restart" = "Close and reopen S2Arm to use the new language.";
 "settings.gameLanguage" = "Game language";
 "settings.gameLanguage.system" = "Same as system";
