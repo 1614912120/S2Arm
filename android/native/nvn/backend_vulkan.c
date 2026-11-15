@@ -1696,6 +1696,7 @@ uint32_t nvn_gpu_format_caps(uint32_t nvn_format) {
 static void wsi_close_locked(void);   // backend_vulkan_wsi.inc
 static void clr_close(void);          // backend_vulkan_clear.inc
 static void depth_blit_close(void);   // backend_vulkan_depth_blit.inc
+static void easu_close(void);   // backend_vulkan_easu.inc
 nvn_gpu_rc nvn_gpu_close(uint64_t timeout_ns, nvn_gpu_err *err) {
     if (!g_open) return rc(NVN_GPU_OK);
     if (g_in_callback) return fail(err, NVN_GPU_E_ORDER, "回调里不许 close");
@@ -1784,6 +1785,7 @@ nvn_gpu_rc nvn_gpu_close(uint64_t timeout_ns, nvn_gpu_err *err) {
     }
     clr_close();
     depth_blit_close();
+    easu_close();
     struct nvn_gpu_pipe_s *p = g.pipes;
     g.pipes = NULL;
     free(g_pipe_ht); g_pipe_ht = NULL; g_pipe_ht_n = 0; g_pipe_cnt = 0;
@@ -6154,6 +6156,7 @@ void nvn_gpu_barrier(nvn_gpu_cmd ch, uint32_t nvn_bits) {
 }
 
 #include "backend_vulkan_depth_blit.inc"
+#include "backend_vulkan_easu.inc"
 
 // 带缩放 / 换格式的贴图拷贝。源、目标都取视图的第一级第一层；区域按各自那一级的像素给。
 // 颜色采用原生 blit；同格式 D24S8/D32FS8 最近点缩放采用辅助绘制，不依赖深度 BLIT 格式位。
