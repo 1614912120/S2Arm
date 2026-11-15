@@ -34,7 +34,7 @@ extension LauncherView {
 
     private var homeEmptyPreview: some View {
         VStack(spacing: 18) {
-            Image(systemName: home.group == .favorites ? "heart" : "magnifyingglass")
+            Image(systemName: home.group.symbol)
                 .font(.system(size: 38, weight: .light)).foregroundStyle(.secondary)
             Text(loc.t(home.search.isEmpty ? "home.empty." + home.group.rawValue : "home.noResults"))
                 .font(.manrope(20, .semibold)).multilineTextAlignment(.center)
@@ -145,10 +145,10 @@ extension LauncherView {
                 Button { home.group = group } label: {
                     Group {
                         if compact {
-                            Image(systemName: group == .all ? "square.grid.2x2" : group == .recent ? "clock.arrow.circlepath" : "heart")
+                            Image(systemName: group.symbol)
                                 .frame(width: 40, height: 40)
                         } else {
-                            Label(loc.t("home.group." + group.rawValue), systemImage: group == .all ? "square.grid.2x2" : group == .recent ? "clock.arrow.circlepath" : "heart")
+                            Label(loc.t("home.group." + group.rawValue), systemImage: group.symbol)
                                 .lineLimit(1).fixedSize(horizontal: true, vertical: false)
                         }
                     }

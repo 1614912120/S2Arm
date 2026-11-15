@@ -33,7 +33,7 @@ import S2ArmAppleAdapter
                 let field = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.search.field" }, "搜索框应直接在首页展开")
                 XCTAssertEqual(Set(NSApp.windows.filter(\.isVisible).map(\.windowNumber)), initialWindows, "展开搜索不能创建 popup")
                 XCTAssertTrue(window.convertToScreen(host.bounds).contains(field.frame))
-                for id in ["home.search", "home.refresh", "library.sgradeUpgrade", "home.group.all", "home.group.recent", "home.group.favorites"] {
+                for id in ["home.search", "home.refresh", "library.sgradeUpgrade", "home.group.all", "home.group.ready", "home.group.recent", "home.group.favorites"] {
                     let control = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == id })
                     XCTAssertTrue(window.convertToScreen(host.bounds).contains(control.frame), "\(language)/\(width): 展开后控件必须留在窗口内")
                     XCTAssertLessThanOrEqual(control.frame.height, 44, "\(language)/\(width): 首页控件不能被换行撑高")
@@ -51,6 +51,15 @@ import S2ArmAppleAdapter
                 try await Task.sleep(for: .milliseconds(80))
                 XCTAssertEqual(fixture.model.home.search, "")
                 XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" }, "清空后保持展开")
+                let groups = try ["all", "ready", "recent", "favorites"].map { id in
+                    try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "home.group." + id })
+                }
+                for pair in zip(groups, groups.dropFirst()) {
+                    XCTAssertLessThanOrEqual(pair.0.frame.maxX, pair.1.frame.minX, "分组应按全部、已就绪、最近、收藏顺序排列")
+                }
+                navigation.focus("home.group.ready"); navigation.handle(.confirm)
+                XCTAssertEqual(fixture.model.home.group.rawValue, "ready")
+                fixture.model.home.group = .all
             }
         }
     }
@@ -75,6 +84,35 @@ import S2ArmAppleAdapter
                 XCTAssertEqual(delta, 0, accuracy: 0.5, "签名子布局右侧应与父选项对齐")
                 try snapshot(host, "signing-right-edge-\(language.code)-\(Int(width))")
             }
+        }
+    }
+
+    func testReadyGroupShowsEmptyStateAndCanReturnToAllGames() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.runner.catalogNeedsPreparation = true
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.first?.needsPreparation != true { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(fixture.model.games.count, 1)
+        XCTAssertEqual(fixture.model.games.first?.needsPreparation, true)
+        let navigation = fixture.model.gamepad
+        navigation.source.controllers = { [] }
+        for language in [Lang.zh, .en] {
+            let page = AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture").frame(width: 1120, height: 630))
+            let (host, window) = try await render(page, fixture: fixture, language: language)
+            navigation.attach(window)
+            defer { navigation.detach(); window.close() }
+            navigation.focus("home.group.ready"); navigation.handle(.confirm)
+            try await Task.sleep(for: .milliseconds(120))
+            XCTAssertEqual(fixture.model.home.group.rawValue, "ready")
+            let targets = navigation.controlTargets(in: window)
+            XCTAssertTrue(targets.contains { $0.id == "home.showAll" })
+            XCTAssertFalse(targets.contains { $0.id.hasPrefix("card.") || $0.id.hasPrefix("hero.") })
+            try snapshot(host, "home-ready-empty-\(language.code)")
+            navigation.focus("home.showAll"); navigation.handle(.confirm)
+            try await Task.sleep(for: .milliseconds(80))
+            XCTAssertEqual(fixture.model.home.group, .all)
+            XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "card.fixture" }, "返回全部游戏后应恢复待准备的游戏卡片")
         }
     }
 
@@ -455,6 +493,11 @@ private final class SettingsRunner: JobProcessRunner {
     private let lock = NSLock()
     private var captured: [[String: Any]] = []
     private var gameCount = 1
+    private var needsPreparation = false
+    var catalogNeedsPreparation: Bool {
+        get { lock.withLock { needsPreparation } }
+        set { lock.withLock { needsPreparation = newValue } }
+    }
     var catalogGameCount: Int {
         get { lock.withLock { gameCount } }
         set { lock.withLock { gameCount = newValue } }
@@ -472,7 +515,7 @@ private final class SettingsRunner: JobProcessRunner {
                 "en": ["title": "Choose a configuration", "body": "Original layout fixture for long content", "points": (1...24).map { "Original item \($0): a longer configuration description to verify scrolling and keep the actions visible" },
                        "recommend": "Use recommended", "original": "Use original"]]
             result = ["games": (0..<catalogGameCount).map { index in
-                ["id": index == 0 ? "fixture" : "fixture-\(index)", "name": "Original UI fixture \(index)", "ready": true, "missing": [],
+                ["id": index == 0 ? "fixture" : "fixture-\(index)", "name": "Original UI fixture \(index)", "ready": true, "needsPreparation": catalogNeedsPreparation, "missing": [],
                  "downstream": ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy]] as [String: Any]
             }]
         }

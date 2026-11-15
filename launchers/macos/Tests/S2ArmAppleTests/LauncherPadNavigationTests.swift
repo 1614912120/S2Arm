@@ -180,6 +180,34 @@ final class LauncherPadInputTests: XCTestCase {
         let restored = HomeLibraryState(store: store)
         XCTAssertEqual(restored.favorites, ["b"]); XCTAssertEqual(restored.recent, ["b", "a"])
     }
+
+    func testReadyGroupContainsOnlyGamesThatCanLaunchOnMac() throws {
+        XCTAssertEqual(HomeGroup.allCases.map(\.rawValue), ["all", "ready", "recent", "favorites"])
+        let ready = try XCTUnwrap(HomeGroup(rawValue: "ready"))
+        let suite = "s2arm.home.ready." + UUID().uuidString
+        let store = UserDefaults(suiteName: suite)!
+        defer { store.removePersistentDomain(forName: suite) }
+        let state = HomeLibraryState(store: store)
+        let games = [
+            GameSummary(id: "mac-a", name: "Alpha", ready: true),
+            GameSummary(id: "unprepared", name: "Not compiled"),
+            GameSummary(id: "phone-only", name: "iPhone build", iphoneReady: true),
+            GameSummary(id: "outdated", name: "Needs rebuild", ready: true, needsPreparation: true),
+            GameSummary(id: "mac-b", name: "Beta", ready: true, iphoneReady: true)
+        ]
+        state.group = ready
+        XCTAssertEqual(state.games(games).map(\.id), ["mac-a", "mac-b"])
+        state.search = "beta"
+        XCTAssertEqual(state.games(games).map(\.id), ["mac-b"])
+        state.search = "Needs rebuild"
+        XCTAssertTrue(state.games(games).isEmpty)
+        state.search = ""
+        XCTAssertTrue(state.games(Array(games[1...3])).isEmpty)
+        state.group = .all; state.cycle(1)
+        XCTAssertEqual(state.group, ready)
+        state.cycle(1); XCTAssertEqual(state.group, .recent)
+        state.cycle(-1); XCTAssertEqual(state.group, ready)
+    }
 }
 
 @MainActor private final class PadActionSink: NSObject {

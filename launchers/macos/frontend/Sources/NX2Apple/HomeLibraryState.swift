@@ -4,7 +4,18 @@ import Combine
 import Foundation
 import S2ArmAppleAdapter
 
-enum HomeGroup: String, CaseIterable { case all, recent, favorites }
+enum HomeGroup: String, CaseIterable {
+    case all, ready, recent, favorites
+
+    var symbol: String {
+        switch self {
+        case .all: return "square.grid.2x2"
+        case .ready: return "checkmark.circle"
+        case .recent: return "clock.arrow.circlepath"
+        case .favorites: return "heart"
+        }
+    }
+}
 
 @MainActor final class HomeLibraryState: ObservableObject {
     @Published var group: HomeGroup = .all
@@ -39,6 +50,7 @@ enum HomeGroup: String, CaseIterable { case all, recent, favorites }
         var result = all
         switch group {
         case .all: break
+        case .ready: result = result.filter(\.playable)
         case .favorites: result = result.filter { favorites.contains($0.id) }
         case .recent:
             let byID = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
