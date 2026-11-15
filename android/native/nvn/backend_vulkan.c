@@ -210,7 +210,7 @@ struct nvn_gpu_cmd_s {
     uint32_t desc_dirty;
     // 描述符写入影子（开关 nvk_desc_skip，缺省开）：同一个组对象里，内容和上次真正写进去的一样就不再写。
     // 真机上一帧约 1030 次整组重建、每次 11 条描述符；其中大部分条目（贴图句柄、采样器、常量缓冲片）和上一笔相同。
-    struct desc_shadow { uint64_t a, b, c; uint32_t type; uint16_t binding; uint8_t valid; } dsh[4][32];
+    struct desc_shadow { uint64_t a, b, c; uint32_t type; uint16_t binding, elem; uint8_t valid; } dsh[4][32];
     VkDescriptorSet dsh_set[4];
     uint8_t dsh_ok[4];
     uint8_t desc_point;             // 当前这几组绑在哪个绑定点：0 还没绑，1 图形，2 计算
@@ -4004,11 +4004,14 @@ static int bind_descriptor_groups(struct nvn_gpu_cmd_s *c, const struct nvn_gpu_
                 if (set >= 4 || wr[i].dstBinding >= 32) { wr[keep++] = wr[i]; continue; }
                 struct desc_shadow *sh = &c->dsh[set][wr[i].dstBinding];
                 struct desc_shadow nx; memset(&nx, 0, sizeof nx);
-                nx.type = wr[i].descriptorType; nx.binding = (uint16_t)wr[i].dstBinding;
+                nx.type = wr[i].descriptorType; nx.binding = (uint16_t)wr[i].dstBinding; nx.elem = (uint16_t)wr[i].dstArrayElement;
                 if (wr[i].pImageInfo) { nx.a = (uint64_t)(uintptr_t)wr[i].pImageInfo->imageView; nx.b = (uint64_t)(uintptr_t)wr[i].pImageInfo->sampler; nx.c = (uint64_t)wr[i].pImageInfo->imageLayout; }
                 else if (wr[i].pBufferInfo) { nx.a = (uint64_t)(uintptr_t)wr[i].pBufferInfo->buffer; nx.b = wr[i].pBufferInfo->offset; nx.c = wr[i].pBufferInfo->range; }
                 else if (wr[i].pTexelBufferView) nx.a = (uint64_t)(uintptr_t)*wr[i].pTexelBufferView;
-                if (sh->valid && sh->a == nx.a && sh->b == nx.b && sh->c == nx.c && sh->type == nx.type) continue;
+                // 影子一个 binding 只占一格，元素号也得比：数组里相邻两个元素描述符相同（空元素沿用首个
+                // 有效视图、采样器共用首项）时，不比元素就会把后一个元素当「没变」跳过，新分配的组里它从没被写过。
+                // 每条写入 descriptorCount 恒为 1（write_binds），所以按元素比就够。
+                if (sh->valid && sh->elem == nx.elem && sh->a == nx.a && sh->b == nx.b && sh->c == nx.c && sh->type == nx.type) continue;
                 nx.valid = 1; *sh = nx; wr[keep++] = wr[i];
             }
             nw = keep;
