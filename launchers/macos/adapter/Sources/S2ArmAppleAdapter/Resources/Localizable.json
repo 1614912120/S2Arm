@@ -9622,5 +9622,9 @@
  {
   "source": "出包已完成，但回报的 ipa 路径还在临时短路径入口下、入口已随出包进程退出拆掉，拷不到：{0}。请把这条报错和诊断一起发给我们。",
   "en": "The build finished, but the reported IPA path is still under a temporary short-path entry that was removed when the build process exited, so it can't be copied: {0}. Please send us this error together with a diagnostic."
+ },
+ {
+  "source": "核对程序 {0}/{1}：{2}",
+  "en": "Checking programs {0}/{1}: {2}"
  }
 ]

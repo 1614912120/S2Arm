@@ -285,7 +285,10 @@ def refresh_ios(c, games):
         return []
     c.emit("message", f"正在核对 {len(todo)} 款游戏的程序是否要按新版更新（含 S 级优化补丁）")
     updated, missing = [], []
-    for g in todo:
+    names = {x["id"].upper(): x.get("name") or x["id"] for x in c.catalog()["games"]}
+    for i, g in enumerate(todo, 1):
+        # 逐款一行（#1132：升级后第一次导出，库里每款都在这一步重核，整体进度停在 0%，玩家看着像卡死）
+        c.emit("message", f"核对程序 {i}/{len(todo)}：{names.get(g.upper(), g)}")
         try:
             r = check_and_update(c, g, layout.ios_kit(c, g), "ios", rid)
             if r == "updated":
@@ -306,7 +309,6 @@ def refresh_ios(c, games):
     if updated:
         c.emit("message", f"已更新 {len(updated)} 款游戏的程序（资源不用重推）")
     if missing:   # 不悄悄跳过：说清哪几款这次没补上、怎么补
-        names = {x["id"].upper(): x.get("name") or x["id"] for x in c.catalog()["games"]}
         c.emit("message", "【黄】这几款这次没补上 S 级优化（找不到游戏原件，也没有 Mac 版可借）："  # 非玩家句
                + "、".join(names.get(g.upper(), g) for g in missing) + "。插上存原件的盘（或在游戏库里重新添加原件）后再更新一次就会补上；这次照常装，游戏照常能玩")  # 非玩家句
     return updated
