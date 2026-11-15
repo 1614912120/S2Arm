@@ -112,5 +112,5 @@ neg M4 '【红】(C1 .*(条数不符|序列哈希不符|没登记)|超时)' 'C1'
 mutate M5 'dq_run(h); r += h->size; atomic_store(&g_dq_rd, r); }' 'const uint32_t sz_ = h->size; r += sz_; atomic_store(&g_dq_rd, r); dq_run(h); }   /* M5：先报已读 */'
 neg M5 '【红】(C2：|C[13] .*条数不符)' 'C[123]'
 mutate M6 'atomic_fetch_sub(&g_dq_draining, 1);' 'atomic_store(&g_dq_draining, 0);   /* M6：先走的抹掉别人的「在等」标记 */'
-neg M6 '【红】C5：后到的清空等了' 'C5'
+neg M6 '【红】C5：(先到的清空已返回、后到的尚未完成|后到的清空等了)' 'C5'
 echo "两级回放队列宿主用例：正控全绿，六种变异都红在预期处"

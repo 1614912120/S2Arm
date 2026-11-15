@@ -85,7 +85,8 @@ enum { MAXCB = 8, CB_BASE = 0x1000 };
 static uint64_t g_hash[MAXCB], g_cnt[MAXCB];   // 同一个 cb 同一时刻只有一侧在写（直调前先清空）；主线程在清空之后读（清空返回对录制线程的 release 写有 acquire）
 static _Atomic uint64_t g_executed[MAXCB];      // 每做完一条加一（release）
 static _Atomic int g_unexpected;                // 桩被调到没登记的调用
-static _Atomic int g_c5_entered, g_c5_waiters, g_c5_a_done;
+static _Atomic int g_c5_entered, g_c5_waiters, g_c5_a_done, g_c5_remaining;
+static int c5_drainer_count(void);
 static _Thread_local int g_c5_role;
 static int g_slow_ns;                           // 录制每条额外耗时（制造背压）；改它只在队列清空之后
 
@@ -118,6 +119,8 @@ static VKAPI_ATTR void VKAPI_CALL rec_dispatch(VkCommandBuffer cb, uint32_t x, u
     }   // C5 的两条握手记录：z 取不到别处发的 dispatch 会用的值（那些 z ≤ 15）
     else if (z == 0x5102u) {
         while (!atomic_load(&g_c5_a_done)) sched_yield();
+        // R2尚未完成，B不能退出；A已返回，所以真实在等者必须恰为1。
+        atomic_store(&g_c5_remaining, c5_drainer_count());
     }
     rec_note(cb, 5, x, y, z, 0);
 }
@@ -141,6 +144,7 @@ static int c5_timedwait(pthread_cond_t *cond, pthread_mutex_t *mu, const struct 
 #define pthread_cond_timedwait c5_timedwait
 #include "nvn_vk_dq.inc"
 #undef pthread_cond_timedwait
+static int c5_drainer_count(void) { return atomic_load(&g_dq_draining); }
 
 // ---- 检查计数 ----
 static int g_checks, g_bad;
@@ -279,7 +283,7 @@ static void *c5_a_main(void *arg) { (void)arg; g_c5_role = 1; vkEndCommandBuffer
 static void run_two_drainers_phase(void) {
     phase("C5 两条线程同时清空");
     set_dq(1); reset_sinks();
-    atomic_store(&g_c5_entered, 0); atomic_store(&g_c5_waiters, 0); atomic_store(&g_c5_a_done, 0);
+    atomic_store(&g_c5_entered, 0); atomic_store(&g_c5_waiters, 0); atomic_store(&g_c5_a_done, 0); atomic_store(&g_c5_remaining, -1);
     vkCmdDispatch(cb_of(0), 1, 1, 0x5101);   // R1
     while (!atomic_load(&g_c5_entered)) sched_yield();
     pthread_t ta; pthread_create(&ta, NULL, c5_a_main, NULL);   // A：快照在 R1 之后
@@ -291,6 +295,7 @@ static void run_two_drainers_phase(void) {
     g_c5_role = 0;
     double b_ms = (double)(now_ns() - t0) / 1e6;
     pthread_join(ta, NULL);
+    CHECK(atomic_load(&g_c5_remaining) == 1, "C5：先到的清空已返回、后到的尚未完成，等待者应为1，实际%d", atomic_load(&g_c5_remaining));
     CHECK(b_ms < 600.0, "C5：后到的清空等了 %.0f 毫秒（应小于600毫秒；等满 1 秒的超时 = 先走的那条把「在等」标记抹掉了，没人叫醒它）", b_ms);
     CHECK(g_cnt[0] == 2, "C5：条数不符：发 2 → 收 %llu", (unsigned long long)g_cnt[0]);
     printf("  %-38s 后到的清空等了 %.0f 毫秒\n", "C5 两条线程同时清空", b_ms);
