@@ -63,7 +63,13 @@ import Sparkle
     }
     func showUpdaterError(_ error: Error, acknowledgement: @escaping () -> Void) {
         let ns = error as NSError
-        log("更新失败（Sparkle \(ns.domain) \(ns.code)）：\(ns.localizedDescription)\(ns.localizedFailureReason.map { "；" + $0 } ?? "")")
+        // 底层错误逐层带上（#1218：2001 只说「下载更新时出现错误」，真正原因——写盘失败 / 网络 / 证书——在 NSUnderlyingError 里，原先不记、查不了）
+        var chain = "", cur = ns.userInfo[NSUnderlyingErrorKey] as? NSError, depth = 0
+        while let u = cur, depth < 4 {
+            chain += "；底层 \(u.domain) \(u.code)：\(u.localizedDescription)"
+            cur = u.userInfo[NSUnderlyingErrorKey] as? NSError; depth += 1
+        }
+        log("更新失败（Sparkle \(ns.domain) \(ns.code)）：\(ns.localizedDescription)\(ns.localizedFailureReason.map { "；" + $0 } ?? "")\(chain)")
         model?.updateFailure = ns.localizedDescription
         model?.updateState = .failed("update_failed")
         installReply = nil
