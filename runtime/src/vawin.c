@@ -1186,8 +1186,10 @@ void s2a_low_tags(char *out, size_t cap) {
         }
     }
     int o = snprintf(out, cap, "按标签（含尾部）：文件页 %llu MB", (unsigned long long)(file >> 20));
-    for (int r = 0; r < 6 && o > 0 && (size_t)o < cap; r++) { int m = -1; for (int i = 0; i < NTAG; i++) if (bytag[i] && (m < 0 || bytag[i] > bytag[m])) m = i; if (m < 0) break;
+    static const char *const vname[S2A_VMTAG_END - S2A_VMTAG_VPOOL] = {"Switch 2 虚拟池预留", "远端影子区", "游戏共享内存", "宿主其他匿名映射"};   // s2a_lowva.h S2A_VMTAG_*
+    for (int r = 0; r < 10 && o > 0 && (size_t)o < cap; r++) { int m = -1; for (int i = 0; i < NTAG; i++) if (bytag[i] && (m < 0 || bytag[i] > bytag[m])) m = i; if (m < 0) break;
         if (m >= S2A_TAIL_TAG0 && m < S2A_TAIL_TAG0 + S2A_TAIL_NUSER) o += snprintf(out + o, cap - (size_t)o, "、%s（标签 %d）%llu MB", g_tl_uname[m - S2A_TAIL_TAG0], m, (unsigned long long)(bytag[m] >> 20));
+        else if (m >= S2A_VMTAG_VPOOL && m < S2A_VMTAG_END) o += snprintf(out + o, cap - (size_t)o, "、%s（标签 %d）%llu MB", vname[m - S2A_VMTAG_VPOOL], m, (unsigned long long)(bytag[m] >> 20));
         else o += snprintf(out + o, cap - (size_t)o, "、标签 %d %llu MB", m, (unsigned long long)(bytag[m] >> 20));
         bytag[m] = 0; }
 }
@@ -1299,6 +1301,6 @@ void s2a_oom_dump(const char *when) {
         prev = a + sz; a += sz;
     }
     s2a_vm_top(when);
-    char b[512]; s2a_low_tags(b, sizeof b); LOG("低区账 [%s]：%s", when, b);
+    char b[768]; s2a_low_tags(b, sizeof b); LOG("低区账 [%s]：%s", when, b);
 }
 #endif
