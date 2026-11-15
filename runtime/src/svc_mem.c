@@ -322,6 +322,13 @@ static uint64_t mask_minmax(uint32_t lo, uint32_t hi) { uint32_t r = hi - lo + 1
 //   多款容器构造期要逐款读包内每一款的 NPDM（runtime/src/vawin.c），许可位是按位或累加的，读了别款就混进本局。本局的状态由起局时 layout_prepare / s2a_mem_init 按 apply = 1 读。
 //   Switch 2 标志与应用池两种都设（标志是赋值、起局 layout_prepare 按本款重写；池 9 GiB 不回设，容器逐款算完由 vawin.c 放回）：
 //   窗口跨度按池算堆区（layout.c S2A_HEAP_DEFAULT），单款构造期的客体内存文件后备判定也读它（vawin.c guest_file_attach）
+// Switch 2 款的应用内存池：缺省 9 GiB（native.h S2A_APP_POOL）。诊断开关 S2A_APP_POOL_MB=<MiB> 覆盖（只给排查用，缺省不设 = 照旧）：
+//   一款 Switch 2 游戏起局把堆开满到池上限（9156 / 9216 MB）、第 7 帧分配拿到空指针崩，要验「真机池更大、游戏按更大的池规划」这个猜测（参考实现 12 GB 档 9809 MiB）。
+//   设了不是正数照旧缺省。纯读环境，t_svc_mem 测
+uint64_t s2a_ounce_pool(void) {
+    const char *e = getenv("S2A_APP_POOL_MB"); long long v = e && *e ? atoll(e) : 0;
+    return v > 0 ? (uint64_t)v << 20 : 0x240000000ull;
+}
 static int npdm_read(const char *path, uint32_t *as_type, uint64_t *sysres, uint32_t *main_stack, uint64_t *pid, int apply) {
     FILE *f = fopen(path, "rb"); if (!f) return -1;
     uint8_t meta[0x80]; size_t n = fread(meta, 1, sizeof meta, f);
@@ -334,7 +341,7 @@ static int npdm_read(const char *path, uint32_t *as_type, uint64_t *sysres, uint
     // Switch 2（Ounce）的 ACID 用 RSA-3072 签名：签名 / 公钥各 0x180，魔数在 ACID +0x300（Switch 1 +0x200；switchbrew NPDM）。按它认 Switch 2 进程
     { uint32_t acid; uint8_t mg[4]; memcpy(&acid, meta + 0x78, 4);
       g_npdm_ounce = !fseek(f, (long)acid + 0x300, SEEK_SET) && fread(mg, 1, 4, f) == 4 && !memcmp(mg, "ACID", 4);
-      if (g_npdm_ounce) s2a_app_pool_set(0x240000000ull); }   // Switch 2：应用池 9 GiB（native.h S2A_APP_POOL）；起局第一次读 NPDM（窗口量跨度）就设，布局之前
+      if (g_npdm_ounce) s2a_app_pool_set(s2a_ounce_pool()); }   // Switch 2：应用池 9 GiB（native.h S2A_APP_POOL）；起局第一次读 NPDM（窗口量跨度）就设，布局之前
     uint8_t a[0x38]; *pid = 0;
     if (!fseek(f, aci, SEEK_SET) && fread(a, 1, sizeof a, f) == sizeof a && !memcmp(a, "ACI0", 4)) {
         uint32_t ko, ks; memcpy(pid, a + 0x10, 8); memcpy(&ko, a + 0x30, 4); memcpy(&ks, a + 0x34, 4);
@@ -437,7 +444,7 @@ uint64_t s2a_npdm_window_need(const char *npdm) {
 uint64_t s2a_npdm_app_pool(const char *npdm) {
     uint32_t t, ms; uint64_t sr, pid;
     if (npdm_read(npdm, &t, &sr, &ms, &pid, 0)) return 0;
-    return g_npdm_ounce ? 0x240000000ull : 0xCD500000ull;
+    return g_npdm_ounce ? s2a_ounce_pool() : 0xCD500000ull;
 }
 // 本款程序号（vawin.c 构造函数占窗口时按名字取）：同 s2a_npdm_window_need 的不写本局状态读法（apply = 0）；读不到 / 没有 ACI0 为 0。
 //   审计 P1-139：构造期客体内存文件后备要按程序号找本款实测峰值 / 「上一局前台死掉」标记，那时图形模式还没落定，不能经 s2a_npdm_program_id → s2a_gfx_mode
