@@ -291,6 +291,42 @@ class NdcUv(unittest.TestCase):
         self.assertIsNone(variant(bad, BINDS_NDC)[0])   # 没有可改的采样：整支不出变体
 
 
+class WideGbuffer(unittest.TestCase):
+    """#1152：G-buffer 贴花写 5 个颜色输出、带多重采样关时的样本掩码成员（s2a_smask）、return 包在单行块里（异度之刃 3 a93aa7a906dc4e2d 的形状）。
+    期望按写法手写：出变体；5 个输出都记；第 5 个输出的搬位置常量落在 128 起（不撞 S2A_AT 100 / S2A_MSOFF 101）；样本掩码成员留在结构里；单行块里的 return 前插了输出赋值"""
+    SRC = FS_NDC.replace("""    float4 m_10 [[color(0)]];
+""", """    float4 m_10 [[color(0)]];
+    float4 m_11 [[color(1)]];
+    float4 m_12 [[color(2)]];
+    float4 m_13 [[color(3)]];
+    float4 m_14 [[color(4)]];
+    uint s2a_smask [[sample_mask, function_constant(S2A_MSOFF_ON)]];
+""").replace("""    out.m_10 = float4(_203, 1.0);
+    return out;
+""", """    out.m_10 = float4(_203, 1.0);
+    out.m_14 = float4(0.0);
+    { if (S2A_MSOFF_ON) out.s2a_smask = 0xffffffffu; return out; }
+""").replace("using namespace metal;\n", "using namespace metal;\nconstant int S2A_AT [[function_constant(100)]]; constant bool S2A_MSOFF [[function_constant(101)]]; constant bool S2A_MSOFF_ON = is_function_constant_defined(S2A_MSOFF) ? S2A_MSOFF : false;\n", 1)
+
+    def test_five_outputs_smask_inline_return(self):
+        self.assertIn("uint s2a_smask", self.SRC); self.assertIn("{ if (S2A_MSOFF_ON) out.s2a_smask = 0xffffffffu; return out; }", self.SRC)
+        fv, meta = variant(self.SRC, BINDS_NDC)
+        self.assertIsNotNone(fv, meta)
+        self.assertEqual([o["color"] for o in meta["outputs"]], [0, 1, 2, 3, 4])
+        self.assertIn("constant bool OM_4_0 [[function_constant(128)]];", fv)
+        self.assertIn("constant bool OM_3_7 [[function_constant(95)]];", fv)
+        self.assertNotIn("[[function_constant(100)]];\nconstant bool OM", fv)
+        for n in range(96, 128):
+            self.assertNotIn("OM_", "\n".join(l for l in fv.splitlines() if f"function_constant({n})" in l))
+        self.assertIn("uint s2a_smask [[sample_mask, function_constant(S2A_MSOFF_ON)]];", fv)
+        self.assertRegex(fv, r"if \(OM_4_0\) out\.m_14_at0 = spv_o_m_14;[^\n]*return out; \}")
+
+    def test_nine_outputs_refused(self):
+        many = FS_NDC.replace("    float4 m_10 [[color(0)]];\n", "".join(f"    float4 m_{10 + i} [[color({i})]];\n" for i in range(9)))
+        fv, why = variant(many, BINDS_NDC)
+        self.assertIsNone(fv); self.assertIn("more than 8", why)
+
+
 class ScrPos(unittest.TestCase):
     def test_position_copy_locn(self):
         # VS：m_71 = (P.x, P.y, ·, P.w) → locn7；m_70 是 scr_uv 那种（(P.x + P.w) / 2 …）不是位置本身 → 不记

@@ -12323,6 +12323,8 @@ planned:
     if (!g_fz_n++) MLOG("readable-tile pass merge: first case pass %llu (%d physical attachments)", g_stat_pass + 1, n);
     PD("F %llu merge with the next pass (readable tile): physical attachments %d, previous pass %d", g_stat_pass + 1, n, R.rt.n == n ? g_fz.n1 : g_fz.n1);
 }
+// 可读瓦片版的「第 j 个输出写附件 k」常量编号（S2A.Dsh DshFetch.OmIndex 同一公式）：前 4 个输出 64 + 8 j + k，第 5–8 个 128 + 8 (j − 4) + k（96–127 有 100 / 101 别的常量）
+static inline int bf_om_index(int j, int k) { return j < 4 ? 64 + 8 * j + k : 128 + 8 * (j - 4) + k; }
 static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const uint8_t *lmap) {   // The readable tile version is specialized by constants (cached)
     bf_key bk; memset(&bk, 0, sizeof bk); memcpy(bk.key, fs->key, sizeof bk.key); bk.fbmask = fbmask; bk.nfc = (uint8_t)MIN(fs->rf.nfc, 32);
     for (int i = 0; i < bk.nfc; i++) bk.fx[i] = (int8_t)fx[i];
@@ -12342,7 +12344,7 @@ static id<MTLFunction> bf_fn(NvShader *fs, const int *fx, uint8_t fbmask, const 
     MTLFunctionConstantValues *cv = [MTLFunctionConstantValues new];
     for (int i = 0; i < fs->rf.nfc; i++) { int v = fx[i]; [cv setConstantValue:&v type:MTLDataTypeInt atIndex:(NSUInteger)i]; }
     for (int q = 0; q < 8; q++) { bool b = fbmask >> q & 1; [cv setConstantValue:&b type:MTLDataTypeBool atIndex:(NSUInteger)(32 + q)]; }
-    for (int j = 0; j < fs->rf.nfo; j++) for (int q = 0; q < 8; q++) { bool b = lmap[q] == fs->rf.fo_color[j]; [cv setConstantValue:&b type:MTLDataTypeBool atIndex:(NSUInteger)(64 + 8 * j + q)]; }
+    for (int j = 0; j < fs->rf.nfo; j++) for (int q = 0; q < 8; q++) { bool b = lmap[q] == fs->rf.fo_color[j]; [cv setConstantValue:&b type:MTLDataTypeBool atIndex:(NSUInteger)bf_om_index(j, q)]; }
     NSError *e = nil; id<MTLFunction> f = [lib newFunctionWithName:@"main0" constantValues:cv error:&e];
     if (!f) {
         NSMutableString *k = [NSMutableString stringWithFormat:@"%02x", fbmask];
