@@ -91,8 +91,19 @@ enum { RP_PERF_SUBMIT_NS, RP_PERF_COMMIT_NS, RP_PERF_SUBS, RP_PERF_WAIT_NS, RP_P
        RP_PERF_KEEP_F_PG, RP_PERF_KEEP_F_BI, RP_PERF_KEEP_F_PIPESET, RP_PERF_KEEP_F_ITEMS,               // 继续：程序变 / base_instance 变 / 换过管线 / 逐项校验不过
        RP_PERF_SUB_PRE_NS, RP_PERF_SUB_EXEC_NS, RP_PERF_SUB_POST_NS, RP_PERF_WAIT_ALREADY_N, RP_PERF_GPU_BUSY_NS,   // 提交三段耗时 / 进等待时已完成 / GPU 忙区间
        RP_PERF_WAIT_FAKED_N,   // 实验开关 nvk_sync_lag 下「没真等」的等待次数（量重叠上限用，画面可能错）
+       RP_PERF_TM_FRAMES,      // 分时抽样：窗口里逐步计时过的帧数（#1103）；绘制各步 / 开通道细分 / 贴图解析等锁持锁按它求每帧值
        RP_PERF_N };   // P_CONT：同目标续接命中的 SET_RT 次数；P_CLEARONLY：一笔绘制都没有的通道数；P_PARK：记进挂起表的待折清除条数；BIND_FAST：整组绑定直接沿用没重建；TEX_EPOCH：贴图内容检查按纪元跳过的次数；PC_HIT/MISS：后端开通道缓存命中 / 新建   /* FX_*：做完时要写回游戏内存的提交数，和各类回写的个数（事件 / 计数器报告 / 遮挡事件 / 显卡写缓冲） */   // TEX_UP_*：贴图整张上传的次数与千字节；BUF_SYNC_KB：池镜像同步的千字节   // P_*：通道的构成（见 rp_pass.c rp_pass_end）   // D_*：一笔绘制里各步（见 rp_draw.c）
 void rp_perf_add(int i, uint64_t v);
+// 分时读数抽样（#1103）：一笔绘制取 10 次时钟 + 9 次原子加、一次贴图解析取 3 次、一个通道取 5 次，世界稳态每帧合计约 2.2 万次取时钟，占回放线程约 3%。
+// 改成每 rp_tm_stride() 帧只完整计 1 帧（缺省 32）：采样帧里逐步计时照旧，其余帧一次时钟都不取；纯计数的项不动、每帧都记。
+// 「分时」里这几项按采样帧数（RP_PERF_TM_FRAMES）求每帧值，读数行的格式和含义不变。
+// 调试开关（仅调试包读；release 恒为缺省）：nvk_tm_stride = 抽样间隔（帧，夹到 1..1024）；nvk_tm_full=1 = 每帧都计（等于原行为，同包 A/B 用）。
+// 开关在会话重开（rp_draw_reset）时读；rp_tm_frame_end 在每次上屏时调一次（帧边界），由它定下一帧要不要计时。
+extern int rp_tm_on;   // 1 = 当前这一帧要逐步计时
+static inline int rp_tm(void) { return __atomic_load_n(&rp_tm_on, __ATOMIC_RELAXED); }
+unsigned rp_tm_stride(void);   // 当前抽样间隔（帧）；1 = 每帧都计
+void rp_tm_frame_end(void);    // 一帧结束（上屏）：刚结束的是采样帧就记一帧，再定下一帧
+void rp_tm_reset(void);        // 会话重开：重读开关（rp_draw_reset 里调）
 void rp_exec_dump_ops(char *b, size_t n);   // 逐命令类型耗时前几名（开关 nvk_exec_tm；窗口末尾取一次即清零）
 void rp_sync_lag_present(void);   // 上屏之后调：给「每帧只放行一次同步等待」补一次额度（开关 nvk_sync_lag=3）
 void rp_bind_tm_take(uint64_t *tot, uint64_t *backend, uint64_t *n);   // 绑定重建：总时间 / 其中交后端 / 次数（纳秒，取即清零）
