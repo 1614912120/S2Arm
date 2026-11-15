@@ -118,6 +118,10 @@ typedef struct thr {
     uint64_t wseq;                     // 登记等待的先后：同优先级先到先醒（同 Horizon KThread 等待树）
     struct thr *next, *all;            // 等待链 / 全部线程链
     int last_svc; uint64_t last_lr, last_fp, nsvc;
+    // 最近 8 次同步类系统调用（0x1a–0x1d / 0x34 / 0x35）：号、参数、地址处的值（调前 / 调后）、返回码、返回地址。
+    //   停帧现场只打「在跑」线程的：同步原语每圈都掉进系统调用的空转（11-14 #35fdbb 166 号 SignalToAddress 11 万次、162 号对空闲锁 ArbitrateLock 2.6 万次）
+    //   要看游戏给了什么、我们回了什么，光有最后一个调用号判不了是哪个输入错
+    struct { uint64_t a[4], lr; uint32_t num, pre, post, ret; } sv_ring[8]; uint32_t sv_n;
     uint64_t tr_ret_t, tr_cpu_ns, tr_wake_t, tr_waker, tr_lastwake_t; int tr_ret_svc;   // 唤醒追踪（S2A_WAKE_TRACE，见 wt_on）：上次回游戏的时刻与当时的线程 CPU、被唤醒时刻与唤醒方、自己最近一次唤醒别人的时刻
     _Atomic uint64_t nsvc_all;                 // 全部系统调用次数（svc_thread 入口计；nsvc 只计线程类）：让步退避判「两次让步之间有没有别的系统调用」
     uint64_t yrun_blk, yrun_sig, yrun_t0, nblk, y_lr, y_ret;   // Yield runs reset after an actual blocking wait, or changed guest state at another call site / after > SPIN_GAP_NS of guest code (y_lr / y_ret).
@@ -1683,6 +1687,11 @@ static void sleep_wait_boundary(thr_t *t) {
     if (!atomic_load(&t->paused_ack) && (atomic_load(&t->pause) || atomic_load(&g_frz))) pause_park(t);
 }
 #endif
+// 同步类系统调用操作的游戏地址（地址就是宿主地址）：ArbitrateLock 在 x1，ArbitrateUnlock / WaitProcessWideKeyAtomic / WaitForAddress / SignalToAddress 在 x0
+static uint32_t *sync_svc_addr(int num, const uint64_t *regs) {
+    uint64_t a = num == 0x1A ? regs[1] : (num == 0x1B || num == 0x1C || num == 0x34 || num == 0x35) ? regs[0] : 0;
+    return a && !(a & 3) ? (uint32_t *)(uintptr_t)a : NULL;
+}
 static void svc_enter(thr_t *t, uint64_t *regs, int num) {
     s2a_thread_stop_point();
     if (wt_on() && t->tr_ret_t) {   // 用户态段：上次回游戏 → 这次进系统调用
@@ -2313,7 +2322,14 @@ int svc_thread(int num, uint64_t *regs) {
         wait_diag_flush(1);
     }
     if (diag) { source_svc = g_wd_source_svc; g_wd_source_svc = num; }
+    uint32_t *sv_addr = sync_svc_addr(num, regs), sv_k = me->sv_n % 8;
+    if (sv_addr || num == 0x1D) {
+        me->sv_ring[sv_k].num = (uint32_t)num; me->sv_ring[sv_k].lr = regs[30];
+        for (int i = 0; i < 4; i++) me->sv_ring[sv_k].a[i] = regs[i];
+        me->sv_ring[sv_k].pre = sv_addr ? __atomic_load_n(sv_addr, __ATOMIC_RELAXED) : 0;
+    }
     int r = svc_thread_impl(me, num, regs);
+    if (sv_addr || num == 0x1D) { me->sv_ring[sv_k].ret = (uint32_t)regs[0]; me->sv_ring[sv_k].post = sv_addr ? __atomic_load_n(sv_addr, __ATOMIC_RELAXED) : 0; me->sv_n++; }
     if (diag) g_wd_source_svc = source_svc;
     if (wait_trace) {
         glock(); wait_diag_end_locked(me, regs); pthread_mutex_unlock(&G);
@@ -2997,6 +3013,15 @@ void s2a_thread_dump(void) {
             (unsigned long long)t->mask, t->held_core - 1,
             t->exited ? "已退出" : !t->started ? "未启动" : wk[(t->wkind < 0 || t->wkind > 4) ? 0 : t->wkind], atomic_load(&t->wcore) ? "（等核）" : "", atomic_load(&t->pause) ? "（暂停）" : "",
             t->last_svc, m ? m->name : "?", (unsigned long long)(m ? t->last_lr - (uint64_t)m->base : t->last_lr), (unsigned long long)t->nsvc, (unsigned long long)t->waddr);
+        if (!t->exited && t->started && t->wkind == 0 && t->sv_n) {   // 在跑：最近的同步类系统调用（旧 → 新），看空转时游戏给了什么、我们回了什么
+            uint32_t n = t->sv_n < 8 ? t->sv_n : 8;
+            for (uint32_t i = 0; i < n; i++) {
+                const typeof(t->sv_ring[0]) *e = &t->sv_ring[(t->sv_n - n + i) % 8]; module_t *em = module_of((void *)e->lr);
+                LOG("    同步调用 %u/%u：svc %#x 参数 %#llx %#llx %#llx %#llx，地址处值 调前 %#x 调后 %#x，返回 %#x，lr %s+%#llx", i + 1, n, e->num,
+                    (unsigned long long)e->a[0], (unsigned long long)e->a[1], (unsigned long long)e->a[2], (unsigned long long)e->a[3], e->pre, e->post, e->ret,
+                    em ? em->name : "?", (unsigned long long)(em ? e->lr - (uint64_t)em->base : e->lr));
+            }
+        }
 #if defined(__APPLE__)
         // 客体回溯（10-25 哈迪斯卡面板：只有 svc 包装函数的 lr 看不出是谁在轮询）：沿 x29 帧链走 ≤ 8 层，打每层返回地址的模块 + 偏移。
         //   在系统调用里的线程：用进门时存的 x29（栈此刻不动）。在跑（游戏代码里、不在系统调用）的线程：短暂停住它的宿主线程读 pc / lr / fp 再放开
