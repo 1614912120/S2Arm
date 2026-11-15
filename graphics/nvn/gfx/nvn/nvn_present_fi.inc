@@ -7,7 +7,7 @@
 // 超时：补帧在 DM_PRESENT_FI_BUDGET_MS（缺省 12）毫秒内没做完就跳过这一次，直接上真帧，不等它。
 // 只走 Metal 4 + 有窗口的出图线程（开着时从启动就不建显示链接）；系统不支持、任何一步建不出来就整段回退到原来的出图，报红一次。
 // 线程：present_blit_m4 用到出图的共用状态（遍描述、管线缓存、驻留集提交），出图线程与补帧队列在 g_fi_enc_mu 下串行编码。
-#import <MetalFX/MetalFX.h>
+// MetalFX 头由 nvn_mtl.m 先包含的 nvn_present_fx.inc 带进来（本文件只在它之后被包含；不在共用文件里再直接包含苹果头，分层规则 R-02）
 #include "nvn_fi_rule.h"   // 逐帧判定：只补 30 帧档或更低档、跑满的帧（dm_fi_should_interp）
 
 API_AVAILABLE(macos(26.0), ios(26.0))

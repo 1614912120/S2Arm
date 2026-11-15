@@ -34,7 +34,8 @@
 // 弱链接[lab]：s2a_hud_brief_show（ios/hud.m 简版性能浮层；输入工作台不链 hud.m / 原生核，取不到就不显示）
 void s2a_hud_brief_show(UIView *root, BOOL on) __attribute__((weak_import));
 BOOL s2a_ios_ext_connected(void) __attribute__((weak_import));
-void s2a_fi_set_live(int on) __attribute__((weak_import));   // 补帧当场开 / 关（graphics/nvn/gfx/nvn/nvn_present_fi.inc；输入工作台不链）
+// 弱链接[lab]：s2a_fi_set_live（graphics/nvn/gfx/nvn/nvn_present_fi.inc 补帧当场开 / 关；输入工作台不链图形层，取不到就不切）
+void s2a_fi_set_live(int on) __attribute__((weak_import));
 #import "app_settings.h"   // 齿轮菜单：存档管理 / 更多设置（s2a_settings_runtime / s2a_settings_present）
 #import "play_layout.h"
 #include "s2a_docs.h"   // iOS 进程级容器 Documents（s2a_container_docs）
