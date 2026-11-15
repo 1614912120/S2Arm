@@ -10,6 +10,7 @@
 //   ④ 再测一条：已测 2 条，基础 / 完整谁先建轮换（第 1 条基础先、第 2 条完整先），两条都成功
 //   ⑤ 片元声明了函数常量（这款游戏的片元多数如此）：照样建成、计第 3 条，进程不 abort
 //   ⑥ 片元主入口已按 shader_load 换成特化后的函数（函数常量表为空）：同样要套特化描述，不 abort
+//   ⑦ 真实描述开着 alpha-to-one：完整建的描述也开（关着的也关），三样照样建成、计第 5 条（#1020 评审）
 #include "../gfx/nvn/nvn_mtl.m"
 
 static unsigned checks, failures;
@@ -61,6 +62,13 @@ int main(void) {
         fs4->fn = [lib newFunctionWithName:@"fconst" constantValues:[MTLFunctionConstantValues new] error:&e]; REQUIRE(fs4->fn);
         spec_probe(desc(vs, fs4->fn), vs, fs4);
         CHECK(g_sp.n == 4 && !g_sp.failed, "⑥ 片元主入口已特化：已测 %llu（期望 4）、失败 %llu（期望 0），不 abort", (unsigned long long)g_sp.n, (unsigned long long)g_sp.failed);
+        MTLRenderPipelineDescriptor *a1 = desc(vs, fs->fn); a1.alphaToOneEnabled = YES;   // 游戏有开着 alpha-to-one 的管线（#1020 评审）
+        id fa = spec_probe_desc(a1, lib, lib, vs, fs), fz = spec_probe_desc(desc(vs, fs->fn), lib, lib, vs, fs);
+        CHECK([fa alphaToOneState] == MTL4AlphaToOneStateEnabled && [fz alphaToOneState] == MTL4AlphaToOneStateDisabled,
+              "⑦ 完整建带上真实描述的 alpha-to-one：开 → %ld、关 → %ld（期望 %ld、%ld）", (long)[fa alphaToOneState], (long)[fz alphaToOneState],
+              (long)MTL4AlphaToOneStateEnabled, (long)MTL4AlphaToOneStateDisabled);
+        spec_probe(a1, vs, fs);
+        CHECK(g_sp.n == 5 && !g_sp.failed, "⑦ alpha-to-one 开着照样三样建成：已测 %llu（期望 5）、失败 %llu（期望 0）", (unsigned long long)g_sp.n, (unsigned long long)g_sp.failed);
         unlink(map); unlink(user);
     }
     printf("%s t_nvn_spec_probe: %u checks %u failures\n", failures ? "✗" : "✓", checks, failures);
