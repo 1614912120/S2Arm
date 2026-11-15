@@ -43,7 +43,7 @@ def rewriter_id(c):
     r = subprocess.run([os.sys.executable, "-X", "utf8", c.engine / "pack/rewriter.py", "source"], cwd=c.engine, env=c.env(),
                        capture_output=True, text=True)
     if r.returncode or not r.stdout.strip():
-        raise Failure("取不到改写器指纹：" + (r.stderr.strip()[-200:] or "无输出"))
+        raise Failure("取不到改写器指纹：" + (r.stderr.strip()[-200:] or "无输出"))  # 非玩家句
     return hashlib.sha256(r.stdout.encode()).hexdigest()[:16]
 
 
@@ -52,7 +52,7 @@ def rewriter_bin(c):
                        capture_output=True, text=True)
     path = r.stdout.strip().splitlines()[-1] if r.stdout.strip() else ""
     if r.returncode or not Path(path).is_file():
-        raise Failure("找不到改写器：" + (r.stderr.strip()[-200:] or "无输出"))
+        raise Failure("找不到改写器：" + (r.stderr.strip()[-200:] or "无输出"))  # 非玩家句
     return path
 
 
@@ -119,7 +119,7 @@ def rewrite_modules(binary, env, exefs, out, widen):
         args = [binary, str(Path(exefs) / m), str(out), m] + ([str(widen)] if Path(widen).is_file() else [])
         r = subprocess.run(args, env=env, capture_output=True, text=True, timeout=600)
         if r.returncode and not (r.returncode == 3 and (Path(out) / f"{m}.patched.bin").is_file()):
-            raise Failure(f"重跑改写 {m} 失败（退出码 {r.returncode}）：" + ((r.stderr.strip().splitlines() or [""])[-1])[:200])
+            raise Failure(f"重跑改写 {m} 失败（退出码 {r.returncode}）：" + ((r.stderr.strip().splitlines() or [""])[-1])[:200])  # 非玩家句
         if max((int(x) for x in AFFECTED.findall(r.stdout)), default=0) > 0:
             hit.append(m)
     return hit
@@ -193,7 +193,7 @@ def sgrade_rewrite(c, game, base, exefs, target, work):
     for _ in range(6):
         r = subprocess.run(py + ["plan", str(root), ""] + [str(d) for d in dirs], cwd=c.engine, env=env, capture_output=True, text=True, timeout=600)
         if r.returncode:
-            raise Failure("社区补丁出表出错：" + ((r.stderr.strip().splitlines() or [""])[-1])[:200])
+            raise Failure("社区补丁出表出错：" + ((r.stderr.strip().splitlines() or [""])[-1])[:200])  # 非玩家句
         rows = root / "cpatch_rows.tsv"
         if not rows.is_file() or not rows.stat().st_size:
             break
@@ -202,7 +202,7 @@ def sgrade_rewrite(c, game, base, exefs, target, work):
         if p.returncode == 10:
             continue
         if p.returncode:
-            raise Failure("社区补丁认领缺口出错：" + ((p.stderr.strip().splitlines() or [""])[-1])[:200])
+            raise Failure("社区补丁认领缺口出错：" + ((p.stderr.strip().splitlines() or [""])[-1])[:200])  # 非玩家句
         break
     tables = [root / t for t in SGRADE_TABLES if (root / t).is_file()] + sorted(root.glob("cheat-src.*"))
     return root, modules_of(exefs), tables
@@ -260,7 +260,7 @@ def check_and_update(c, gid, kit, target, rid):
             names = put_tables(kit, tables)
             import patches
             patches.remember(c, gid.upper(), patches.record(c, gid, "ios", out))   # 哪些打上 / 没打上（结果页列，11-14）
-            c.emit("message", f"{gid}：S 级优化已按当前补丁库补进程序（{', '.join(names) or '这款没有匹配的社区补丁'}；资源不用重推）")
+            c.emit("message", f"{gid}：S 级优化已按当前补丁库补进程序（{', '.join(names) or '这款没有匹配的社区补丁'}；资源不用重推）")  # 非玩家句
             layout.update_info(c, gid, ios={**{k: v for k, v in side.items() if k != "sgradeMissing"}, "rewriterId": rid, "sgradeKey": sgrade_key(c, gid, rid, bid), "mainBid": bid})
             return "updated"
         out = work / "out"; out.mkdir()
@@ -307,8 +307,8 @@ def refresh_ios(c, games):
         c.emit("message", f"已更新 {len(updated)} 款游戏的程序（资源不用重推）")
     if missing:   # 不悄悄跳过：说清哪几款这次没补上、怎么补
         names = {x["id"].upper(): x.get("name") or x["id"] for x in c.catalog()["games"]}
-        c.emit("message", "【黄】这几款这次没补上 S 级优化（找不到游戏原件，也没有 Mac 版可借）："
-               + "、".join(names.get(g.upper(), g) for g in missing) + "。插上存原件的盘（或在游戏库里重新添加原件）后再更新一次就会补上；这次照常装，游戏照常能玩")
+        c.emit("message", "【黄】这几款这次没补上 S 级优化（找不到游戏原件，也没有 Mac 版可借）："  # 非玩家句
+               + "、".join(names.get(g.upper(), g) for g in missing) + "。插上存原件的盘（或在游戏库里重新添加原件）后再更新一次就会补上；这次照常装，游戏照常能玩")  # 非玩家句
     return updated
 
 

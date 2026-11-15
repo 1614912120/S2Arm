@@ -21,7 +21,7 @@ TIMEOUT = 10
 MAX_BYTES = 4 << 20
 SKIP = ("enabled.txt", "status.txt")
 # Cheats.cs 状态串（与 iOS ios/vpad_cheats.m 同一约定）在电脑上的说法：改代码的条目没编进这次的包 = 重新准备这款就能编进去
-STATUS = {"改代码，不支持": "这条要改游戏代码：重新准备这款就能用。"}
+STATUS = {"改代码，不支持": "这条要改游戏代码：重新准备这款就能用。"}  # 非玩家句
 UA = "S2Arm-cheats"   # 公开接口要求带 User-Agent；不带任何本机 / 用户信息
 
 
@@ -102,7 +102,7 @@ def _unified(c):
             if text.strip() not in t["text"]:
                 t["text"] += text.rstrip("\n") + "\n\n"
         return [(bid, t) for (repo, bid), t in sorted(by.items())]
-    return [("下载站统一包", "", get)]
+    return [("下载站统一包", "", get)]  # 非玩家句
 
 
 def fetch(c, game, libraries=None):

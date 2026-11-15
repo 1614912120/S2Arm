@@ -497,6 +497,9 @@
 "settings.language.zhHans" = "简体中文";
 "settings.language.zhHant" = "繁體中文";
 "settings.language.en" = "English";
+"settings.language.ja" = "日本語";
+"settings.language.es" = "Español";
+"settings.language.fr" = "Français";
 "settings.language.restart" = "Close and reopen S2Arm to use the new language.";
 "settings.gameLanguage" = "Game language";
 "settings.gameLanguage.system" = "Same as system";

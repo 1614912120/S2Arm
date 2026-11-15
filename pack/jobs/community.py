@@ -182,7 +182,7 @@ def runtime_caps(c, gid):
 
 # 60 帧缺省开的来源（11-11 维护者：出包默认游戏原本帧率、玩家手动开；速度已验证正确的款保留默认 60）。
 #   与宿主 runtime/src/caps.c apply_cap 同一条规则、同一组字样：清单 fps60 值 1 且原因含其一，宿主没收到玩家选择时自己开 60 帧
-FPS60_VERIFIED = ("fps.tsv", "逻辑速度同局 A/B 绿", "游戏原生 60 帧", "社区帧率补丁")   # 社区帧率补丁：版本精确命中才进得了包，默认开（11-13）
+FPS60_VERIFIED = ("fps.tsv", "逻辑速度同局 A/B 绿", "游戏原生 60 帧", "社区帧率补丁")   # 社区帧率补丁：版本精确命中才进得了包，默认开（11-13）  # 非玩家句
 
 
 def fps60_default(rows):
@@ -213,7 +213,7 @@ def mac_settings(c, gid):
     caps = {k: v for k, (v, _) in rows.items()}
     picked = chosen(c, gid, table)
     # 满屏改不动只认强信号（tools/caps_policy.py 原因写「强信号：…」）；「发布缺省关」只是没验证过，玩家可以明确开（同 iPhone settings.m s2a_ios_fullscreen_state）
-    strong = caps.get("widen") == "0" and "强信号" in rows.get("widen", ("", ""))[1]
+    strong = caps.get("widen") == "0" and "强信号" in rows.get("widen", ("", ""))[1]  # 非玩家句
     need = {"fps60": ("fps60" in caps, NO_FPS60), "enhance": (caps.get("direct") == "1", NO_DIRECT), "widescreen": (not strong, NO_WIDEN)}
     out = {}
     for key, item in table.items():
@@ -231,8 +231,8 @@ def mac_settings(c, gid):
     # 只用社区补丁（11-13 维护者撤掉我方 60 帧与通用满屏，tools/caps_policy.py patch_only）：没有帧率补丁的款不出「60 帧」，没有宽屏补丁的款不出「满屏」
     #   （读到了能力清单才判：还没出 Mac 版时照旧都列、先存偏好）
     if caps:
-        fps_p = "社区帧率补丁" in rows.get("fps60", ("", ""))[1]
-        ws_p = any((r.get("编号") or "").startswith(("widescreen:", "wsauto:")) for r in _rows(layout.image_mac(c, gid, create=False) / "cpatch.tsv"))
+        fps_p = "社区帧率补丁" in rows.get("fps60", ("", ""))[1]  # 非玩家句
+        ws_p = any((r.get("编号") or "").startswith(("widescreen:", "wsauto:")) for r in _rows(layout.image_mac(c, gid, create=False) / "cpatch.tsv"))  # 非玩家句
         for key, has in (("fps60", fps_p), ("widescreen", ws_p), ("fpsPick", len(fps_levels(c, gid)) > 1)):
             if key in out and not has:
                 out[key]["hidden"] = True
@@ -336,15 +336,15 @@ def language_state(c, gid, item, value):
     if got != want:
         label = {o["value"]: o["label"] for o in item.get("options", [])}
         name = lambda v, lang: label.get(v, {}).get(lang, v)
-        out["note"] = {"zh-Hans": f"这款不支持{name(want, 'zh-Hans')}，起局用{name(got, 'zh-Hans')}。",
+        out["note"] = {"zh-Hans": f"这款不支持{name(want, 'zh-Hans')}，起局用{name(got, 'zh-Hans')}。",  # 非玩家句
                        "en": f"This game doesn't have {name(want, 'en')}; it starts in {name(got, 'en')}."}
     return out
 
 
 def fps_levels(c, gid):
     """这款 Mac 包里帧率补丁（编号 fps:）的目标帧率档，去重升序；没写目标的当 60（同 iPhone app_settings.m fpsLevels）。两档以上才出「帧率档位」"""
-    return sorted({int(r.get("目标帧率") or 0) or 60 for r in _rows(layout.image_mac(c, gid, create=False) / "cpatch.tsv")
-                   if (r.get("编号") or "").startswith("fps:") and (r.get("目标帧率") or "0").isdigit()})
+    return sorted({int(r.get("目标帧率") or 0) or 60 for r in _rows(layout.image_mac(c, gid, create=False) / "cpatch.tsv")  # 非玩家句
+                   if (r.get("编号") or "").startswith("fps:") and (r.get("目标帧率") or "0").isdigit()})  # 非玩家句
 
 
 def selection(c, gid):
@@ -359,7 +359,7 @@ def available(c, game):
     builds = {(p.get("builds") or {}).get("main", "").lower() for p in game.get("packages", [])} - {""}
     ws = dict(verified=False, sources=[], relocate=False)
     for r in _rows(c.engine / "graphics/widen/tables/verified.tsv"):
-        if (r.get("程序号") or "").upper() == gid and (r.get("构建号") or "").lower() in builds:
+        if (r.get("程序号") or "").upper() == gid and (r.get("构建号") or "").lower() in builds:  # 非玩家句
             ws["verified"] = True
     fps = dict(verified=False, sources=[], relocate=False)
     for index in _indexes():
@@ -381,12 +381,12 @@ def adaptive_patches(c, gid):
     """这款 Mac 包里的自适应满屏补丁一族（编号 wsauto:<族>:w / :n → 族编号）与「表里有缺省开的」：满屏开关一并开关它们（11-13，同 iPhone settings.m），不在补丁列表单列"""
     fams, default_on = [], False
     for r in _rows(layout.image_mac(c, gid, create=False) / "cpatch.tsv"):
-        uid = r.get("编号") or ""
+        uid = r.get("编号") or ""  # 非玩家句
         if uid.startswith("wsauto:"):
             fam = uid.rsplit(":", 1)[0]
             if fam not in fams:
                 fams.append(fam)
-            default_on = default_on or (r.get("缺省开") or "") == "1"
+            default_on = default_on or (r.get("缺省开") or "") == "1"  # 非玩家句
     return fams, default_on
 
 
@@ -404,9 +404,9 @@ def patch_result(st):
     """给玩家看的一句（同 iPhone ios/game_options.m s2a_ios_cpatch_result）：没生效写原因、开着且量到效果写实测、其余空"""
     if not st:
         return ""
-    if st[0] in ("不配套", "表不认"):
+    if st[0] in ("不配套", "表不认"):  # 非玩家句
         return "没生效：补丁与这个版本的游戏不配套"
-    if st[0] != "开":
+    if st[0] != "开":  # 非玩家句
         return ""
     if st[1].startswith("fps="):   # 达到 55 帧（60 帧补丁目标留 5 帧余量）才算生效，达不到如实写实测
         n = st[1][4:]
@@ -429,21 +429,21 @@ def packed_patches(c, gid):
     out, seen, st = [], set(), patch_status(c, gid)
     fixed = None   # 定画幅宽屏变体（表「画幅」列 > 0，pack/cpatch.py）并成一项 widescreen:auto，宿主按窗口比例开最近的一份（runtime/src/cpatch.c）
     for r in _rows(layout.image_mac(c, gid, create=False) / "cpatch.tsv"):
-        uid = r.get("编号") or ""
-        label = r.get("段名") or uid
+        uid = r.get("编号") or ""  # 非玩家句
+        label = r.get("段名") or uid  # 非玩家句
         if not uid or uid in seen or uid.startswith(("fps:", "cheat:", "wsauto:")):   # 自适应满屏一族跟满屏开关（adaptive_patches），不单列
             continue
-        try: fa = float(r.get("画幅") or 0) if uid.startswith("widescreen:") else 0
+        try: fa = float(r.get("画幅") or 0) if uid.startswith("widescreen:") else 0  # 非玩家句
         except ValueError: fa = 0
         if fa > 0:
             if fixed is None:
-                fixed = dict(id="widescreen:auto", label="", exclusive="", source=r.get("来源") or "", license=r.get("许可") or "",
+                fixed = dict(id="widescreen:auto", label="", exclusive="", source=r.get("来源") or "", license=r.get("许可") or "",  # 非玩家句
                              kind="widescreen", state="community", relocate=False, result=patch_result(st.get("widescreen:auto")), ratios=[])
                 out.append(fixed)
             fixed["ratios"].append(ratio_text(fa)); fixed["label"] = "满屏补丁（按屏幕比例自动选）"   # 界面 L() 按原文查译文，标题写死、画幅在 ratios
             continue
         seen.add(uid)
-        out.append(dict(id=uid, label=label, exclusive="", source=r.get("来源") or "", license=r.get("许可") or "",
+        out.append(dict(id=uid, label=label, exclusive="", source=r.get("来源") or "", license=r.get("许可") or "",  # 非玩家句
                         kind="widescreen" if uid.startswith(("widescreen:", "wsauto:")) else "gfx", state="community", relocate=False,
                         result=patch_result(st.get(uid))))
     return out
@@ -453,10 +453,10 @@ def verified_patches(c, gid):
     """我方验过的（表「缺省开」= 1）：补丁编号；定画幅宽屏变体任一份验过算 widescreen:auto；帧率档任一份验过算 fps60。崩溃时排在最后关（cheats.narrow）"""
     out = set()
     for r in _rows(layout.image_mac(c, gid, create=False) / "cpatch.tsv"):
-        if (r.get("缺省开") or "") != "1":
+        if (r.get("缺省开") or "") != "1":   # 非玩家句
             continue
-        uid = r.get("编号") or ""
-        try: fa = float(r.get("画幅") or 0) if uid.startswith("widescreen:") else 0
+        uid = r.get("编号") or ""   # 非玩家句
+        try: fa = float(r.get("画幅") or 0) if uid.startswith("widescreen:") else 0   # 非玩家句
         except ValueError: fa = 0
         out.add("fps60" if uid.startswith("fps:") else "widescreen:auto" if fa > 0 else uid)
     return out
@@ -548,7 +548,7 @@ def launch_env(c, gid):
     # 满屏（11-13 合并「宽屏」与「宽屏强制启用」，同 iPhone settings.m）：明确开 = 没验证过也铺满（画面被拉伸会自动退回 16:9）；明确关 = 16:9；
     #   没选过 = 清单 widen 1 或包里有我方验过的自适应满屏补丁才开。有自适应满屏补丁的款由补丁铺满（下面写进 S2A_CPATCH_ON，S2Arm 满屏让开）；
     #   清单原因「强信号」= 判过坏，一律不开
-    strong = caps.get("widen") == "0" and "强信号" in runtime_caps_rows(c, gid).get("widen", ("", ""))[1]
+    strong = caps.get("widen") == "0" and "强信号" in runtime_caps_rows(c, gid).get("widen", ("", ""))[1]  # 非玩家句
     fams, fam_default = adaptive_patches(c, gid)
     full = False if strong else s["widescreen"] if isinstance(s.get("widescreen"), bool) else (caps.get("widen") == "1" or bool(fams))   # 有自适应满屏补丁 = 默认开（11-13）
     if s.get("widescreen") is True and not strong and not fams:

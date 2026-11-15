@@ -148,7 +148,7 @@ extension LauncherView {
                 Button { model.sgradeUpgradeOpen = true } label: {
                     HStack(spacing: 6) {
                         Image(nsImage: SGradeCardView.sGold).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 16, height: 16)
-                        Text(BackendText.launcherText("sgrade.upgrade.button", language: loc.lang == .zh ? "zh-Hans" : "en")).font(.manrope(12.5, .semibold))
+                        Text(BackendText.launcherText("sgrade.upgrade.button", language: loc.lang.sharedCode)).font(.manrope(12.5, .semibold))
                     }
                 }
                 .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy || model.games.isEmpty)

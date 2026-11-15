@@ -22,12 +22,12 @@ struct ImportSheet: View {
     @FocusState private var focusedSource: String?
 
     var page: S2ArmLauncherModel.ImportPage { model.importPage ?? (kind == .games ? .selection : .keys) }
-    private var language: String { loc.lang == .zh ? "zh-Hans" : "en" }
+    private var language: String { loc.lang.sharedCode }
 
     private func w(_ id: String) -> String {
         BackendText.launcherText("welcome.sheet." + (page == .selection ? "games." : "keys.") + id, language: language)
     }
-    private func common(_ id: String) -> String { BackendText.launcherText("welcome.sheet." + id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func common(_ id: String) -> String { BackendText.launcherText("welcome.sheet." + id, language: loc.lang.sharedCode) }
 
     private var job: JobSession? {
         guard let s = model.session, [.keys, .importGames].contains(s.kind) else { return nil }
@@ -250,11 +250,11 @@ struct ImportSheet: View {
             .padding(.top, 20)
             .animation(.easeOut(duration: 0.2), value: job == nil)
             if page == .keys, model.keysRejected, job == nil {
-                Text(BackendText.launcherText("welcome.keys.unusable", language: loc.lang == .zh ? "zh-Hans" : "en")).font(.manrope(13)).foregroundStyle(LauncherPalette.danger)
+                Text(BackendText.launcherText("welcome.keys.unusable", language: loc.lang.sharedCode)).font(.manrope(13)).foregroundStyle(LauncherPalette.danger)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
             }
             if page == .selection, job == nil, !model.importNoBase.isEmpty {   // #797：刚添加的款缺本体
-                Text(model.importNoBase.map { BackendText.launcherText("import.noBase", language: loc.lang == .zh ? "zh-Hans" : "en").replacingOccurrences(of: "{0}", with: $0) }.joined(separator: "\n"))
+                Text(model.importNoBase.map { BackendText.launcherText("import.noBase", language: loc.lang.sharedCode).replacingOccurrences(of: "{0}", with: $0) }.joined(separator: "\n"))
                     .font(.manrope(13)).foregroundStyle(LauncherPalette.building)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 12).accessibilityIdentifier("import.noBase")
             }
@@ -506,7 +506,7 @@ struct UploadDiagnosticsSheet: View {
     private func exportInstead() {
         let panel = NSSavePanel()
         let stamp = DateFormatter(); stamp.locale = Locale(identifier: "en_US_POSIX"); stamp.dateFormat = "MMdd-HHmm"
-        panel.nameFieldStringValue = "S2Arm-\(loc.lang == .zh ? "诊断" : "diag")-\(stamp.string(from: Date())).zip"
+        panel.nameFieldStringValue = "S2Arm-\(BackendText.launcherText("diag.fileWord", language: loc.lang.sharedCode))-\(stamp.string(from: Date())).zip"
         if panel.runModal() == .OK, let url = panel.url { close(); model.diagnostics(exportTo: url) }
     }
 }
