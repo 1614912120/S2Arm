@@ -5,7 +5,7 @@
   ① 大小写与登记不同（c:\\users\\a\\appdata\\local\\s2a\\j\\GKAM\\pkg\\t.ipa）→ 换成 D:\\Lib\\games\\x\\build\\ios\\pkg\\t.ipa
   ② 分隔符是 /（C:/Data/A/AppData/Local/S2A/j/gkam/pkg/t.ipa）→ 换成 D:\\Lib\\games\\x\\build\\ios/pkg/t.ipa（前缀换回，尾巴原样）
   ③ 写法完全一致 → 照旧换回；文案中间夹着短路径（say）→ 照旧换回
-  反证：旧实现只走 shortroot.show（逐字替换），① ② 原样留着短路径
+  反证（手工核过，不写成常驻用例：show 后来也改成不分大小写）：把 Run.ev 换回只走 show 的旧实现，① ② 原样留着短路径
 ④ pack/jobs/ipa.py win_oneclick：回报的 ipa 不存在且还在 \\S2A\\j\\ 下 → 报明确的 Failure，不是 WinError 3 / FileNotFoundError"""
 import json, os, sys, tempfile, unittest
 from pathlib import Path
@@ -36,11 +36,6 @@ class Ev(unittest.TestCase):
     def test_exact_and_text(self):
         self.assertEqual(self.ev(ipa=SHORT + r"\pkg\t.ipa")["ipa"], LONG + r"\pkg\t.ipa")
         self.assertEqual(self.ev(msg=f"出到 {SHORT}\\pkg\\t.ipa 了")["msg"], f"出到 {LONG}\\pkg\\t.ipa 了")
-
-    def test_old_show_alone_fails(self):   # 反证：只用 show（旧实现）换不回 ① ②
-        with mock.patch.dict(os.environ, {shortroot.ENV: f"{LONG}\t{SHORT}"}):
-            self.assertIn("s2a", shortroot.show(r"c:\data\a\appdata\local\s2a\j\GKAM\pkg\t.ipa").lower())
-            self.assertIn("S2A/j", shortroot.show("C:/Data/A/AppData/Local/S2A/j/gkam/pkg/t.ipa"))
 
 
 class Copy(unittest.TestCase):
