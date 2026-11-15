@@ -77,7 +77,11 @@ class RewriteInputKey(unittest.TestCase):
         try:
             stdout, stderr = process.communicate(timeout=30)
         except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
+            # 经 tools/safe_killpg.sh 杀整组（全仓约定：不绕开它给进程组发信号；带命令行标记，防进程号被回收后误杀）
+            marker = subprocess.run(['/bin/ps', '-ww', '-o', 'command=', '-p', str(process.pid)], capture_output=True, text=True).stdout.strip()[:64]
+            if marker:
+                subprocess.run(['/bin/bash', '-c', 'source "$1"; safe_killpg "$2" "$3" "$4"', 'rik-timeout', str(ROOT / 'tools/safe_killpg.sh'),
+                                'KILL', str(process.pid), marker], capture_output=True, text=True)
             process.communicate()
             raise
         result = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
