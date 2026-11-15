@@ -8,6 +8,83 @@ import XCTest
 @testable import NX2AppleUI
 
 @MainActor final class ControllerInteractionTests: XCTestCase {
+    func testShortcutHintsFollowConnectionAndShowOneGlyphPerButton() async throws {
+        _ = NSApplication.shared
+        let navigation = LauncherPadNavigation()
+        let host = NSHostingView(rootView: ShortcutHintPreview().environment(\.padControls, navigation))
+        let window = NSWindow(contentRect: CGRect(x: 80, y: 80, width: 680, height: 140), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
+        navigation.source.isActive = { true }
+        defer { navigation.detach(); window.close() }
+        let snapshot = GCController.withExtendedGamepad()
+        for connected in [false, true, false, true] {
+            navigation.source.controllers = { connected ? [snapshot] : [] }
+            navigation.source.tick()
+            host.layoutSubtreeIfNeeded()
+            try await Task.sleep(for: .milliseconds(100))
+            let targets = navigation.controlTargets(in: window)
+            let plain = try XCTUnwrap(targets.first { $0.id == "hint.plain" }).frame.width
+            let single = try XCTUnwrap(targets.first { $0.id == "hint.single" }).frame.width
+            let aliases = try XCTUnwrap(targets.first { $0.id == "hint.aliases" }).frame.width
+            XCTAssertEqual(targets.contains { $0.id == "hint.footer" }, connected, "首页类型的整组手柄提示也要随连接状态显隐")
+            if connected {
+                XCTAssertGreaterThan(single - plain, 12, "连接后在按钮内显示按键图标")
+                XCTAssertEqual(aliases, single, accuracy: 0.5, "同一按钮即使接受两个按键，也只显示一个图标")
+            } else {
+                XCTAssertEqual(single, plain, accuracy: 0.5, "未连接时应隐藏图标且不留空白")
+                XCTAssertEqual(aliases, plain, accuracy: 0.5)
+            }
+            if let output = ProcessInfo.processInfo.environment["S2A_SETTINGS_SHOTS"] {
+                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                try XCTUnwrap(bitmap.representation(using: .png, properties: [:]))
+                    .write(to: URL(fileURLWithPath: output).appendingPathComponent(connected ? "hints-connected.png" : "hints-disconnected.png"))
+            }
+        }
+    }
+
+    func testConnectionNotificationsHandleStaleSnapshotsWithoutForegroundInput() async throws {
+        let center = NotificationCenter()
+        let source = LauncherPadSource(notifications: center)
+        let snapshot = GCController.withExtendedGamepad()
+        var listed: [GCController] = []
+        var connected = false
+        source.controllers = { listed }; source.isActive = { false }
+        source.updatePresentation = { connected = $0; _ = $1 }
+        source.start()
+        defer { source.stop() }
+        XCTAssertFalse(connected)
+        center.post(name: .GCControllerDidConnect, object: snapshot)
+        XCTAssertTrue(connected, "连接通知先于系统枚举时，也应立即显示提示")
+        source.refreshPresentation()
+        XCTAssertTrue(connected)
+        listed = [snapshot]; source.refreshPresentation()
+        center.post(name: .GCControllerDidDisconnect, object: snapshot)
+        XCTAssertFalse(connected, "失焦期间收到断开事件也应隐藏提示")
+        source.refreshPresentation()
+        XCTAssertFalse(connected, "滞后的枚举不能重新显示已断开的手柄")
+        listed = []; source.refreshPresentation()
+        listed = [snapshot]; source.refreshPresentation()
+        XCTAssertFalse(connected, "没有新的连接通知前，旧设备不能因枚举抖动而复活")
+        center.post(name: .GCControllerDidConnect, object: snapshot)
+        XCTAssertTrue(connected)
+    }
+
+    func testRelayPresenceShowsHintsWithoutAControllerInputLease() {
+        let source = LauncherPadSource()
+        var paired = false, connected = false
+        source.controllers = { [] }; source.isActive = { false }
+        source.relayConnected = { paired }; source.relayAllowed = { false }
+        source.updatePresentation = { connected = $0; _ = $1 }
+        source.refreshPresentation()
+        XCTAssertFalse(connected)
+        paired = true; source.refreshPresentation()
+        XCTAssertTrue(connected, "Switch 专用通道已连接，分配玩家或失焦时也应显示提示")
+        paired = false; source.refreshPresentation()
+        XCTAssertFalse(connected)
+    }
+
     func testManualScrollSelectsTheNextCompleteControlInsteadOfAClippedSliver() async throws {
         let fixture = ScrollFixture()
         defer { fixture.close() }
@@ -165,6 +242,12 @@ import XCTest
         defer { navigation.detach(); window.close() }
         window.orderBack(nil)
         _ = navigation.targets(in: window)
+        XCTAssertNil(primary.image, "未连接手柄时，原生按钮不能显示手柄图标")
+        XCTAssertNil(cancel.image)
+        let snapshot = GCController.withExtendedGamepad()
+        navigation.source.stop(); navigation.source.controllers = { [snapshot] }; navigation.source.isActive = { true }
+        navigation.source.tick(now: 0)
+        _ = navigation.targets(in: window)
         XCTAssertNotNil(primary.image, "原生确认框也应在按钮内显示手柄键")
         XCTAssertNotNil(cancel.image)
         let sink = NativeButtonSink()
@@ -174,6 +257,10 @@ import XCTest
         XCTAssertEqual(sink.submits, 1)
         navigation.handle(.back)
         XCTAssertEqual(sink.cancels, 1)
+        navigation.source.controllers = { [] }; navigation.source.tick(now: 0.1)
+        _ = navigation.targets(in: window)
+        XCTAssertNil(primary.image, "断开后立即恢复原生按钮图标")
+        XCTAssertNil(cancel.image)
         navigation.detach()
         XCTAssertNil(primary.image, "解绑时恢复原生按钮，不留下测试状态")
     }
@@ -199,6 +286,21 @@ import XCTest
         fixture.navigation.handle(.up)
         XCTAssertEqual(fixture.navigation.focusedID, "row.0", "返回父窗口后从之前的 row.1 继续导航")
         XCTAssertEqual(fixture.rowActions, 0)
+    }
+}
+
+private struct ShortcutHintPreview: View {
+    var body: some View {
+        VStack(spacing: 16) {
+            HStack(spacing: 24) {
+                Button("Original action") {}.controllerID("hint.plain")
+                Button("Original action") {}.controllerID("hint.single").controllerShortcut(.primary)
+                Button("Original action") {}.controllerID("hint.aliases").controllerShortcut(.primary, .back)
+            }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+            Text("Controller navigation")
+                .controllerControl(id: "hint.footer", activate: {})
+                .controllerConnectedOnly()
+        }.padding(24).frame(width: 680, height: 140)
     }
 }
 

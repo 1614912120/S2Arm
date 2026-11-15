@@ -111,6 +111,7 @@ bash launchers/macos/test_controller.sh
 不需要连接手柄、辅助功能授权、游戏文件或玩家游戏库；不会往系统注册虚拟硬件。
 真实 SwiftUI 设置页、弹窗、下拉框、屏幕键盘和原生确认框使用原创夹具，
 中英文截图写入 `build/controller-qa/`。完整 Mac 回归仍用 `bash launchers/macos/test.sh`。
+专项还覆盖提示图标随连接状态显隐、单按钮单图标、失焦期间断开及出包页底栏操作；连接状态切换后原控件仍须可导航和激活。
 此检查覆盖应用内交互；蓝牙配对、射频断连、震动和实体按键手感须另用真手柄验证。
 
 ## DMG installation window / 拖拽安装窗口

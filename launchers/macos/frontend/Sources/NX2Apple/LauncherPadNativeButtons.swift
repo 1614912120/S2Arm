@@ -32,6 +32,7 @@ import NXLauncher
         return result
     }
     func update(in window: NSWindow, presentation: PadPresentation) {
+        guard presentation.connected else { restore(); return }
         guard lastWindow !== window || lastSymbols != presentation.symbols else { return }
         lastWindow = window; lastSymbols = presentation.symbols
         hints = hints.filter { $0.value.button != nil }

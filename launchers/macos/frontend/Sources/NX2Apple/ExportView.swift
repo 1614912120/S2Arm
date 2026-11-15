@@ -51,12 +51,6 @@ struct ExportView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 22) {
-            Button { model.exportFor = nil } label: {
-                Label(loc.t("s2arm.export.back"), systemImage: "chevron.left").font(.manrope(12.5, .semibold))
-            }
-            .controllerButtonStyle(LauncherSecondaryButtonStyle())
-            .keyboardShortcut("[", modifiers: .command)
-            .accessibilityIdentifier("export.back")
             HStack(alignment: .center, spacing: 24) {
                 Button { chooseCover(game) } label: {
                     GameArtwork(covers: covers, cover: game.cover)
@@ -68,7 +62,7 @@ struct ExportView: View {
                 .controllerButtonStyle(.plain).disabled(model.busy || model.customizing)
                 .help(loc.t("s2arm.custom.cover.help"))
                 .accessibilityLabel(loc.t("s2arm.custom.cover.help"))
-                .accessibilityIdentifier("export.cover")
+                .controllerID("export.cover")
                 VStack(alignment: .leading, spacing: 10) {
                     Button { renameText = game.name; renaming = true } label: {
                         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -298,6 +292,9 @@ struct ExportView: View {
                 Text(loc.t("s2arm.export.hint")).font(.manrope(13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 12)
+            Button(loc.t("s2arm.job.cancel")) { model.exportFor = nil }
+                .controllerButtonStyle(LauncherSecondaryButtonStyle())
+                .keyboardShortcut(.cancelAction).controllerID("export.cancel").controllerShortcut(.back)
             Button { model.export(game, location: location.isEmpty ? nil : location) } label: {
                 Label(model.busy ? x("action.queue") : count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"), systemImage: "shippingbox.fill")
             }
@@ -305,6 +302,7 @@ struct ExportView: View {
             .disabled(blocker?.stopsStart == true)   // 缺文件 / 缺 keys 只在左边提示，不置灰（作业层核实）
             .busyHint(model, disabled: blocker == .busy)   // 别的任务（非出包）在跑：说在等谁（出包在跑时这里是「排队」，不置灰）
             .keyboardShortcut(.defaultAction)
+            .controllerID("export.start").controllerShortcut(.primary)
             .padTarget("export.start", scope: "main", radius: LauncherTheme.Metrics.controlRadius) { model.export(game, location: location.isEmpty ? nil : location) }
             .accessibilityLabel(count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"))
             .accessibilityIdentifier("export.start")

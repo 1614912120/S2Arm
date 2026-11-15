@@ -83,8 +83,9 @@ struct LauncherPadRepeater {
     var relayPath: () -> String? = { nil }
     var relayAllowed: () -> Bool = { true }
     var controllers: () -> [GCController] = { GCController.controllers() }
+    var relayConnected: () -> Bool = { false }
     var isActive: () -> Bool = { NSApp.isActive }
-    var updateSymbols: ([PadShortcut: String]) -> Void = { _ in }
+    var updatePresentation: (Bool, [PadShortcut: String]) -> Void = { _, _ in }
     var refresh: () -> Void = {}
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
@@ -95,26 +96,72 @@ struct LauncherPadRepeater {
     private var token = ""
     private var repeater = LauncherPadRepeater()
     private var hintController: ObjectIdentifier?
+    private let notifications: NotificationCenter
+    private var announced: [ObjectIdentifier: GCController] = [:]
+    private var disconnected = Set<ObjectIdentifier>()
+
+    init(notifications: NotificationCenter = .default) { self.notifications = notifications }
 
     func start() {
         guard observers.isEmpty else { return }
-        let notifications = NotificationCenter.default
         observers.append(notifications.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.resume() }
         })
         observers.append(notifications.addObserver(forName: NSApplication.didResignActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in self?.pause() }
         })
+        for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect] {
+            observers.append(notifications.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                MainActor.assumeIsolated {
+                    guard let self, let controller = note.object as? GCController else { return }
+                    let id = ObjectIdentifier(controller)
+                    if note.name == .GCControllerDidConnect {
+                        self.announced[id] = controller; self.disconnected.remove(id)
+                    } else {
+                        self.announced[id] = nil; self.disconnected.insert(id)
+                    }
+                    self.refreshPresentation()
+                }
+            })
+        }
+        refreshPresentation()
         if NSApp.isActive { resume() }
     }
     func stop() {
         pause()
-        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        for observer in observers { notifications.removeObserver(observer) }
         observers.removeAll()
+        announced.removeAll(); disconnected.removeAll()
     }
     func releaseRelay() {
         if let client { s2a_launcher_pad_close(client) }
         client = nil; relay = .init(); repeater.reset(); token = ""
+        refreshPresentation()
+    }
+    /// Connection notifications can precede the system enumeration (or remove
+    /// a device before enumeration catches up). Preserve that authoritative edge.
+    private func currentControllers() -> [GCController] {
+        let listed = controllers()
+        let ids = Set(listed.map(ObjectIdentifier.init))
+        for id in ids { announced[id] = nil }
+        return listed.filter { !disconnected.contains(ObjectIdentifier($0)) } + Array(announced.values)
+    }
+    func refreshPresentation() {
+        publishPresentation(currentControllers())
+        refresh()
+    }
+    private func publishPresentation(_ pads: [GCController]) {
+        let activePad = pads.first { $0.extendedGamepad.map { !LauncherPadInput.system($0).neutral } ?? false }
+            ?? pads.first { ObjectIdentifier($0) == hintController } ?? pads.first
+        hintController = activePad.map(ObjectIdentifier.init)
+        var symbols: [PadShortcut: String] = [:]
+        if let pad = activePad?.extendedGamepad {
+            symbols = [.primary: pad.buttonMenu.sfSymbolsName ?? PadShortcut.primary.symbol,
+                       .back: pad.buttonB.sfSymbolsName ?? PadShortcut.back.symbol,
+                       .secondary: pad.buttonX.sfSymbolsName ?? PadShortcut.secondary.symbol,
+                       .tertiary: pad.buttonY.sfSymbolsName ?? PadShortcut.tertiary.symbol]
+        }
+        updatePresentation(!pads.isEmpty || relayConnected() || relay.ready != 0, symbols)
     }
     private func pause() { timer?.invalidate(); timer = nil; releaseRelay() }
     private func resume() {
@@ -141,16 +188,8 @@ struct LauncherPadRepeater {
                 else if relay.ready != 0, now - lastPacketAt > 0.25 { relay = .init() }
             }
         }
-        let pads = controllers()
-        let activePad = pads.first { $0.extendedGamepad.map { !LauncherPadInput.system($0).neutral } ?? false }
-            ?? pads.first { ObjectIdentifier($0) == hintController } ?? pads.first
-        hintController = activePad.map(ObjectIdentifier.init)
-        if let pad = activePad?.extendedGamepad {
-            updateSymbols([.primary: pad.buttonMenu.sfSymbolsName ?? PadShortcut.primary.symbol,
-                           .back: pad.buttonB.sfSymbolsName ?? PadShortcut.back.symbol,
-                           .secondary: pad.buttonX.sfSymbolsName ?? PadShortcut.secondary.symbol,
-                           .tertiary: pad.buttonY.sfSymbolsName ?? PadShortcut.tertiary.symbol])
-        } else { updateSymbols([:]) }
+        let pads = currentControllers()
+        publishPresentation(pads)
         refresh()
         var input = LauncherPadInput()
         for pad in pads.compactMap(\.extendedGamepad) {
@@ -172,7 +211,7 @@ struct LauncherPadRepeater {
     }
     deinit {
         timer?.invalidate()
-        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        for observer in observers { notifications.removeObserver(observer) }
         if let client { s2a_launcher_pad_close(client) }
     }
 }

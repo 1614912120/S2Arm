@@ -11,6 +11,7 @@ import SwiftUI
     func removeControl(_ token: UUID)
 }
 package struct PadControl {
+    /// Identity of this native registration, independent of the semantic control ID.
     package let token: UUID
     package let id: String
     package let scope: String
@@ -35,6 +36,7 @@ package enum PadShortcut: String, CaseIterable {
     }
 }
 @MainActor package final class PadPresentation: ObservableObject {
+    @Published package var connected = false
     @Published package var symbols: [PadShortcut: String] = [:]
     package init() {}
 }
@@ -55,6 +57,7 @@ extension View {
     package func controllerScope(_ scope: String) -> some View { environment(\.padControlScope, scope) }
     package func controllerPreferredFocus(_ preferred: Bool) -> some View { environment(\.padPreferred, preferred) }
     package func controllerShortcut(_ shortcuts: PadShortcut...) -> some View { environment(\.padShortcuts, shortcuts) }
+    package func controllerConnectedOnly() -> some View { modifier(PadConnectedOnlyModifier()) }
     package func controllerButtonStyle<S: ButtonStyle>(_ style: S) -> some View { buttonStyle(PadVisualButtonStyle(style: style)) }
     package func controllerButtonStyle<S: PrimitiveButtonStyle>(_ style: S) -> some View { buttonStyle(PadPrimitiveButtonStyle(style: style)) }
     package func controllerControl(id: String? = nil, activate: @escaping () -> Void, adjust: ((Int) -> Void)? = nil) -> some View {
@@ -80,27 +83,38 @@ private struct PadButtonLabel<Label: View>: View {
     @Environment(\.padShortcuts) private var shortcuts
     @Environment(\.padControls) private var registry
     @ViewBuilder var body: some View {
-        if shortcuts.isEmpty { label }
-        else {
+        if let shortcut = shortcuts.first, let presentation = registry?.presentation {
+            PadConnectedButtonLabel(label: label, shortcut: shortcut, presentation: presentation)
+        } else { label }
+    }
+}
+private struct PadConnectedButtonLabel<Label: View>: View {
+    let label: Label
+    let shortcut: PadShortcut
+    @ObservedObject var presentation: PadPresentation
+    @ViewBuilder var body: some View {
+        if presentation.connected {
             HStack(spacing: 6) {
-                if let presentation = registry?.presentation {
-                    PadShortcutSymbols(shortcuts: shortcuts, presentation: presentation)
-                } else {
-                    ForEach(shortcuts, id: \.self) { Image(systemName: $0.symbol).accessibilityHidden(true) }
-                }
+                Image(systemName: presentation.symbols[shortcut] ?? shortcut.symbol)
+                    .font(.system(size: 16, weight: .medium)).accessibilityHidden(true)
                 label
             }
+        } else { label }
+    }
+}
+private struct PadConnectedOnlyModifier: ViewModifier {
+    @Environment(\.padControls) private var registry
+    @ViewBuilder func body(content: Content) -> some View {
+        if let presentation = registry?.presentation {
+            PadConnectedContent(content: content, presentation: presentation)
         }
     }
 }
-private struct PadShortcutSymbols: View {
-    let shortcuts: [PadShortcut]
+private struct PadConnectedContent<Content: View>: View {
+    let content: Content
     @ObservedObject var presentation: PadPresentation
-    var body: some View {
-        ForEach(shortcuts, id: \.self) { shortcut in
-            Image(systemName: presentation.symbols[shortcut] ?? shortcut.symbol)
-                .font(.system(size: 16, weight: .medium)).accessibilityHidden(true)
-        }
+    @ViewBuilder var body: some View {
+        if presentation.connected { content }
     }
 }
 private struct PadControlModifier: ViewModifier {
@@ -117,7 +131,7 @@ private struct PadControlModifier: ViewModifier {
     func body(content: Content) -> some View {
         content.background {
             if registry != nil {
-                PadControlFrame(registry: registry, token: token, id: explicitID ?? identifier ?? "control." + token.uuidString,
+                PadControlFrame(registry: registry, id: explicitID ?? identifier ?? "control." + token.uuidString,
                     scope: scope, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred, shortcuts: shortcuts)
             }
         }
@@ -125,7 +139,6 @@ private struct PadControlModifier: ViewModifier {
 }
 private struct PadControlFrame: NSViewRepresentable {
     let registry: (any PadControlRegistry)?
-    let token: UUID
     let id: String
     let scope: String
     let enabled: Bool
@@ -135,16 +148,21 @@ private struct PadControlFrame: NSViewRepresentable {
     let shortcuts: [PadShortcut]
     final class Host: NSView {
         weak var registry: (any PadControlRegistry)?
-        var token: UUID?
+        // SwiftUI can overlap old and new hosts during a button-style update.
+        // Each host must remove only its own registration when dismantled.
+        let token = UUID()
         override func hitTest(_ point: NSPoint) -> NSView? { nil }
         override func isAccessibilityElement() -> Bool { false }
     }
     func makeNSView(context: Context) -> Host { Host() }
     func updateNSView(_ view: Host, context: Context) {
-        view.registry = registry; view.token = token
-        registry?.register(PadControl(token: token, id: id, scope: scope, view: view, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred, shortcuts: shortcuts))
+        if let previous = view.registry, previous !== registry { previous.removeControl(view.token) }
+        view.registry = registry
+        registry?.register(PadControl(token: view.token, id: id, scope: scope, view: view, enabled: enabled, activate: activate, adjust: adjust, preferred: preferred, shortcuts: shortcuts))
     }
-    static func dismantleNSView(_ view: Host, coordinator: ()) { if let token = view.token { view.registry?.removeControl(token) } }
+    static func dismantleNSView(_ view: Host, coordinator: ()) {
+        view.registry?.removeControl(view.token)
+    }
 }
 
 /// Preserve the requested system switch/checkbox appearance and expose its value

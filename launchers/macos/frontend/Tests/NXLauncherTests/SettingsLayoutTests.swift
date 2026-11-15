@@ -2,6 +2,7 @@
 // Copyright 2026 S2Arm contributors
 import AppKit
 import GameController
+import LauncherPadBridge
 import SwiftUI
 import XCTest
 import NXCore
@@ -116,8 +117,92 @@ import S2ArmAppleAdapter
                 dropdown.close()
                 if stage == 1 { try snapshot(host, "export-location-remembered-" + language.code) }
             }
-            XCTAssertFalse(fixture.runner.requests.contains { $0["operation"] as? String == "exportPlan" }, "只选位置不能开始出包或搬游戏")
+            XCTAssertFalse(fixture.runner.requests.contains { $0["operation"] as? String == "export" }, "只选位置不能开始出包或搬游戏")
         }
+    }
+
+    func testExportActionsLiveInBottomRightAndHaveControllerShortcuts() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        for platform in fixture.model.exportTargets where platform != .mac { fixture.model.toggleExport(platform) }
+        if !fixture.model.exportTargets.contains(.mac) { fixture.model.toggleExport(.mac) }
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let game = try XCTUnwrap(fixture.model.games.first)
+        for language in [Lang.zh, .en] {
+            for width: CGFloat in [800, 1120, 1440] {
+                let padFocus = PadFocus()
+                let page = AnyView(ExportView(model: fixture.model, covers: CoverCache(), game: game, install: {})
+                    .environmentObject(padFocus).padScope("main", padFocus).frame(width: width, height: 630))
+                let (host, window) = try await render(page, fixture: fixture, language: language)
+                fixture.navigation.source.controllers = { [] }; fixture.navigation.attach(window)
+                fixture.navigation.source.stop(); fixture.navigation.source.isActive = { true }
+                defer { fixture.navigation.detach(); window.close() }
+                let snapshot = GCController.withExtendedGamepad()
+                for connected in [false, true, false] {
+                    fixture.navigation.source.controllers = { connected ? [snapshot] : [] }
+                    fixture.navigation.source.tick()
+                    fixture.navigation.hide()
+                    if let scroll = scrollViews(in: host).first, let document = scroll.documentView {
+                        let clip = scroll.contentView
+                        clip.scroll(to: CGPoint(x: 0, y: document.isFlipped ? 0 : max(0, document.bounds.height - clip.bounds.height)))
+                        scroll.reflectScrolledClipView(clip)
+                    }
+                    try await Task.sleep(for: .milliseconds(70))
+                    let targets = fixture.navigation.controlTargets(in: window)
+                    let ids = Set(LauncherPadNavigation.elements(window).compactMap { S2ALauncherAX.identifier($0) })
+                    XCTAssertFalse(ids.contains("export.back"), "出包页不再显示左上角返回")
+                    let start = try XCTUnwrap(targets.first { $0.id == "export.start" })
+                    let cancel = try XCTUnwrap(targets.first { $0.id == "export.cancel" })
+                    let cover = try XCTUnwrap(targets.first { $0.id == "export.cover" })
+                    let bounds = window.convertToScreen(host.bounds)
+                    XCTAssertEqual(bounds.maxY - cover.frame.maxY, 22, accuracy: 1, "移除返回按钮后，游戏内容直接从 22 pt 顶部边距开始")
+                    XCTAssertTrue(bounds.contains(cancel.frame.union(start.frame)))
+                    XCTAssertGreaterThan(cancel.frame.midX, bounds.midX, "取消和开始出包都应位于右下角")
+                    XCTAssertLessThanOrEqual(cancel.frame.maxX, start.frame.minX)
+                    XCTAssertEqual(cancel.frame.midY, start.frame.midY, accuracy: 1)
+                    XCTAssertLessThan(start.frame.maxY, bounds.minY + 90)
+                    let shortcuts = fixture.navigation.shortcutTargets(in: window)
+                    XCTAssertEqual(shortcuts[.primary], ["export.start"])
+                    XCTAssertEqual(shortcuts[.back], ["export.cancel"])
+                    fixture.model.exportFor = game.id
+                    fixture.navigation.focus("export.location"); fixture.navigation.handle(.back)
+                    XCTAssertNil(fixture.model.exportFor, "B 与右下角取消执行相同的返回操作")
+                    XCTAssertFalse(fixture.runner.requests.contains { $0["operation"] as? String == "export" }, "取消不应开始出包")
+                    try self.snapshot(host, "export-actions-\(language.code)-\(Int(width))-\(connected ? "connected" : "disconnected")")
+                }
+            }
+        }
+    }
+
+    func testExportSubmitShortcutUsesTheExistingExportAction() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        for platform in fixture.model.exportTargets where platform != .mac { fixture.model.toggleExport(platform) }
+        if !fixture.model.exportTargets.contains(.mac) { fixture.model.toggleExport(.mac) }
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let game = try XCTUnwrap(fixture.model.games.first)
+        fixture.model.exportFor = game.id
+        let padFocus = PadFocus()
+        let page = AnyView(ExportView(model: fixture.model, covers: CoverCache(), game: game, install: {})
+            .environmentObject(padFocus).padScope("main", padFocus).frame(width: 1120, height: 630))
+        let (_, window) = try await render(page, fixture: fixture, language: .zh)
+        let navigation = fixture.navigation
+        navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
+        navigation.source.isActive = { true }
+        defer { navigation.detach(); window.close() }
+        let snapshot = GCController.withExtendedGamepad()
+        navigation.source.controllers = { [snapshot] }; navigation.source.tick(now: 0)
+        navigation.focus("export.location")
+        snapshot.extendedGamepad?.buttonMenu.setValue(1); navigation.source.tick(now: 0.1)
+        for _ in 0..<100 where !fixture.runner.requests.contains(where: { $0["operation"] as? String == "export" }) {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertNil(fixture.model.exportFor, "Menu 应与开始出包按钮执行同一操作")
+        XCTAssertEqual(fixture.runner.requests.filter { $0["operation"] as? String == "export" }.count, 1)
+        navigation.source.tick(now: 0.8)
+        XCTAssertEqual(fixture.runner.requests.filter { $0["operation"] as? String == "export" }.count, 1, "长按不能重复开始出包")
     }
 
     func testTitlebarActionsAlignWithTheHomeControls() async throws {
@@ -486,12 +571,12 @@ import S2ArmAppleAdapter
                 defer { window.close() }
                 let bounds = window.convertToScreen(host.bounds)
                 let targets = fixture.navigation.controlTargets(in: window)
-                let back = try XCTUnwrap(targets.max { $0.frame.midY < $1.frame.midY })
+                let cover = try XCTUnwrap(targets.first { $0.id == "export.cover" })
                 let start = try XCTUnwrap(padFocus.frames["main"]?.first { $0.id == "export.start" })
-                print("export-insets \(language.code)/\(width): left=\(back.frame.minX - bounds.minX), right=\(width - start.frame.maxX)")
-                XCTAssertEqual(back.frame.minX - bounds.minX, 48, accuracy: 1, "出包内容应与游戏库的 48 pt 内边距对齐")
+                print("export-insets \(language.code)/\(width): left=\(cover.frame.minX - bounds.minX), right=\(width - start.frame.maxX)")
+                XCTAssertEqual(cover.frame.minX - bounds.minX, 48, accuracy: 1, "出包内容应与游戏库的 48 pt 内边距对齐")
                 XCTAssertEqual(width - start.frame.maxX, 48, accuracy: 1, "底栏操作应与内容右边缘对齐")
-                XCTAssertTrue(bounds.contains(back.frame))
+                XCTAssertTrue(bounds.contains(cover.frame))
                 XCTAssertTrue(CGRect(x: 0, y: 0, width: width, height: 630).contains(start.frame))
                 try snapshot(host, "export-full-width-\(language.code)-\(Int(width))")
             }
@@ -717,28 +802,32 @@ import S2ArmAppleAdapter
             ]
             for (name, page) in pages {
                 let (host, window) = try await render(page, fixture: fixture, language: language)
-                let bounds = window.convertToScreen(host.bounds)
-                XCTAssertLessThanOrEqual(host.bounds.height, (NSScreen.main?.visibleFrame.height ?? 900) - 100,
-                                         "\(name)/\(language.code): 弹层必须适合屏幕")
-                if name == "update" || name == "messages" {
-                    let reading = try XCTUnwrap(scrollViews(in: host).first { $0.hasVerticalScroller })
-                    XCTAssertGreaterThan(reading.contentView.bounds.height, 40, "\(name): 说明列表必须有可见空间")
-                }
-                for target in fixture.navigation.controlTargets(in: window) {
-                    XCTAssertTrue(bounds.insetBy(dx: -1, dy: -1).contains(target.frame),
-                                  "\(name)/\(language.code): 控件溢出 \(target.id) \(target.frame), \(bounds)")
-                }
-                if name != "messages" {
-                    let shortcuts = fixture.navigation.shortcutTargets(in: window)
-                    XCTAssertFalse(shortcuts.isEmpty, "\(name)/\(language.code)：弹窗底栏必须登记手柄快捷键")
-                    for (key, ids) in shortcuts {
-                        XCTAssertEqual(ids.count, 1, "\(name)/\(language.code)：同一按键不能同时触发多个底栏按钮：\(key) \(ids)")
+                for connected in [false, true] {
+                    fixture.navigation.presentation.connected = connected
+                    try await Task.sleep(for: .milliseconds(70))
+                    let bounds = window.convertToScreen(host.bounds)
+                    XCTAssertLessThanOrEqual(host.bounds.height, (NSScreen.main?.visibleFrame.height ?? 900) - 100,
+                                             "\(name)/\(language.code): 弹层必须适合屏幕")
+                    if name == "update" || name == "messages" {
+                        let reading = try XCTUnwrap(scrollViews(in: host).first { $0.hasVerticalScroller })
+                        XCTAssertGreaterThan(reading.contentView.bounds.height, 40, "\(name): 说明列表必须有可见空间")
                     }
-                    if !["downstream", "import-games", "import-keys"].contains(name) {
-                        XCTAssertNotNil(shortcuts[.back], "\(name)：必须能用 B 关闭或取消")
+                    for target in fixture.navigation.controlTargets(in: window) {
+                        XCTAssertTrue(bounds.insetBy(dx: -1, dy: -1).contains(target.frame),
+                                      "\(name)/\(language.code): 控件溢出 \(target.id) \(target.frame), \(bounds)")
                     }
+                    if name != "messages" {
+                        let shortcuts = fixture.navigation.shortcutTargets(in: window)
+                        XCTAssertFalse(shortcuts.isEmpty, "\(name)/\(language.code)：弹窗底栏必须登记手柄快捷键")
+                        for (key, ids) in shortcuts {
+                            XCTAssertEqual(ids.count, 1, "\(name)/\(language.code)：同一按键不能同时触发多个底栏按钮：\(key) \(ids)")
+                        }
+                        if !["downstream", "import-games", "import-keys"].contains(name) {
+                            XCTAssertNotNil(shortcuts[.back], "\(name)：必须能用 B 关闭或取消")
+                        }
+                    }
+                    try snapshot(host, "\(name)-\(language.code)-\(connected ? "connected" : "disconnected")")
                 }
-                try snapshot(host, "\(name)-\(language.code)")
                 window.close()
             }
             for feature in [false, true] {
@@ -748,10 +837,14 @@ import S2ArmAppleAdapter
                 let page = feature ? AnyView(FeatureSpotlightView(model: fixture.model, language: uiLanguage))
                     : AnyView(UpdatePopupView(model: fixture.model, language: uiLanguage))
                 let (host, window) = try await render(page, fixture: fixture, language: language)
-                let keys = fixture.navigation.shortcutTargets(in: window)
-                XCTAssertEqual(keys[.primary]?.count, 1)
-                XCTAssertEqual(keys[.back]?.count, 1)
-                try snapshot(host, (feature ? "feature-" : "updated-") + language.code)
+                for connected in [false, true] {
+                    fixture.navigation.presentation.connected = connected
+                    try await Task.sleep(for: .milliseconds(70))
+                    let keys = fixture.navigation.shortcutTargets(in: window)
+                    XCTAssertEqual(keys[.primary]?.count, 1)
+                    XCTAssertEqual(keys[.back]?.count, 1)
+                    try snapshot(host, (feature ? "feature-" : "updated-") + language.code + (connected ? "-connected" : "-disconnected"))
+                }
                 window.close()
             }
         }

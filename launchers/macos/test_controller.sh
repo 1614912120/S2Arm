@@ -11,4 +11,4 @@ export SWIFTPM_MODULECACHE_OVERRIDE="$R/build/macos/swift-cache"
 mkdir -p build/controller-qa
 export S2A_SETTINGS_SHOTS="$R/build/controller-qa"
 swift test --disable-sandbox --package-path launchers/macos/frontend --scratch-path build/macos/frontend-ui \
-    --filter 'ControllerInteractionTests|ControllerPopoverLayoutTests|PadControlsTests|SettingsLayoutTests/testControllerSettings|SettingsLayoutTests/testAllUtilitySheets'
+    --filter 'ControllerInteractionTests|ControllerPopoverLayoutTests|PadControlsTests|SettingsLayoutTests/testControllerSettings|SettingsLayoutTests/testAllUtilitySheets|SettingsLayoutTests/testExportActions|SettingsLayoutTests/testExportSubmit'

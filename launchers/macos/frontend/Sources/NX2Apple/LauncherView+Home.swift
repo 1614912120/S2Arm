@@ -205,6 +205,7 @@ extension LauncherView {
             homeHint("B", loc.t("home.back"))
             homeHint("Y", loc.t("home.details"))
         }.foregroundStyle(.white.opacity(0.6)).padding(.horizontal, 54).frame(height: 48)
+            .accessibilityIdentifier("home.controller-hints").controllerConnectedOnly()
     }
     private func homeHint(_ button: String, _ title: String) -> some View {
         HStack(spacing: 6) {
@@ -257,6 +258,7 @@ extension LauncherView {
         navigation.context = { showingHome ? "home" : model.showsWelcome ? "welcome" : "job.\(model.exportFor ?? model.session?.kind.rawValue ?? "")" }
         navigation.source.relayPath = { model.controller.phase == .ready && !model.controller.assigning ? model.controller.socketURL.path : nil }
         navigation.source.relayAllowed = { !model.playSessionActive && !model.controller.assigning }
+        navigation.source.relayConnected = { model.controller.deviceCount > 0 }
         navigation.onAction = { action in
             if action == .back, !showingHome, !model.showsWelcome { model.goToLibrary(); return true }
             guard showingHome else { return false }

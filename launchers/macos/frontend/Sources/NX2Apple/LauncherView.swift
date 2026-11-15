@@ -103,6 +103,9 @@ struct LauncherView: View {
         }
         .background(LauncherWindowChrome())
         .background(LauncherPadHost(navigation: navigation, update: configurePadNavigation))
+        .onReceive(model.controller.$deviceCount.dropFirst()) { _ in
+            DispatchQueue.main.async { navigation.source.refreshPresentation() }
+        }
         .ignoresSafeArea(.container, edges: .top)
         .preferredColorScheme(.dark)
         .tint(LauncherPalette.cream)

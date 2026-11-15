@@ -163,9 +163,13 @@ enum LauncherPadSpatial {
         guard self.window !== window else { return }
         self.window = window
         source.receive = { [weak self] action in self?.handle(action) }
-        source.updateSymbols = { [weak self] symbols in
-            guard let self, self.presentation.symbols != symbols else { return }
-            self.presentation.symbols = symbols
+        source.updatePresentation = { [weak self] connected, symbols in
+            guard let self else { return }
+            if self.presentation.symbols != symbols { self.presentation.symbols = symbols }
+            if self.presentation.connected != connected {
+                self.presentation.connected = connected
+                if !connected { self.hide(); self.nativeButtons.restore() }
+            }
         }
         source.refresh = { [weak self] in
             guard let self, let window = self.activeWindow else { return }
@@ -213,11 +217,12 @@ enum LauncherPadSpatial {
     }
     func detach() {
         source.stop(); clearRings(); keyboard?.close(apply: false); keyboard = nil
-        nativeButtons.restore(); source.refresh = {}; source.updateSymbols = { _ in }
+        nativeButtons.restore(); source.refresh = {}; source.updatePresentation = { _, _ in }
+        presentation.connected = false; presentation.symbols = [:]
         for monitor in monitors { NSEvent.removeMonitor(monitor) }; monitors.removeAll()
         for observer in notifications { NotificationCenter.default.removeObserver(observer) }; notifications.removeAll()
         for overlay in overlays.values { overlay.removeFromSuperview() }; overlays.removeAll()
-        onAction = nil; defaultFocus = { nil }; context = { "home" }; text = { $0 }; source.relayPath = { nil }; source.relayAllowed = { true }
+        onAction = nil; defaultFocus = { nil }; context = { "home" }; text = { $0 }; source.relayPath = { nil }; source.relayAllowed = { true }; source.relayConnected = { false }
         controls.removeAll(); window = nil
     }
     func hide() { visible = false; clearRings() }
