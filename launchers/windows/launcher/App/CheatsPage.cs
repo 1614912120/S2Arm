@@ -36,7 +36,7 @@ public sealed partial class EnvironmentWindow
                 cheatsList = ch.Clone();
             else cheatsError = job.Report.Message.Length > 0 ? job.Report.Message : job.Report.State;
         }
-        catch (Exception error) when (error is LibraryProtocolException or IOException or UnauthorizedAccessException or InvalidOperationException or OperationCanceledException)
+        catch (Exception error)   // 任何失败都要落成错误文字：页面渲染时见「没结果、没在查、没错误」就再发，漏掉一类异常 = 无限重发卡死 UI（#1149）
         { cheatsError = error.Message; }
         finally { cheatsLoading = false; Dispatcher.UIThread.Post(Render); }
     }
@@ -57,7 +57,7 @@ public sealed partial class EnvironmentWindow
             var job = await PackJobClient.RunAsync(PackRequest("communitySave", game.Id, new Dictionary<string, object?> { ["cheatsImport"] = paths }), null, CancellationToken.None);
             if (!job.Report.Succeeded) cheatsError = job.Report.Message.Length > 0 ? job.Report.Message : job.Report.State;
         }
-        catch (Exception error) when (error is LibraryProtocolException or IOException or UnauthorizedAccessException or InvalidOperationException or OperationCanceledException)
+        catch (Exception error)   // 任何失败都要落成错误文字：页面渲染时见「没结果、没在查、没错误」就再发，漏掉一类异常 = 无限重发卡死 UI（#1149）
         { cheatsError = error.Message; }
         cheatsLoading = false;
         await LoadCheatsAsync();

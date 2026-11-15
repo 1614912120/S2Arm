@@ -13,7 +13,7 @@ struct TargetDeviceRow: View {
     @ObservedObject var model: S2ArmLauncherModel
     @EnvironmentObject var loc: Localizer
 
-    private func x(_ id: String) -> String { BackendText.launcherText("export." + id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func x(_ id: String) -> String { BackendText.launcherText("export." + id, language: loc.lang.sharedCode) }
 
     var body: some View {
         let device = model.selectedDevice

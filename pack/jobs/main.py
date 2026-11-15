@@ -264,7 +264,7 @@ def cli(argv, *, context_class=Context, operation_overrides=None):
                 print(json.dumps(dict(dryRun=True, wouldResume=bool(args.force) or not terminal, operation=record.get("operation"),
                                       attemptNo=(record.get("attemptNo") or 1) + (0 if terminal and not args.force else 1),
                                       stage=record.get("stage") or "", attempts=record.get("attempts") or {},
-                                      note="阶段是否跳过只由各阶段自己的产物键（.stage_<阶段>）决定，job 层不记也不预判"), ensure_ascii=False))
+                                      note="阶段是否跳过只由各阶段自己的产物键（.stage_<阶段>）决定，job 层不记也不预判"), ensure_ascii=False))  # 非玩家句
                 return 0
             if record.get("state") in TERMINAL_STATES and not args.force:
                 # Re-running a finished task on purpose is allowed, but a caller that thinks it is resuming must not silently restart it

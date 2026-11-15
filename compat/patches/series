@@ -598,3 +598,5 @@
 20261114-1824-hid-supported-follow-sync.patch
 20261114-1829-surfaceflinger-swap-oob.patch
 20261114-2043-ro-nro-keep-unpacked.patch
+20261114-2315-aud-late-probe.patch
+20261115-0732-game-volume.patch

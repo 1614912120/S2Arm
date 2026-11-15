@@ -64,15 +64,30 @@ int main(void) {
       uint8_t *big = s2a_tail_map(2 * M, S2A_TAIL_METAL | S2A_TAIL_ONLY, PROT_READ | PROT_WRITE), *fb = s2a_tail_map(2 * M, S2A_TAIL_METAL, PROT_READ | PROT_WRITE);
       if (!fill) { printf("✗ 尾部剩 %llu MB 应能占到只剩 1 MB\n", (unsigned long long)(rest >> 20)); bad++; }
       if (big) { printf("✗ 尾部放不下且带 ONLY 应回 NULL，得 %p\n", big); bad++; }
-      if (!fb || s2a_tail_has(fb)) { printf("✗ 放不下应退回尾部以外的映射，得 %p\n", fb); bad++; } else { fb[0] = 1; s2a_tail_unmap(fb, 2 * M, S2A_TAIL_METAL); }
+      if (!fb || s2a_tail_has(fb)) { printf("✗ 放不下应退回尾部以外的映射，得 %p\n", fb); bad++; }
+      else {   // #0d51a7：退回低区的映射照样带使用者标签、记落低区在用量；还回后在用量归 0
+        fb[0] = 1;
+        vm_address_t ra = (vm_address_t)fb; vm_size_t rs = 0; natural_t d = 0; vm_region_submap_info_data_64_t si; mach_msg_type_number_t c = VM_REGION_SUBMAP_INFO_COUNT_64;
+        if (vm_region_recurse_64(mach_task_self(), &ra, &rs, &d, (vm_region_recurse_info_t)&si, &c) || si.user_tag != S2A_TAIL_TAG0 + S2A_TAIL_METAL) { printf("✗ 退回低区的映射应带 Metal 使用者标签 %d，得 %u\n", S2A_TAIL_TAG0 + S2A_TAIL_METAL, si.user_tag); bad++; }
+        char fn[900]; s2a_tail_note(fn, sizeof fn);
+        if (!strstr(fn, "落低区在用 2.0 MB 峰值 2.0 MB")) { printf("✗ 退回 2 MB 未还时应记落低区在用 2.0 MB：%s\n", fn); bad++; }
+        char tg[768]; s2a_low_tags(tg, sizeof tg);
+        if (!strstr(tg, "Metal 缓冲（标签")) { printf("✗ 按标签合计应按名字列出 Metal 使用者：%s\n", tg); bad++; }
+        s2a_tail_unmap(fb, 2 * M, S2A_TAIL_METAL); }
       s2a_tail_unmap(fill, rest - M, S2A_TAIL_METAL);
       char note[900]; s2a_tail_note(note, sizeof note);
-      if (!strstr(note, "Metal 缓冲 在用 0.0 MB") || !strstr(note, "退回低区 2 次")) { printf("✗ 尾部账应记 Metal 退回 2 次：%s\n", note); bad++; }
+      if (!strstr(note, "Metal 缓冲 在用 0.0 MB") || !strstr(note, "退回低区 2 次") || !strstr(note, "落低区在用 0.0 MB 峰值 2.0 MB")) { printf("✗ 尾部账应记 Metal 退回 2 次：%s\n", note); bad++; }
       // ④ 全部还回后空闲段合并成一整段（剩余 = 接管 = 256 MB，最大空闲块同）
       s2a_tail_unmap(a1, M, S2A_TAIL_STACK); s2a_tail_unmap(a4, M, S2A_TAIL_STACK); s2a_tail_unmap(a3, M, S2A_TAIL_RYU);
       s2a_tail_note(note, sizeof note);
       if (!strstr(note, "接管 256 MB，已用 0.0 MB、剩余 256.0 MB（最大空闲块 256.0 MB、空闲段 1）")) { printf("✗ 全部还回后应合并成一整段：%s\n", note); bad++; }
       printf("· 窗口尾部分配：%s\n", note); }
+    { // #7c1a0f：宿主自有映射带 S2A_VMTAG_* 标签，按标签合计按名字列出（期望按 s2a_lowva.h 的名字手写）。64 MB 不提交物理页，排进前 10
+      const uint64_t N = 64ull << 20; void *fm = mmap(NULL, N, PROT_NONE, MAP_PRIVATE | MAP_ANON, S2A_VMTAG_FD(S2A_VMTAG_FAR), 0);
+      if (fm == MAP_FAILED) { printf("✗ 带远端影子区标签的 64 MB 映射失败\n"); bad++; }
+      else { char tg[768]; s2a_low_tags(tg, sizeof tg);
+        if (!strstr(tg, "远端影子区（标签 249）")) { printf("✗ 按标签合计应按名字列出远端影子区：%s\n", tg); bad++; }
+        munmap(fm, N); } }
     printf("%s t_vawin：%d 处不符\n", bad ? "✗" : "✓", bad);
     return bad != 0;
 }

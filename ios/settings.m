@@ -31,10 +31,16 @@ static void apply_environment(const char *name, NSString *value) {
 // Metal 性能浮层的系统键（11-13 维护者实机：iPad mini / iPadOS 27.2 上 Metal 框架初始化时读 MetalForceHudEnabled，只多存这个键 = 冷启动出面板，
 //   删掉就没有；我们的开关键 MetalHUDForceEnabled（Settings.bundle / 设置页）它不认，MTL_HUD_ENABLED 是进程起来后才设、对系统建设备太晚）。
 //   开关打开就往 App 自己的偏好里写系统键、关掉就删（两种拼法都在：我们的键作界面状态照旧），下次冷启动 Metal 读到。只在值不同时写，免得自己触发变更通知再写
+//   写 / 删会在本线程同步发变更通知、又回到这里：系统键来自删不掉的域（LiveContainer 下 / 启动参数 / 注册缺省）时删完还读得到，
+//   没有这道重入闸就无限递归撑爆线程栈（#1148：v0.4.0 LiveContainer 里一开游戏就闪退，栈是 本函数 ← 通知 ← 本函数 …）
 static void metal_hud_mirror(NSUserDefaults *d) {
+    static _Thread_local int busy;
+    if (busy) return;
+    busy = 1;
     BOOL on = [d boolForKey:@"MetalHUDForceEnabled"];
     if (on && ![d boolForKey:@"MetalForceHudEnabled"]) { [d setBool:YES forKey:@"MetalForceHudEnabled"]; fprintf(stderr, "[S2A 画面设置] Metal 性能浮层：写系统键 MetalForceHudEnabled（下次冷启动生效）\n"); }
     else if (!on && [d objectForKey:@"MetalForceHudEnabled"]) { [d removeObjectForKey:@"MetalForceHudEnabled"]; fprintf(stderr, "[S2A 画面设置] Metal 性能浮层：删系统键 MetalForceHudEnabled（下次冷启动生效）\n"); }
+    busy = 0;
 }
 void s2a_ios_apply_overlay_settings(NSUserDefaults *defaults) {
     metal_hud_mirror(defaults);
@@ -55,7 +61,7 @@ void s2a_ios_apply_overlay_settings(NSUserDefaults *defaults) {
 //   以及撑不住就问玩家的「问过」与「本款原生 60 帧」记号——原先全在 App 级，一款游戏自动退回 16:9、关 60 帧会串到所有游戏
 NSArray *s2a_ios_per_game_keys(void) {
     return @[@"S2AResolutionScale", @"S2AAntiAliasing", @"S2AScalingFilter", @"S2AFrameRateLimit", @"S2AWidescreen", @"S2AFps60",
-             @"S2AFps60Manual", @"S2ADockedMode", @"S2ACommunityPatches", @"S2AWidescreenAsked", @"S2AFps60Asked", @"S2AFpsNative60", @"S2AFpsPick", S2AGameLanguageKey, @"S2AFrameInterp"];
+             @"S2AFps60Manual", @"S2ADockedMode", @"S2ACommunityPatches", @"S2AWidescreenAsked", @"S2AFps60Asked", @"S2AFpsNative60", @"S2AFpsPick", S2AGameLanguageKey, @"S2AFrameInterp", @"S2AGameVolume"];
 }
 NSArray<NSString *> *s2a_ios_game_languages(void) {
     return @[@"system", @"SimplifiedChinese", @"TraditionalChinese", @"AmericanEnglish", @"BritishEnglish", @"Japanese", @"Korean", @"French", @"CanadianFrench", @"German",
@@ -339,7 +345,9 @@ void s2a_ios_apply_graphics_settings(NSUserDefaults *defaults) {
         [game removeObjectForKey:@"S2AWidenForce"];
         BOOL fs = NO;
         // 有自适应满屏补丁的款由补丁铺满（下面社区补丁那段让 S2Arm 满屏让开），这里不强开 S2Arm 满屏，免得拉宽两次
-        if ([game objectForKey:@"S2AWidescreen"] && [game boolForKey:@"S2AWidescreen"] && s2a_ios_fullscreen_state(@(gid), &fs) == 0 && fs && !adaptive_items(s2a_ios_game_dir(@(gid)), NULL).count) {
+        // 11-15：我方通用满屏缺省不用（runtime/src/widen.c）——玩家以前存下的「满屏明确开」也只在旧口径（S2A_CAPS_OWN=1）转成 S2A_WIDEN_VERIFIED，否则老设置会绕过闸
+        const char *own = getenv("S2A_CAPS_OWN");
+        if (own && !strcmp(own, "1") && [game objectForKey:@"S2AWidescreen"] && [game boolForKey:@"S2AWidescreen"] && s2a_ios_fullscreen_state(@(gid), &fs) == 0 && fs && !adaptive_items(s2a_ios_game_dir(@(gid)), NULL).count) {
             if (!getenv("S2A_WIDEN_VERIFIED")) apply_environment("S2A_WIDEN_VERIFIED", @"1");
             if (!getenv("S2A_WIDESCREEN")) apply_environment("S2A_WIDESCREEN", @"1");
             fprintf(stderr, "[S2A 画面设置] 满屏：这款明确开（没进已验证名单也铺满，自检兜底）\n");
@@ -400,6 +408,15 @@ void s2a_ios_apply_graphics_settings(NSUserDefaults *defaults) {
         id v = [defaults objectForKey:@"S2ACommunityPatches"];
         NSString *on = [v isKindOfClass:NSArray.class] ? ([(NSArray *)v count] ? [(NSArray *)v componentsJoinedByString:@","] : @"none") : [v isKindOfClass:NSString.class] ? v : nil;
         if (on) { apply_environment("S2A_CPATCH_ON", on); fprintf(stderr, "[S2A 画面设置] S2A_CPATCH_ON=%s（本 App 设置：社区补丁）\n", on.UTF8String); }
+    }
+    // 游戏音量（#1186，按游戏存的 S2AGameVolume 0–100；没设过 / 100 不设，输出层整段跳过）→ S2A_AUDIO_VOLUME（runtime/src/game_volume.c）；
+    //   局中改走齿轮菜单 S2A_AudioSetVolume，当场生效。启动环境显式给的优先
+    if (!getenv("S2A_AUDIO_VOLUME")) {
+        id v = [defaults objectForKey:@"S2AGameVolume"];
+        if ([v isKindOfClass:NSNumber.class] && [v integerValue] < 100) {
+            NSInteger p = MAX(0, [v integerValue]);
+            apply_environment("S2A_AUDIO_VOLUME", [NSString stringWithFormat:@"%ld", (long)p]); fprintf(stderr, "[S2A 声音设置] S2A_AUDIO_VOLUME=%ld（本 App 设置：游戏音量）\n", (long)p);
+        }
     }
     // 开着社区宽屏 / 自适应满屏补丁（编号 widescreen: / wsauto:）：游戏自己按屏幕比例画宽画面，S2Arm 的满屏让开、不拉宽两次（同 Mac pack/jobs/community.py launch_env）；
     //   启动环境显式给了 S2A_WIDESCREEN 的照它

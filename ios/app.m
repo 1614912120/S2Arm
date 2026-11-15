@@ -730,10 +730,11 @@ static void audio_category_apply(void) {
             (int)[NSProcessInfo.processInfo hasPerformanceProfile:NSProcessPerformanceProfileSustained], (int)NSProcessInfo.processInfo.lowPowerModeEnabled, (unsigned long long)(lt >> 20), (unsigned long long)(ll >> 20), fn, (unsigned long long)fs, wins);
         // 本款本机实测峰值（vawin.c s2a_guest_mem_note：只记没开文件后备那几局的进程实占，#783）：下一局起局按它判文件后备开不开
         { void s2a_guest_mem_note(uint64_t footprint); s2a_guest_mem_note((uint64_t)s2a_footprint_mb() << 20); }
-        int s2a_disk_written(uint64_t *bytes);   // energy.c（只此一处用，不进 native.h：那是出包抽取阶段的键）
+        int s2a_disk_io(uint64_t *rd, uint64_t *wr, uint64_t *pageins);   // energy.c（只此一处用，不进 native.h：那是出包抽取阶段的键）
         // 写盘量（11-05 能耗线，客体内存文件后备的代价）：本进程累计与近 10 秒，内存紧张时内核把文件脏页写回闪存的量在这里看
-        { static uint64_t last; static int have; uint64_t w;
-          if (!s2a_disk_written(&w)) { LOG("[写盘] 进程累计 %llu MB，近 10 秒 %llu MB（客体内存文件后备 %s）", (unsigned long long)(w >> 20), (unsigned long long)(have && w >= last ? (w - last) >> 20 : 0), s2a_guest_fd() >= 0 ? "开" : "关"); last = w; have = 1; } }
+        { static uint64_t last, lr, lp; static int have; uint64_t w, r, p;
+          if (!s2a_disk_io(&r, &w, &p)) { LOG("[写盘] 进程累计 %llu MB，近 10 秒 %llu MB（客体内存文件后备 %s）；近 10 秒读盘 %llu MB、缺页读入 %llu 次", (unsigned long long)(w >> 20), (unsigned long long)(have && w >= last ? (w - last) >> 20 : 0), s2a_guest_fd() >= 0 ? "开" : "关",
+              (unsigned long long)(have && r >= lr ? (r - lr) >> 20 : 0), (unsigned long long)(have && p >= lp ? p - lp : 0)); last = w; lr = r; lp = p; have = 1; } }
         // 客体内存分区账（S2A_MEM_SPLIT=1，缺省关）：心跳每 10 秒一行，另起 100 ms 采样线程抓跳变（mem_split_*）
         if (mem_split_on()) { mem_split_line("内存分区", s2a_footprint_mb(), wr, wo, 0); mem_split_start(); }
         s2a_energy_log();
@@ -828,17 +829,22 @@ static void library_play_go(const char *gid, S2ASceneDelegate *sd);
 //   上一局死在前台、死的就是这一款（会话标记是整个 App 一份，runtime/src/sesdiag.c；靠上次点开始的那款 S2ALastGameId 认）、当时开着金手指 /
 //   玩家开的未验证社区补丁（ios/game_options.m）→ 启动这一局之前关掉它们（社区补丁要在装载前关才不再带进这一局），进游戏后横幅告诉玩家。
 //   记下已处理，进游戏后 diag.m 不再处理一遍（只问发诊断）
-NSArray<NSDictionary *> *s2a_ios_crash_suspects_for(NSString *gid);
+//   v0.4.1：只关出事的那份（game_options.m s2a_ios_crash_pick_for），并记下这局开着的（s2a_ios_crash_session_begin）。
+//   多款容器一律在这里处理（g_s2a_crash_asked 先置上）：原先上一局死的是别的游戏时这里提前返回、没置标记，进游戏后 diag.m 会把这一款开着的关掉
+NSArray<NSDictionary *> *s2a_ios_crash_pick_for(NSString *gid);
+void s2a_ios_crash_session_begin(NSString *gid, BOOL prev_clean);
 void s2a_ios_crash_turn_off_for(NSString *gid, NSArray<NSDictionary *> *items);
 extern int g_s2a_crash_asked;
 void s2a_dprompt_notice(NSString *title, NSString *body, double delay, double seconds);   // dprompt.m
 static void crash_auto_off(const char *gid) {
-    char d[1024]; if (s2a_container_docs(d, sizeof d) <= 0) return;
-    if (s2a_sesmark_prev(d) != S2A_SESMARK_FG || ![[NSUserDefaults.standardUserDefaults stringForKey:@"S2ALastGameId"] isEqualToString:@(gid)]) return;
     g_s2a_crash_asked = 1;
-    NSString *g = @(gid); NSArray<NSDictionary *> *items = s2a_ios_crash_suspects_for(g);
+    NSString *g = @(gid);
+    char d[1024]; if (s2a_container_docs(d, sizeof d) <= 0) return;
+    BOOL same = [[NSUserDefaults.standardUserDefaults stringForKey:@"S2ALastGameId"] isEqualToString:g], fg = s2a_sesmark_prev(d) == S2A_SESMARK_FG;
+    NSArray<NSDictionary *> *items = same && fg ? s2a_ios_crash_pick_for(g) : @[];
+    if (items.count) s2a_ios_crash_turn_off_for(g, items);
+    s2a_ios_crash_session_begin(g, same && !fg);   // 关完再记这局开着的；上一局是这款且好好收局 → 那局开着的升为「好的」
     if (!items.count) return;
-    s2a_ios_crash_turn_off_for(g, items);
     NSString *names = [[items valueForKey:@"name"] componentsJoinedByString:S2AL(@"common.listSeparator")];
     LOG("崩溃恢复：%s 上一局开着 %s 时死在前台，这一局启动前已关掉（玩家可在设置里再开）", gid, names.UTF8String);
     { void s2a_diag_note_crash_off(NSString *); s2a_diag_note_crash_off(names); }   // 进游戏后诊断询问（diag.m，上次死在前台必问）一并说，不另弹横幅

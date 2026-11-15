@@ -220,6 +220,8 @@
 "vpad.menu.ns2pro" = "Enable Switch 2 Pro Controller";
 "vpad.menu.pad" = "Controllers & Motion";
 "vpad.menu.rumble" = "Rumble";
+"vpad.menu.volume" = "Sound";
+"vpad.volume.mute" = "Mute";
 "vpad.menu.rumble.note" = "Shared by the phone motor and controllers; picking a level plays a sample";
 "vpad.menu.saves" = "Manage saves";
 "vpad.menu.stickFixed.note" = "Off = the stick centers where your finger lands";
@@ -456,6 +458,7 @@
 "settings.fps.knownIssue.message" = "60 FPS has known issues in this game. Turn it off if the game runs at the wrong speed.";
 "settings.fps.native" = "Native 60 FPS in this game";
 "settings.group.dev" = "Development";
+"settings.devEntry" = "Developer & diagnostics";
 "settings.notStarted" = "Game not started";
 "settings.restart.message" = "Restart the game now? Unsaved progress will be lost, so make sure you’ve saved in the game.";
 "settings.restart.messageLater" = "Your saved settings take effect the next time you start the game.";
@@ -497,6 +500,9 @@
 "settings.language.zhHans" = "简体中文";
 "settings.language.zhHant" = "繁體中文";
 "settings.language.en" = "English";
+"settings.language.ja" = "日本語";
+"settings.language.es" = "Español";
+"settings.language.fr" = "Français";
 "settings.language.restart" = "Close and reopen S2Arm to use the new language.";
 "settings.gameLanguage" = "Game language";
 "settings.gameLanguage.system" = "Same as system";

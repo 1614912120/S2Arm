@@ -242,7 +242,7 @@ static void fill_facts(const struct rp_shader_req *q, const struct s2a_direct_co
     if (!any_ssbo || pc->storage_buffer_offset_alignment) { g->has_unaligned_ssbo = 1; g->unaligned_ssbo = unaligned; }
     for (int i = 0; i < 32; i++) g->attribute_types[i] = num_type(i < rp_S.nattr && i < 16 ? rp_S.attr[i].fmt : 0, 1);
     for (int i = 0; i < 8; i++) g->fragment_output_types[i] = i < q->rt_count && q->rt_format[i] ? num_type(q->rt_format[i], 0) : "Float";
-    for (int st = 0; st < 6; st++) { uint32_t m = 0; for (int i = 0; i < 16; i++) if (rp_S.ubo[st][i].size) m |= 1u << i; f->ubo_use[st] = m << 3; }   // 用户常量缓冲从 c3 起
+    for (int st = 0; st < nst; st++) { uint32_t m = 0; for (int i = 0; i < 16; i++) if (rp_S.ubo[st][i].size) m |= 1u << i; f->ubo_use[st] = m << 3; }   // 用户常量缓冲从 c3 起
     // 组合贴图槽事实：顶点、片元各 32 槽。槽里是「贴图号 | 采样器号 << 20」；没绑过的槽读作池里的第 0 项。
     for (int st = 0; st < nst; st++) for (int slot = 0; slot < 32; slot++) {
         uint64_t h = rp_S.tex[st][slot]; long id = h ? (long)(h & 0xFFFFF) : (long)rp_S.tex_base;
@@ -274,6 +274,8 @@ static void fill_facts(const struct rp_shader_req *q, const struct s2a_direct_co
         f->tex[n] = (struct s2a_compile_texture_src){(const char *const[]){"vs", "fs", "gs"}[st], (uint32_t)(90 + 2 * slot), 2, f->tsmp[n], f->tfmt[n], nf.is_buffer, nf.normalized, 1, nf.array_length};
     }
 }
+
+#include "nvk_shader_fact_cache.h"
 
 // fd_binding → 后端布局项（核心按 src_kind / src_reg 绑定）。0 = 这一项首版不支持
 static int layout_ent(const struct fd_binding *b, nvn_gpu_layout_ent *e) {
@@ -545,7 +547,7 @@ static uint64_t input_sig(const struct rp_shader_req *q, const struct s2a_direct
     MIX(rp_depth_zero()); MIX(rp_origin_lower_left()); MIX(pc->shader_draw_parameters);
     { int any = 0, un = 0; for (int st = 0; st < 5; st++) for (int i = 0; i < 16; i++) if (rp_S.ssbo[st][i].addr) { any = 1; if (pc->storage_buffer_offset_alignment && rp_S.ssbo[st][i].addr % pc->storage_buffer_offset_alignment) un = 1; } MIX(any); MIX(un); MIX(pc->storage_buffer_offset_alignment); }
     MIX(rp_S.nattr); for (int i = 0; i < 16; i++) MIX(i < rp_S.nattr ? rp_S.attr[i].fmt : 0);
-    for (int st = 0; st < 6; st++) { uint32_t m = 0; for (int i = 0; i < 16; i++) if (rp_S.ubo[st][i].size) m |= 1u << i; MIX(m); }
+    for (int st = 0; st < 3; st++) if (stages & (1u << st)) { uint32_t m = 0; for (int i = 0; i < 16; i++) if (rp_S.ubo[st][i].size) m |= 1u << i; MIX(m); }
     MIX(rp_S.tex_pool_n); MIX(rp_S.samp_pool_n); MIX(rp_S.tf_on); MIX(rp_S.tex_base);
     MIX(combined_fact_sig(0)); MIX(combined_fact_sig(1));
     MIX(sep_fact_sig(0)); MIX(sep_fact_sig(1));
@@ -615,6 +617,16 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
     sha256(idbuf, idlen, sha);
     struct entry *e = nvn_hm_get(&g_progs, sha);
     if (!e) {
+        *out = nvn_hm_get(&g_fact_aliases, sha);
+        if (*out) return 0;
+    }
+    uint8_t fact_base[32];
+    int reusable = fact_cache_shape(&id) && fact_cache_hash(&id, NULL, fact_base);
+    if (!e && reusable) {
+        *out = fact_cache_find(&id, fact_base);
+        if (*out) { nvn_hm_put(&g_fact_aliases, sha, (void *)*out); return 0; }
+    }
+    if (!e) {
         struct s2a_source_entry_view views[3]; memset(views, 0, sizeof views);
         for (int st = 0; st < nst; st++) if (!s2a_source_get_key(stage_key((unsigned)st), &views[st]) || !views[st].complete)   /* get_key：1 = 命中 */ { nvn_unimpl("shader", "source_snapshot_incomplete", NULL); return -1; }
         if (g_texpool_diag) g_pool_programs++;
@@ -662,6 +674,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
             if (cdir && !nvn_plat_flag("no_disk_cache", 0)) s2a_program_cache_store_async(cdir, sha, bytes, len);
         }
         e = build(bytes, len, views, nst);
+        if (!e->failed && reusable) fact_cache_keep(&id, fact_base, bytes, len, &e->prog);
         free(bytes);
         nvn_hm_put(&g_progs, sha, e);
         if (!e->failed && ((g_n_offline + g_n_cache + g_n_compiled) == 1 || (g_n_offline + g_n_cache + g_n_compiled) % 50 == 0)) {
@@ -869,6 +882,7 @@ int rp_shader_resolve_compute(const struct rp_prog **out) {
 }
 
 void rp_shader_reset(void) {
+    fact_cache_reset();
     if (g_pool_programs || g_pool_request_rejected) pool_stats("reset");
     for (uint32_t i = 0; i < g_progs.cap; i++) { struct entry *e = g_progs.vals[i]; if (!e) continue;
         for (int st = 0; st < RP_PROG_STAGES; st++) if (e->prog.sh[st]) nvn_gpu_shader_release(e->prog.sh[st]);

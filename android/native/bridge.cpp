@@ -5,6 +5,10 @@
 #include <unwind.h>
 #include <dlfcn.h>
 #include <sys/system_properties.h>
+#include <malloc.h>   // mallopt：:game 进程的堆分配器策略（JNI_OnLoad 前的 s2a_tune_heap_for_game）
+#ifndef M_CACHE_COUNT_MAX
+#define M_CACHE_COUNT_MAX (-200)   // bionic 的选项号（次级分配器空闲大块缓存的条数）；NDK 的 malloc.h 未必带这个宏
+#endif
 
 #include "capture_jpeg.h"
 #include "debug_environment.h"
@@ -937,6 +941,29 @@ Java_org_s2arm_android_NativeBridge_configureFrameLogDir(JNIEnv *env, jclass, js
     return ::setenv("S2A_FRAME_LOG_DIR", value.c_str(), 1) == 0 ? 0 : errno;
 }
 
+// 外挂 Vulkan 驱动目录（direct_session.c 的 custom_driver_open 读）：内部目录用于复制与 dlopen，
+// 外部私有目录用于 adb push（selected.txt 与驱动文件）。没选驱动时两边都不碰。
+static std::string g_gpu_driver_files_dir, g_gpu_driver_external_dir;
+extern "C" const char *s2a_android_gpu_driver_files_dir(void) { return g_gpu_driver_files_dir.c_str(); }
+extern "C" const char *s2a_android_gpu_driver_external_dir(void) { return g_gpu_driver_external_dir.c_str(); }
+// 隔离探针（direct_session.c）：诊断 / 非 game 构建里没有这个符号。
+extern "C" int s2a_android_vk_probe_driver(void) __attribute__((weak));
+
+extern "C" JNIEXPORT jint JNICALL
+Java_org_s2arm_android_NativeBridge_configureGpuDriver(JNIEnv *env, jclass, jstring files_dir, jstring external_dir) {
+    std::string files = jstring_or(env, files_dir, "");
+    std::string external = jstring_or(env, external_dir, "");
+    if (files.empty() || files[0] != '/') return EINVAL;
+    if (!external.empty() && external[0] != '/') return EINVAL;
+    g_gpu_driver_files_dir = files;
+    g_gpu_driver_external_dir = external;
+    fprintf(stderr, "[vk-direct] 驱动目录配置：files=%s external=%s\n",
+            files.c_str(), external.empty() ? "(空)" : external.c_str());
+    // 隔离探针（direct_session.c）：有选择时只打开驱动并枚举设备，不改渲染路径。
+    if (s2a_android_vk_probe_driver) s2a_android_vk_probe_driver();
+    return 0;
+}
+
 // 拆线程：宿主创建前设 S2A_ANDROID_THREADED_RENDERER（0|1|auto，外壳每次游戏启动都显式设）；
 // AndroidVulkanRuntime.CreateRenderer 读它决定是否给 GAL 套 ThreadedRenderer（GPU 模拟 / Vulkan 录制提交分两条线程），
 // auto = 按本游戏上局记录决定。别的值 EINVAL，不按关处理。
@@ -1485,13 +1512,39 @@ extern "C" void __real_exit(int);
 extern "C" void __wrap__exit(int code) { s2a_log_exit("_exit", code); __real__exit(code); }
 extern "C" void __wrap_exit(int code) { s2a_log_exit("exit", code); __real_exit(code); }
 
+// :game 进程的堆分配器策略（#1145）。世界场景里回放线程每帧约 460 次缺页（占进程缺页的 100%），其中 93.9% 来自 Adreno 驱动在
+// 每次 vkCmdBeginRenderPass / vkCmdEndRenderPass 里 calloc 出来的块：scudo 在 free 后按间隔把空闲页还给系统，下一次 calloc
+// 清零时又要重新缺页。
+//   M_DECAY_TIME = -1：不按时间归还空闲页（取 1 在读数上没有效果，缺页不降）。
+//   M_CACHE_COUNT_MAX = 0：次级分配器不留空闲大块的缓存。只设上一条时，缓存里的大块一直不归还、每次复用都要 calloc 整块清零，
+//     Native Heap 的 PSS 会多约 205 MB；关掉缓存后大块一释放就还，常驻只多约 18 MB（同包同局 A/B，见 docs/坑记录.md）。
+// mallopt 是进程级的；JNI_OnLoad 在每个加载本库的进程里都会跑，启动器进程不需要这个策略，所以按进程名只在 :game 进程设。
+static bool s2a_is_game_process() {
+    char name[256] = {0};
+    const int fd = open("/proc/self/cmdline", O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    const ssize_t n = read(fd, name, sizeof name - 1);
+    close(fd);
+    if (n <= 0) return false;
+    const size_t len = strlen(name);   // cmdline 以 NUL 分隔参数，进程名是第一段（<包名>:game）
+    return len > 5 && strcmp(name + len - 5, ":game") == 0;
+}
+static void s2a_tune_heap_for_game() {
+    if (!s2a_is_game_process()) return;
+    const int rc_decay = mallopt(M_DECAY_TIME, -1);
+    const int rc_cache = mallopt(M_CACHE_COUNT_MAX, 0);
+    // mallopt 返回 1 = 生效，0 = 这台设备的分配器不认这个选项（照常往下走，只是没有这条优化）。
+    __android_log_print(ANDROID_LOG_INFO, "S2Arm", "heap: M_DECAY_TIME=-1 rc=%d, M_CACHE_COUNT_MAX=0 rc=%d", rc_decay, rc_cache);
+}
+
 // JNI 装载即重定向 stderr（debug.s2a.stderr）并注册 exit 探针（debug.s2a.exitlog），
-// 早于任何 Java/游戏逻辑。exit() 会触发 atexit；_exit()/abort() 不会。
+// 早于任何 Java/游戏逻辑。exit() 会触发 atexit；_exit()/abort() 不会。:game 进程同时设好堆分配器策略（见上）。
 extern "C" int JNI_OnLoad(JavaVM *vm, void *reserved) {
     (void)vm; (void)reserved;
     s2a_redirect_stderr_once();
     __system_property_get("debug.s2a.exitlog", g_exitlog_path);
     if (g_exitlog_path[0]) atexit(s2a_exit_probe);
+    s2a_tune_heap_for_game();
     return 0x00010006;   // JNI_VERSION_1_6
 }
 

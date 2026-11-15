@@ -30,6 +30,17 @@ native-test-nvn_res:
 	@echo '✓ t_nvn_res：贴图内容按纪元只查一次（换段重查 / 写后重传 / WriteTexels 强制作废）/ 连续同参数绘制第二笔整组沿用 / 驱动段暂存按内容命中 / 换管线按布局立脏'
 TEST_TARGETS += native-test-nvn_res
 
+# native-test-nvn_tm：分时读数抽样（绘制 / 开通道 / 贴图解析的逐步计时每 N 帧只完整计 1 帧，读数按计时过的帧数求每帧值；#1103）。
+# 与 t_nvn_replay 共用同一份替身（重命名它的 main 后 include）；Linux 上另用假时钟数取时钟次数、核对抽样与全量打出的读数逐字相同。
+.PHONY: native-test-nvn_tm
+native-test-nvn_tm:
+	@mkdir -p $(BUILD)/tests
+	$(CC) $(CFLAGS) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -I. -Igraphics/nvn/gfx/nvn -Igraphics/nvn/gfx/nvn/include -Igraphics/nvn/gfx/tex -I$(NVN_REPLAY_DIR) \
+	  -o $(BUILD)/tests/t_nvn_tm graphics/nvn/tests/t_nvn_tm.c graphics/nvn/tests/nvn_clear_view_unused.c $(NVN_REPLAY_CORE) -lm
+	timeout 30 $(BUILD)/tests/t_nvn_tm
+	@echo '✓ t_nvn_tm：逐步计时按帧抽样（开关缺省每 32 帧计 1 帧 / 夹取 / nvk_tm_full 压过 / 会话重开重读；采样帧数数得对；非采样帧不取时钟；抽样与全量打出的三行读数逐字相同）'
+TEST_TARGETS += native-test-nvn_tm
+
 .PHONY: native-test-nvn_wait_sync
 native-test-nvn_wait_sync:
 	@mkdir -p $(BUILD)/tests

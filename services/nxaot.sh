@@ -5,6 +5,7 @@
 # 合成：S2A.Aot.o 与运行时的 libbootstrapperdll.o 用 ld -r 合成一个成员（-keep_private_externs）——
 #   bootstrapperdll.o 只有加载时初始化函数，单独链会把整个运行时无条件拖进来；合进同一成员后宿主调 S2A_Init 才整块进来（旧库出包线 10-18 实测）。
 set -euo pipefail
+_s2a_d=$(CDPATH= cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd) || _s2a_d=; while [ -n "$_s2a_d" ] && [ ! -f "$_s2a_d/tools/_timeout.sh" ] && [ "$_s2a_d" != / ]; do _s2a_d=${_s2a_d%/*}; done; { [ -n "$_s2a_d" ] && [ -f "$_s2a_d/tools/_timeout.sh" ] && . "$_s2a_d/tools/_timeout.sh"; } || :   # 下面 dotnet publish 套 timeout：Mac 没有 GNU timeout，用仓库的（#384）
 RID=${1:-osx-arm64}; case $RID in ios-arm64|osx-arm64) ;; *) echo "🔴 nxaot：不认识的平台 $RID" >&2; exit 1;; esac
 ROOT=$(cd "$(dirname "$0")/.." && pwd); B=${S2A_CS_CACHE:-${S2A_RUN_ROOT:-$HOME/.s2arm/run}/s2arm/cache/nxaot}; mkdir -p "$B"   # 整机级缓存（10-20 出包提速）：键 = 源码内容哈希，各工作树 / 门禁镜像共用一份，原来每树 build/cs 各冷编一遍（冷 124 秒）
 DN=${DOTNET:-$HOME/.dotnet/dotnet}; [ -x "$DN" ] || DN=$(command -v dotnet)

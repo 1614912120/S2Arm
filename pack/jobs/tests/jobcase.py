@@ -14,6 +14,8 @@ os.environ.setdefault("S2A_BANNER_FETCH", "0")   # 作业层测试一律不连�
 #   （经本机代理，每次约 1 秒，test_job_failure_codes 一份就 40 多次；断网 / 代理卡住时按 patches.TIMEOUT 白等）。缺省指一个不存在的本地目录
 #   = 「云端取不到、只用本地」，与门禁机断网时同一条路径；要测下载站的用例（test_patches）自己把 S2A_PATCH_BASE 指到造好的目录
 os.environ.setdefault("S2A_PATCH_BASE", "file:" + os.path.join(tempfile.gettempdir(), "s2a-jobtests-no-patch-site"))
+# 每局结束注销 S2ArmGame 系统登记（host_update.forget_registrations，#1126）：单测起局不碰门禁机 / 本机真的应用登记库，指向不存在的工具 = 不做
+os.environ.setdefault("S2A_LSREGISTER", os.path.join(tempfile.gettempdir(), "s2a-jobtests-no-lsregister"))
 
 JOBS = Path(__file__).resolve().parents[1]
 ROOT = JOBS.parents[1]

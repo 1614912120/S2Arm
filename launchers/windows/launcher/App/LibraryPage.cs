@@ -471,7 +471,7 @@ public sealed partial class EnvironmentWindow
     private async Task ExportDiagnosticsAsync()
     {
         if (connectedFolder is null || libraryId is null || libraryBusy) return;
-        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { Title = T("diag.upload.export"), SuggestedFileName = $"S2Arm-{(language == "en" ? "diag" : "诊断")}-{DateTime.Now:MMdd-HHmm}.zip", DefaultExtension = "zip" });
+        var file = await StorageProvider.SaveFilePickerAsync(new FilePickerSaveOptions { Title = T("diag.upload.export"), SuggestedFileName = $"S2Arm-{T("diag.fileWord")}-{DateTime.Now:MMdd-HHmm}.zip", DefaultExtension = "zip" });
         if (file?.TryGetLocalPath() is not { } output) return;
         var front = BeginJob(JobKind.Library); librarySummary = "library.working"; Render();
         try
@@ -718,14 +718,25 @@ public sealed partial class EnvironmentWindow
         var r = LibraryFolderInput.Normalize(folder);
         if (r.Folder is null) { librarySummary = "library.failed"; libraryDiagnostics = T(r.ErrorKey!); Render(); return; }
         folder = r.Folder;
+        var previous = connectedFolder;
         connectedFolder = null; libraryId = null;
         libraryFolder = folder;
-        libraryOperation = SwitchLibraryAsync(folder);
+        libraryOperation = SwitchLibraryAsync(folder, previous);
     }
 
-    private async Task SwitchLibraryAsync(string folder)
+    private async Task SwitchLibraryAsync(string folder, string? previous)
     {
         await EnsureLibraryAsync(folder, () => { });
+        // 换不过去（D-3P26：选在启动器自己的文件夹里，作业层正确拒绝）：原先旧库也一并断开、设置页却写着新路径，玩家以为改好了，
+        //   重开又是原来的。现在连回原来那个库，失败原因留着（设置页游戏库一行下面常驻，换成功才清）
+        if (connectedFolder is null && previous is not null && !SameFolder(previous, folder))
+        {
+            var why = libraryFailure;
+            libraryFolder = previous;
+            await EnsureLibraryAsync(previous, () => { });
+            libraryFailure = why; importError = why; Render();
+            return;
+        }
         if (connectedFolder is null) return;
         try { PrivateJobRequest.EnsurePrivateRoot(privateRoot); File.WriteAllText(LibraryPreference, folder); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException) { importError = error.Message; Render(); }
