@@ -13,6 +13,103 @@ import S2ArmAppleAdapter
 
 /// Real SwiftUI pages with original, asset-free job responses; never reads the player's library.
 @MainActor final class SettingsLayoutTests: XCTestCase {
+    func testPlayResultAlignsWithPageInsetsAndTheSharedPrimaryAction() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.runner.catalogCover = "original-play-cover"
+        let artwork = NSImage(size: CGSize(width: 100, height: 100), flipped: false) { rect in
+            NSColor(deviceRed: 0.8, green: 0.1, blue: 0.9, alpha: 1).setFill()
+            rect.fill(); return true
+        }
+        let covers = CoverCache { _, _ in CoverCache.Loaded(version: "original", image: artwork) }
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let game = try XCTUnwrap(fixture.model.games.first)
+        for language in [Lang.zh, .en] {
+            for (width, height): (CGFloat, CGFloat) in [(800, 450), (1120, 630), (1440, 810)] {
+                let session = JobSession(kind: .play, gameID: game.id, name: game.name,
+                    phase: .finished(.completed), stage: "游戏运行中")
+                fixture.model.session = session
+                let page = AnyView(PlaySessionView(model: fixture.model, covers: covers, session: session,
+                    uiLanguage: language == .zh ? "zh-Hans" : "en")
+                    .background(LauncherWindowMaterial()).foregroundStyle(LauncherTheme.Colors.text)
+                    .preferredColorScheme(.dark).frame(width: width, height: height))
+                let (host, window) = try await render(page, fixture: fixture, language: language)
+                defer { window.close() }
+                for connected in [false, true] {
+                    fixture.navigation.presentation.connected = connected
+                    try await Task.sleep(for: .milliseconds(80))
+                    let back = try XCTUnwrap(fixture.navigation.controlTargets(in: window).first)
+                    let bounds = window.convertToScreen(host.bounds)
+                    let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    let scale = CGFloat(bitmap.pixelsWide) / width
+                    // The original magenta cover isolates the information column from text and material shadows.
+                    let first = try XCTUnwrap((0..<bitmap.pixelsWide).first { x in
+                        guard let color = bitmap.colorAt(x: x, y: Int(80 * scale))?.usingColorSpace(.deviceRGB) else { return false }
+                        return color.redComponent - color.greenComponent > 0.3 && color.blueComponent - color.greenComponent > 0.3
+                    })
+                    let left = CGFloat(first) / scale, buttonFrame = back.frame
+                    print("play-result \(language.code)/\(width)/\(connected): left=\(left), right=\(bounds.maxX - buttonFrame.maxX), bottom=\(buttonFrame.minY - bounds.minY), height=\(buttonFrame.height)")
+                    XCTAssertEqual(left, 48, accuracy: 1, "游戏信息与游戏库共用 48 pt 左边距")
+                    XCTAssertEqual(back.id, "play.back")
+                    XCTAssertEqual(bounds.maxX - buttonFrame.maxX, 48, accuracy: 1, "回库按钮应放在右下角，与其他页面右边缘对齐")
+                    XCTAssertEqual(buttonFrame.minY - bounds.minY, 16, accuracy: 1)
+                    XCTAssertEqual(buttonFrame.height, 48, accuracy: 1, "使用共用的突出主按钮尺寸")
+                    XCTAssertTrue(bounds.contains(buttonFrame))
+                    let shortcuts = fixture.navigation.shortcutTargets(in: window)
+                    XCTAssertEqual(shortcuts[.primary], ["play.back"])
+                    XCTAssertEqual(shortcuts[.back], ["play.back"])
+                    try snapshot(host, "play-result-\(language.code)-\(Int(width))-\(connected ? "connected" : "disconnected")")
+                }
+            }
+        }
+    }
+
+    func testPlayFooterActionsKeepTheirBehaviorInRunningStoppingAndFailedStates() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let game = try XCTUnwrap(fixture.model.games.first)
+        for phase in [JobSession.Phase.running, .stopping, .finished(.failed)] {
+            let session = JobSession(kind: .play, gameID: game.id, name: game.name, phase: phase, stage: "游戏运行中")
+            fixture.model.session = session
+            let page = AnyView(PlaySessionView(model: fixture.model, covers: CoverCache(), session: session, uiLanguage: "en")
+                .background(LauncherWindowMaterial()).frame(width: 800, height: 450))
+            let (host, window) = try await render(page, fixture: fixture, language: .en)
+            let navigation = fixture.navigation
+            navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
+            defer { navigation.detach(); window.close() }
+            navigation.presentation.connected = true
+            try await Task.sleep(for: .milliseconds(80))
+            let bounds = window.convertToScreen(host.bounds)
+            let actionID = phase == .finished(.failed) ? "play.back" : "play.stop"
+            let button = navigation.controlTargets(in: window).first { $0.id == actionID }
+            if phase == .stopping {
+                XCTAssertNil(button, "正在停止时不能重复发送停止动作")
+            } else {
+                let frame = try XCTUnwrap(button).frame
+                XCTAssertTrue(bounds.contains(frame), "小窗口中失败说明滚动，底栏操作始终可见")
+                XCTAssertEqual(bounds.maxX - frame.maxX, 48, accuracy: 1)
+                XCTAssertEqual(frame.minY - bounds.minY, 16, accuracy: 1)
+                XCTAssertEqual(frame.height, 48, accuracy: 1)
+            }
+            if phase == .finished(.failed) {
+                for action in [LauncherPadAction.confirm, .menu, .back] {
+                    fixture.model.session = session
+                    navigation.focus("play.back"); navigation.handle(action)
+                    XCTAssertNil(fixture.model.session, "A、Menu 与 B 均应执行原有回库操作")
+                }
+            } else {
+                navigation.handle(.menu)
+                XCTAssertEqual(fixture.model.session?.phase, .stopping)
+            }
+            XCTAssertFalse(fixture.runner.requests.contains { $0["operation"] as? String == "launch" }, "底栏操作不能意外重启游戏")
+            try snapshot(host, "play-footer-\(actionID)-\(phase == .stopping ? "stopping" : "active")")
+        }
+    }
+
     func testControllerSettingsScrollKeepsFocusOnVisibleControls() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
@@ -921,6 +1018,7 @@ private final class SettingsRunner: JobProcessRunner {
     private var captured: [[String: Any]] = []
     private var gameCount = 1
     private var needsPreparation = false
+    private var cover = ""
     private var storage: [String: Any] = [:]
     var storageResponse: [String: Any] {
         get { lock.withLock { storage } }
@@ -929,6 +1027,10 @@ private final class SettingsRunner: JobProcessRunner {
     var catalogNeedsPreparation: Bool {
         get { lock.withLock { needsPreparation } }
         set { lock.withLock { needsPreparation = newValue } }
+    }
+    var catalogCover: String {
+        get { lock.withLock { cover } }
+        set { lock.withLock { cover = newValue } }
     }
     var catalogGameCount: Int {
         get { lock.withLock { gameCount } }
@@ -948,7 +1050,7 @@ private final class SettingsRunner: JobProcessRunner {
                 "en": ["title": "Choose a configuration", "body": "Original layout fixture for long content", "points": (1...24).map { "Original item \($0): a longer configuration description to verify scrolling and keep the actions visible" },
                        "recommend": "Use recommended", "original": "Use original"]]
             result = ["games": (0..<catalogGameCount).map { index in
-                ["id": index == 0 ? "fixture" : "fixture-\(index)", "name": "Original UI fixture \(index)", "ready": true, "needsPreparation": catalogNeedsPreparation, "missing": [],
+                ["id": index == 0 ? "fixture" : "fixture-\(index)", "name": "Original UI fixture \(index)", "cover": catalogCover, "ready": true, "needsPreparation": catalogNeedsPreparation, "missing": [],
                  "downstream": ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy]] as [String: Any]
             }]
         }
