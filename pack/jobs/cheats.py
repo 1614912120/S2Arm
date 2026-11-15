@@ -237,7 +237,8 @@ def _on_now(c, game):
     fps = bool(community.fps_levels(c, gid)) and data["settings"].get("fps60", True) is not False
     # 自适应满屏一族（编号 wsauto:）跟「满屏」开关走、也不在 packed_patches 里（11-15 候选自测：崩了没关它）：有这一族且开关没关 → 算一条，关 = 关满屏开关（iOS 同口径）
     fams, fam_verified = community.adaptive_patches(c, gid)
-    fs = bool(fams) and data["settings"].get("widescreen", True) is not False
+    # 玩家手动开的我方通用满屏（没有自适应满屏补丁、开关明确开，11-15 维护者「手动打开满屏就走咱们通用方案」）也算一条：崩了下一局关满屏
+    fs = (bool(fams) and data["settings"].get("widescreen", True) is not False) or (not fams and data["settings"].get("widescreen") is True)
     on = [("cheat", k) for k in keys] + [("patch", k) for k in patches] + ([("fps", "fps60")] if fps else []) + ([("fs", "fullscreen")] if fs else [])
     return on, community.verified_patches(c, gid) | ({"fullscreen"} if fam_verified else set()), data
 
@@ -392,6 +393,25 @@ def note_stall(c, game, docs):
     r = read(d / "crashed.json", {}) or {}
     atomic(d / "crashed.json", dict(r, fps=True, at=int(time.time()), off=True, cheats=r.get("cheats", []), patches=r.get("patches", [])))
     remember_auto_off(c, d, [("fps", "fps60")], "stall")
+    return True
+
+
+# 我方通用满屏自检退回（runtime/src/qprompt_host.c widen_auto_revert：玩家手动开的通用满屏局内没铺满 / 被拉伸，当场退回 16:9 并在 S2A_DOCS 下写 widen_auto_off）：
+#   收局读到 → 这款「满屏」写关、记自动关（原因 widen_fit），下次开始时通知（同停帧救场 note_stall 一套）
+def note_widen(c, game, docs):
+    mark = Path(docs) / "widen_auto_off"
+    if not mark.is_file():
+        return False
+    mark.unlink(missing_ok=True)
+    gid = game["id"].upper()
+    import community
+    data = community.load_launch(c, gid)
+    data["settings"]["widescreen"] = False
+    atomic(community.launch_path(c, gid), data)
+    d = cheats_dir(c, gid)
+    r = read(d / "crashed.json", {}) or {}
+    atomic(d / "crashed.json", dict(r, fullscreen=True, at=int(time.time()), off=True, cheats=r.get("cheats", []), patches=r.get("patches", [])))
+    remember_auto_off(c, d, [("fs", "fullscreen")], "widen_fit")
     return True
 
 
