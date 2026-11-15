@@ -252,7 +252,7 @@
   "library.refresh": "Actualiser la Bibliothèque",
   "library.import_files": "Choisir les fichiers du jeu",
   "library.import_folder": "Choisir un dossier de jeu",
-  "library.import_keys": "Importer vos Clés",
+  "library.import_keys": "Importer vos clés",
   "library.source_hint": "Les fichiers du jeu sont uniquement lus, jamais déplacés ; conservez la Bibliothèque sur le même lecteur que vos fichiers de jeu",
   "library.empty": "La Bibliothèque est vide ; choisissez d'abord vos fichiers de jeu",
   "library.disconnected": "Aucune Bibliothèque connectée",
