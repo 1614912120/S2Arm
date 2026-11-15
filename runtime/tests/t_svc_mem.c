@@ -535,6 +535,19 @@ int main(void) {
         s2a_mem_test_peaks(&pk,&ap); CHECK(pk==0x83a00000, "成功请求继续提高需求峰值");
         SVH(0x01, 0, 0, 0, 0);
         uint64_t a=layout.alias_base+2*G;
+        {   // #1143 续：学跨度只认空洞以内的地址。界设在这段映射中间（a − 窗口基址 + 0x2000）：别名区跨度截到界上 = 别名区内偏移 2 GiB + 0x2000，
+            //   完整高水位照记 2 GiB + 0x4000（地址需求表用）；界 0 = 不限
+            void s2a_mem_span_limit(uint64_t); uint64_t s2a_mem_test_alias_in(void);
+            s2a_mem_span_limit(a - W + 0x2000);
+            CHECK(SVH(0x2C,a,0x4000,0,0)==0, "跨界的别名映射照常成功");
+            CHECK(s2a_mem_test_alias_in()==2*G+0x2000, "别名区学跨度截到界上：期望 %#llx 实 %#llx", (unsigned long long)(2*G+0x2000), (unsigned long long)s2a_mem_test_alias_in());
+            s2a_mem_test_peaks(&pk,&ap); CHECK(ap==2*G+0x4000, "完整别名高水位不受界影响");
+            CHECK(SVH(0x2D,a,0x4000,0,0)==0, "解除");
+            s2a_mem_span_limit(0);
+            uint64_t s2a_span_pick(uint64_t, uint64_t, const uint64_t *, int);
+            const uint64_t B = 0x7000000000ull, e3[3] = {B + 2*G, B + 73*G, B - 0x1000};
+            CHECK(s2a_span_pick(B, 64*G, e3, 3)==2*G, "跨度：超出空洞（73 GiB > 64 GiB）的整项不算、窗口基址以下的不算 → 2 GiB");
+            CHECK(s2a_span_pick(B, 0, e3, 3)==73*G, "跨度：界 0 不限 → 73 GiB（旧口径）"); }
         CHECK(SVH(0x2C,a,0x4000,0,0)==0 && SVH(0x2D,a,0x4000,0,0)==0, "窗口内别名映射及解除");
         s2a_mem_test_peaks(&pk,&ap); CHECK(ap==2*G+0x4000, "解除映射后保留别名最高偏移");
         uint64_t far=W+layout.win_size+G;   // 16 GiB 窗口之外的别名区（远端），仍在本块预留里
