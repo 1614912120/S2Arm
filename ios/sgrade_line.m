@@ -52,3 +52,36 @@ NSString *s2a_sgrade_line(NSString *cat, NSDictionary *s, NSString *catName, NSI
     if ([state isEqual:@"mac_only"]) return S2AL(@"sgrade.state.mac_only");
     return nil;
 }
+
+NSString *s2a_sgrade_row_note(NSString *cat, NSDictionary *s, NSInteger fpsTarget, BOOL hasFpsPatch, BOOL fpsPatchOn, BOOL fiSupported,
+                              NSString *(^date)(NSDate *when), BOOL *disabled) {
+    if (disabled) *disabled = NO;
+    NSDictionary *st = [s isKindOfClass:NSDictionary.class] ? s : @{};
+    NSString *state = str(st[@"state"]);
+    // 状态句优先：被自动关、上一局没生效、出包时没打入——这些比「用的是什么」要紧
+    if ([state isEqual:@"off_auto"] || [state isEqual:@"ineffective"] || [state isEqual:@"opted_out"]) {
+        NSString *line = s2a_sgrade_line(cat, st, @"", fpsTarget, date); if (line) return line;
+    }
+    if ([cat isEqual:@"widescreen"]) {
+        // 没有社区满屏补丁的款一律走 S2Arm 通用满屏（11-15 起不看名单）
+        if ([str(st[@"source"]) isEqual:@"patch"])
+            return [str(st[@"active"]) isEqual:@"fixed"] ? S2AL(@"sgrade.src.fs.fixed") : S2AL(@"sgrade.src.fs.adaptive");
+        return S2AL(@"sgrade.src.fs.own");
+    }
+    if ([cat isEqual:@"fps"]) {
+        // 一个开关取最好的来源（作业层 fps.source：patch / fi / none；没这个字段时按本机：补丁开关开着且有补丁 = patch，否则能补帧 = fi）
+        NSString *src = str(st[@"source"]);
+        id fs = st[@"fi_supported"]; BOOL fi = [fs isKindOfClass:NSNumber.class] ? [fs boolValue] : fiSupported;
+        if (!src.length) src = hasFpsPatch && fpsPatchOn ? @"patch" : fi ? @"fi" : @"none";
+        NSString *patchLine = fpsTarget > 0 ? [NSString stringWithFormat:S2AL(@"sgrade.src.fps.patch"), [@(fpsTarget) stringValue]] : nil;
+        NSString *fiLine = hasFpsPatch ? S2AL(@"sgrade.src.fps.fi") : S2AL(@"sgrade.src.fps.fi.nopatch");
+        if ([src isEqual:@"patch"]) return patchLine ?: fiLine;
+        if ([src isEqual:@"fi"]) return fiLine;
+        // 关着：写打开后用什么；真用不了（没补丁、设备不支持补帧）才置灰
+        if (hasFpsPatch) return patchLine;
+        if (fi) return fiLine;
+        if (disabled) *disabled = YES;
+        return S2AL(@"sgrade.unavail.fi");
+    }
+    return nil;
+}

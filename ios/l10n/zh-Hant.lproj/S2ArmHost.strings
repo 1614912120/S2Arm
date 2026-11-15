@@ -187,8 +187,6 @@
 "vpad.menu.holdLock.note" = "按住 2 秒鎖定，只對這款遊戲";
 "vpad.menu.hud" = "效能浮層";
 "vpad.menu.hud.note" = "在右上角顯示幀率和記憶體";
-"vpad.menu.fi" = "補幀";
-"vpad.menu.fi.note" = "30 幀補到 60 幀，更順但操作稍慢一點；切換當場生效";
 "vpad.menu.manageLayouts" = "匯入 / 匯出 / 另存配置…";
 "vpad.menu.ns2pro" = "啟用 Switch 2 Pro 手把";
 "vpad.menu.pad" = "手把與體感";
@@ -530,3 +528,13 @@
 "sgrade.state.opted_out" = "沒打入：出包時取消了「出包時打入」。重新出包時勾上就有。";
 "sgrade.state.pending.ios" = "電腦上有可用的新補丁：在電腦的 S2Arm 點「S 級優化升級」裝進來。";
 "sgrade.state.mac_only" = "畫面補丁只在 Mac 版裡。";
+"sgrade.row.fps" = "幀率解鎖";
+"sgrade.src.fs.adaptive" = "社群修補檔 · 依螢幕比例自動選";
+"sgrade.src.fs.fixed" = "社群修補檔 · 固定畫幅";
+"sgrade.src.fs.own" = "S2Arm 通用滿螢幕（這款沒有社群修補檔）";
+"sgrade.src.fps.patch" = "社群修補檔 · 最高 %1$@ 幀";
+"sgrade.src.fps.fi" = "補幀：30 幀補到 60 幀";
+"sgrade.src.fps.fi.nopatch" = "補幀：30 幀補到 60 幀（這款沒有社群修補檔）";
+"sgrade.unavail.fi" = "這台裝置不支援補幀";
+"sgrade.cheats.none" = "這款還沒有金手指 · 可在電腦上匯入";
+"sgrade.cpatch.detail" = "社群修補檔明細";

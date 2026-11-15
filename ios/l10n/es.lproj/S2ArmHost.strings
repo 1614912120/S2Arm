@@ -215,8 +215,6 @@
 "vpad.menu.holdLock.note" = "Mantén 2 s para bloquear; solo para este juego";
 "vpad.menu.hud" = "Información de rendimiento";
 "vpad.menu.hud.note" = "Velocidad de fotogramas y memoria en la esquina superior derecha";
-"vpad.menu.fi" = "Generación de fotogramas";
-"vpad.menu.fi.note" = "Completa de 30 FPS a 60: más fluido, con ligero retraso de entrada; se aplica al instante";
 "vpad.menu.manageLayouts" = "Importar / Exportar / Guardar diseño como…";
 "vpad.menu.ns2pro" = "Activar Switch 2 Pro Controller";
 "vpad.menu.pad" = "Mandos y movimiento";
@@ -524,3 +522,13 @@
 "sgrade.state.opted_out" = "No añadido: «Añadir al compilar» estaba desactivado al exportar. Actívalo y vuelve a exportar.";
 "sgrade.state.pending.ios" = "Hay parches nuevos: abre S2Arm en tu ordenador y elige «Mejora a grado S».";
 "sgrade.state.mac_only" = "Los parches de gráficos son solo para Mac.";
+"sgrade.row.fps" = "Desbloqueo de fps";
+"sgrade.src.fs.adaptive" = "Parche de la comunidad · se ajusta a tu pantalla";
+"sgrade.src.fs.fixed" = "Parche de la comunidad · proporción fija";
+"sgrade.src.fs.own" = "Pantalla completa de S2Arm (este juego no tiene parche de la comunidad)";
+"sgrade.src.fps.patch" = "Parche de la comunidad · hasta %1$@ fps";
+"sgrade.src.fps.fi" = "Generación de fotogramas: de 30 a 60 fps";
+"sgrade.src.fps.fi.nopatch" = "Generación de fotogramas: de 30 a 60 fps (este juego no tiene parche de la comunidad)";
+"sgrade.unavail.fi" = "Este dispositivo no admite la generación de fotogramas";
+"sgrade.cheats.none" = "Este juego aún no tiene trucos · puedes importarlos en tu ordenador";
+"sgrade.cpatch.detail" = "Detalles de los parches de la comunidad";

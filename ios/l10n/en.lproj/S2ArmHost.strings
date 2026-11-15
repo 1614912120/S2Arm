@@ -216,8 +216,6 @@
 "vpad.menu.holdLock.note" = "Hold for 2 s to lock; this game only";
 "vpad.menu.hud" = "Performance overlay";
 "vpad.menu.hud.note" = "Frame rate and memory in the top-right corner";
-"vpad.menu.fi" = "Frame generation";
-"vpad.menu.fi.note" = "Fills 30 FPS up to 60: smoother, with slightly more input delay; applies right away";
 "vpad.menu.manageLayouts" = "Import / Export / Save As…";
 "vpad.menu.ns2pro" = "Enable Switch 2 Pro Controller";
 "vpad.menu.pad" = "Controllers & Motion";
@@ -530,3 +528,13 @@
 "sgrade.state.opted_out" = "Not added: \"Add when building\" was off at export. Turn it on and export again.";
 "sgrade.state.pending.ios" = "New patches are available: open S2Arm on your computer and choose \"S-grade upgrade\".";
 "sgrade.state.mac_only" = "Graphics patches are Mac-only.";
+"sgrade.row.fps" = "Frame rate unlock";
+"sgrade.src.fs.adaptive" = "Community patch · fits your screen";
+"sgrade.src.fs.fixed" = "Community patch · fixed aspect ratio";
+"sgrade.src.fs.own" = "S2Arm full screen (no community patch for this game)";
+"sgrade.src.fps.patch" = "Community patch · up to %1$@ fps";
+"sgrade.src.fps.fi" = "Frame generation: 30 to 60 fps";
+"sgrade.src.fps.fi.nopatch" = "Frame generation: 30 to 60 fps (no community patch for this game)";
+"sgrade.unavail.fi" = "This device doesn't support frame generation";
+"sgrade.cheats.none" = "No cheats for this game yet · you can import them on your computer";
+"sgrade.cpatch.detail" = "Community patch details";

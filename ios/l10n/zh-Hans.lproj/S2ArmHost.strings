@@ -216,8 +216,6 @@
 "vpad.menu.holdLock.note" = "按住 2 秒锁定，只对这款游戏";
 "vpad.menu.hud" = "性能浮层";
 "vpad.menu.hud.note" = "右上角显示帧率和内存";
-"vpad.menu.fi" = "补帧";
-"vpad.menu.fi.note" = "30 帧补到 60 帧，更顺但操作稍慢一点；切换当场生效";
 "vpad.menu.manageLayouts" = "导入 / 导出 / 另存布局…";
 "vpad.menu.ns2pro" = "启用 Switch 2 Pro 手柄";
 "vpad.menu.pad" = "手柄与体感";
@@ -530,3 +528,13 @@
 "sgrade.state.opted_out" = "没打入：出包时取消了「出包时打入」。重新出包时勾上就有。";
 "sgrade.state.pending.ios" = "电脑上有可用的新补丁：在电脑的 S2Arm 点「S 级优化升级」装进来。";
 "sgrade.state.mac_only" = "画面补丁只在 Mac 版里。";
+"sgrade.row.fps" = "帧率解锁";
+"sgrade.src.fs.adaptive" = "社区补丁 · 按屏幕比例自动选";
+"sgrade.src.fs.fixed" = "社区补丁 · 固定画幅";
+"sgrade.src.fs.own" = "S2Arm 通用满屏（这款没有社区补丁）";
+"sgrade.src.fps.patch" = "社区补丁 · 最高 %1$@ 帧";
+"sgrade.src.fps.fi" = "补帧：30 帧补到 60 帧";
+"sgrade.src.fps.fi.nopatch" = "补帧：30 帧补到 60 帧（这款没有社区补丁）";
+"sgrade.unavail.fi" = "这台设备不支持补帧";
+"sgrade.cheats.none" = "这款还没有金手指 · 可在电脑上导入";
+"sgrade.cpatch.detail" = "社区补丁明细";
