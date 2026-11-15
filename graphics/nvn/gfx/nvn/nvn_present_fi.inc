@@ -22,7 +22,8 @@ API_AVAILABLE(macos(26.0), ios(26.0))
     id alloc[3], cb[3];   // Metal 4 分配器 / 命令缓冲（MTL4 棘轮：用 id，经 nvn_mtl.m 的 m4_* 包装）
     dispatch_semaphore_t slot_free[3];
     dispatch_queue_t q; uint64_t last_seq, jobs;
-    uint64_t made, skipped, shown_mid, declined, last_in_ns; double ms_sum, ms_max, gpu_sum;   // declined：按规则不补的帧（60 帧档 / 跑不满），原图直接上屏
+    uint64_t made, skipped, shown_mid, declined, last_in_ns; double ms_sum, ms_max, gpu_sum;
+    double bd_enc, bd_queue, bd_cb, bd_n;   // 拆账（常开，每 300 帧一行）：作业开始→提交 / 提交→GPU 开始（排在游戏 GPU 工作后面等）/ GPU 结束→完成回调，毫秒累计   // declined：按规则不补的帧（60 帧档 / 跑不满），原图直接上屏
 }
 @end
 @implementation NvPresentFI @end
@@ -268,11 +269,13 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
             id<MTLCommandBuffer> c = [f->mq commandBuffer]; c.label = @"present frame interpolation (MetalFX)";
             if (fi_mv_mode()) fi_mv_encode(f, c, f->in_tex[k], f->in_tex[(k + 2) % 3], fi_mv_mode() < 0 ? -1.f : 1.f);
             [fx encodeToCommandBuffer:c]; fx.outputTexture = fx.prevColorTexture = fx.colorTexture = nil;
-            dispatch_semaphore_t done = dispatch_semaphore_create(0); __block int ok = 0; __block double gms = 0;
-            [c addCompletedHandler:^(id<MTLCommandBuffer> x) { ok = x.error == nil; gms = (x.GPUEndTime - x.GPUStartTime) * 1000; if (x.error) MLOG("【红】 MetalFX frame interpolation failed: %s", x.error.description.UTF8String); dispatch_semaphore_signal(done); }];
+            dispatch_semaphore_t done = dispatch_semaphore_create(0); __block int ok = 0; __block double gms = 0, gstart = 0, gend = 0, cbt = 0;
+            double tcommit = CACurrentMediaTime(), tenc = (now_ns() - t0) / 1e6;
+            [c addCompletedHandler:^(id<MTLCommandBuffer> x) { cbt = CACurrentMediaTime(); gstart = x.GPUStartTime; gend = x.GPUEndTime; ok = x.error == nil; gms = (x.GPUEndTime - x.GPUStartTime) * 1000; if (x.error) MLOG("【红】 MetalFX frame interpolation failed: %s", x.error.description.UTF8String); dispatch_semaphore_signal(done); }];
             [c commit];
             if (!dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(g_fi_budget_ms * 1e6))) && ok) { have_mid = 1; last_pair_seq = seq; f->gpu_sum += gms; }
-            else dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC));   // 迟到的那次做完再往下（输出图下一帧还要用），这一帧不用它
+            else dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC));
+            if (gstart > 0 && gend >= gstart && cbt >= gend) { f->bd_enc += tenc; f->bd_queue += (gstart - tcommit) * 1000; f->bd_cb += (cbt - gend) * 1000; f->bd_n++; }   // 迟到的也算：拆账要看全部   // 迟到的那次做完再往下（输出图下一帧还要用），这一帧不用它
         }
         f->last_seq = seq;
     }
@@ -293,7 +296,10 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
     } else fi_ticket_done(ticket);
     if (++f->jobs % 300 == 0) { MLOG("present frame interpolation up to game frame %llu: interpolated %llu, skipped %llu (over %.1f ms or failed), not interpolated by the rule %llu (60 fps tier or frame late), shown %llu; job mean %.2f ms, max %.2f ms, MetalFX GPU mean %.2f ms; on screen (system reported) interpolated %llu, game frames %llu",
                                      (unsigned long long)f->jobs, (unsigned long long)f->made, (unsigned long long)f->skipped, g_fi_budget_ms, (unsigned long long)f->declined, (unsigned long long)f->shown_mid, f->ms_sum / 300, f->ms_max, f->made ? f->gpu_sum / 300 : 0,
-                                     (unsigned long long)atomic_load(&g_fi_on_mid), (unsigned long long)atomic_load(&g_fi_on_real)); f->ms_sum = f->ms_max = f->gpu_sum = 0; }
+                                     (unsigned long long)atomic_load(&g_fi_on_mid), (unsigned long long)atomic_load(&g_fi_on_real)); f->ms_sum = f->ms_max = f->gpu_sum = 0;
+                                 if (f->bd_n) MLOG("present frame interpolation breakdown (%.0f jobs): start → commit %.2f ms, commit → GPU start %.2f ms (waiting behind other GPU work), GPU %s, GPU end → completion callback %.2f ms",
+                                                   f->bd_n, f->bd_enc / f->bd_n, f->bd_queue / f->bd_n, "see MetalFX GPU mean above", f->bd_cb / f->bd_n);
+                                 f->bd_enc = f->bd_queue = f->bd_cb = f->bd_n = 0; }
 } }
 // 出图线程：游戏的一帧。返回 1 = 已接手（票由补帧队列记完成），-1 = 没接手（调用方照原样出图）
 API_AVAILABLE(macos(26.0), ios(26.0))
