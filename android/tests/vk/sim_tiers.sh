@@ -19,7 +19,7 @@ tiers_json="$repo/android/tests/vk/profiles/s2a_sim_tiers.json"
 profiles_sha=b502e9b0d7508e06e6300af272548cf0ee32f380
 profiles_url=https://github.com/KhronosGroup/Vulkan-Profiles.git
 
-all=(no_bc no_d24 no_vertex_stores no_dual_src_blend no_calibrated_timestamps no_depth_clamp)
+all=(no_bc no_d24 no_vertex_stores no_dual_src_blend no_calibrated_timestamps no_mirror_clamp no_exact16 no_depth_clamp no_vertex_divisor no_custom_border)
 want=("$@"); [ ${#want[@]} -gt 0 ] || want=("${all[@]}")
 for t in "${want[@]}"; do
     case " ${all[*]} " in *" $t "*) ;; *) echo "未知档：${t}（可用：${all[*]}）" >&2; exit 64 ;; esac
@@ -130,11 +130,34 @@ check_tier() {
                 VK_KHRONOS_PROFILES_EXCLUDE_DEVICE_EXTENSIONS=VK_KHR_calibrated_timestamps,VK_EXT_calibrated_timestamps || rc=$?
             [ "$rc" -eq 0 ] || red no_calibrated_timestamps "run.sh rc=$rc"
             has "$log" "calibrated_timestamps=0" || red no_calibrated_timestamps "层没去掉校准时间戳扩展（期望走完成点兜底）" ;;
+        no_vertex_divisor)
+            run_tier no_vertex_divisor "$log" VK_KHRONOS_PROFILES_EXCLUDE_DEVICE_EXTENSIONS=VK_EXT_vertex_attribute_divisor || rc=$?
+            [ "$rc" -eq 0 ] || red no_vertex_divisor "run.sh rc=$rc"
+            has "$log" "vk vertex divisor: enabled=0" || red no_vertex_divisor "层没去掉 VK_EXT_vertex_attribute_divisor"
+            has "$log" "C977b 实例除数：本设备没有 VK_EXT_vertex_attribute_divisor，除数 2 具名 UNSUPPORTED" || red no_vertex_divisor "C977b 没在缺除数扩展的设备上具名报 UNSUPPORTED（不能静默退回每实例一次）" ;;
+        no_mirror_clamp)
+            run_tier no_mirror_clamp "$log" VK_KHRONOS_PROFILES_EXCLUDE_DEVICE_EXTENSIONS=VK_KHR_sampler_mirror_clamp_to_edge || rc=$?
+            [ "$rc" -eq 0 ] || red no_mirror_clamp "run.sh rc=${rc}，期望契约绿"
+            has "$log" "C976m 镜像夹取：设备 mirror_clamp_to_edge=0" || red no_mirror_clamp "层没去掉 VK_KHR_sampler_mirror_clamp_to_edge"
+            has "$log" "C976m 没有扩展：MIRROR_CLAMP_TO_EDGE 建采样器 rc=-1002（sampler_mirror_clamp_to_edge" || red no_mirror_clamp "缺扩展时 MIRROR_CLAMP_TO_EDGE 没回 UNSUPPORTED（#976：不静默换别的环绕）" ;;
+        no_exact16)
+            run_tier no_exact16 "$log" VK_KHRONOS_PROFILES_EXCLUDE_DEVICE_EXTENSIONS=VK_EXT_4444_formats || rc=$?
+            [ "$rc" -eq 0 ] || red no_exact16 "run.sh rc=${rc}，期望契约绿（16 位打包格式走退回格式 + 通道补偿）"
+            has "$log" "vk packed16 route: 4444=0" || red no_exact16 "层没去掉 VK_EXT_4444_formats"
+            for f in RGBA4 RGB565 A1BGR5; do
+                grep -qE "C975 ${f}：设备 路由 vk=[0-9]+ 通道补偿=1" "$log" || red no_exact16 "C975 ${f} 没在设备路由上走退回格式"
+                has "$log" "C975 ${f} 渲染目标：退回格式具名拒绝" || red no_exact16 "C975 ${f} 当渲染目标没具名报红"
+            done ;;
+        no_custom_border)
+            run_tier no_custom_border "$log" VK_KHRONOS_PROFILES_EXCLUDE_DEVICE_EXTENSIONS=VK_EXT_custom_border_color || rc=$?
+            [ "$rc" -eq 0 ] || red no_custom_border "run.sh rc=${rc}，期望契约绿"
+            has "$log" "C976b 自定义边框色：设备 custom_border=0" || red no_custom_border "层没去掉 VK_EXT_custom_border_color"
+            has "$log" "C976b 没有扩展：自定义边框色建采样器 rc=-1002（sampler_border_color_custom：" || red no_custom_border "缺扩展时自定义边框色没回 UNSUPPORTED（#976：不静默换成不透明黑）" ;;
         no_depth_clamp)
             run_tier no_depth_clamp "$log" || rc=$?
             [ "$rc" -ne 0 ] || red no_depth_clamp "负对照竟然绿了：缺硬门槛 depthClamp 应建设备失败"
             has "$log" "required feature missing: depthClamp" || red no_depth_clamp "没看到拒绝原因 required feature missing: depthClamp" ;;
-        *) echo "未知档：${tier}（可用：no_bc no_d24 no_vertex_stores no_dual_src_blend no_calibrated_timestamps no_depth_clamp）" >&2; exit 64 ;;
+        *) echo "未知档：${tier}（可用：${all[*]}）" >&2; exit 64 ;;
     esac
     local t=$((SECONDS - start))
     if [ "$fails" -eq "$before" ]; then echo "【绿】${tier}（${t}s）"; else echo "  日志：${log}（失败时末尾 40 行如下）" >&2; tail -40 "$log" >&2; fi

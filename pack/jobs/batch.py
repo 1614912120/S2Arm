@@ -93,7 +93,8 @@ def save(private_root, batch):
 
 
 def create(items, location=None):
-    """items: [{gameId, name, platforms}]（界面识别完、玩家勾好的；没勾平台的款不进批次）"""
+    """items: [{gameId, name, platforms, sgrade?}]（界面识别完、玩家勾好的；没勾平台的款不进批次）。
+    sgrade = false：这款在出包页取消了「S 级优化（Beta）· 出包时打入」（按款记住），批量出也不带社区补丁与金手指（export_plan 转给子作业）"""
     out = []
     seen = set()
     for raw in items:
@@ -102,7 +103,7 @@ def create(items, location=None):
             continue
         seen.add(gid)
         out.append({"gameId": gid, "name": str(raw.get("name") or gid), "platforms": platforms,
-                    "results": {p: {"state": "pending"} for p in platforms}})
+                    "results": {p: {"state": "pending"} for p in platforms}, **({"sgrade": False} if raw.get("sgrade") is False else {})})
     if not out:
         raise ValueError("这一批里没有勾了平台的游戏")
     return {"schema": 1, "created": int(time.time()), "location": location or None, "paused": None, "items": out}
@@ -131,7 +132,7 @@ def next_step(batch):
 
 def mark(batch, gid, platform, state, message="", code=None, output=None):
     if state not in STATES:
-        raise ValueError(f"状态不对：{state}")
+        raise ValueError(f"状态不对：{state}")  # 非玩家句
     item = find(batch, gid)
     if platform not in item["results"]:
         raise ValueError(f"{gid} 这一批没有 {platform}")
@@ -196,7 +197,7 @@ def show(batch):
 def main(argv=None):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
-    ap = argparse.ArgumentParser(description="批量出包的批次（Mac / Windows 共用）")
+    ap = argparse.ArgumentParser(description="批量出包的批次（Mac / Windows 共用）")  # 非玩家句
     ap.add_argument("command", choices=("show", "create", "mark", "recover", "cancel", "resume", "retry", "clear"))
     ap.add_argument("--private-root", required=True)
     ap.add_argument("--json"); ap.add_argument("--game"); ap.add_argument("--platform", choices=PLATFORMS)
@@ -229,7 +230,7 @@ def run(a):
             raise ValueError("没有进行中的批次")
         if a.command == "mark":
             if not (a.game and a.platform and a.state):
-                raise ValueError("mark 要 --game --platform --state")
+                raise ValueError("mark 要 --game --platform --state")  # 非玩家句
             mark(batch, a.game, a.platform, a.state, a.message, a.code, a.output)
         elif a.command == "recover": recover(batch)
         elif a.command == "cancel": cancel(batch)

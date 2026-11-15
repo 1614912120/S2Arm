@@ -17,7 +17,7 @@ import uuid
 import community
 import host_update
 import layout
-from core import Cancelled, Failure, atomic, clone, contained, digest, read, tree_hash
+from core import Cancelled, Failure, atomic, clone, contained, digest, read, resolve_path, tree_hash
 from library import input_identity, require_game, selected_packages, source_path, stage_sources, validate_input
 import milestones as ms
 import toolchain
@@ -57,7 +57,7 @@ def validate_files(c, root, files, full=False):
         raise Failure("运行产物校验清单缺失。", code="runtime_invalid")
     # 判据同逐个 contained()：解析后在 root 里、本身是普通文件（不是软链）、大小对。所在目录只解析一次（11-07：运行包 6 万多个文件，
     #   逐个 realpath 要一百多万次 lstat，catalog 一次 9–15 秒）；文件本身 lstat 一次，不跟软链。
-    root = Path(root).resolve()
+    root = resolve_path(root)
     dirs = {}
     for name, expected in files.items():
         c.check()
@@ -72,9 +72,9 @@ def validate_files(c, root, files, full=False):
         except OSError:
             st = None
         if st is None or not stat.S_ISREG(st.st_mode) or st.st_size != expected[0]:
-            raise Failure("准备产物缺失或大小不符，请重新准备：" + name, code="runtime_invalid")
+            raise Failure("准备产物缺失或大小不符，请重新准备：" + name, code="runtime_invalid")  # 非玩家句
         if full and expected[1] and digest(p) != expected[1]:   # full 只在调用方明确要求时核摘要（v0.2.3 清理：缺省只核大小，#304 被改的文件就是靠大小查出来的）
-            raise Failure("准备产物校验失败，请重新准备：" + name, code="runtime_invalid")
+            raise Failure("准备产物校验失败，请重新准备：" + name, code="runtime_invalid")  # 非玩家句
 
 
 QUICK_FILES = ("main", "main.npdm")   # 游戏库列表快判也核的几个文件（主程序与程序描述）：在、是普通文件、大小同清单
@@ -84,7 +84,7 @@ def validate_runtime(c, runtime, full=False, files=True):
     """files=False：只看清单和入口（游戏库列表用），不逐文件读状态，只核主程序 / main.npdm 在且大小对（QUICK_FILES，审计 P2-212：
     原先清单没变、主程序被删也报就绪，点开始才报错）。起局也用它（v0.3.1：原先每次起局逐个核约 6 万个文件，又慢、任何一个不对就不让玩）；
     其余文件真坏了，游戏会非正常退出，launch 那时再完整核一遍、说清缺了什么（missing_after_crash）"""
-    root = runtime.resolve()
+    root = resolve_path(runtime)
     layout.require_in_location(c, root)
     manifest = read(root / "manifest.json", {})
     if manifest.get("schema") != 1 or manifest.get("engine") != "S2Arm" or manifest.get("target") != "macos-arm64":
@@ -112,7 +112,7 @@ def missing_after_crash(c, runtime, manifest):
     if not isinstance(files, dict) or not files:
         return None
     try:
-        validate_files(c, runtime.resolve(), files, full=False)
+        validate_files(c, resolve_path(runtime), files, full=False)
     except Failure as e:
         return str(e).split("：", 1)[-1][:120] or str(e)[:120]
     return None
@@ -153,7 +153,9 @@ def runtime_env(c, game, runtime, input_ok=True):
                S2A_MACRO_DUMP=str(cache / "macros"),
                S2A_DOCKED="0" if c.r.get("docked") is False else "1",   # Mac 缺省主机模式（维护者 11-07）；只有请求明说 false 才掌机
                S2A_AUTOPLAY="0", S2A_GAME_NAME=game["name"], S2A_GAME_ID=game["id"],
-               S2A_INPUT_GUIDE_PREFS=str(c.private / "input-guides" / (game["id"] + ".json")))
+               S2A_INPUT_GUIDE_PREFS=str(c.private / "input-guides" / (game["id"] + ".json")),
+               # 金手指（11-12）：这款游戏文件夹的 cheats/（玩家导入 + 启动器从公开库取的 txt、开关 enabled.txt），Mac 宿主 Cheats.cs 读它
+               S2A_CHEATS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "cheats"))))
     if player:
         env["S2A_PLAYER_USER"] = player["user"]
         if player.get("name"):
@@ -191,9 +193,25 @@ def runtime_env(c, game, runtime, input_ok=True):
         path = c.private / "runtime-input" / game["id"] / (c.task + ".json")
         atomic(path, config)
         env["S2A_INPUT_CONFIG"] = str(path)
+    # 玩家 2–4 自己的键位（启动器按玩家保存的 input-pN.json，键位设置里选玩家）：有就照玩家 1 同一套校验后交给宿主
+    #   （S2A_INPUT_CONFIG_P2..P4；front_mac.m 槽 i = 玩家 i+1，各手柄照自己玩家的映射采样）；没存的那位照玩家 1 的键位。
+    #   input_ok = False（宿主不认键位映射）时不带，同玩家 1 的口径
+    if input_ok:
+        for player in (2, 3, 4):
+            player_config = read(layout.path(c, game["id"], f"input-p{player}.json", create=False))
+            if not player_config:
+                continue
+            try:
+                validate_input(player_config)
+            except Failure as e:   # 映射不合规（旧版本 / 手改坏了）：这位照玩家 1 的键位照常玩，不挡
+                print(f"[起局] 玩家 {player} 的键位映射不合规（{e}），这位照玩家 1 的键位", file=sys.stderr, flush=True)
+                continue
+            path = c.private / "runtime-input" / game["id"] / f"{c.task}-player{player}.json"
+            atomic(path, player_config)
+            env[f"S2A_INPUT_CONFIG_P{player}"] = str(path)
     if c.r.get("inputGuideHandled") is True:
         env["S2A_INPUT_GUIDE_SHOWN"] = "1"
-    if c.r.get("uiLanguage") in ("zh-Hans", "zh-Hant", "en"):   # 宿主自己的界面文案（按键引导等）跟启动器界面语言；不再决定游戏语言（见上 gameLanguage）
+    if c.r.get("uiLanguage") in ("zh-Hans", "zh-Hant", "en", "ja", "es", "fr"):   # 宿主自己的界面文案（按键引导等）跟启动器界面语言；不再决定游戏语言（见上 gameLanguage）
         env["S2A_UI_LANGUAGE"] = c.r["uiLanguage"]
     return env
 
@@ -211,11 +229,11 @@ def collect_pipeline_seed(c, game_id, docs):
                                 env=c.env(), capture_output=True, text=True, timeout=30)
         output = (result.stdout if result.returncode == 0 else result.stderr or result.stdout).strip()
         if result.returncode:
-            message = f"管线种子来源：本局记录未能收纳（退出 {result.returncode}：{output[-300:]}）"
+            message = f"管线种子来源：本局记录未能收纳（退出 {result.returncode}：{output[-300:]}）"  # 非玩家句
         elif output:
             message = output.splitlines()[-1]
     except (OSError, subprocess.TimeoutExpired) as error:
-        message = f"管线种子来源：本局记录未能收纳（{error}）"
+        message = f"管线种子来源：本局记录未能收纳（{error}）"  # 非玩家句
     if message:
         try:
             c.emit("message", message)
@@ -273,6 +291,8 @@ def launch(c):
                 if trial:   # 新宿主试玩：TRIAL_OK_SECONDS 内异常退出 = 不认这款，下次退回原来的；玩过这么久才崩不怪宿主
                     host_update.settle(c, game["id"], host, ok=time.monotonic() - started >= host_update.TRIAL_OK_SECONDS)
                 if f.code == "tool_exit":   # 游戏进程自己非 0 退出（多为崩溃，139 = 段错误）：给启动页一个说人话的码，原文与退出码随错误摘要带走
+                    import cheats   # 开着金手指 / 补丁时退出：当场关掉、记下，下次开始时启动器通知关了哪几条（11-13 维护者改定：不问，cheats.note_crash）
+                    cheats.note_crash(c, game)
                     broken = missing_after_crash(c, runtime, manifest)
                     if broken:   # 起局前没逐个核（v0.3.1）：退出后再核，运行文件缺 / 坏了就直说，别让玩家以为是游戏崩了
                         raise Failure(f"这款游戏的 Mac 运行文件缺了或坏了（例：{broken}），游戏读到它时退出了。重新出一次 Mac 版就能修好；存档不受影响。",
@@ -281,12 +301,17 @@ def launch(c):
                 raise
             if trial:
                 host_update.settle(c, game["id"], host, ok=True)
+            import cheats   # 好好收局：记下这时开着的，下次崩了只关比这多开的（cheats.narrow）
+            cheats.note_good(c, game)
             back = marker.exists()
         finally:
             marker.unlink(missing_ok=True)
+            host_update.forget_registrations()   # 系统起宿主时把它登记成 App、启动台多出「S2ArmGame」：每局结束注销（#1126）
             if seed:
                 finish_seed(c, game["id"], log)
             collect_pipeline_seed(c, game["id"], env["S2A_DOCS"])
+            import cheats   # 停帧救场：局内画面停住时帧率补丁已被运行时关掉、留了标记 → 这款「帧率」写关，下次开始时通知（正常退出 / 崩溃都要读）
+            cheats.note_stall(c, game, env["S2A_DOCS"])
             # Context.run waits for the host, including failure/cancellation.
             # Do not accumulate per-run snapshots after the process exits.
             if env.get("S2A_INPUT_CONFIG"):
@@ -352,7 +377,7 @@ def compile_host(c, fingerprint, env, log_root):
     c.run(["codesign", "--force", "--sign", "-", executable.parent / guard.name], log_root / "sign.log", env)
     plist = dict(CFBundleIdentifier="org.s2arm.macos.game", CFBundleName="S2Arm Game",
                  CFBundleExecutable="s2arm-host", CFBundlePackageType="APPL", LSMinimumSystemVersion="15.0",
-                 NSBluetoothAlwaysUsageDescription="连接 Switch 2 Pro 手柄，接收按键与体感并发送游戏震动。",
+                 NSBluetoothAlwaysUsageDescription="连接 Switch 2 Pro 手柄，接收按键与体感并发送游戏震动。",  # 非玩家句
                  NSHighResolutionCapable=True, LSSupportsGameMode=True,
                  LSApplicationCategoryType="public.app-category.games")   # 游戏模式要系统靠类别认出是游戏（11-01 调研：Mac 全屏才进游戏模式）
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(plist))
@@ -382,7 +407,7 @@ def clone_tree(c, source, destination, *, materialize_romfs=False):
     if error is None:
         error = next((e.lstat_error for e in tree.entries if e.lstat_error is not None), None)
     if error is not None:
-        raise Failure("准备产物目录读取失败：" + str(error)) from error
+        raise Failure("准备产物目录读取失败：" + str(error)) from error  # 非玩家句
     entries = sorted(Path(e.path) for e in tree.entries)
     del tree
     romfs = None
@@ -397,8 +422,8 @@ def clone_tree(c, source, destination, *, materialize_romfs=False):
             identity = link.removeprefix(prefix)
             if not link.startswith(prefix) or not identity or identity.startswith(".") or "/" in identity:
                 raise Failure("RomFS 链接不属于本款共享存储。")
-            expected = source.parent.resolve() / ".romfs_store" / game / identity
-            if not expected.is_dir() or expected.resolve() != expected.absolute():
+            expected = resolve_path(source.parent) / ".romfs_store" / game / identity
+            if not expected.is_dir() or resolve_path(expected) != expected.absolute():
                 raise Failure("RomFS 共享存储缺失或包含符号链接。")
             romfs = expected
         else:
@@ -464,10 +489,10 @@ def warn_offline_empty(c, root):
     if not p.is_file():
         return
     why = (p.read_text(encoding="utf-8", errors="replace").strip().splitlines() or [""])[0][:300]
-    c.diagnostic("这款的着色器离线预编 0 支，游戏能玩，但首次遇到的画面要现编、开头会卡顿" + (f"（{why}）" if why else ""), code="direct_offline_empty", severity="warning")
+    c.diagnostic("这款的着色器离线预编 0 支，游戏能玩，但首次遇到的画面要现编、开头会卡顿" + (f"（{why}）" if why else ""), code="direct_offline_empty", severity="warning")  # 非玩家句
 
 
-DEGRADE_HEAD = "# 阶段\t类别\t处数\t玩家提示\t说明"
+DEGRADE_HEAD = "# 阶段\t类别\t处数\t玩家提示\t说明"  # 非玩家句
 
 
 def degrade_rows(text):
@@ -574,7 +599,7 @@ def ensure_extract(c, game, packages, env, logs, valid=None):
         c.run(["dotnet", toolchain.reader(c), "--npdm-isa", extraction / "exefs/main.npdm"], isa_log, env, ok_codes=(0, 3))
         isa = (isa_log.read_text(encoding="utf-8", errors="replace").strip().splitlines() or [""])[-1].strip()
         if c.last_rc != 0 or isa != "aarch64":
-            raise Failure("合并后的游戏程序不是有效的 AArch64 NPDM（nx_unpack --npdm-isa：" + (isa or "无输出") + "）。")
+            raise Failure("合并后的游戏程序不是有效的 AArch64 NPDM（nx_unpack --npdm-isa：" + (isa or "无输出") + "）。")  # 非玩家句
         # 所选 DLC 有一行文件数 -1（nx_unpack：数据不在给的文件里 = 只有授权，或数据分区解不开）：本体照常出、不挡，
         #   但不能静默变成仅授权——同 oneclick / pack/stages/aoc.sh 与出包完成的口径发黄字 aoc_missing，完成页画「完成（有警告）」
         #   （审计 P1-89：原先整单失败、本体也不出，如暗黑2 卡带里 100 KB 的密钥代号 DLC；命令行 oneclick 不拦本体，两边口径不一）
@@ -601,9 +626,10 @@ def oneclick_kuan(c, gid):
 def sibling_roots(c, game):
     """同一款在别的平台已有的现行产物根（新的在前）：iPhone games/<英文名>/build/ios/roots/*@现行、Mac games/<英文名>/build/<键>/roots/<程序号>@现行"""
     found = []
-    for link in [*layout.ios_work(c, game["id"], create=False).glob("roots/*@现行"), *(p for p in layout.build_dir(c, game["id"], create=False).glob("*/roots/*@现行") if p.parent.parent.name != "ios")]:
+    for link in [*layout.ios_work(c, game["id"], create=False).glob("roots/*@现行"), *(p for p in layout.build_dir(c, game["id"], create=False).glob("*/roots/*@现行") if p.parent.parent.name != "ios")]:  # 非玩家句
         try:
-            cur = contained(c.library, link.resolve())
+            target = Path(os.readlink(link)) if _path_is_link(link) else link
+            cur = contained(c.library, resolve_path(target if target.is_absolute() else link.parent / target))
         except (Failure, OSError):
             continue
         if cur.is_dir():
@@ -611,11 +637,15 @@ def sibling_roots(c, game):
     return [p for _, p in sorted(found, reverse=True)]
 
 
+def _path_is_link(path):
+    return path.is_symlink() or getattr(os.path, "isjunction", lambda _: False)(path)
+
+
 def seed_from_sibling(c, game, roots, kuan):
     """本平台还没有现行根、别的平台有：克隆它的现行根起步（不从解包目录重新播种）。平台无关阶段的键按内容算，与本树一致就跳过、不一致照常重做
     （兄弟根是旧提交出的、键不同 → 重做）。克隆走 tools/clonedir.py：同一 APFS 卷 clonefile，跨卷 / exFAT 等退回普通拷贝（目标不存在才改名发布），--report 打出走了哪条路。
     → 用了兄弟根 True；没有可用的兄弟根 False（调用方照常从解包目录播种）"""
-    mine = roots.resolve() if roots.exists() else roots
+    mine = resolve_path(roots) if roots.exists() else roots
     for cur in sibling_roots(c, game):
         if cur.parent == mine:
             continue
@@ -630,14 +660,14 @@ def seed_from_sibling(c, game, roots, kuan):
         except Failure:
             # 克隆失败（盘满、权限、源被删等）：不用兄弟根，回到从共用解包目录播种（解包不重做），黄字说清走了哪条路
             shutil.rmtree(dst, ignore_errors=True)
-            why = (log.read_text(encoding="utf-8", errors="replace").strip().splitlines() or ["原因未记"])[0]
+            why = (log.read_text(encoding="utf-8", errors="replace").strip().splitlines() or ["原因未记"])[0]  # 非玩家句
             c.diagnostic(f"兄弟平台的产物根 {cur.name} 克隆不过来（{why}），改从解包目录准备，平台无关阶段这次要重做", code="sibling_clone_failed", severity="warning")
             return False
         route = (log.read_text(encoding="utf-8", errors="replace").strip().splitlines() or [""])[-1]
-        link = roots / (kuan + "@现行")
-        tmp = roots / ("." + kuan + "@现行.new")
+        link = roots / (kuan + "@现行")  # 非玩家句
+        tmp = roots / ("." + kuan + "@现行.new")  # 非玩家句
         tmp.unlink(missing_ok=True); tmp.symlink_to(dst.name); tmp.replace(link)
-        src = (cur / ".root_src").read_text().strip()[:9] if (cur / ".root_src").is_file() else "未知"
+        src = (cur / ".root_src").read_text().strip()[:9] if (cur / ".root_src").is_file() else "未知"  # 非玩家句
         c.emit("cache", f"复用兄弟平台的产物根 {cur.name}（提交 {src}；{route}）：平台无关阶段按键核对，键相同跳过、不同照常重做", cacheHit=True)
         return True
     return False
@@ -696,7 +726,7 @@ def prepare(c):
             ok, version = toolchain.probe(c, command)
             if not ok:
                 code = {"sdk": "xcode_unavailable", "metal": "metal_unavailable", "dotnet": "dotnet_unavailable"}[name]
-                raise Failure("构建工具不可用：" + name, code=code)
+                raise Failure("构建工具不可用：" + name, code=code)  # 非玩家句
             versions[name] = version
         identity = dict(schema=1, target="macos-arm64", source=fingerprint, tools=versions,
                         inputIdentity=input_identity(game), fonts=tree_hash(fonts, ["."]),
@@ -707,16 +737,18 @@ def prepare(c):
         # 会复用缓存的步：共用解包快照对得上 → 解包；现行镜像就是从这一份产物根（同样的代码、工具、输入）出的（game.json imageKey）→ 改写与准备资源、
         #   直连库（各阶段按键跳过）。直连库若其实要重出（跑局知识等变了，DirectWatcher 看到直连临时版本），当场改回冷步
         unpack_ok = extract_valid(c, game)
-        warm = layout.game_info(c, game["id"]).get("imageKey") == key and (root / "roots" / (game["id"] + "@现行")).exists()
+        warm = layout.game_info(c, game["id"]).get("imageKey") == key and (root / "roots" / (game["id"] + "@现行")).exists()  # 非玩家句
         ms.plan(c, size_gb, "build_dual", reused=(["unpack"] if unpack_ok else []) + (["refresh", "analyze", "direct"] if warm else []))
         logs = c.logs / c.task
         logs.mkdir(parents=True, exist_ok=True)
         env.update(S2A_ROOTS=str(root / "roots"), S2A_ROOTS_SHARED=str(root / "never-shared"),
                    S2A_ROOTS_PRIV=str(root / "roots-private"), S2A_FONTS=str(fonts))
         extraction = ensure_extract(c, game, packages, env, logs, valid=unpack_ok)
+        import patches   # 金手指 / 社区补丁（11-12）：解包后按真构建号查库，交改写阶段（S2A_CHEATS_DIRS / S2A_CPATCH_DIRS）
+        patches.prepare(c, game, extraction, env)
         # The memory table is collected from the repository table and the recent run logs only; the previously
         # installed table is not fed back (its values would never age out once the host stops needing them)
-        if not (root / "roots" / (game["id"] + "@现行")).exists() and not seed_from_sibling(c, game, root / "roots", game["id"]):
+        if not (root / "roots" / (game["id"] + "@现行")).exists() and not seed_from_sibling(c, game, root / "roots", game["id"]):  # 非玩家句
             c.run(["bash", c.engine / "pack/seed_root.sh", game["id"], "import-" + key, extraction], logs / "seed.log", env)
         # 出包同一条流水线（10-26 维护者 / 维护者「iOS 和 macOS 不要这儿新那旧的」）：和一键出包 --target mac 一样调 pack/refresh.sh——改写 ‖ 系统数据 ‖ 宽屏布局 ‖
         #   追加内容 → 直连配置推导 → RomFS 索引 → 抽取 → 直连库 → 直连出成则通用 lazy（C.3：不翻译 / 编译 / 预建管线，首遇安全网兜底）。
@@ -738,7 +770,7 @@ def prepare(c):
                 c.run(["bash", c.engine / "pack/refresh.sh", game["id"]], logs / "refresh.log", env)
         finally:
             shutil.rmtree(src, ignore_errors=True)
-        current = (root / "roots" / (game["id"] + "@现行")).resolve()
+        current = resolve_path(root / "roots" / (game["id"] + "@现行"))  # 非玩家句
         contained(root, current)
         if not (current / "shaders/direct/keys.tsv").is_file():   # 只有直连：refresh.sh 退 0 却没有直连库就是出包出错（11-07 拆通用模式）
             raise Failure("直连着色器库不完整。")
@@ -756,6 +788,7 @@ def prepare(c):
         temporary.mkdir()
         try:
             all_cloned = clone_tree(c, current, temporary, materialize_romfs=True)
+            patches.record(c, game["id"], "mac", current)   # 补丁打入结果（打上 / 没打上，完成页列，11-14）：产物根里编译器的记录
             # Transient stage logs, the packaging workspace and source paths are not runtime dependencies.
             prune_runtime_extras(temporary)
             if not c.r.get("engineBundle") and fingerprint != source_fingerprint(c):   # 只有源码树开发会在出包中途改源码；发版引擎冻结
@@ -795,4 +828,4 @@ def prepare(c):
         import sizes
         host_update.tidy(c, "刷新游戏占用大小", sizes.refresh, c, game["id"])   # 每款各部分大小写回 game.json（游戏库只读不量）
         return dict(gameId=game["id"], outputPath=str(image), outputBytes=_part_bytes([image]), target="macos-arm64", compatibility="unverified",
-                    **({"notes": notes} if notes else {}))
+                    boost=patches.boost(c, game, image, layout.game_info(c, game["id"]).get("sgradeResult", {}).get("mac")), **({"notes": notes} if notes else {}))

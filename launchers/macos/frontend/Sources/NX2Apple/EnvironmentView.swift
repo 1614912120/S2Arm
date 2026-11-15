@@ -52,7 +52,7 @@ struct EnvironmentView: View {
                     // 存放位置（社区贡献者补丁 #10）：游戏库、iPhone 包、磁盘空间集中在这一处；单款游戏放在哪看出包页的「存放位置」
                     CardGroup(s("settings.locations")) {
                         let library = model.provider.client.environment.library
-                        CardRow(s("settings.locations.library"), detail: loc.t("s2arm.env.library.detail"), detail2: library) {   // 路径放 detail2：以 / 开头就画成可点的路径链接（PathLink）
+                        CardRow(s("settings.locations.library"), detail: loc.t("s2arm.env.library.detail"), detail2: library, stacked: true) {   // 说明长 + 两个按钮：按钮另起一行（11-14 第二轮）   // 路径放 detail2：以 / 开头就画成可点的路径链接（PathLink）
                             HStack(spacing: 8) {
                                 Button(s("settings.open")) { NSWorkspace.shared.open(URL(fileURLWithPath: library)) }
                                     .buttonStyle(LauncherSecondaryButtonStyle()).disabled(library.isEmpty)
@@ -72,11 +72,22 @@ struct EnvironmentView: View {
                                 .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.games.isEmpty)
                         }
                     }
+                    // 密钥：状态 + 导入（同 Windows 设置页；11-14 体验梳理：原先密钥就绪后 Mac 上没有地方换一份）
+                    CardGroup(s("settings.keys")) {
+                        CardRow(s("settings.keys"), detail: model.keysReady == true ? s("welcome.step.keys.done") : s("welcome.step.keys.title")) {
+                            Button(s("library.import_keys")) {   // 设置页本身是弹层：先收起，等动画走完再开导入（同时开第二个弹层会被吞掉）
+                                model.showEnvironment = false
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { model.showKeys = true }
+                            }
+                                .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
+                        }
+                    }
                     InstallModeCard(model: model)   // 装到 iPhone 的方式（v0.3.0：签名 / 安装入口收在这一处）
                     let failing = model.checks.filter { !$0.ok }
                     if !failing.isEmpty || model.environmentError != nil {
                         CopyReportButton(model: model, gameID: nil, operations: nil,
-                                         fallback: (["S2Arm 环境检查未通过", ProcessInfo.processInfo.operatingSystemVersionString, model.environmentError ?? ""] + failing.map { "\($0.name)：\($0.message)" }).joined(separator: "\n"))
+                                         fallback: ([s("envcopy.title"), s("envcopy.system").replacingOccurrences(of: "{0}", with: ProcessInfo.processInfo.operatingSystemVersionString), model.environmentError.map(loc.backend) ?? ""]
+                                                   + failing.map { s("envcopy.line").replacingOccurrences(of: "{0}", with: loc.backend($0.name)).replacingOccurrences(of: "{1}", with: loc.backend($0.message)) }).joined(separator: "\n"))
                         ReportHint()
                     }
                     ForEach(ordered(failing), id: \.self) { group in
@@ -178,7 +189,7 @@ struct EnvironmentView: View {
         do { try model.setCloudFolder(url) } catch { model.reportFailure("s2arm.fail.cloudFolder", error) }   // 剃刀 M13：失败报原因，不再停在旧值像没反应
     }
 
-    private func s(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func s(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
 
     private func chooseLibrary() {
         let panel = NSOpenPanel()

@@ -20,7 +20,7 @@ import shutil
 import time
 from pathlib import Path
 
-from core import Failure, atomic, contained, read
+from core import Failure, atomic, contained, read, resolve_path
 
 VERSION = 4   # 2：每款进 games/<英文名>/；3：iPhone 产物进每款 image/ios、装机产物与设备记录进默认位置根（_upgrade_3）；4：库外的工具缓存 / 日志搬进默认位置（_upgrade_4）
 GAME_JSON = "game.json"
@@ -226,9 +226,9 @@ def indexed_dir(c, gid):
 
 def require_in_location(c, p):
     """路径必须在某个已登记存放位置的 games/ 下（运行镜像校验用，挡住指到库外的路径）"""
-    p = Path(p).resolve()
+    p = resolve_path(p)
     for _, root, ok in locations(c):
-        if ok and p.is_relative_to(games_root(c, root).resolve()):
+        if ok and p.is_relative_to(resolve_path(games_root(c, root))):
             return p
     raise Failure("运行文件不在任何存放位置里。", code="runtime_invalid")
 
@@ -415,7 +415,9 @@ def build_dir(c, gid, create=True):
 #   game.json 的 ios 记 {shellId 出它的壳, hostAbi, dmshChain（host_update 判兼容）, pack 资源包 index_sha256}。不再保留单款 ipa。
 # 出包工作目录 build/ios（一键出包 --out）；默认位置根：S2Arm.ipa（最近一次装的）、S2Arm.previous.ipa（换壳前那一版，回滚用）；
 # devices/<设备>.json：这台手机装了哪些款（各款资源包号）、壳号、包名（Windows 由 plumesign 定）、装回过上一版的壳号 failedShells。
-IOS_KIT, IOS_PACK = "kit", "pack"
+# 资源包目录叫 .pack 且隐藏（D-9ZF9，v0.3.10 后）：里面的 game.img 不带着色器库、不能单独导入手机，玩家翻游戏库时不该看见一个「看起来能导」的 .img；
+#   自签玩家要的是「S2Arm 自签导出」文件夹里以游戏名命名的 .img。旧库的 pack/ 第一次用到时改名过来（ios_pack）
+IOS_KIT, IOS_PACK, LEGACY_IOS_PACK = "kit", ".pack", "pack"
 PHONE_IPA, PHONE_PREVIOUS = "S2Arm.ipa", "S2Arm.previous.ipa"
 DEVICES = "devices"
 LEGACY_DEVICE = "legacy"   # 迁移来的旧容器记录：还不知道是哪台手机，第一台装机的设备认领它
@@ -430,7 +432,29 @@ def ios_kit(c, gid):
 
 
 def ios_pack(c, gid):
-    return image_ios(c, gid, create=False) / IOS_PACK
+    image = image_ios(c, gid, create=False)
+    legacy, pack = image / LEGACY_IOS_PACK, image / IOS_PACK
+    if legacy.is_dir() and not pack.exists():
+        try:
+            os.rename(legacy, pack)
+            hide(pack)
+        except OSError:
+            return legacy   # 改不了名（被占着）：照旧用老位置，下次再改
+    return pack
+
+
+def hide(path):
+    """Windows 上给文件夹加隐藏属性（名字带点在资源管理器里照样看得见）；Mac / Linux 名字带点已隐藏。失败不碍事"""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        import winproc
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(winproc.win_path(str(path)))   # 游戏库在深目录时裸长路径会 WinError 3 / 123
+        if attrs != -1 and attrs != 0xFFFFFFFF:
+            ctypes.windll.kernel32.SetFileAttributesW(winproc.win_path(str(path)), attrs | 0x2)   # FILE_ATTRIBUTE_HIDDEN
+    except (OSError, AttributeError):
+        pass
 
 
 def ios_work(c, gid, create=True):
@@ -517,8 +541,12 @@ def _split_release(c, gid, d):
     link, releases = d / "current", d / "releases"
     image = d / "image" / "mac"
     if os.path.lexists(link) and not image.exists():
-        cur = link.resolve()
-        if cur.parent == releases.resolve() and cur.is_dir():
+        if link.is_symlink() or getattr(os.path, "isjunction", lambda _: False)(link):
+            target = Path(os.readlink(link))
+            cur = resolve_path(target if target.is_absolute() else link.parent / target)
+        else:
+            cur = resolve_path(link)
+        if cur.parent == resolve_path(releases) and cur.is_dir():
             app = cur / "S2ArmGame.app"
             if app.is_dir():
                 sha = _host_digest(app)
@@ -541,7 +569,7 @@ def _split_release(c, gid, d):
         _rm(c, c.library, releases)
 
 
-_NACP_GLOBS = ("games/{gid}/current/ctl/control.nacp", "games/{gid}/current/exefs/control.nacp", "iPhone/{gid}/*资源包/ctl/control.nacp",
+_NACP_GLOBS = ("games/{gid}/current/ctl/control.nacp", "games/{gid}/current/exefs/control.nacp", "iPhone/{gid}/*资源包/ctl/control.nacp",  # 非玩家句
                "iPhone/{gid}/roots/*/ctl/control.nacp", "iPhone/{gid}/container-kit/ctl/control.nacp", "cache/{gid}/*/roots/*/ctl/control.nacp",
                # 新布局里还叫游戏号的文件夹（heal_folder_names）：Mac / iPhone 产物、出包解包目录
                "games/{gid}/image/mac/ctl/control.nacp", "games/{gid}/image/ios/*/ctl/control.nacp", "games/{gid}/build/*/extract/ctl/control.nacp")
@@ -702,7 +730,7 @@ def _upgrade_3(c, marker):
             done.add(gid); atomic(marker, dict(state, iphone=sorted(done))); continue   # 游戏库里已经没有这款：留着的旧产物下面随 iPhone/ 一起删
         kit = d / "container-kit"
         if not (kit / "main.npdm").is_file():
-            root = next((r for r in [*sorted(d.glob("roots/*@现行")), d / "work/pkg/product"] if (r / "main.npdm").is_file()), None)
+            root = next((r for r in [*sorted(d.glob("roots/*@现行")), d / "work/pkg/product"] if (r / "main.npdm").is_file()), None)  # 非玩家句
             if root is not None and any(p.suffix == ".ipa" for p in d.iterdir()):
                 save_container_kit(c, gid, root, dest=d)
         image = image_ios(c, gid)
@@ -963,7 +991,7 @@ def _relocate_lock(private):
             yield
     except filelock.Busy as busy:
         raise Failure("另一个任务正在使用游戏库，请稍后重试。", code="library_busy", holder=busy.holder,
-                      internal=f"等了 {RELOCATE_LOCK_WAIT} 秒，旧默认游戏库搬家锁仍被占（{busy.holder}）") from None
+                      internal=f"等了 {RELOCATE_LOCK_WAIT} 秒，旧默认游戏库搬家锁仍被占（{busy.holder}）") from None  # 非玩家句
 
 
 def _relocate_locked(private, library):
@@ -1037,7 +1065,7 @@ def _finish_relocate(private, old, new):
 
 def _same_path(text, path):
     try:
-        return Path(str(text)).expanduser().resolve() == Path(path).resolve() or str(text) == str(path)
+        return resolve_path(Path(str(text)).expanduser()) == resolve_path(path) or str(text) == str(path)
     except (OSError, ValueError):
         return False
 

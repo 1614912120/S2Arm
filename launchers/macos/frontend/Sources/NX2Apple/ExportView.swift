@@ -1,7 +1,7 @@
 // S2Arm（不是上游文件）：出包页（11-07 维护者：启动器围绕「出包」设计，iPhone / iPad、macOS 同为出包平台，安卓、鸿蒙留位置）。
 // 自上而下：这款游戏（封面、名称、版本、本体 / 更新 / DLC，同旧启动器 ExportGameCard 的读法）→ 出包到哪些平台（带图多选卡，同上游
 // TargetCard 的样子；安卓、鸿蒙置灰「即将上线，敬请期待」；勾选记住）→ 底栏（不能出包的原因，或「开始出包 · N 个平台」）。
-// 没有「游戏选项」（11-07 维护者）：游戏语言跟设备系统语言，Mac 主机模式 / 手机掌机模式，60 帧缺省开、起不来自动降级，满屏缺省通用 + 补丁包，都不用玩家选。
+// 出包页没有「游戏选项」：游戏语言（11-14 维护者确认玩家可选）、主机模式、帧率、满屏等逐款选项都在启动设置，出包时不用选。
 import SwiftUI
 import UniformTypeIdentifiers
 import NXCore
@@ -19,6 +19,8 @@ struct ExportView: View {
     @State private var location = ""
     /// 「选择其他文件夹…」选过、还不在位置表里的
     @State private var pickedLocation: String?
+    /// S 级优化卡片报了「这款什么都没有」的游戏号（整张卡不出）
+    @State private var sgradeNothing: String?
     let game: GameSummary
     /// 打开装机页（已出过 iPhone 包的款直接装）。
     let install: () -> Void
@@ -28,7 +30,9 @@ struct ExportView: View {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 34) {
                     header
-                    Text(BackendText.launcherText("batch.hint", language: loc.lang == .zh ? "zh-Hans" : "en")).font(.manrope(12.5)).foregroundStyle(.secondary)
+                    if sgradeNothing != game.id {   // 都没有（这个版本没命中、别的版本也没有）就整张不出（11-13 维护者「没匹配就什么都不显示」），换一款再出
+                        SGradeCard(model: model, gameID: game.id, nothing: { sgradeNothing = game.id })   // S 级优化（Beta，11-13）：这款这个版本命中了哪些社区补丁，命中的出包时自动打入
+                    }
                     platforms
                 }
                 .padding(.horizontal, 40).padding(.top, 22).padding(.bottom, 40)
@@ -145,7 +149,7 @@ struct ExportView: View {
         }
     }
 
-    private func x(_ id: String) -> String { BackendText.launcherText("export." + id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func x(_ id: String) -> String { BackendText.launcherText("export." + id, language: loc.lang.sharedCode) }
 
     /// 存放位置（游戏库结构 v3，像 Steam 的库文件夹）：这款游戏的文件夹放在哪；换了位置，出包前先整个搬过去（存档跟着走）。
     private var locationRow: some View {
@@ -169,7 +173,7 @@ struct ExportView: View {
                 }
                 .accessibilityIdentifier("export.location")
             }
-            if let slack = model.locationSlackText(location, language: loc.lang == .zh ? "zh-Hans" : "en") {   // #444：大分配单元 / 不是 APFS
+            if let slack = model.locationSlackText(location, language: loc.lang.sharedCode) {   // #444：大分配单元 / 不是 APFS
                 Label(slack, systemImage: "exclamationmark.triangle").font(.manrope(12)).foregroundStyle(LauncherPalette.building)
                     .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("export.location.slack")
             }

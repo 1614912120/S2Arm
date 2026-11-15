@@ -16,6 +16,8 @@ RECOVERY = {
     "ios_install_files_missing": "从电脑重新装到 iPhone。",   # iOS 端装机 / 导入失败：手机上的 S2Arm 报码、按码显示（11-11 维护者「补上说人话的原因」）
     "ios_install_manifest_bad": "从电脑重新装到 iPhone。",   # iOS 端装机 / 导入失败：手机上的 S2Arm 报码、按码显示（11-11 维护者「补上说人话的原因」）
     "ios_install_write_failed": "重新打开 S2Arm 后点「重试」；还不行就导出诊断包发给我们。",   # iOS 端装机 / 导入失败：手机上的 S2Arm 报码、按码显示（11-11 维护者「补上说人话的原因」）
+    "ios_import_update_no_base": "先把导出文件夹里这款的完整 .img（不带「着色器更新包」字样的那个）放进「放这里导入」，导好后再放更新包。",   # 着色器更新包认领时本机没有本体（pack_apply.c img_update）
+    "ios_import_update_mismatch": "把电脑上这次导出的完整 .img 放进「放这里导入」重新导一遍（游戏版本换过，只换着色器套不上）。",   # 更新包的资源包号和本机本体不一致
     "ios_import_img_failed": "检查文件是否拷完整，再打开 S2Arm。",   # iOS 端装机 / 导入失败：手机上的 S2Arm 报码、按码显示（11-11 维护者「补上说人话的原因」）
     "ios_install_unknown": "导出诊断包发给我们。",   # iOS 端装机 / 导入失败：手机上的 S2Arm 报码、按码显示（11-11 维护者「补上说人话的原因」）
     "rewrite_gap": "之前已经装到 iPhone 上的这款可以照常接着玩。点「复制错误摘要」发给我们，修好后更新 S2Arm 再出一次包。",
@@ -62,7 +64,7 @@ RECOVERY = {
     "library_busy": "等正在用游戏库的那个任务结束（或在任务列表里取消它）再重试；什么都没有改动。",
     "downstream_ineligible": "这个下游方案只支持某一版更新（上面写了是哪一版）：导入那一版更新后再导出；不换更新就在确认页选「仍用原版方案」。",
     "download_failed": "检查这台电脑的网络（能打开 s2arm.com）后再点一次；下了一半的不会被当成好的用。",
-    "diag_upload_failed": "导出诊断包，手动发到 GitHub 帖子或群里；网络恢复后也可以再点一次「上传给开发者」。",   # 上传诊断没成（服务没开通 / 连不上 / 被拒收，diag_upload.py）：界面退回导出
+    "diag_upload_failed": "导出诊断包，手动发到 GitHub 帖子或群里；网络恢复后也可以再点一次「故障报修」。",   # 上传诊断没成（服务没开通 / 连不上 / 被拒收，diag_upload.py）：界面退回导出
     "disk_full": "释放任务所在磁盘的空间，检查游戏库和应用数据所在磁盘后重试；不要删除存档或上次成功的运行版本。",
     "out_of_memory": "关掉其它占内存的程序（浏览器、游戏等）后重试；还不行就在 Windows 设置里调大虚拟内存（页面文件），或换一台内存更大的电脑出包。已做完的步骤下次会复用。",
     "permission_denied": "检查文件和目录权限；若位于桌面、文稿、下载或外接磁盘，请在「系统设置 → 隐私与安全性 → 文件与文件夹」允许 S2Arm 访问，再重试。",
@@ -72,6 +74,7 @@ RECOVERY = {
     "xcode_unavailable": "去 App Store 安装 Xcode，装好打开一次并完成必要组件安装，回来点「重新检查」。",
     "xcode_setup_required": "打开 Xcode，同意许可并完成首次设置，回来点「重新检查」。",
     "metal_unavailable": "在设置中安装 Metal 编译组件，完成后重新检查环境并重试。",
+    "metal_download_unreachable": "连不上苹果的组件服务器：检查网络，关掉或换个代理后在设置里再点「一键下载」；还不行就从苹果开发者网站下载与你的 Xcode 配套的 Metal Toolchain（.dmg），在「终端」运行 xcodebuild -importComponent MetalToolchain -importPath <下载的 .dmg>，回来点「重新检查」。",
     "package_verify_mismatch": "直接再出一次包：对不上的文件会重新读、重新算，不用重新导入游戏。还是这样就检查一下游戏库所在的磁盘（Windows：磁盘属性 →「工具」→「检查」），"
                                "并关掉对游戏库文件夹的杀毒实时扫描或云同步，或把游戏库换到另一块盘。",
     "ios_platform_missing": "在设置里点「iOS 平台组件」的「一键下载」（苹果官方，约 8 GB），下完自动重新检查后重试；也可以打开 Xcode → 设置 → Components 装上与 Xcode 配套的 iOS 平台。",
@@ -229,7 +232,7 @@ def explain(error, sources=(), library=None):
         if error.errno in (errno.ENOSPC, errno.EDQUOT):
             return Failure("任务所在磁盘空间不足。", code="disk_full")
         paths = [p for p in (error.filename, error.filename2) if p]
-        internal = f"{type(error).__name__} errno {error.errno}：{error.strerror or error}" + ("；路径 " + " → ".join(map(str, paths)) if paths else "")
+        internal = f"{type(error).__name__} errno {error.errno}：{error.strerror or error}" + ("；路径 " + " → ".join(map(str, paths)) if paths else "")  # 非玩家句
         if error.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
             if any(_under(p, [*sources, *([library] if library else [])]) for p in paths):
                 return Failure("文件或目录不可访问或不可写。", code="permission_denied", internal=internal)
@@ -239,7 +242,21 @@ def explain(error, sources=(), library=None):
                 return Failure("任务所需的文件或目录不存在。", code="input_missing", internal=internal)
             return Failure("本地任务失败：S2Arm 自己的文件找不到了，请重试；还不行请导出诊断发给我们。", internal=internal)
         return Failure("本地任务失败，请检查日志和输入。", internal=internal)
-    return Failure("本地任务失败，请检查日志和输入。")
+    # 不是 OSError 的（多是我们自己的代码缺陷，如 #372 / #854 Windows 报修打包 AttributeError）：上屏原句不改（旧前端按它做本地化匹配），
+    #   但异常类型、原文和出在我们哪个文件哪一行进 internal——原先整个丢掉，玩家复制的错误摘要里只剩「本地任务失败」，定不了因
+    return Failure("本地任务失败，请检查日志和输入。", internal=_where(error))
+
+
+def _where(error):
+    """「AttributeError: 'x' object has no attribute 'y'（library.py:2837 in diagnostics）」：取调用栈里最后一帧落在 S2Arm 自己源码里的位置"""
+    import traceback
+    text = f"{type(error).__name__}: {error}"
+    ours = Path(__file__).resolve().parents[2]
+    frames = [f for f in traceback.extract_tb(error.__traceback__) if _under(f.filename, [ours])]
+    if frames:
+        f = frames[-1]
+        text += f"（{Path(f.filename).name}:{f.lineno} in {f.name}）"
+    return text
 
 
 # 实际阶段或命令确定分类，不从错误 prose 猜编译器/输入的根因（日志里有确凿根因字样的先由 LOG_CAUSES 判，见 classify_failure）。
@@ -263,6 +280,7 @@ PLAYER_REASON = {
     "rewrite_gap": "暂时出不了包：这款游戏里有程序代码我们的改写器还不支持，我们正在修。",
     "glslc_windows_unavailable": "着色器编译暂不支持：这款游戏的着色器编译目前只能在 Mac 上完成。",
     "metal_unavailable": "缺少 Metal 组件：编着色器要用的 Metal 组件没装上。",
+    "metal_download_unreachable": "下不了 Metal 组件：连不上苹果的组件服务器，Metal 编译组件下载不下来。",
     "package_verify_mismatch": "资源包核对没通过：出包最后核对资源包时，有文件前后两次读出的内容对不上。多见于磁盘或内存读写不稳定，或有杀毒、云同步软件在改游戏库里的文件。",
     "ios_platform_missing": "缺少 iOS 平台组件：Xcode 的 iOS 平台还没装，打不了 iPhone 包。",
     "engine_toolchain_newer": "这版 S2Arm 不认识你的 Xcode：你的 Xcode 比这版 S2Arm 新。",
@@ -289,42 +307,47 @@ def player_reason(code):
 # 按日志确凿字样归因，先于阶段映射：按本表顺序，证据里第一个命中的码胜出（盘满最先：写盘失败后面常跟一串连带错误）。
 # 只收工具 / 系统原样会打的字样，不从散文猜。
 LOG_CAUSES = (
-    (r"WinError 206|filename or extension is too long|文件名或扩展名太长", "windows_path_too_long"),
-    (r"No space left on device|\bENOSPC\b|\[Errno 28\]|\berrno\s*[=:]?\s*28\b"          # POSIX / Python OSError / .NET IOException（Mac）
+    (r"WinError 206|filename or extension is too long|文件名或扩展名太长", "windows_path_too_long"),  # 非玩家句
+    (r"No space left on device|\bENOSPC\b|\[Errno 28\]|\berrno\s*[=:]?\s*28\b"          # POSIX / Python OSError / .NET IOException（Mac）  # 非玩家句
      r"|There is not enough space on the disk|\bDisk full\b|WinError 112|ERROR_DISK_FULL|0x80070070"   # Windows / .NET
      r"|STATUS_DISK_FULL|磁盘空间不足", "disk_full"),                                       # Windows 退出码注（direct_lib.sh 127）/ 我方字样
     # 内存用完（#711：Windows 16 GB 抽取按核数开满进程池，Python 子进程 MemoryError）：Python / .NET / Windows 提交上限原样字样
-    (r"(?m:^\s*MemoryError\b)|OutOfMemoryException|\[WinError 1455\]|paging file is too small|页面文件太小|Cannot allocate memory|\bENOMEM\b", "out_of_memory"),
+    (r"(?m:^\s*MemoryError\b)|OutOfMemoryException|\[WinError 1455\]|paging file is too small|页面文件太小|Cannot allocate memory|\bENOMEM\b", "out_of_memory"),  # 非玩家句
     # 盘不支持某种文件操作（exFAT 外接盘不支持原子改名 / 克隆 / 硬链接，实测 errno 45）：出包写入的这块盘格式不对，说清换 APFS 盘（11-10 网友：存放位置设到外接盘写入失败）
     (r"\[Errno 45\] Operation not supported|\bENOTSUP\b|Operation not supported on socket", "volume_ops_unsupported"),
     # cp 被系统拒绝（拷字体等，pack/stages/sysdata.sh 红行带 cp 原文）：macOS 隐私授权没给（桌面 / 文稿 / 下载 / 外接盘）或目录没写权限 → 提示去系统设置授权
     (r"\bcp: .*: (?:Operation not permitted|Permission denied)", "permission_denied"),
     # 直连库出库前核链号对不上：旧引擎（≤ beta.4，direct_lib.sh 把 dmsh_chain.py --build-env 的 stderr 一起收进链号）遇到 metal 比锁新的 Xcode，
     #   编译器提示「note: …」被当成链号读（eb4b5c964 已修）。玩家能做的就是更新 S2Arm
-    (r"链号前后不一", "engine_toolchain_newer"),
+    (r"链号前后不一", "engine_toolchain_newer"),  # 非玩家句
     # 直连配置推导判不出图形接口（graphics/nvn/tools/direct_profile.py；gfx_api.py 只认动态导入的 NVN / Vulkan / EGL）：
     #   同人移植多把 deko3d / Mesa 静态链进程序（#222 程序号 05F4…，不是官方 0100 段），通用 GPU 模拟路径已拆（11-07 只有直连），这类按现行设计不支持
     (r"unsupported graphics API: unknown", "graphics_api_unsupported"),
     # v0.3.1 拿不准不停 ⑪ / ⑧：物理做不下去的照停，但要说人话。直连配置推导不认本款的程序结构（main 不是 NSO / 动态符号表 / RomFS 符号链接等；图形接口那类上一行先认）
-    (r"配置推导不支持本款", "game_structure_unsupported"),
+    (r"配置推导不支持本款", "game_structure_unsupported"),  # 非玩家句
     # 直连库 Metal 一份都没出（Build.cs Metal.Tally）：这台机器上的 Metal 编译器用不了
-    (r"Metal 库一份都没出", "metal_unavailable"),
+    (r"Metal 库一份都没出", "metal_unavailable"),  # 非玩家句
     # 资源包核对（pack/verify.py）：包里那份读出的 SHA 和 pack.py 记进 index 的不一样——同一个文件（NTFS 硬链接 / 克隆）两次读出不同，
     #   多见于读盘不稳定或有程序在改游戏库里的文件；核对已让这几个文件下次重算（11-13 玩家报错原先落成未归类 package_failed）
-    (r"SHA 与 index 不符", "package_verify_mismatch"),
+    (r"SHA 与 index 不符", "package_verify_mismatch"),  # 非玩家句
     # 直连库原生库缺导出 / 缺库（Build.cs）：S2Arm 安装不全，不是游戏内容
-    (r"原生库缺件（出包机环境", "tool_missing"),
+    (r"原生库缺件（出包机环境", "tool_missing"),  # 非玩家句
     # 改写停住：v0.3.1 起有缺口照出产物、降级继续（pack/stage_rewrite.sh 记 degrade.rewrite.tsv），日志里留着「PFRW … gaps=N」不再说明失败在改写；
     #   只有缺口加上补丁区放不下（stage_rewrite.sh 这句红行）才是改写停住。按 PFRW 认会把之后别的阶段的失败错归成改写缺口
-    (r"需要的改写空间超过了能放下的上限", "rewrite_gap"),
+    (r"需要的改写空间超过了能放下的上限", "rewrite_gap"),  # 非玩家句
     # Windows 出包期 GLSLC 工具模式缺失（exitCode 75）
-    (r"Windows 还没有 GLSLC 工具模式|要出包期离线编 GLSLC.*Windows", "glslc_windows_unavailable"),
-    (r"unable to find utility \"metal(?:lib)?\"|cannot execute tool '?metal(?:lib)?'?|missing Metal Toolchain"
+    (r"Windows 还没有 GLSLC 工具模式|要出包期离线编 GLSLC.*Windows", "glslc_windows_unavailable"),  # 非玩家句
+    # 下载 Metal 编译组件（xcodebuild -downloadComponent MetalToolchain）拿不到苹果的资源目录（诊断#f5eae9：3 台 Mac，Xcode 27A266a / 27B47；
+    #   同版本 Xcode 在能连上苹果的网络里照常下得下来）：玩家这边网络 / 代理到不了苹果的组件服务器。原先上屏只剩最后一行「})」
+    (r"Failed fetching catalog for assetType \(com\.apple\.MobileAsset\.MetalToolchain", "metal_download_unreachable"),
+    # xcodebuild 自己的插件加载不了（CoreSimulator 等系统组件没装上），苹果原文让跑 -runFirstLaunch = Xcode 首次设置没做完（同诊断#f5eae9 一台）
+    (r"xcodebuild failed to load a required plug-in", "xcode_setup_required"),
+    (r"unable to find utility \"metal(?:lib)?\"|cannot execute tool '?metal(?:lib)?'?|missing Metal Toolchain"  # 非玩家句
      r"|【红】环境缺件 metal：", "metal_unavailable"),   # 后者：Windows 出包预检（pack/orch/oneclick_win.py env_items）找不到 Metal Developer Tools
     (r"is not installed\. (?:To use with Xcode, first download and install the platform|Please download and install the platform)", "ios_platform_missing"),   # xcodebuild 原文（11-07 gate-host Xcode 26.6）
     (r"unable to find utility \"|: command not found|is not recognized as an internal or external command", "tool_missing"),
 )
-_RED = ("【红】", "🔴", "[RED]")
+_RED = ("【红】", "🔴", "[RED]")  # 非玩家句
 # 红行里点名的子日志（如直连库 <缓存>/work.stage.N/build.log）：绝对路径（可含空格，如「Application Support」），以 .log / .out 结尾
 _LOG_PATH_ANY = re.compile(r"((?:[A-Za-z]:[\\/]|/)[^\s'\"（）()，,；;]+)")   # 命中行里点名的绝对路径（核盘满用：不限 .log）
 _LOG_PATH = re.compile(r"(?:(?<=[\s（(：:，,=])|^)((?:[A-Za-z]:[\\/]|/)[^（）()，,；;\"'\r\n]*?\.(?:log|out))(?=$|[\s）)，,；;:\"'])")
@@ -359,7 +382,7 @@ def gather_evidence(log, texts=()):
     """有界读取失败证据：调用方给的原因文本 + 主日志尾 EVIDENCE_MAIN_BYTES，再跟红行（原因文本整段）里点名的子日志，
     最多 EVIDENCE_SUB_FILES 份、每份尾 EVIDENCE_SUB_BYTES，子日志的红行可再往下跟。返回 [(来源, 文本)]。"""
     from pathlib import Path
-    chunks = [("原因", t) for t in texts if t]
+    chunks = [("原因", t) for t in texts if t]  # 非玩家句
     queue = [p for t in texts if t for p in _log_paths(t, red_only=False)]
     seen = set()
     if log:
@@ -416,16 +439,16 @@ def _confirm(code, line, log):
         paths = [m.group(1) for m in _LOG_PATH_ANY.finditer(line)] + ([str(Path(log).parent)] if log else [])
         free = [(p, f) for p, f in ((p, _free_bytes(p)) for p in paths) if f is not None]
         if not free:
-            return True, "读不到所在盘的剩余空间，按字样"
+            return True, "读不到所在盘的剩余空间，按字样"  # 非玩家句
         path, least = min(free, key=lambda pf: pf[1])
         gib = least / (1 << 30)
         if least < DISK_FULL_FREE:
-            return True, "核实：%s 所在盘只剩 %.1f GB" % (path, gib)
-        return False, "所在盘还剩 %.1f GB（%s），不是盘满" % (gib, path)
+            return True, "核实：%s 所在盘只剩 %.1f GB" % (path, gib)  # 非玩家句
+        return False, "所在盘还剩 %.1f GB（%s），不是盘满" % (gib, path)  # 非玩家句
     if code == "tool_missing":
         m = re.search(r"([\w.+-]+): command not found", line)
         if m and _tool_present(m.group(1)):
-            return False, "「%s」现在找得到，不是没装" % m.group(1)
+            return False, "「%s」现在找得到，不是没装" % m.group(1)  # 非玩家句
     return True, ""
 
 
@@ -442,18 +465,18 @@ def log_cause(chunks, log=None):
                 ok, why = _confirm(code, line, log)
                 if ok:
                     return code, label, line, why
-                rejected.append("候选 %s 未采信：%s 里「%s」，%s" % (code, label, line, why))
+                rejected.append("候选 %s 未采信：%s 里「%s」，%s" % (code, label, line, why))  # 非玩家句
                 break   # 同一个码事实已核过，别的来源同样字样不再重复核
     return None, rejected
 
 
 def refresh_stop_phase(red):
     """refresh.sh 的终止红行「【红】<款> 刷新停在 <子阶段>…」→ STAGE_CODES 的阶段；未登记的子阶段给 None（保持宽码，不从更早的红行猜）。"""
-    stop = re.match(r"^【红】[^\r\n]+? 刷新停在\s*(.*)", red or "")
+    stop = re.match(r"^【红】[^\r\n]+? 刷新停在\s*(.*)", red or "")  # 非玩家句
     if not stop:
         return None
     substep = stop.group(1)
-    for prefix, phase in (("直连配置推导", "configure"), ("rewrite 阶段", "rewrite"), ("抽取阶段", "sh_extract"), ("direct 阶段", "direct")):
+    for prefix, phase in (("直连配置推导", "configure"), ("rewrite 阶段", "rewrite"), ("抽取阶段", "sh_extract"), ("direct 阶段", "direct")):  # 非玩家句
         if substep.startswith(prefix):
             return phase
     return None
@@ -493,13 +516,13 @@ def classify_failure(phase, log, texts=()):
     """Mac 准备（build_tool_failure）与 iPhone 打包（ipa.oneclick_failure，Mac / Windows 同一份）共用：
     日志确凿根因优先，其次阶段映射，判不出 package_failed。返回 (码, 写进 internal 的归因说明)。"""
     chunks = gather_evidence(log, texts)
-    read = "；".join("%s（尾 %d 字节）" % (label, len(text.encode("utf-8"))) for label, text in chunks if label != "原因") or "无日志"
+    read = "；".join("%s（尾 %d 字节）" % (label, len(text.encode("utf-8"))) for label, text in chunks if label != "原因") or "无日志"  # 非玩家句
     hit = log_cause(chunks, log)
     if hit[0]:
         code, label, line, why = hit
-        return code, "归因 %s：%s 里「%s」%s；读过 %s" % (code, label, line, "（" + why + "）" if why else "", read)
+        return code, "归因 %s：%s 里「%s」%s；读过 %s" % (code, label, line, "（" + why + "）" if why else "", read)  # 非玩家句
     code = STAGE_CODES.get(phase, "package_failed")
-    return code, "归因 %s：按阶段 %s；%s读过 %s" % (code, phase or "未识别", "".join(r + "；" for r in hit[1]), read)
+    return code, "归因 %s：按阶段 %s；%s读过 %s" % (code, phase or "未识别", "".join(r + "；" for r in hit[1]), read)  # 非玩家句
 
 
 def tool_reason(log):
@@ -512,7 +535,7 @@ def tool_reason(log):
                 lines = stream.read().decode("utf-8", errors="replace").splitlines()
             # 作业层自己往工具日志里追加的记录（[s2a] 开头，如收掉残留进程）不是工具的报错，不当失败原因（#711：真报错被它盖住）
             nonempty = [line.strip() for line in lines if line.strip() and not line.strip().startswith("[s2a] ")]
-            red = [line for line in nonempty if "【红】" in line]
+            red = [line for line in nonempty if "【红】" in line]  # 非玩家句
             if nonempty:
                 return (red or nonempty)[-1][-1500:]
         except OSError:
@@ -531,7 +554,7 @@ def last_output_lines(log, limit=5):
             lines = [line.strip() for line in stream.read().decode("utf-8", errors="replace").splitlines() if line.strip()]
     except OSError:
         return []
-    reds = [i for i, line in enumerate(lines) if "【红】" in line or "error" in line.lower()][-2:]
+    reds = [i for i, line in enumerate(lines) if "【红】" in line or "error" in line.lower()][-2:]  # 非玩家句
     keep = sorted(set(reds) | set(range(max(0, len(lines) - (limit - len(reds))), len(lines))))
     return [lines[i][-300:] for i in keep]
 
@@ -567,5 +590,5 @@ def build_tool_failure(args, milestone, log):
         phase = "unpack"
     code, why = classify_failure(phase, log)
     # 上屏只放玩家话术；阶段 / rc / 构建号 / 红行原文进 internal → 诊断 detail（「复制错误摘要」带走）；机读事实进 facts（前端按字段显示）
-    return Failure(player_reason(code), code=code, internal="Mac 准备失败（" + (phase or "未识别阶段") + "）：" + reason + "\n" + why,
+    return Failure(player_reason(code), code=code, internal="Mac 准备失败（" + (phase or "未识别阶段") + "）：" + reason + "\n" + why,  # 非玩家句
                    facts=cause_facts(code, log))

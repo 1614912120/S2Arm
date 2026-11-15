@@ -10,6 +10,12 @@ import unittest
 import unittest.mock
 import os
 os.environ.setdefault("S2A_BANNER_FETCH", "0")   # 作业层测试一律不连商店（library.store_meta）；要测的用例自己打桩
+# 补丁 / 金手指下载站同理（11-14 门禁提速）：每次出包 patches.prepare 都现取云端清单（patches.cloud_manifest），原先单测里每个出包用例都真连网
+#   （经本机代理，每次约 1 秒，test_job_failure_codes 一份就 40 多次；断网 / 代理卡住时按 patches.TIMEOUT 白等）。缺省指一个不存在的本地目录
+#   = 「云端取不到、只用本地」，与门禁机断网时同一条路径；要测下载站的用例（test_patches）自己把 S2A_PATCH_BASE 指到造好的目录
+os.environ.setdefault("S2A_PATCH_BASE", "file:" + os.path.join(tempfile.gettempdir(), "s2a-jobtests-no-patch-site"))
+# 每局结束注销 S2ArmGame 系统登记（host_update.forget_registrations，#1126）：单测起局不碰门禁机 / 本机真的应用登记库，指向不存在的工具 = 不做
+os.environ.setdefault("S2A_LSREGISTER", os.path.join(tempfile.gettempdir(), "s2a-jobtests-no-lsregister"))
 
 JOBS = Path(__file__).resolve().parents[1]
 ROOT = JOBS.parents[1]
@@ -107,6 +113,8 @@ class JobCase(unittest.TestCase):
         # Keep all direct Context events out of test output (including fixtures).
         self.redirect.__enter__()
         self.addCleanup(self.redirect.__exit__, None, None, None)
+        # 诊断导出收本机崩溃报告（library.MAC_CRASH_DIR）：测试里一律指到空的临时目录，不读跑测试这台机器上真实的 ~/Library/Logs/DiagnosticReports
+        crash_dir = unittest.mock.patch.object(library, "MAC_CRASH_DIR", self.root / "no-crash-reports"); crash_dir.start(); self.addCleanup(crash_dir.stop)
         self.request = dict(schema=1, taskId="setup", operation="setup", engineDir=str(ROOT),
                             privateRoot=str(self.root / "private"), library=str(self.root / "library"))
         self.c = Context(self.request)
@@ -323,7 +331,7 @@ def ios_fixture(c, gid, *, shell="SID1", pack="cafe01", compat=None, fixups=True
     game.json 的 ios 记出它的壳号、资源包号（compat 给了再记 hostAbi / dmshChain）→ (kit, pack)"""
     import layout
     image = layout.image_ios(c, gid)
-    kit, pk = image / "kit", image / "pack"
+    kit, pk = image / "kit", image / ".pack"
     kit.mkdir(parents=True, exist_ok=True)
     (kit / "main.npdm").write_bytes(b"META")
     if fixups:

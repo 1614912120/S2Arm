@@ -21,7 +21,7 @@ import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from core import Failure, atomic, contained
+from core import Failure, atomic, contained, resolve_path
 from library import input_identity, selected_packages
 import save_formats
 import layout
@@ -613,9 +613,9 @@ class RecoveryFailed(Exception):
 def recovery_message(error):
     # 与 iPhone 存档页同一口径：说清记录在哪、可以先备份、单独确认后仍可启动、记录不删（审计 18:00 P0-3）
     return (
-        f"存档恢复事务尚未完成，自动回退失败。事务记录在 {error.journal}"
-        + (f"，上次的数据副本在 {error.transaction}" if error.transaction else "")
-        + "。可以先「备份存档」把当前存档拷走；确认可能丢掉这次没做完的导入 / 恢复后，可选择「仍要启动」。"
+        f"存档恢复事务尚未完成，自动回退失败。事务记录在 {error.journal}"  # 非玩家句
+        + (f"，上次的数据副本在 {error.transaction}" if error.transaction else "")  # 非玩家句
+        + "。可以先「备份存档」把当前存档拷走；确认可能丢掉这次没做完的导入 / 恢复后，可选择「仍要启动」。"  # 非玩家句
         "记录不会删除，下次启动会再试恢复。"
     )
 
@@ -676,7 +676,7 @@ def recover(c, game, override=False):
     except RecoveryFailed as error:
         if not override:
             fail(c, recovery_message(error), "recovery")
-        report(c, recovery_message(error) + "（玩家已确认仍要启动）", "recovery_overridden", "warning")
+        report(c, recovery_message(error) + "（玩家已确认仍要启动）", "recovery_overridden", "warning")  # 非玩家句
         return False
 
 
@@ -729,12 +729,13 @@ def backup(c):
     with stopped(c, tolerate=True) as (game, _, _):
         root, _, _ = locations(c, game)
         destination = Path(c.r["path"]).expanduser()
-        destination = destination.parent.resolve() / destination.name
-        home = layout.root_of(c, game["id"]).resolve()   # 这款所在存放位置（可以不是默认游戏库）也不许放
+        destination = resolve_path(destination.parent) / destination.name
+        home = resolve_path(layout.root_of(c, game["id"]))   # 这款所在存放位置（可以不是默认游戏库）也不许放
+        library = resolve_path(c.library)   # 玩家写的样子（映射盘保留盘符）→ 和解析过的 destination 同一写法再比
         if (
             not destination.parent.is_dir()
-            or destination == c.library
-            or c.library in destination.parents
+            or destination == library
+            or library in destination.parents
             or destination == home
             or home in destination.parents
             or destination == c.private
@@ -988,7 +989,7 @@ def checked_archive(c, game, root):
     if external:
         source, notice = external_archive(c, game, root, source)
     try:
-        if source.stat().st_size > MAX_BYTES + (64 << 20) or root in source.resolve().parents:
+        if source.stat().st_size > MAX_BYTES + (64 << 20) or root in resolve_path(source).parents:
             raise ValueError("invalid backup location or size")
         before = hash_file(c, source)
         with open_archive(c, source) as (_, manifest):
@@ -1023,7 +1024,7 @@ def checked_archive(c, game, root):
 SEED_NOTICE = "这款游戏在这台电脑上还没玩过：存档会在下次启动游戏时放进去。"
 # 服务层 SeedFrom 每一类都灌入后才打这一句（services/S2A.Services/Saves.cs SeedAllDoneLine，两边一字不差；审计 P1-156：
 #   原先认「S2A 带存档起局：」，它在真正灌入前的「当前用户」行和每一类成功行都有，前一类成功、后一类失败也删了种子）
-SEED_DONE_LINE = "S2A 带存档起局完成："
+SEED_DONE_LINE = "S2A 带存档起局完成："  # 非玩家句
 
 
 def pending_seed(c, gid):

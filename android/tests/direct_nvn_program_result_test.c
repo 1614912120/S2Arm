@@ -119,6 +119,37 @@ int main(void) {
     CHECK(parse_json("{\"stage\":\"fs\",\"kind\":\"texture\",\"set\":2,\"binding\":0,\"slot\":8}", &p, why, sizeof why) == 0 && p.bindings[0].samp_slot == -1, "v1 keeps combined sampler sentinel");
     nvn_vk_program_free(&p);
 
+    // #999 / #1189：现编结果的平铺写法 uboSlot（cbuf − 3）+ uboOffset（句柄字字节偏移），没有 slot。
+    //   组合句柄一个字：贴图号低 20 位、采样器号高 12 位 → 贴图与采样器都取同一个字（FD_SAMP_UBO，采样器字 sid=0）。
+    for (int v = 1; v <= 2; ++v) {
+        int (*parse)(const char *, struct fd_program *, char *, size_t) = v == 1 ? parse_json : parse_v2;
+        why[0] = 0;
+        int flat_rc = parse("{\"stage\":\"fs\",\"kind\":\"texture\",\"set\":2,\"binding\":0,\"count\":1,\"uboSlot\":1,\"uboOffset\":1024}", &p, why, sizeof why);
+        if (flat_rc) printf("flat v%d why: %s\n", v, why);
+        CHECK(flat_rc == 0, "flat uboSlot/uboOffset texture parses");
+        if (!flat_rc && p.binding_count == 1) {
+            const struct fd_binding *b = &p.bindings[0];
+            CHECK(b->tex_ubo == 1 && b->slot < 0 && b->tex_u.slot == 1 && b->tex_u.offset == 1024 && !b->tex_u.sid && !b->tex_u.pair,
+                  "flat form: texture word = UBO 1 byte 1024, no sid / pair");
+            CHECK(b->samp_src == FD_SAMP_UBO && b->samp_u.slot == 1 && b->samp_u.offset == 1024 && !b->samp_u.sid && !b->samp_u.pair,
+                  "flat form: sampler read from the same combined word");
+        }
+        nvn_vk_program_free(&p);
+    }
+    static const char *const flat_bad[] = {
+        "{\"stage\":\"fs\",\"kind\":\"texture\",\"set\":2,\"binding\":0,\"count\":1,\"uboSlot\":16,\"uboOffset\":0}",              // 槽越界
+        "{\"stage\":\"fs\",\"kind\":\"texture\",\"set\":2,\"binding\":0,\"count\":1,\"uboSlot\":0}",                                // 缺偏移
+        "{\"stage\":\"fs\",\"kind\":\"texture\",\"set\":2,\"binding\":0,\"count\":1,\"uboSlot\":0,\"uboOffset\":65536}",           // 偏移出 64 KiB
+        "{\"stage\":\"fs\",\"kind\":\"texture\",\"set\":2,\"binding\":0,\"count\":1,\"uboSlot\":0,\"uboOffset\":6}",               // 不是字偏移
+        "{\"stage\":\"fs\",\"kind\":\"texture\",\"set\":2,\"binding\":0,\"count\":1,\"slot\":8,\"uboSlot\":0,\"uboOffset\":0}",  // 同时给组合槽
+    };
+    for (unsigned i = 0; i < sizeof flat_bad / sizeof flat_bad[0]; ++i) {
+        why[0] = 0;
+        char what[64]; snprintf(what, sizeof what, "flat form negative %u rejected", i);
+        CHECK(parse_json(flat_bad[i], &p, why, sizeof why) != 0, what);
+        nvn_vk_program_free(&p);
+    }
+
     // 负控 1：NVN 槽位越界必须拒绝，不能截断成 0 绑到别的缓冲。
     why[0] = 0;
     CHECK(parse_json("{\"stage\":\"vs\",\"kind\":\"storage\",\"set\":1,\"binding\":0,"

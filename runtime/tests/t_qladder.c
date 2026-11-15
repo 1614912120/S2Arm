@@ -37,6 +37,8 @@ int main(void) {
     fresh(S2A_QL_FPS, 1); CHECK(feed(600, 33.333, 1, 0.4, 0, 1, 0) < 0, "主机30、GPU 40%%（× 2 = 80%% ≥ 70%%）：10 分钟不升");
     fresh(S2A_QL_FPS, 1); r = feed(600, 33.333, 1, 0.2, 3, 1, &at); CHECK(r == 0 && at - 1000 > 120.1 && at - 1000 < 120.2, "主机30、热状态 3、GPU 20%%：余量够满 2 分钟（第 4 个窗口，每窗 901 帧 × 33.333 ms = 30.033 秒，4 窗 120.13 秒）就升，不看热状态（实 %d，第 %.2f 秒）", r, at - 1000);
     fresh(S2A_QL_FPS, 0); CHECK(feed(120, 33.333, 0, 0.9, 0, 1, 0) < 0, "菜单 / 加载（非局内画面）30 帧 2 分钟：不降");
+    fresh(S2A_QL_FPS, 0); CHECK(feed(120, 33.333, 1, 0.17, 0, 2, 0) < 0, "主机60、游戏自设间隔 2（标题 / 过场自己锁 30 帧）、30 帧 2 分钟：不降（游戏自己限的帧，不是跑不动）");
+    fresh(S2A_QL_FPS, 0); r = feed(40, 50, 1, 0.9, 0, 2, &at); CHECK(r == 1, "主机60、游戏自设间隔 2 但只跑出 20 帧（目标 33.3 ms）：照常降（实 %d）", r);
     fresh(S2A_QL_FPS, 2); CHECK(feed(120, 50, 1, 0.9, 0, 1, 0) < 0, "最低档（掌机30）跟不上：没处可降，不换");
     fresh(S2A_QL_MODE, 0);
     CHECK(s2a_ql_tiers() == 2 && s2a_ql_docked(0) && !s2a_ql_docked(1) && !s2a_ql_fps60(0), "两档款：主机 / 掌机，帧率归游戏");
@@ -44,12 +46,12 @@ int main(void) {
     r = feed(40, 50, 1, 0.9, 0, 2, 0); CHECK(r == 1, "原生 30 帧只跑出 20 帧：降到掌机（实 %d）", r);
     fresh(S2A_QL_MODE, 0); CHECK(feed(40, 33.333, 1, 0.9, 0, 1, 0) == 1, "原生 60 帧（间隔 1）只跑出 30：降到掌机");
     // #352 运行模式上限：玩家选掌机（iPhone 缺省）时梯子不自己升到主机；没有上限的同一段喂数会升（对照）
-    CHECK(s2a_ql_top_tier(S2A_QL_FPS, 1) == 0 && s2a_ql_top_tier(S2A_QL_MODE, 1) == 0 && s2a_ql_top_tier(S2A_QL_FPS, 0) == 2 && s2a_ql_top_tier(S2A_QL_MODE, 0) == 1,
-          "上限对应的档：主机 0；掌机 三档款 2、两档款 1");
+    CHECK(s2a_ql_top_tier(S2A_QL_FPS, 1) == 0 && s2a_ql_top_tier(S2A_QL_MODE, 1) == 0 && s2a_ql_top_tier(S2A_QL_FPS, 0) == 0 && s2a_ql_top_tier(S2A_QL_MODE, 0) == 1,
+          "上限对应的档：主机 0；掌机 三档款 0（60 帧不受掌机限）、两档款 1");
     fresh(S2A_QL_MODE, 1); CHECK(feed(600, 16.667, 1, 0.2, 0, 1, 0) == 0, "对照：两档款在掌机、余量足（GPU 20%%）、没上限：10 分钟内升回主机");
     fresh(S2A_QL_MODE, 1); s2a_ql_top(1); CHECK(feed(600, 16.667, 1, 0.2, 0, 1, 0) < 0 && s2a_ql_tier() == 1, "两档款上限掌机：同样余量 10 分钟不升（停在掌机）");
-    fresh(S2A_QL_FPS, 0); s2a_ql_top(2); CHECK(s2a_ql_tier() == 2, "三档款记下的主机60、上限掌机：拉到掌机30（实 %d）", s2a_ql_tier());
-    CHECK(feed(600, 33.333, 1, 0.2, 0, 1, 0) < 0 && s2a_ql_tier() == 2, "三档款上限掌机：余量足 10 分钟不升");
+    fresh(S2A_QL_FPS, 0); s2a_ql_top(2); CHECK(s2a_ql_tier() == 2, "三档款记下的 60 帧、上限设为底档：拉到底档（实 %d）", s2a_ql_tier());
+    CHECK(feed(600, 33.333, 1, 0.2, 0, 1, 0) < 0 && s2a_ql_tier() == 2, "三档款上限底档：余量足 10 分钟不升");
     fresh(S2A_QL_FPS, 2); s2a_ql_top(0); r = feed(320, 33.333, 1, 0.2, 0, 1, 0); CHECK(r == 1, "上限主机（Mac / 玩家开了主机）：照旧升档（实 %d）", r);
     // 梯子压 / 放 60 帧时要不要告诉玩家（审计 P1-80 原因 4）：期望按「起局不说、没变不说、没开 60 帧 / 自动化局不说、压了说 4、放开说 0」手推
     { struct { int boot, last, hold, on, un, want; const char *why; } c[] = {

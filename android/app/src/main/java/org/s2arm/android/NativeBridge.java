@@ -57,6 +57,12 @@ final class NativeBridge {
      * 诊断仍写会话内部目录。启动加载库后调用一次。
      */
     static native int configureDiagDir(String dir);
+    /**
+     * 外挂 Vulkan 驱动（libadrenotools）的目录：filesDir 是应用内部私有目录（驱动必须复制到
+     * 这里才能 dlopen），externalFilesDir 是 adb push 用的外部私有目录（没有外部存储传空串）。
+     * 只在启动加载库后调用一次；没有选择驱动时 native 不碰这两个目录。
+     */
+    static native int configureGpuDriver(String filesDir, String externalFilesDir);
     static native int configureFrameLogDir(String dir);
     static native int configureLanDiscovery(Object provider);
     static native void lanSnapshot(long generation, String ownName, String[] names, String[] addresses, int[] ports);
@@ -219,7 +225,7 @@ final class NativeBridge {
     static native void setPowerState(int thermalStatus, boolean powerSave);
     /** 直连安全网：宿主版本号（BuildConfig.VERSION_NAME），起局前传一次，dguard 用它区分「另一个包」。 */
     static native void setHostBuild(String build);
-    /** 存档原子提交判定（共用 direct_prompt.c）：每秒轮询，非 0 = 服务层报出原因位（只报一次）。 */
+    /** 存档原子提交判定（共用 direct_prompt.c）：每秒轮询，正数 = 服务层报出原因位（只报一次），负数 = 状态未知（服务层缺导出，不提示）。 */
     static native int pollSaveAtomic();
 
     static native String checkModules(String modulesDir);

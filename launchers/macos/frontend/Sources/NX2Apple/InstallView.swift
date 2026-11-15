@@ -23,7 +23,8 @@ struct InstallView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(loc.t(model.installKey("s2arm.install.title"))).font(.manrope(26, .heavy)).tracking(-0.6)
+                    // 装法是导出时标题照导出写（维护者 11-13：出包页起分两路），不写「装到 iPhone」
+                    Text(model.installMode.mode == "export" ? text("install.mode.export") : loc.t(model.installKey("s2arm.install.title"))).font(.manrope(26, .heavy)).tracking(-0.6)
                     if let game { Text(game.name).font(.manrope(14)).foregroundStyle(.secondary) }
                 }
                 Spacer()
@@ -63,7 +64,7 @@ struct InstallView: View {
                                     }
                                     if !item.ok, item.id == "appleId" {
                                         // 团队号手填 / 引导项目收进环境检查「装到 iPhone 的方式」（v0.3.0）：这里只给一个去设置
-                                        Button(BackendText.launcherText("install.mode.go_settings", language: loc.lang == .zh ? "zh-Hans" : "en")) {
+                                        Button(BackendText.launcherText("install.mode.go_settings", language: loc.lang.sharedCode)) {
                                             dismiss(); DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { model.showEnvironment = true }
                                         }
                                         .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.goSettings")
@@ -162,7 +163,7 @@ struct InstallView: View {
     }
 
     private var installJob: JobSession? { (model.session?.kind == .install || model.session?.kind == .installRemove || model.session?.kind == .installRestore) ? model.session : nil }
-    private func text(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+    private func text(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
 
     @ViewBuilder private var doneContent: some View {
         if let last = model.lastPhoneSession, last.phase == .finished(.completed), last.gameID == gameID {

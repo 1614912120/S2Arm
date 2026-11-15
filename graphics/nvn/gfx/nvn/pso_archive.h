@@ -388,22 +388,38 @@ static id<MTLComputePipelineState> par_compute_(id<MTLFunction> fn, NSString *ke
 //   thread stood inside a compute pipeline build for over 30 s on the first gameplay frame, and nothing in the log named the shader, because a build is logged only when it
 //   returns). The note fires from a timer while the build still runs; a build that took longer than PAR_SLOW_MS also logs its time when it returns, and whether it built or failed (11-05: a compile the system killed at its 150 MB limit returned nil after 8.4 s and read as built). Nothing else changes.
 enum { PAR_SLOW_MS = 5000 };
-typedef struct { _Atomic int done; char key[96]; char kind[8]; char thread[32]; char fns[160]; uint64_t t0; } ParSlow;
+static int g_par_slow_ms = PAR_SLOW_MS;   // 单测改短
+// #065090：慢编译那一行带上 MSL 摘要（谁的源、行数、哈希、main0 体多长、大计算核拆分 DshOutline 拆没拆，见 msl_note），回落翻译的还把源文件留一份
+//   <键>.slow.metal 在兜底目录（诊断包随 .inflight / .fail 一起带走，ios/diag.m）：发版后同类停帧还在，就能当场判拆分是没覆盖到还是拆了也慢。
+//   调用方在本线程建管线前设 t_par_msl_note / t_par_msl_src（par_slow_begin 同步拷走），建完清空
+static __thread const char *t_par_msl_note, *t_par_msl_src;
+enum { PAR_SLOW_KEEP_MAX = 4 };   // 一局至多留几份源
+static void par_slow_keep_src(const char *src) {
+    static _Atomic int n;
+    size_t L = strlen(src); if (L < 7 || strcmp(src + L - 6, ".metal") || atomic_fetch_add(&n, 1) >= PAR_SLOW_KEEP_MAX) return;
+    NSString *s = @(src), *d = [[s stringByDeletingPathExtension] stringByAppendingString:@".slow.metal"];
+    [NSFileManager.defaultManager removeItemAtPath:d error:nil];
+    NSError *e = nil; BOOL ok = [NSFileManager.defaultManager copyItemAtPath:s toPath:d error:&e];
+    MLOG("%s MSL source %s kept as %s for the diagnostic package%s%s", ok ? "slow pipeline:" : "【红】 slow pipeline:", s.lastPathComponent.UTF8String, d.lastPathComponent.UTF8String, ok ? "" : ": ", ok ? "" : e.localizedDescription.UTF8String);
+}
+typedef struct { _Atomic int done; char key[96]; char kind[8]; char thread[32]; char fns[160]; char note[224]; char src[1024]; uint64_t t0; } ParSlow;
 static ParSlow *par_slow_begin(NSString *key, const char *kind, NSString *fns) {
     ParSlow *w = calloc(1, sizeof *w); if (!w) return NULL;
     snprintf(w->key, sizeof w->key, "%s", key ? key.UTF8String : "-"); snprintf(w->kind, sizeof w->kind, "%s", kind); snprintf(w->fns, sizeof w->fns, "%s", fns ? fns.UTF8String : "-");
+    snprintf(w->note, sizeof w->note, "%s", t_par_msl_note ? t_par_msl_note : "unknown"); snprintf(w->src, sizeof w->src, "%s", t_par_msl_src ? t_par_msl_src : "");
     pthread_getname_np(pthread_self(), w->thread, sizeof w->thread); w->t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     atomic_store(&w->done, 0);
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)PAR_SLOW_MS * 1000000), s2a_qos_global(S2A_QOS_IO_BG), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)g_par_slow_ms * 1000000), s2a_qos_global(S2A_QOS_IO_BG), ^{
         if (atomic_exchange(&w->done, 2) == 1) { free(w); return; }   // the build returned first: its end freed nothing and left the memory to this block
-        MLOG("【红】 %s pipeline %s (functions %s) still compiling after %d ms on thread %s", w->kind, w->key, w->fns, PAR_SLOW_MS, w->thread[0] ? w->thread : "?");
+        MLOG("【红】 %s pipeline %s (functions %s) still compiling after %d ms on thread %s; MSL: %s", w->kind, w->key, w->fns, g_par_slow_ms, w->thread[0] ? w->thread : "?", w->note);
+        if (w->src[0]) par_slow_keep_src(w->src);   // 编完先返回就不进这里：只留真慢的
     });
     return w;
 }
 static void par_slow_end(ParSlow *w, int ok) {
     if (!w) return;
     double ms = (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - w->t0) / 1e6;
-    if (ms >= PAR_SLOW_MS) MLOG("%s%s pipeline %s (functions %s) %s after %.0f ms on thread %s", ok ? "" : "【红】 ", w->kind, w->key, w->fns, ok ? "built" : "FAILED", ms, w->thread[0] ? w->thread : "?");
+    if (ms >= g_par_slow_ms) MLOG("%s%s pipeline %s (functions %s) %s after %.0f ms on thread %s", ok ? "" : "【红】 ", w->kind, w->key, w->fns, ok ? "built" : "FAILED", ms, w->thread[0] ? w->thread : "?");
     if (atomic_exchange(&w->done, 1) == 2) free(w);   // the timer already ran: the memory is the end's to free
 }
 // Build a render pipeline through the archive. key = par_rkey(...), nil = not archived (built as before)
@@ -416,6 +432,13 @@ static id<MTLRenderPipelineState> par_render(MTLRenderPipelineDescriptor *d, NSS
     par_fl_leave(key, mine, ps);
     return ps;
 }
+// 重译抢跑（par_compute_wait）：调用方在本线程设 t_par_race（只用一次、取走即清）；块在后台跑、返回替代管线或 nil（做不了）
+typedef id<MTLComputePipelineState> (^ParRace)(void);
+static __thread __unsafe_unretained ParRace t_par_race;   // 调用方的强引用撑着这次调用
+static int64_t g_par_race_wait_ns = 60ll * 1000000000;   // 抢跑在途时的等待上限（单测改短）
+static _Atomic uint64_t g_par_race_n, g_par_race_won, g_par_race_lost;   // 起了几次抢跑、抢跑先好、原管线先好
+@interface ParWait : NSObject { @public dispatch_semaphore_t sem; int odone, rstate; id<MTLComputePipelineState> ores, rres; NSError *oerr; } @end   // rstate：0 没起 / 1 在跑 / 2 好了 / 3 做不了 / 4 已处理
+@implementation ParWait @end
 // 建计算管线的实现（单测换成不返回 / 晚返回的桩，#884）
 static id<MTLComputePipelineState> (*g_par_compute_impl)(id<MTLFunction>, NSString *, NSError **) = par_compute_;
 // 至多等 wait_ns 建一条计算管线（< 0 = 一直等，原行为）。#884：Metal 编译服务对一条计算管线现编一直不返回，提交线程跟着卡死、开场剧情固定定格。
@@ -438,22 +461,49 @@ static id<MTLComputePipelineState> par_compute_wait(id<MTLFunction> fn, NSString
         par_fl_leave(fk, mine, ps);
         return ps;
     }
-    __block id<MTLComputePipelineState> res = nil; __block NSError *err = nil; dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    // 重译抢跑（v0.4.1，#065090）：调用方给了 t_par_race（出包库是旧翻译器出的计算着色器）→ 编满 g_par_slow_ms 还没完就在后台起一份重译管线，谁先好用谁，执行的就是这一次派发
+    //   （跳过这一次救不回来：诊断 D-EVQ3 卡住那支 20.5 秒后自己编出，之后 18 秒游戏仍不出帧——它在等被跳过那次派发的结果）。抢跑在途时上限放宽到 g_par_race_wait_ns，
+    //   抢跑做不了（返回 nil）上限回到 wait_ns；两边都没好到上限才跳过（#884 的老行为）
+    ParWait *w = [ParWait new]; w->sem = dispatch_semaphore_create(0);
     ParFlight *m2 = mine; NSString *k2 = key, *fk2 = fk; id<MTLFunction> f2 = fn;
     dispatch_async(dispatch_get_global_queue(qos_class_self(), 0), ^{
         NSError *ee = nil; id<MTLComputePipelineState> r = g_par_compute_impl(f2, k2, &ee);
         par_slow_end(sw, r != nil);
-        res = r; err = ee;
+        w->ores = r; w->oerr = ee;
         par_fl_leave(fk2, m2, r);
-        dispatch_semaphore_signal(sem);
+        __atomic_store_n(&w->odone, 1, __ATOMIC_RELEASE); dispatch_semaphore_signal(w->sem);
     });
-    if (dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, wait_ns))) {
+    ParRace race = t_par_race;
+    uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); int64_t cap = wait_ns, race_at = race ? (int64_t)g_par_slow_ms * 1000000 : -1;
+    for (;;) {
+        int64_t el = (int64_t)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0), until = race_at >= 0 && race_at < cap ? race_at : cap;
+        long to = until > el ? dispatch_semaphore_wait(w->sem, dispatch_time(DISPATCH_TIME_NOW, until - el)) : 1;
+        if (__atomic_load_n(&w->odone, __ATOMIC_ACQUIRE)) {
+            if (__atomic_load_n(&w->rstate, __ATOMIC_ACQUIRE) == 1) atomic_fetch_add(&g_par_race_lost, 1);
+            if (e) *e = w->oerr;
+            return w->ores;
+        }
+        int rs = __atomic_load_n(&w->rstate, __ATOMIC_ACQUIRE);
+        if (rs == 2) {   // 原管线还在编：在途记录照「等超时过」处理，同键后到的有界请求不再等满（结果仍登记给下一次，g_par_late）
+            if (m2) { os_unfair_lock_lock(&g_par_fl_lock); if (!m2->result) atomic_store(&m2->gave_up, 1); os_unfair_lock_unlock(&g_par_fl_lock); }
+            atomic_fetch_add(&g_par_race_won, 1); return w->rres;
+        }
+        if (rs == 3) { __atomic_store_n(&w->rstate, 4, __ATOMIC_RELEASE); cap = wait_ns; continue; }   // 抢跑做不了：回到原上限（已过就立刻跳过）
+        if (!to) continue;   // 被信号叫醒但两边都没出结果（抢跑失败的那次已在上面处理）
+        el = (int64_t)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0);
+        if (race_at >= 0 && el >= race_at) {
+            race_at = -1; __atomic_store_n(&w->rstate, 1, __ATOMIC_RELEASE); cap = wait_ns > g_par_race_wait_ns ? wait_ns : g_par_race_wait_ns; atomic_fetch_add(&g_par_race_n, 1);
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ @autoreleasepool {
+                id<MTLComputePipelineState> r = race(); w->rres = r;
+                __atomic_store_n(&w->rstate, r ? 2 : 3, __ATOMIC_RELEASE); dispatch_semaphore_signal(w->sem);
+            } });
+            continue;
+        }
+        if (el < cap) continue;
         if (m2) { os_unfair_lock_lock(&g_par_fl_lock); if (!m2->result) atomic_store(&m2->gave_up, 1); os_unfair_lock_unlock(&g_par_fl_lock); }
         if (gave_up) *gave_up = 1;
         return nil;
     }
-    if (e) *e = err;
-    return res;
 }
 static id<MTLComputePipelineState> par_compute(id<MTLFunction> fn, NSString *key, NSError **e) { return par_compute_wait(fn, key, e, -1, NULL); }
 static id<MTLRenderPipelineState> par_render_(MTLRenderPipelineDescriptor *d, NSString *key, NSError **e) {

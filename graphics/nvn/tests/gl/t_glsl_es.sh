@@ -11,6 +11,11 @@
 #           ⑨ 「out highp vec4 gl_Position;」整句删（数码宝贝内置精灵着色器），「out vec4 gl_PositionX;」不动
 #           ⑩ textureOffset 偏移是变量 → texture(s, (P) + vec2(off) / vec2(textureSize(s, 0)))；常量 ivec2(1, -1) 不动；textureLodOffset 变量 → textureLod(…, int(l)) 形式
 #           ⑪ 括号不配 → 退 1、stderr「unbalanced parentheses」（gl_shaders.py 原 call_args 同句）
+#           ⑰ #749 顶点 out 接口块（紧跟 #extension 行、块带 layout）→ 每个成员一条「out … 块名_成员」，成员的 flat 挪到 out 前、highp 留在 out 后；正文「实例名 . 成员」→「块名_成员」，xvs_out.uv 不动
+#           ⑱ 片元 in 块的块级 flat 加到每个成员；成员自带精度保留
+#           ⑲ 匿名块（没有实例名）：成员保持原名
+#           ⑳ 实例是数组 / 成员是数组 / uniform 块：整份不动（照旧由翻译报错）
+#           ㉑–㉔ D-9EPN：结果不是 3.20、没开多重采样插值扩展时整词 sample → s2a_sample（3.10 原文 / ES 1.00 升版）；3.20 或开了扩展不动
 set -u
 H=$(cd "$(dirname "$0")" && pwd); R=$(cd "$H/../../../.." && pwd)
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; bad=0; n=0
@@ -49,4 +54,29 @@ printf '#version 320 es\nvoid f(ivec2 k) { a = texture(s, (uv) + vec2(k) / vec2(
 ck "⑩ 非常量纹理偏移" rewrite frag
 n=$((n + 1)); printf '#version 320 es\nvoid f() { a = textureOffset(s, uv, k; }\n' > "$T/in"
 if ! "$T/es" rewrite frag < "$T/in" > /dev/null 2> "$T/err" && grep -qx 'unbalanced parentheses' "$T/err"; then echo "  过 ⑪ 括号不配报错"; else echo "  败 ⑪ 括号不配报错：$(cat "$T/err")"; bad=$((bad + 1)); fi
+printf '#version 320 es\n#extension GL_EXT_shader_io_blocks : enable\nlayout(location = 0) out VS_OUT {\n    highp vec2 uv;\n    flat int id;\n    vec4 col;\n} vs_out;\nvoid main() { vs_out.uv = vec2(0.0); vs_out . id = 1; vs_out.col.x = 1.0; xvs_out.uv = 0.0; }\n' > "$T/in"
+printf '#version 320 es\n#extension GL_EXT_shader_io_blocks : enable\nout highp vec2 VS_OUT_uv;\nflat out int VS_OUT_id;\nout vec4 VS_OUT_col;\n\nvoid main() { VS_OUT_uv = vec2(0.0); VS_OUT_id = 1; VS_OUT_col.x = 1.0; xvs_out.uv = 0.0; }\n' > "$T/want"
+ck "⑰ 顶点 out 接口块展平" rewrite vert
+printf '#version 320 es\nprecision highp float;\nflat in VS_OUT { mediump vec2 uv; int k; } fs_in;\nout vec4 o;\nvoid main() { o = vec4(fs_in.uv, float(fs_in.k), 1.0); }\n' > "$T/in"
+printf '#version 320 es\nprecision highp float;\nflat in mediump vec2 VS_OUT_uv;\nflat in int VS_OUT_k;\n\nout vec4 o;\nvoid main() { o = vec4(VS_OUT_uv, float(VS_OUT_k), 1.0); }\n' > "$T/want"
+ck "⑱ 片元 in 块：块级 flat 加到每个成员" rewrite frag
+printf '#version 320 es\nout Blk { vec2 a; };\nvoid main() { a = vec2(1.0); }\n' > "$T/in"
+printf '#version 320 es\nout vec2 a;\n\nvoid main() { a = vec2(1.0); }\n' > "$T/want"
+ck "⑲ 匿名块成员保持原名" rewrite vert
+printf '#version 320 es\nout VS_OUT { vec2 uv; } vs_out[2];\nout B { float w[4]; } b;\nlayout(std140) uniform U { vec4 c; } u;\nvoid main() { }\n' > "$T/in"; cp "$T/in" "$T/want"
+ck "⑳ 数组实例 / 数组成员 / uniform 块不动" rewrite vert
+# ㉑ D-9EPN：3.10 结果里「sample」当名字用 → 整词改 s2a_sample；gl_SampleID、samples、sampler2D 不动
+printf '#version 310 es\nprecision highp float;\nuniform sampler2D tex;\nout vec4 o;\nvoid main() { float sample = 1.0; int samples = gl_SampleID; o = vec4(sample) + texture(tex, vec2(sample)); }\n' > "$T/in"
+printf '#version 310 es\nprecision highp float;\nuniform sampler2D tex;\nout vec4 o;\nvoid main() { float s2a_sample = 1.0; int samples = gl_SampleID; o = vec4(s2a_sample) + texture(tex, vec2(s2a_sample)); }\n' > "$T/want"
+ck "㉑ 3.10 里 sample 当名字 → s2a_sample" rewrite frag
+# ㉒ ES 1.00 原文（升版后同样是 3.10）也改：varying → in，sample → s2a_sample
+printf 'precision mediump float;\nvarying vec2 uv;\nvoid main() { vec4 sample = vec4(uv, 0.0, 1.0); gl_FragColor = sample; }\n' > "$T/in"
+"$T/es" rewrite frag < "$T/in" > "$T/got" 2> "$T/err"; n=$((n + 1))
+if grep -q 'vec4 s2a_sample = vec4' "$T/got" && grep -q '= s2a_sample;' "$T/got" && ! grep -qw 'sample' "$T/got"; then echo "  过 ㉒ ES 1.00 升版后 sample 也改名"; else echo "  败 ㉒ ES 1.00 升版后 sample 也改名"; cat "$T/got"; bad=$((bad + 1)); fi
+# ㉓ 3.20 里 sample 是插值限定符：不动
+printf '#version 320 es\nprecision highp float;\nsample in vec4 v;\nout vec4 o;\nvoid main() { o = v; }\n' > "$T/in"; cp "$T/in" "$T/want"
+ck "㉓ 3.20 的 sample 限定符不动" rewrite frag
+# ㉔ 3.10 开了 GL_OES_shader_multisample_interpolation：sample 是限定符，不动
+printf '#version 310 es\n#extension GL_OES_shader_multisample_interpolation : require\nprecision highp float;\nsample in vec4 v;\nout vec4 o;\nvoid main() { o = v; }\n' > "$T/in"; cp "$T/in" "$T/want"
+ck "㉔ 开了多重采样插值扩展：不动" rewrite frag
 [ $bad = 0 ] && echo "✓ t_glsl_es：$n 项全过" || { echo "✗ t_glsl_es：$n 项，失败 $bad"; exit 1; }

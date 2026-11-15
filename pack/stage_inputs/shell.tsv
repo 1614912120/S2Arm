@@ -173,6 +173,9 @@
 入	launchers/shared/experience.v1.json
 入	launchers/shared/experience_strings.py
 入	launchers/shared/experience_zh_hant.json
+入	launchers/shared/l10n/es.json
+入	launchers/shared/l10n/fr.json
+入	launchers/shared/l10n/ja.json
 入	platform/plat.h
 入	platform/plat_asm.h
 入	compat
@@ -228,5 +231,6 @@
 不	tests/rewriter_api_test.c
 不	tests/sync_contract_litmus.c
 不	tests/sync_publish_litmus.c
+不	tests/vpad_screen_lock_test.c
 不	tools/dotnet_lock.c
 不	tools/pipeline_timing.m
