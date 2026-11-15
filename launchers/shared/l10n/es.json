@@ -933,7 +933,9 @@
   "welcome.step.keys.panel": "Elige el prod.keys exportado de tu Switch",
   "welcome.step.keys.done": "Claves listas",
   "welcome.step.games.title": "Añade tus juegos",
-  "welcome.step.games.what": "Funcionan archivos NSP, XCI o NUP y carpetas de juegos extraídas."
+  "welcome.step.games.what": "Funcionan archivos NSP, XCI o NUP y carpetas de juegos extraídas.",
+  "phone.done.export.fresh": "Archivos .img que debes copiar esta vez: {0}. Los otros {1} son iguales que en la última exportación; si ya están en tu teléfono, no hace falta copiarlos de nuevo.",
+  "phone.done.export.same": "Todos los .img son iguales que en la última exportación; si ya están en tu teléfono, no hace falta copiarlos de nuevo."
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "Parche de pantalla completa (elegido según la proporción de tu pantalla)",
