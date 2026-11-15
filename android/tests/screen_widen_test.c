@@ -25,6 +25,7 @@ const char *s2a_main_build_id(void) { return ""; }   // loader.c 的桩：补丁
 
 static int run_case(int which) {
     unsetenv("S2A_SCREEN_W"); unsetenv("S2A_SCREEN_H"); unsetenv("S2A_WIDESCREEN"); unsetenv("S2A_WIDEN_CAPS");
+    setenv("S2A_CAPS_OWN", "1", 1);   // 测名单门 / 能力清单机制本身（11-15 起我方通用满屏缺省不用，runtime/src/widen.c；S2A_CAPS_OWN=1 才按名单 / 清单）
     if (which < 5) setenv("S2A_WIDEN_VERIFIED", "1", 1);
     else {
         unsetenv("S2A_WIDEN_VERIFIED");
