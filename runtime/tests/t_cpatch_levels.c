@@ -11,7 +11,7 @@
 #include <unistd.h>
 #include "../src/native.h"
 void s2a_cpatch_load(module_t *m, const char *dir);
-void s2a_cpatch_fps_follow(int on); void s2a_cpatch_fps_pick(int target); int s2a_cpatch_fps_levels(int *out, int n, int *cur); int s2a_cpatch_stall_rescue(void);
+void s2a_cpatch_fps_follow(int on); void s2a_cpatch_fps_pick(int target); int s2a_cpatch_fps_levels(int *out, int n, int *cur); int s2a_cpatch_stall_rescue(void); int s2a_cpatch_fps_unit(const char *id);
 static int fails;
 static int g_scr;   // ⑤ 屏幕最高刷新率（覆盖 cpatch.c 的弱定义 front_screen_max_fps；0 = 还不知道）
 int front_screen_max_fps(void) { return g_scr; }
@@ -35,7 +35,9 @@ static void run(const char *dir, int pick_env, char *out, size_t n) {
             s2a_cpatch_fps_pick(120); k += snprintf(b + k, sizeof b - (size_t)k, " 选120 %llx %02x %s %s", (unsigned long long)(*slot & 0xC0), m.base[0x40], E("DM_PRESENT_LINK"), E("DM_PRESENT_HZ"));
             s2a_cpatch_fps_pick(60); k += snprintf(b + k, sizeof b - (size_t)k, " 选60 %llx %02x %s %s", (unsigned long long)(*slot & 0xC0), m.base[0x40], E("DM_PRESENT_LINK"), E("DM_PRESENT_HZ"));
         }
+        if (pick_env) k += snprintf(b + k, sizeof b - (size_t)k, " 份 %d %d", s2a_cpatch_fps_unit("fps:L"), s2a_cpatch_fps_unit("fps:H"));   // ⑦ 选 120：只有 120 那份选中
         s2a_cpatch_fps_follow(0); k += snprintf(b + k, sizeof b - (size_t)k, " 关 %llx %02x", (unsigned long long)(*slot & 0xC0), m.base[0x40]);
+        if (pick_env) k += snprintf(b + k, sizeof b - (size_t)k, " 份 %d %d", s2a_cpatch_fps_unit("fps:L"), s2a_cpatch_fps_unit("fps:H"));   // 关帧率：都没选中
         write(pp[1], b, (size_t)k); _exit(0);
     }
     close(pp[1]); ssize_t r = read(pp[0], out, n - 1); out[r > 0 ? r : 0] = 0; close(pp[0]); waitpid(c, NULL, 0);
@@ -78,7 +80,8 @@ static void run_rescue(const char *dir, char *out, size_t n) {
     close(pp[1]); ssize_t r = read(pp[0], out, n - 1); out[r > 0 ? r : 0] = 0; close(pp[0]); waitpid(c, NULL, 0);
 }
 // ⑥ 同档几个上游补丁只开一组（11-15）：表里两份 60 档，组 g1 两行（位 1 写 0x48 = 11、位 2 写 0x4c = 22，同一上游补丁的 main / sdk）、组 g2 一行（位 3 写 0x50 = 33）。
-//   期望（手算）：都没验过 → 开表里第一组 g1：掩码 0x06、0x48 11、0x4c 22、0x50 00；g2 缺省开（我方验过）→ 开 g2：掩码 0x08、00 00 33
+//   期望（手算）：都没验过 → 开表里第一组 g1：掩码 0x06、0x48 11、0x4c 22、0x50 00；g2 缺省开（我方验过）→ 开 g2：掩码 0x08、00 00 33。
+//   ⑦ 按份问选中档（s2a_cpatch_fps_unit，FpsLocker.cs 只写选中那份，审计 P1-184）：g1 选中 → A / B 返回 60、C 返回 0；g2 选中 → 0 0 60
 static void run_group(int g2_def, char *out, size_t n) {
     char dir[] = "/tmp/t_cpatch_grp.XXXXXX"; if (!mkdtemp(dir)) { out[0] = 0; return; }
     char p[256]; snprintf(p, sizeof p, "%s/cpatch.tsv", dir); FILE *f = fopen(p, "w");
@@ -94,7 +97,8 @@ static void run_group(int g2_def, char *out, size_t n) {
         m.size = 0x8000; m.base = mmap(NULL, m.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); m.key_page_off = 0x4000; m.key_page_size = 0x4000;
         s2a_cpatch_load(&m, dir); s2a_cpatch_fps_follow(1);
         uint64_t *slot = (uint64_t *)(m.base + m.key_page_off) + 2046; char b[128];
-        int k = snprintf(b, sizeof b, "%llx %02x %02x %02x", (unsigned long long)(*slot & 0x0e), m.base[0x48], m.base[0x4c], m.base[0x50]);
+        int k = snprintf(b, sizeof b, "%llx %02x %02x %02x 份 %d %d %d", (unsigned long long)(*slot & 0x0e), m.base[0x48], m.base[0x4c], m.base[0x50],
+                         s2a_cpatch_fps_unit("fps:A"), s2a_cpatch_fps_unit("fps:B"), s2a_cpatch_fps_unit("fps:C"));
         write(pp[1], b, (size_t)k); _exit(0);
     }
     close(pp[1]); ssize_t r = read(pp[0], out, n - 1); out[r > 0 ? r : 0] = 0; close(pp[0]); waitpid(c, NULL, 0); unlink(p); rmdir(dir);
@@ -111,17 +115,17 @@ int main(void) {
     const char *want = "档 2:60/120 开 40 55 1 60 选120 80 77 2 120 选60 40 55 1 60 关 0 00";
     CHECK(!strcmp(got, want), "① 缺省选档 / 切 120 / 切回 60 / 关：期望 %s，实得 %s", want, got);
     run(dir, 1, got, sizeof got);
-    const char *want2 = "档 2:60/120 开 80 77 2 120 关 0 00";
-    CHECK(!strcmp(got, want2), "② 玩家设置 S2A_FPS_PICK=120 起局：期望 %s，实得 %s", want2, got);
+    const char *want2 = "档 2:60/120 开 80 77 2 120 份 0 120 关 0 00 份 0 0";   // ⑦ 按份问：选 120 只有 fps:H 选中（120），60 那份 0；关帧率两份都 0
+    CHECK(!strcmp(got, want2), "②⑦ 玩家设置 S2A_FPS_PICK=120 起局、按份问选中档：期望 %s，实得 %s", want2, got);
     // ④ 补帧开着（iOS 设置页缺省写 DM_PRESENT_FI=1）：选 120 照样要 120 Hz 显示链（2，nvn_mtl.m mtl_init 见到 2 不再清成 0）；
     //   不在高刷档时回到 0（不建显示链，画面交还补帧），不是 1。期望手写
     g_fi = 1; run(dir, 0, got, sizeof got); g_fi = 0;
     const char *want4 = "档 2:60/120 开 40 55 0 60 选120 80 77 2 120 选60 40 55 0 60 关 0 00";
     CHECK(!strcmp(got, want4), "④ 补帧开着：期望 %s，实得 %s", want4, got);
     run_group(0, got, sizeof got);
-    CHECK(!strcmp(got, "6 11 22 00"), "⑥ 同档两组、都没验过 → 只开第一组：期望 6 11 22 00，实得 %s", got);
+    CHECK(!strcmp(got, "6 11 22 00 份 60 60 0"), "⑥⑦ 同档两组、都没验过 → 只开第一组、按份问只有它选中：期望 6 11 22 00 份 60 60 0，实得 %s", got);
     run_group(1, got, sizeof got);
-    CHECK(!strcmp(got, "8 00 00 33"), "⑥ 第二组我方验过 → 只开它：期望 8 00 00 33，实得 %s", got);
+    CHECK(!strcmp(got, "8 00 00 33 份 0 0 60"), "⑥⑦ 第二组我方验过 → 只开它、按份问只有它选中：期望 8 00 00 33 份 0 0 60，实得 %s", got);
     run_screen(dir, got, sizeof got);
     const char *want5 = "起 40 55 1 屏120 80 77 2 再报 80 77 选60后屏120 40 55";
     CHECK(!strcmp(got, want5), "⑤ 起局后才知道屏幕 120 Hz：期望 %s，实得 %s", want5, got);

@@ -29,14 +29,17 @@ int main(void) { @autoreleasepool {
     g_link = nil; g_dm_present_link = 0;
     // ③ 每局开头的出图方式（11-15 #ee56e7 / #1155 另一条入口）：期望手写——补帧开、没给 DM_PRESENT_LINK → 0（出图线程自己取画布，不起显示链）；
     //   补帧开、DM_PRESENT_LINK=2（120 档帧率补丁）→ 2；补帧关 → 1（缺省 60 Hz 显示链）。旧实现每局开头只看 DM_PRESENT_LINK：第一项得 1（红）
-    { struct { const char *fi, *link; int want; } c[] = {{"1", NULL, 0}, {"1", "2", 2}, {NULL, NULL, 1}};
-      for (int i = 0; i < 3; i++) {
+    //   ③b 走 Metal 3 的机器（g_m3）补帧开 → 1：Metal 3 不补帧，显示链照建（审计 P1-188；旧实现不看后端得 0，那一局既没补帧也没显示链，红）
+    { struct { const char *fi, *link; int want, m3; } c[] = {{"1", NULL, 0, 0}, {"1", "2", 2, 0}, {NULL, NULL, 1, 0}, {"1", NULL, 1, 1}};
+      int m3_was = g_m3;
+      for (int i = 0; i < 4; i++) {
+          g_m3 = c[i].m3;
           if (c[i].fi) setenv("DM_PRESENT_FI", c[i].fi, 1); else unsetenv("DM_PRESENT_FI");
           if (c[i].link) setenv("DM_PRESENT_LINK", c[i].link, 1); else unsetenv("DM_PRESENT_LINK");
           nvn_be_request_stop(); nvn_be_shutdown_session(); nvn_be_begin_session();
-          CHECK(g_dm_present_link == c[i].want, "③ 每局开头：DM_PRESENT_FI=%s、DM_PRESENT_LINK=%s → 出图方式 %d（期望 %d）", c[i].fi ? c[i].fi : "未设", c[i].link ? c[i].link : "未设", g_dm_present_link, c[i].want);
+          CHECK(g_dm_present_link == c[i].want, "③ 每局开头（Metal %d）：DM_PRESENT_FI=%s、DM_PRESENT_LINK=%s → 出图方式 %d（期望 %d）", c[i].m3 ? 3 : 4, c[i].fi ? c[i].fi : "未设", c[i].link ? c[i].link : "未设", g_dm_present_link, c[i].want);
       }
-      unsetenv("DM_PRESENT_FI"); unsetenv("DM_PRESENT_LINK"); }
+      g_m3 = m3_was; unsetenv("DM_PRESENT_FI"); unsetenv("DM_PRESENT_LINK"); }
     printf("%s t_link_restart：%u 项，不过 %u\n", failures ? "✗" : "✓", checks, failures);
     return failures ? 1 : 0;
 }}
