@@ -11,7 +11,7 @@
 #include <unistd.h>
 #include "../src/native.h"
 void s2a_cpatch_load(module_t *m, const char *dir);
-void s2a_cpatch_fps_follow(int on); void s2a_cpatch_fps_pick(int target); int s2a_cpatch_fps_levels(int *out, int n, int *cur);
+void s2a_cpatch_fps_follow(int on); void s2a_cpatch_fps_pick(int target); int s2a_cpatch_fps_levels(int *out, int n, int *cur); int s2a_cpatch_stall_rescue(void);
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { fails++; printf("✗ "); printf(__VA_ARGS__); printf("\n"); } } while (0)
 static const char *E(const char *k) { const char *v = getenv(k); return v ? v : "-"; }
@@ -35,6 +35,25 @@ static void run(const char *dir, int pick_env, char *out, size_t n) {
     }
     close(pp[1]); ssize_t r = read(pp[0], out, n - 1); out[r > 0 ? r : 0] = 0; close(pp[0]); waitpid(c, NULL, 0);
 }
+// ③ 停帧救场（11-14，cpatch.c s2a_cpatch_stall_rescue）：期望（手算）——帧率补丁没开时救场不动（0）；开着 120 档时救场 → 返回 1、两份都关（掩码 0、
+//   0x40 写回 00）、出图链 1 / 节拍 60、S2A_DOCS 下留 cpatch_stall_off（内容 fps）；同一局再救一次返回 0
+static void run_rescue(const char *dir, char *out, size_t n) {
+    int pp[2]; pipe(pp); pid_t c = fork();
+    if (c == 0) {
+        close(pp[0]); unsetenv("DM_PRESENT_LINK"); unsetenv("DM_PRESENT_HZ"); unsetenv("S2A_CPATCH_ON"); setenv("S2A_FPS_PICK", "120", 1); setenv("S2A_DOCS", dir, 1);
+        module_t m; memset(&m, 0, sizeof m); snprintf(m.name, sizeof m.name, "%s", "main");
+        m.size = 0x8000; m.base = mmap(NULL, m.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0); m.key_page_off = 0x4000; m.key_page_size = 0x4000;
+        s2a_cpatch_load(&m, dir);
+        uint64_t *slot = (uint64_t *)(m.base + m.key_page_off) + 2046; char b[512], mk[64] = "-"; int k = 0;
+        k += snprintf(b + k, sizeof b - (size_t)k, "未开救 %d", s2a_cpatch_stall_rescue());
+        s2a_cpatch_fps_follow(1); k += snprintf(b + k, sizeof b - (size_t)k, " 开 %llx %02x %s %s", (unsigned long long)(*slot & 0xC0), m.base[0x40], E("DM_PRESENT_LINK"), E("DM_PRESENT_HZ"));
+        int r1 = s2a_cpatch_stall_rescue();
+        char p[300]; snprintf(p, sizeof p, "%s/cpatch_stall_off", dir); FILE *f = fopen(p, "r"); if (f) { if (!fgets(mk, sizeof mk, f)) mk[0] = 0; fclose(f); mk[strcspn(mk, "\n")] = 0; unlink(p); }
+        k += snprintf(b + k, sizeof b - (size_t)k, " 救 %d %llx %02x %s %s 标记 %s 再救 %d", r1, (unsigned long long)(*slot & 0xC0), m.base[0x40], E("DM_PRESENT_LINK"), E("DM_PRESENT_HZ"), mk, s2a_cpatch_stall_rescue());
+        write(pp[1], b, (size_t)k); _exit(0);
+    }
+    close(pp[1]); ssize_t r = read(pp[0], out, n - 1); out[r > 0 ? r : 0] = 0; close(pp[0]); waitpid(c, NULL, 0);
+}
 int main(void) {
     char dir[] = "/tmp/t_cpatch_levels.XXXXXX"; if (!mkdtemp(dir)) return 1;
     char p[256]; snprintf(p, sizeof p, "%s/cpatch.tsv", dir); FILE *f = fopen(p, "w");
@@ -49,7 +68,10 @@ int main(void) {
     run(dir, 1, got, sizeof got);
     const char *want2 = "档 2:60/120 开 80 77 2 120 关 0 00";
     CHECK(!strcmp(got, want2), "② 玩家设置 S2A_FPS_PICK=120 起局：期望 %s，实得 %s", want2, got);
+    run_rescue(dir, got, sizeof got);
+    const char *want3 = "未开救 0 开 80 77 2 120 救 1 0 00 1 60 标记 fps 再救 0";
+    CHECK(!strcmp(got, want3), "③ 停帧救场：期望 %s，实得 %s", want3, got);
     unlink(p); rmdir(dir);
     if (fails) { printf("✗ t_cpatch_levels：%d 项红\n", fails); return 1; }
-    printf("✓ t_cpatch_levels：2 项（缺省按屏幕取档、局中切档、玩家设置起局）\n"); return 0;
+    printf("✓ t_cpatch_levels：3 项（缺省按屏幕取档、局中切档、玩家设置起局、停帧救场）\n"); return 0;
 }

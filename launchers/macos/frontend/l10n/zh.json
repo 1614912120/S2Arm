@@ -1378,7 +1378,7 @@
   "s2arm.export.dlc": "DLC × %d",
   "s2arm.export.elapsed": "总用时",
   "s2arm.export.finishAt": "约 %@ 完成",
-  "s2arm.export.hint": "大游戏第一次出包要几十分钟，请插上电源、别让 Mac 睡眠。",
+  "s2arm.export.hint": "大游戏第一次出包要几十分钟，请插上电源、别让 Mac 睡眠。可以一次放进多款游戏，连续出包。",
   "s2arm.export.installExisting": "已有 iPhone 包？装到 iPhone",
   "s2arm.export.log": "详细记录",
   "s2arm.export.noDlc": "无 DLC",

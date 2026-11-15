@@ -3,6 +3,7 @@ import importlib.util
 import hashlib
 import io
 import zipfile
+import tarfile
 from contextlib import redirect_stdout
 import json
 import os
@@ -163,6 +164,32 @@ class ScanTests(unittest.TestCase):
                 table.write_text(json.dumps(raw))
                 with patch.object(self.mod, 'RULES_PATH', table), self.assertRaises(self.mod.ScanError):
                     self.mod.load_rules()
+
+    def test_synthetic_systemdata_tar_exception_is_exact_and_unread(self):
+        path = 'services/S2A.Services/systemdata_synth.tar'
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode='w', format=tarfile.USTAR_FORMAT) as archive:
+            data = b'Original synthetic scanner fixture'
+            member = tarfile.TarInfo('fixture.txt'); member.size = len(data)
+            archive.addfile(member, io.BytesIO(data))
+        self.commit({path: stream.getvalue()})
+        with patch.object(self.mod.Blobs, 'read', side_effect=AssertionError('archive body read')):
+            report = self.mod.scan(self.root, 'HEAD', ['.'])
+        self.assertEqual(report['coverage'], {'unreviewed_type': 1})
+        self.assertEqual(report['uncovered_blocking'], [])
+        self.assertEqual([f['path'] for f in report['uncovered_allowed']], [path])
+        self.assertEqual(report['uncovered_allowed'][0]['reason'], 'unreviewed_type')
+        other = 'services/S2A.Services/another.tar'
+        self.commit({other: stream.getvalue()})
+        with patch.object(self.mod.Blobs, 'read', side_effect=AssertionError('archive body read')):
+            report = self.mod.scan(self.root, 'HEAD', ['.'])
+        self.assertEqual([f['path'] for f in report['uncovered_blocking']], [other])
+        self.assertEqual([f['path'] for f in report['uncovered_allowed']], [path])
+
+    def test_dshfn_comments_have_no_public_scan_findings(self):
+        path = 'graphics/tools/direct/tests/dshfn.py'
+        for line_number, line in enumerate((ROOT / path).read_text().splitlines(), 1):
+            self.assertEqual(self.mod.categories(line, path), [], f'{path}:{line_number}')
 
     def test_full_scan_reasoned_existing_allowlist_keeps_boundary_visible(self):
         self.commit({'unknown.xyz': b'original unknown-type fixture'})
