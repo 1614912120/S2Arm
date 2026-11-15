@@ -12,8 +12,12 @@
 // 录进同一个命令缓冲。命令缓冲的开始 / 结束 / 分配、队列提交、呈现先等录制线程把队列里的调用全做完（vk_dq_drain）：命令池要外部同步，
 // 一次提交必须带着它之前录的全部内容。参数拷不了的调用（带不认识的 pNext 链）等队列清空后直接调。
 // 生产者不止一条线程（回放线程、呈现线程），每条记录在自旋锁里写。
+#include <errno.h>
 #include <sched.h>
 #include <stdatomic.h>
+#ifdef __linux__
+#include <sys/prctl.h>
+#endif
 #define VKLOG(...) do { char dq_b_[256]; snprintf(dq_b_, sizeof dq_b_, __VA_ARGS__); nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", dq_b_); } while (0)
 #define DQ_U __attribute__((unused))
 
@@ -44,20 +48,37 @@ static _Atomic uint64_t g_dq_pub, g_dq_rd;           // published end, the recor
 static _Atomic int g_dq_sleeping;   // the recorder is (about to be) asleep on g_dq_cv
 static _Atomic int g_dq_draining;   // how many threads wait in vk_dq_drain's slow path (a count, not a flag: threads drain concurrently and the one that leaves first must not erase the others' mark, or the recorder skips the wake-up and they sit out the 1 s timeout)
 static pthread_spinlock_t g_dq_pl;   // the producers' lock, from dq_rec_begin to dq_rec_end
-static pthread_mutex_t g_dq_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_dq_cv = PTHREAD_COND_INITIALIZER, g_dq_dcv = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t g_dq_mu = PTHREAD_MUTEX_INITIALIZER; static pthread_cond_t g_dq_cv, g_dq_dcv = PTHREAD_COND_INITIALIZER;   // g_dq_cv 在 vk_dq_init 里按单调时钟初始化（录制线程定时醒要用）；录制线程起来之前没有人睡在它上面，也没有人叫它
 static _Atomic int g_dq_on;   // 开关：dq_poll 在提交处改，各生产者线程读（relaxed：切换点之后的调用走新路径即可）
 #define DQ_ON() atomic_load_explicit(&g_dq_on, memory_order_relaxed)
 static uint64_t g_dq_recs, g_dq_drains, g_dq_direct;   // records queued, drains, calls made directly (unknown arguments); 诊断计数，各线程可能同时读写：一律 relaxed 原子访问
 static _Atomic uint32_t g_dq_cur_op;                   // 录制线程正在做 / 刚开始做的那条的 op（清空等超时的自报红里指出卡在哪一类调用）
+static pthread_t g_dq_rec_th;                          // 录制线程（读它的 CPU 时间用，见 nvn_vk_dbg_dq_thread_cpu_ns）
 
-static void dq_wake(void) { if (atomic_load(&g_dq_sleeping)) { pthread_mutex_lock(&g_dq_mu); pthread_cond_signal(&g_dq_cv); pthread_mutex_unlock(&g_dq_mu); } }
+// 录制线程怎么等活（调试开关，开会话时读、之后每 64 次提交再读；缺省都是原行为）：
+//   nvk_dq_spin     没活时先 sched_yield 自旋几次再睡。缺省 200；0 = 直接睡。
+//   nvk_dq_poll_us  睡法：0 = 睡到被叫醒；>0 = 定时醒（起始间隔这么多微秒，醒来没活就翻倍退避，封顶 DQ_POLL_MAX_US），靠定时醒把积压的活取走。
+//   nvk_dq_wake_kb  生产者何时叫醒睡着的录制线程：0 = 每发布一条记录都叫；>0 = 积压不到这么多 KB 不叫（清空、环满、定时醒不受此限，积压最多等到下一次定时醒 / 过线 / 清空）。
+static _Atomic int g_dq_spin = 200;
+static _Atomic int g_dq_poll_us;
+static _Atomic uint64_t g_dq_wake_bytes;
+enum { DQ_POLL_MAX_US = 2000 };
+// 诊断读数（nvk_gputime 开着才计；backend_vulkan_wsi.inc 随「对象读数」每 300 帧打一行）
+static _Atomic int g_dq_stat;
+enum { DQS_SLEEP, DQS_TMO, DQS_TMO_WORK, DQS_WAKE, DQS_DRAIN_WAIT, DQS_DRAIN_NS, DQS_N };   // 录制线程进睡眠次数 / 定时醒次数 / 其中醒来发现有活的次数 / 生产者真去叫醒的次数 / 清空要等的次数 / 清空等待总纳秒
+static uint64_t g_dq_st[DQS_N];
+#define DQ_ST(i, v) do { if (atomic_load_explicit(&g_dq_stat, memory_order_relaxed)) __atomic_fetch_add(&g_dq_st[i], (uint64_t)(v), __ATOMIC_RELAXED); } while (0)
+static uint64_t dq_now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec; }
+
+static void dq_wake(void) { if (atomic_load(&g_dq_sleeping)) { DQ_ST(DQS_WAKE, 1); pthread_mutex_lock(&g_dq_mu); pthread_cond_signal(&g_dq_cv); pthread_mutex_unlock(&g_dq_mu); } }
 static void vk_dq_drain(void) {
     if (!g_dq_ring) return;
     uint64_t w = atomic_load(&g_dq_pub);   // 到此刻已经写完的记录（原文在自旋锁里读写位置；这里读已发布的位置，免得开关关着时每个调用都过一次锁。别的线程正写到一半的那条不算，它那次调用还没返回）
     if (atomic_load_explicit(&g_dq_rd, memory_order_acquire) >= w) return;
+    const uint64_t t0 = atomic_load_explicit(&g_dq_stat, memory_order_relaxed) ? dq_now_ns() : 0;
     __atomic_fetch_add(&g_dq_drains, 1, __ATOMIC_RELAXED); dq_wake();
     for (int i = 0; i < 2000 && atomic_load_explicit(&g_dq_rd, memory_order_acquire) < w; i++) sched_yield();   // the recorder is usually a few calls behind
-    if (atomic_load_explicit(&g_dq_rd, memory_order_acquire) >= w) return;
+    if (atomic_load_explicit(&g_dq_rd, memory_order_acquire) >= w) goto done;
     pthread_mutex_lock(&g_dq_mu); atomic_fetch_add(&g_dq_draining, 1);
     while (atomic_load_explicit(&g_dq_rd, memory_order_acquire) < w) { pthread_cond_signal(&g_dq_cv);
         struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl); dl.tv_sec += 1;
@@ -65,6 +86,8 @@ static void vk_dq_drain(void) {
             if (atomic_fetch_add_explicit(&n, 1, memory_order_relaxed) < 20) VKLOG("[RED] two-stage replay: a drain waits over 1 s: written %llu, published %llu, read %llu; the recorder is at op %u (%s)",
                 (unsigned long long)w, (unsigned long long)atomic_load(&g_dq_pub), (unsigned long long)rd, cur, cur < OP_N ? g_dq_names[cur] : "?"); } }
     atomic_fetch_sub(&g_dq_draining, 1); pthread_mutex_unlock(&g_dq_mu);
+done:
+    if (t0) { DQ_ST(DQS_DRAIN_WAIT, 1); DQ_ST(DQS_DRAIN_NS, dq_now_ns() - t0); }
 }
 static void *dq_rec_begin(uint32_t op, VkCommandBuffer cb, size_t n) {   // room for a record with n bytes after its header
     size_t need = (sizeof(dq_rec_hdr) + n + 15) & ~(size_t)15;   // 16-byte records: the ring's end always has room for a whole header
@@ -81,9 +104,13 @@ static void *dq_rec_begin(uint32_t op, VkCommandBuffer cb, size_t n) {   // room
 }
 static void dq_rec_end(void *payload) {
     dq_rec_hdr *h = (dq_rec_hdr *)payload - 1; g_dq_w += h->size; __atomic_store_n(&g_dq_recs, g_dq_recs + 1, __ATOMIC_RELAXED);   // 自旋锁里：写者只有一个，读者（用例 / 读数）用原子读
-    atomic_store(&g_dq_pub, g_dq_w);   // (seq_cst, against the recorder's sleep flag: either it sees this record or this sees it asleep)
+    const uint64_t w = g_dq_w;
+    atomic_store(&g_dq_pub, w);   // (seq_cst, against the recorder's sleep flag: either it sees this record or this sees it asleep)
     pthread_spin_unlock(&g_dq_pl);
-    dq_wake();
+    if (atomic_load(&g_dq_sleeping)) {   // 录制线程醒着就不用叫：它做完手头的会看到这一条
+        const uint64_t wb = atomic_load_explicit(&g_dq_wake_bytes, memory_order_relaxed), rd = atomic_load_explicit(&g_dq_rd, memory_order_acquire);   // 睡着时 g_dq_rd 不动，读它不会和录制线程抢缓存行
+        if (!wb || (w > rd && w - rd >= wb)) dq_wake();   // 按批叫（wb > 0）：积压不够就让它睡着，等定时醒 / 下一次过线 / 清空来叫（w <= rd：别的生产者发布了更靠后的记录、已被取走，这一条也做完了，积压为零）
+    }
 }
 // copying helpers: a record is a fixed struct followed by its arrays
 #define DQ_ARR(T, p, n) ((n) && (p) ? (size_t)(n) * sizeof(T) : 0)
@@ -186,16 +213,29 @@ static void *dq_recorder_main(void *arg) {
 #ifdef __ANDROID__
     pthread_setname_np(pthread_self(), "s2a-vk-record");
 #endif
+#ifdef __linux__
+    prctl(PR_SET_TIMERSLACK, 1000UL, 0UL, 0UL, 0UL);   // 定时醒（nvk_dq_poll_us）别被默认 50 微秒的定时器松弛拖长；只作用于本线程
+#endif
     uint64_t r = 0;
     for (;;) {
         uint64_t pub = atomic_load(&g_dq_pub);
         if (r == pub) {
-            for (int i = 0; i < 200 && (pub = atomic_load(&g_dq_pub)) == r; i++) sched_yield();   // the producer usually queues the next call within microseconds
+            const int spin = atomic_load_explicit(&g_dq_spin, memory_order_relaxed);
+            for (int i = 0; i < spin && (pub = atomic_load(&g_dq_pub)) == r; i++) sched_yield();   // the producer usually queues the next call within microseconds
             if (pub == r) {
+                int wait_us = 0, tmo = 0;   // wait_us：这一觉的定时醒间隔，每次进睡眠从 nvk_dq_poll_us 起，醒来没活就翻倍
                 pthread_mutex_lock(&g_dq_mu);
                 if (atomic_load(&g_dq_draining)) pthread_cond_broadcast(&g_dq_dcv);
-                atomic_store(&g_dq_sleeping, 1);
-                while ((pub = atomic_load(&g_dq_pub)) == r) pthread_cond_wait(&g_dq_cv, &g_dq_mu);
+                atomic_store(&g_dq_sleeping, 1); DQ_ST(DQS_SLEEP, 1);
+                while ((pub = atomic_load(&g_dq_pub)) == r) {
+                    const int poll_us = atomic_load_explicit(&g_dq_poll_us, memory_order_relaxed);   // 每圈都读：开关变了，dq_tune 叫醒一下，这里就按新的睡
+                    if (poll_us <= 0) { wait_us = 0; pthread_cond_wait(&g_dq_cv, &g_dq_mu); continue; }
+                    if (wait_us <= 0) wait_us = poll_us;
+                    struct timespec dl; clock_gettime(CLOCK_MONOTONIC, &dl);   // g_dq_cv 按单调时钟初始化：墙钟被改也不影响
+                    dl.tv_nsec += (long)wait_us * 1000L; if (dl.tv_nsec >= 1000000000L) { dl.tv_sec++; dl.tv_nsec -= 1000000000L; }
+                    if (pthread_cond_timedwait(&g_dq_cv, &g_dq_mu, &dl) == ETIMEDOUT) { tmo = 1; DQ_ST(DQS_TMO, 1); if (wait_us < DQ_POLL_MAX_US) wait_us *= 2; } else tmo = 0;   // 醒来没活：下次睡久一点（生产者停了就别白醒）
+                }
+                if (tmo) DQ_ST(DQS_TMO_WORK, 1);   // 是定时醒取走的活，不是谁叫醒的
                 atomic_store(&g_dq_sleeping, 0); pthread_mutex_unlock(&g_dq_mu);
             }
         }
@@ -340,9 +380,19 @@ static DQ_U VKAPI_ATTR void VKAPI_CALL w_vkDestroyCommandPool(VkDevice d, VkComm
 static DQ_U VKAPI_ATTR void VKAPI_CALL w_vkFreeCommandBuffers(VkDevice d, VkCommandPool p, uint32_t n, const VkCommandBuffer *cb) { vk_dq_drain(); vkFreeCommandBuffers(d, p, n, cb); }
 static DQ_U VKAPI_ATTR VkResult VKAPI_CALL w_vkResetCommandBuffer(VkCommandBuffer cb, VkCommandBufferResetFlags f) { vk_dq_drain(); return vkResetCommandBuffer(cb, f); }
 
+// 录制线程等活的调试开关（见 g_dq_spin 处）：开会话时读一次，之后跟着 dq_poll 每 64 次提交再读（用例也靠这个在运行中切）
+static void dq_tune(void) {
+    atomic_store_explicit(&g_dq_spin, nvn_plat_flag("nvk_dq_spin", 200), memory_order_relaxed);
+    const int poll_us = nvn_plat_flag("nvk_dq_poll_us", 0);
+    if (atomic_exchange_explicit(&g_dq_poll_us, poll_us, memory_order_relaxed) != poll_us) dq_wake();   // 睡法变了：叫醒睡着的录制线程，它每圈重读睡法，醒来就按新的睡
+    const int kb = nvn_plat_flag("nvk_dq_wake_kb", 0);
+    atomic_store_explicit(&g_dq_wake_bytes, kb > 0 ? (uint64_t)kb << 10 : 0, memory_order_relaxed);
+    atomic_store_explicit(&g_dq_stat, nvn_plat_flag("nvk_gputime", 0) != 0, memory_order_relaxed);
+}
 // 开关（调试属性 nvk_dq，缺省关）：在提交处读——那里队列刚清空；别的线程这时还有没做完的记录也没关系，它之后的直接调用会先清空队列。
 static void dq_poll(void) {
     static _Atomic uint32_t n; if (!g_dq_ring || (atomic_fetch_add_explicit(&n, 1, memory_order_relaxed) & 63)) return;
+    dq_tune();
     int on = nvn_plat_flag("nvk_dq", 0) != 0;
     if (on != DQ_ON()) { atomic_store_explicit(&g_dq_on, on, memory_order_relaxed); VKLOG("两级回放%s（debug.s2a.nvk_dq）", on ? "开：vkCmd* 调用交给录制线程" : "关：回放线程自己录"); }
 }
@@ -353,14 +403,17 @@ static void vk_dq_init(VkDevice dev) {
     // The instance requests Vulkan 1.1: use the explicitly enabled KHR aliases.
     r_vkCmdDrawIndirectCount = (PFN_vkCmdDrawIndirectCount)vkGetDeviceProcAddr(dev, "vkCmdDrawIndirectCountKHR");
     r_vkCmdDrawIndexedIndirectCount = (PFN_vkCmdDrawIndexedIndirectCount)vkGetDeviceProcAddr(dev, "vkCmdDrawIndexedIndirectCountKHR");
+    dq_tune();   // 每次开会话都读
     if (g_dq_ring) return;   // 会话重开：队列和线程沿用
     pthread_spin_init(&g_dq_pl, PTHREAD_PROCESS_PRIVATE);
     uint8_t *ring = malloc(dq_RING);
     if (!ring) { VKLOG("【红】两级回放：队列内存分配失败，回放线程自己录"); return; }
+    { pthread_condattr_t ca; pthread_condattr_init(&ca); pthread_condattr_setclock(&ca, CLOCK_MONOTONIC); pthread_cond_init(&g_dq_cv, &ca); pthread_condattr_destroy(&ca); }   // 录制线程起来之前：没有人睡在它上面
     pthread_t t; pthread_attr_t at; pthread_attr_init(&at); pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
     int rc = pthread_create(&t, &at, dq_recorder_main, NULL);
     pthread_attr_destroy(&at);
     if (rc) { free(ring); VKLOG("【红】两级回放：录制线程起不来，回放线程自己录"); return; }
+    g_dq_rec_th = t;
     g_dq_ring = ring;
     atomic_store_explicit(&g_dq_on, nvn_plat_flag("nvk_dq", 0) != 0, memory_order_relaxed);   // 起始值；之后由 dq_poll 在提交处跟着开关变
 }
@@ -388,6 +441,12 @@ static DQ_U VKAPI_ATTR VkResult VKAPI_CALL w_vkFreeDescriptorSets(VkDevice d, Vk
 static DQ_U VKAPI_ATTR VkResult VKAPI_CALL w_vkResetDescriptorPool(VkDevice d, VkDescriptorPool p, VkDescriptorPoolResetFlags f) { vk_dq_drain(); return vkResetDescriptorPool(d, p, f); }
 
 uint64_t nvn_vk_dbg_dq_recs(void) { return __atomic_load_n(&g_dq_recs, __ATOMIC_RELAXED); }   // 用例读：至今交给录制线程的调用数
+uint64_t nvn_vk_dbg_dq_stat(int i) { return i >= 0 && i < DQS_N ? __atomic_load_n(&g_dq_st[i], __ATOMIC_RELAXED) : 0; }   // 用例读：等活读数（见 DQS_*；nvk_gputime 开着才计）
+int nvn_vk_dbg_dq_thread_cpu_ns(uint64_t *ns) {   // 用例读：录制线程至今用掉的 CPU 纳秒（没起来返回 -1）
+    clockid_t cid; struct timespec ts;
+    if (!g_dq_ring || pthread_getcpuclockid(g_dq_rec_th, &cid) || clock_gettime(cid, &ts)) return -1;
+    *ns = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec; return 0;
+}
 
 // ---- 从这里往下，后端里这些名字都走包装 ----
 #define vkBeginCommandBuffer w_vkBeginCommandBuffer

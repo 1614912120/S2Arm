@@ -293,6 +293,11 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
           size_t o = (size_t)snprintf(b, sizeof b, "驱动调用（每帧，近 300 帧）：共 %.0f 次", tot / 300.0);
           for (int i = 0; i < 10 && i < OP_N && c[idx[i]] && o < sizeof b - 48; i++) if (idx[i] != OP_WRAP) o += (size_t)snprintf(b + o, sizeof b - o, "；%s %.1f", g_dq_names[idx[i]] + 5, c[idx[i]] / 300.0);   // + 5：去掉 vkCmd
           nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
+        if (g_dq_ring && DQ_ON()) {   // 两级回放开着才有这一行：录制线程怎么等活、生产者叫了几次、清空等了多久（nvk_dq_spin / nvk_dq_poll_us / nvk_dq_wake_kb 的 A/B 读数）
+          uint64_t s[DQS_N]; for (int i = 0; i < DQS_N; i++) s[i] = __atomic_exchange_n(&g_dq_st[i], 0, __ATOMIC_RELAXED);
+          snprintf(b, sizeof b, "两级回放等活读数（每帧，近 300 帧）：录制线程进睡眠 %.1f 次（其中定时醒 %.1f 次、醒来有活 %.1f 次）；生产者真去叫醒 %.1f 次；清空要等 %.1f 次、共 %.0f 微秒",
+              s[DQS_SLEEP] / 300.0, s[DQS_TMO] / 300.0, s[DQS_TMO_WORK] / 300.0, s[DQS_WAKE] / 300.0, s[DQS_DRAIN_WAIT] / 300.0, s[DQS_DRAIN_NS] / 300.0 / 1000.0);
+          nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
         { uint64_t d0 = __atomic_exchange_n(&g_draw_ns[0], 0, __ATOMIC_RELAXED), d1 = __atomic_exchange_n(&g_draw_ns[1], 0, __ATOMIC_RELAXED), d2 = __atomic_exchange_n(&g_draw_ns[2], 0, __ATOMIC_RELAXED);
           snprintf(b, sizeof b, "后端绘制细分（每帧毫秒，近 300 帧）：描述符 %.2f、推常量与状态 %.2f、顶点索引与绘制调用 %.2f", d0 / 300.0 / 1e6, d1 / 300.0 / 1e6, d2 / 300.0 / 1e6);
           nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }

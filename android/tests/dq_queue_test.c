@@ -13,7 +13,13 @@
 //   C3 背压：录制线程每条慢 1.5 微秒，单生产者发的总量超过队列容量，生产者必须等环里有地方；全部按序做完、不死锁。
 //   C5 两条线程同时清空：用记录桩与真实等待握手定次序，先到的先走之后，后到的必须仍被叫醒（不能等满 1 秒的超时）。
 //   C4 运行时开关：生产者在跑的时候来回切 nvk_dq（经提交处的开关读取，开 → 关 → 开），每个 cb 的序列仍然一致。
+//   C6 录制线程怎么等活（nvk_dq_spin / nvk_dq_poll_us / nvk_dq_wake_kb）：
+//      a 积压不到阈值时清空照样立刻等到；b 积压不到阈值不叫、过线就叫（不清空，过线的那一批也要被做掉）；
+//      c 定时醒会把没人叫的积压取走；d 空闲很久之后退避封顶（再来一条也在毫秒级被取走）；
+//      e 稀疏的生产者下，定时醒 + 按批叫的录制线程 CPU 远低于原来的自旋（同一台机器上两种配置各量一次，比值）。
+//   C1b / C1c 同 C1，但录制线程用定时醒 + 按批叫（C1b 无清空噪声：积压只靠定时醒 / 过线 / 末尾清空取走）。
 // 任何一处卡住由看门狗在 TEST_TIMEOUT_S 秒后以退出码 3 收场（队列死锁不会让 CI 挂着）。
+// 带一个参数时只跑那一组（如 `dq_queue_test C6`），变异负控用它直奔被测的阶段。
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
@@ -34,10 +40,14 @@
 #endif
 
 // ---- 平台桩 ----
-static _Atomic int g_flag_dq = 1;
+static _Atomic int g_flag_dq = 1, g_flag_spin = 200, g_flag_poll = 0, g_flag_wake_kb = 0, g_flag_gputime = 1;   // 后三个等活开关的缺省值就是队列的缺省行为；gputime 开着 = 队列里的读数计数器在计
 static _Atomic int g_red_logs, g_red_expected, g_red_ok;   // g_red_ok：这一段里「清空等了超过 1 秒」的自报红是预期的（背压段收尾时环里积压着 1 秒以上的活）
 int nvn_plat_flag(const char *name, int dflt) {
     if (!strcmp(name, "nvk_dq")) return atomic_load(&g_flag_dq);
+    if (!strcmp(name, "nvk_dq_spin")) return atomic_load(&g_flag_spin);
+    if (!strcmp(name, "nvk_dq_poll_us")) return atomic_load(&g_flag_poll);
+    if (!strcmp(name, "nvk_dq_wake_kb")) return atomic_load(&g_flag_wake_kb);
+    if (!strcmp(name, "nvk_gputime")) return atomic_load(&g_flag_gputime);
     return dflt;
 }
 void nvn_plat_log(int level, const char *cls, const char *text) {
@@ -199,6 +209,13 @@ static void set_dq(int on) {
     for (int i = 0; i < 64; i++) vkQueueSubmit(NULL, 0, NULL, VK_NULL_HANDLE);
     CHECK((g_dq_on != 0) == (on != 0), "两级回放开关没切过去：期望 %d → %d", on, g_dq_on);
 }
+// 切录制线程的等活开关（同样经提交处的读取），并确认队列里的值跟上了
+static void set_wait(int spin, int poll_us, int wake_kb) {
+    atomic_store(&g_flag_spin, spin); atomic_store(&g_flag_poll, poll_us); atomic_store(&g_flag_wake_kb, wake_kb);
+    for (int i = 0; i < 64; i++) vkQueueSubmit(NULL, 0, NULL, VK_NULL_HANDLE);
+    CHECK(atomic_load(&g_dq_spin) == spin && atomic_load(&g_dq_poll_us) == poll_us && (long)(atomic_load(&g_dq_wake_bytes) >> 10) == wake_kb,
+          "等活开关没切过去：期望 spin=%d poll_us=%d wake_kb=%d", spin, poll_us, wake_kb);
+}
 static void reset_sinks(void) { vkDeviceWaitIdle(NULL); memset(g_hash, 0, sizeof g_hash); memset(g_cnt, 0, sizeof g_cnt); for (int i = 0; i < MAXCB; i++) atomic_store(&g_executed[i], 0); }
 static void phase(const char *name) { printf("阶段开始：%s\n", name); fflush(stdout); }   // 崩溃 / 超时时，日志里最后一行告诉你卡在哪个阶段
 
@@ -320,7 +337,75 @@ static void run_pressure_phase(uint64_t n) {
     printf("  %-38s %llu 条，写入 %.1f MB（队列 %d MB）\n", "C3 背压（录制每条慢 1.5 微秒）", (unsigned long long)n, mb, dq_RING >> 20);
 }
 
+// ---- C6：录制线程怎么等活 ----
+static int wait_executed(unsigned cb, uint64_t want, int timeout_ms) {   // 等 cb 上做完的条数到 want；返回等了多少毫秒，超时返回 -1
+    uint64_t t0 = now_ns();
+    while (atomic_load_explicit(&g_executed[cb], memory_order_acquire) < want) {
+        if ((now_ns() - t0) / 1000000ull >= (uint64_t)timeout_ms) return -1;
+        usleep(200);
+    }
+    return (int)((now_ns() - t0) / 1000000ull);
+}
+static void issue_draws(unsigned cb, int n) { for (int i = 0; i < n; i++) vkCmdDraw(cb_of(cb), 3, 1, (uint32_t)i, 0); }   // 每条记录 48 字节
+static uint64_t rec_cpu_ns(void) { uint64_t ns = 0; return nvn_vk_dbg_dq_thread_cpu_ns(&ns) ? 0 : ns; }
+static uint64_t trickle_cpu_ns(int ms) {   // 稀疏的单生产者（每约 20 微秒一条）持续 ms 毫秒；返回这段时间里录制线程用掉的 CPU 纳秒
+    reset_sinks();
+    uint64_t c0 = rec_cpu_ns(), t0 = now_ns();
+    while (now_ns() - t0 < (uint64_t)ms * 1000000ull) { vkCmdDraw(cb_of(0), 3, 1, 0, 0); spin_ns(20000); }
+    vkEndCommandBuffer(cb_of(1));
+    return rec_cpu_ns() - c0;
+}
+static void run_wait_phase(void) {
+    phase("C6 录制线程怎么等活");
+    set_dq(1);
+    // a 积压不到阈值：清空照样立刻等到
+    set_wait(0, 0, 64); reset_sinks(); usleep(20000);
+    issue_draws(0, 3);
+    uint64_t t0 = now_ns(); vkEndCommandBuffer(cb_of(1)); double ms = (double)(now_ns() - t0) / 1e6;
+    CHECK(ms < 300.0, "C6a：积压不到阈值时清空等了 %.0f 毫秒（应在毫秒级；等满 1 秒的超时 = 清空没把睡着的录制线程叫醒）", ms);
+    CHECK(g_cnt[0] == 3, "C6a：条数不符：发 3 → 收 %llu", (unsigned long long)g_cnt[0]);
+    // b 不过线不叫、过线就叫（只按批叫：poll_us = 0，睡着的录制线程只有生产者能叫）
+    set_wait(0, 0, 4); reset_sinks(); usleep(20000);
+    uint64_t wk0 = nvn_vk_dbg_dq_stat(DQS_WAKE);
+    issue_draws(0, 20);   // 960 字节，不到 4 KB
+    usleep(30000);
+    uint64_t ex = atomic_load_explicit(&g_executed[0], memory_order_acquire);
+    CHECK(ex == 0, "C6b：积压 960 字节（阈值 4 KB），不清空，30 毫秒内录制线程却做了 %llu 条——没过线就叫醒了", (unsigned long long)ex);
+    CHECK(nvn_vk_dbg_dq_stat(DQS_WAKE) == wk0, "C6b：没过线却去叫醒了 %llu 次", (unsigned long long)(nvn_vk_dbg_dq_stat(DQS_WAKE) - wk0));
+    issue_draws(0, 180);   // 共 200 条 = 9.6 KB，过线
+    int wms = wait_executed(0, 80, 500);
+    ex = atomic_load_explicit(&g_executed[0], memory_order_acquire);
+    CHECK(wms >= 0, "C6b：共写了 200 条（9.6 KB，阈值 4 KB），不清空，500 毫秒内录制线程只做了 %llu 条——过线没人叫醒", (unsigned long long)ex);
+    CHECK(nvn_vk_dbg_dq_stat(DQS_WAKE) > wk0, "C6b：过了线，生产者却没有去叫醒");
+    vkEndCommandBuffer(cb_of(1));
+    CHECK(g_cnt[0] == 200, "C6b：清空后条数不符：发 200 → 收 %llu", (unsigned long long)g_cnt[0]);
+    // c 定时醒：谁也不叫（阈值 1 MB），积压靠定时醒取走
+    set_wait(0, 500, 1024); reset_sinks(); usleep(20000);
+    uint64_t tw0 = nvn_vk_dbg_dq_stat(DQS_TMO_WORK);
+    issue_draws(0, 5);
+    wms = wait_executed(0, 5, 200);
+    ex = atomic_load_explicit(&g_executed[0], memory_order_acquire);
+    CHECK(wms >= 0, "C6c：定时醒（起始 500 微秒）下 5 条记录 200 毫秒内没被取走（实际 %llu 条）", (unsigned long long)ex);
+    CHECK(nvn_vk_dbg_dq_stat(DQS_TMO_WORK) > tw0, "C6c：记录被取走了，却不是定时醒取走的");
+    // d 空闲很久之后：退避封顶，再来一条仍在毫秒级被取走（不封顶的话 400 毫秒后下一次醒要在 250 毫秒以后）
+    set_wait(0, 500, 1024); reset_sinks();
+    usleep(400000);
+    issue_draws(0, 1);
+    wms = wait_executed(0, 1, 60);
+    CHECK(wms >= 0, "C6d：空闲 400 毫秒后来 1 条，60 毫秒内没被取走（退避没封顶？封顶 %d 微秒）", (int)DQ_POLL_MAX_US);
+    // e 稀疏的生产者：定时醒 + 按批叫的录制线程不再空转。同一台机器上各量一次，比值（绝对值跟机器走）
+    set_wait(200, 0, 0);
+    uint64_t cpu_spin = trickle_cpu_ns(300);   // 原来的行为：没活先 sched_yield 自旋 200 次
+    set_wait(0, 100, 4);
+    uint64_t cpu_new = trickle_cpu_ns(300);
+    CHECK(cpu_spin > 0 && cpu_new * 10 < cpu_spin * 6, "C6e：稀疏生产者 300 毫秒里录制线程 CPU：自旋 %.1f 毫秒、定时醒 + 按批叫 %.1f 毫秒（要求后者不到前者的 60%%）", (double)cpu_spin / 1e6, (double)cpu_new / 1e6);
+    printf("  %-38s 稀疏生产者 300 毫秒：录制线程 CPU 自旋 %.1f 毫秒 → 定时醒 + 按批叫 %.1f 毫秒\n", "C6 录制线程怎么等活", (double)cpu_spin / 1e6, (double)cpu_new / 1e6);
+    set_wait(200, 0, 0);   // 还原缺省
+}
+
 int main(int argc, char **argv) {
+    const char *only = argc > 1 ? argv[1] : NULL;
+#define WANT(id) (!only || !strcmp(only, id))
     pthread_t wd; pthread_create(&wd, NULL, watchdog_main, NULL); pthread_detach(wd);
     vk_dq_init((VkDevice)(uintptr_t)0x1);
     CHECK(g_dq_ring != NULL && g_dq_on, "队列没起来（环内存 / 录制线程）");
@@ -331,11 +416,14 @@ int main(int argc, char **argv) {
         return g_bad ? 1 : 0;
     }
     printf("两级回放队列宿主用例（真队列 + 真录制线程 + 记录桩）\n");
-    run_seq_phase("C1 多生产者序列（另有线程不停清空）", 4, 160000, 1, 0);
-    run_drain_phase(3000);
-    run_two_drainers_phase();
-    run_pressure_phase(1200000);
-    run_seq_phase("C4 运行时来回切 nvk_dq", 3, 200000, 0, 1);
+    if (WANT("C1")) run_seq_phase("C1 多生产者序列（另有线程不停清空）", 4, 160000, 1, 0);
+    if (WANT("C2")) run_drain_phase(3000);
+    if (WANT("C5")) run_two_drainers_phase();
+    if (WANT("C3")) run_pressure_phase(1200000);
+    if (WANT("C4")) run_seq_phase("C4 运行时来回切 nvk_dq", 3, 200000, 0, 1);
+    if (WANT("C6")) run_wait_phase();
+    if (WANT("C1b")) { set_wait(0, 100, 4); run_seq_phase("C1b 多生产者序列（定时醒 + 按批叫，无清空噪声）", 4, 160000, 0, 0); set_wait(200, 0, 0); }
+    if (WANT("C1c")) { set_wait(0, 0, 16); run_seq_phase("C1c 多生产者序列（只按批叫 + 清空噪声）", 4, 160000, 1, 0); set_wait(200, 0, 0); }
     CHECK(atomic_load(&g_red_logs) == 0, "队列自己报过 %d 次红", atomic_load(&g_red_logs));
     printf("dq_queue_test：%d 项检查，%d 项红（交给录制线程 %llu 条，直调 %llu 次）\n", g_checks, g_bad, (unsigned long long)nvn_vk_dbg_dq_recs(), (unsigned long long)g_dq_direct);
     return g_bad ? 1 : 0;

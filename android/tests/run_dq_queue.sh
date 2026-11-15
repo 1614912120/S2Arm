@@ -10,6 +10,12 @@
 #     M4 环尾跳过记录的长度写错          → 录制线程跳到错位的地方（C1 第一次回绕：序列错 / 崩溃 / 超时）
 #     M5 先报「已读」再执行这一条        → 清空在最后一条做完之前返回（C2 欠账）
 #     M6 先走的清空线程抹掉别人的「在等」标记 → 后到的没人叫醒，等满 1 秒超时（C5；这是修前主线的行为）
+#   录制线程等活的三个开关（nvk_dq_spin / nvk_dq_poll_us / nvk_dq_wake_kb）另有五种变异，只跑 C6 那一组（dq_queue_test C6）：
+#     M7 按批叫时过线也不叫                → C6b（不清空，过线的那一批没人叫醒）
+#     M8 定时醒不定时（睡到被叫醒）        → C6c（谁也不叫，积压没被定时醒取走）
+#     M9 定时醒的退避不封顶                → C6d（空闲很久后再来一条，等了几百毫秒）
+#     M10 不认 nvk_dq_spin（恒自旋 200）    → C6e（稀疏生产者下录制线程 CPU 没降）
+#     M11 按批叫失效（每条都叫）            → C6b（积压不到阈值就被叫醒了）
 set -euo pipefail
 ulimit -c 0 2> /dev/null || true   # 变异用例可能崩溃（M1 常见）：不留 core 文件
 repo=$(cd "$(dirname "$0")/../.." && pwd)
@@ -30,9 +36,9 @@ build() {   # $1 = 可执行文件，$2 = 额外的 -I（变异 .inc 所在目�
     local extra=(); if [ -n "$mdir" ]; then extra=(-I "$mdir"); fi
     cc "${cflags[@]}" "${extra[@]}" "${inc[@]}" -I "$repo/android/native/nvn" "$@" "$test_c" -o "$exe" -lpthread
 }
-run() {   # $1 = 可执行文件，$2 = 日志；返回码留在 rc
+run() {   # $1 = 可执行文件，$2 = 日志，其余 = 传给可执行文件的参数；返回码留在 rc
     set +e
-    "$1" >"$2" 2>&1
+    "$1" "${@:3}" >"$2" 2>&1
     rc=$?
     set -e
 }
@@ -82,9 +88,9 @@ if s.count(a) != 1:
 pathlib.Path(dst).write_text(s.replace(a, b), encoding="utf-8")
 PYMUT
 }
-neg() {   # $1 = 变异名，$2 = 日志里必须出现的红（正则），$3 = 第一条红发生时所在阶段（正则），$4 = 1：没有红行但在该阶段崩溃（信号）也算
+neg() {   # $1 = 变异名，$2 = 日志里必须出现的红（正则），$3 = 第一条红发生时所在阶段（正则），$4 = 1：没有红行但在该阶段崩溃（信号）也算，$5 = 只跑哪一组阶段（传给用例的参数，缺省全跑）
     build "$out/neg_$1" "$out/m_$1" -DTEST_TIMEOUT_S=40
-    run "$out/neg_$1" "$out/log_$1"
+    run "$out/neg_$1" "$out/log_$1" ${5:+"$5"}
     local first_red="" phase_at="（无红行、无崩溃）" ok=0
     first_red=$(grep -m1 '【红】' "$out/log_$1" || true)
     if [ -n "$first_red" ]; then
@@ -113,4 +119,16 @@ mutate M5 'dq_run(h); r += h->size; atomic_store(&g_dq_rd, r); }' 'const uint32_
 neg M5 '【红】(C2：|C[13] .*条数不符)' 'C[123]'
 mutate M6 'atomic_fetch_sub(&g_dq_draining, 1);' 'atomic_store(&g_dq_draining, 0);   /* M6：先走的抹掉别人的「在等」标记 */'
 neg M6 '【红】C5：(先到的清空已返回、后到的尚未完成|后到的清空等了)' 'C5'
-echo "两级回放队列宿主用例：正控全绿，六种变异都红在预期处"
+# ---- 录制线程等活的开关：五种变异，只跑 C6 那一组（每种直奔被测的阶段，不用等前面的阶段）
+anchor_wake='if (!wb || (w > rd && w - rd >= wb)) dq_wake();'
+mutate M7 "$anchor_wake" '(void)rd; if (!wb) dq_wake();   /* M7：按批叫时过线也不叫 */'
+neg M7 '【红】C6b：' 'C6' 0 C6
+mutate M8 'if (pthread_cond_timedwait(&g_dq_cv, &g_dq_mu, &dl) == ETIMEDOUT)' 'if (pthread_cond_wait(&g_dq_cv, &g_dq_mu) == ETIMEDOUT)   /* M8：定时醒不定时 */'
+neg M8 '【红】C6c：' 'C6' 0 C6
+mutate M9 'if (wait_us < DQ_POLL_MAX_US) wait_us *= 2;' 'wait_us *= 2;   /* M9：退避不封顶 */'
+neg M9 '【红】C6d：' 'C6' 0 C6
+mutate M10 'const int spin = atomic_load_explicit(&g_dq_spin, memory_order_relaxed);' 'const int spin = 200;   /* M10：不认 nvk_dq_spin */'
+neg M10 '【红】C6e：' 'C6' 0 C6
+mutate M11 "$anchor_wake" '(void)wb; (void)rd; dq_wake();   /* M11：按批叫失效，每条都叫 */'
+neg M11 '【红】C6b：' 'C6' 0 C6
+echo "两级回放队列宿主用例：正控全绿，十一种变异都红在预期处"
