@@ -61,7 +61,8 @@ def equiv_canon(repo, rel, h):
 # 算键 / 记清单的基础设施本身（阶段表里归「外」：只读输入算键、不改产物）：照记进实际读入清单（编排层 pack/orch/stages.py 要求清单里有这几行，
 #   缺了就判清单无效、永不跳过——11-11 第一版把它们从清单里去掉，列车上各阶段缓存测试全红）；重算时这几行原样沿用记录值，
 #   改了它们（如加产物等价）不让老游戏重跑（11-11 实测：同根换代码再出，抽取曾因清单里 stage_keyfiles.sh / stage_deps.py 对不上被判重跑）
-INFRA = {'R:pack/stage_keyfiles.sh', 'R:tools/stage_deps.py', 'R:tools/stage_equiv.py', 'R:pack/stage_inputs/equiv.tsv'}
+#   采集钩子 tools/stage_deps_hook/sitecustomize.py 同属这一类（编排层 MECHANISM 三件之一；11-14 修它的重入，产物与清单行都不变，不该让全部老游戏各阶段重跑一遍）
+INFRA = {'R:pack/stage_keyfiles.sh', 'R:tools/stage_deps.py', 'R:tools/stage_deps_hook/sitecustomize.py', 'R:tools/stage_equiv.py', 'R:pack/stage_inputs/equiv.tsv'}
 
 
 def _eq(repo, k, n, h):
