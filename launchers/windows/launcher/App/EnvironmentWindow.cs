@@ -232,10 +232,12 @@ public sealed partial class EnvironmentWindow : Window
             welcomeHome = true; Navigate("library");
         };
         // 版本号（11-11 维护者：玩家截图时我们一眼看出是哪一版）：正式版 v0.3.0，开发版 v0.2.9-dev+短提交号（S2Arm.csproj 构建时算好）
-        var versionLabel = new TextBlock { Text = DisplayVersion, FontSize = 12.5, FontWeight = FontWeight.SemiBold, Foreground = Brush.Parse("#8C8A85"),
-            VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 4, 0, 0) };
+        //   11-14 体验梳理第二轮：放到品牌名下面一行小字（同 Mac），放不下就截断；左栏裁掉超出部分，窗口窄时不再画到右侧按钮底下
+        var versionLabel = new TextBlock { Text = DisplayVersion, FontSize = 11, FontWeight = FontWeight.SemiBold, Foreground = Brush.Parse("#8C8A85"),
+            TextTrimming = TextTrimming.CharacterEllipsis };
         Avalonia.Automation.AutomationProperties.SetAutomationId(versionLabel, "topbar.version");
-        header.Children.Add(new StackPanel { Orientation = Orientation.Horizontal, Children = { brand, versionLabel } });
+        header.Children.Add(new StackPanel { Orientation = Orientation.Vertical, VerticalAlignment = VerticalAlignment.Center, ClipToBounds = true,
+            Margin = new Thickness(0, 0, 12, 0), Children = { brand, versionLabel } });
 
         var rightBar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10,
             VerticalAlignment = VerticalAlignment.Center };
@@ -334,6 +336,18 @@ public sealed partial class EnvironmentWindow : Window
         {
             RenderMessages(body);
             ShowPage("messages", body);
+            return;
+        }
+        if (page == "library" && cheatsFor is not null)   // 「金手指」页（CheatsPage.cs）：从游戏库这款的菜单进、「返回」回游戏库
+        {
+            RenderCheats(body);
+            ShowPage("cheats", body);
+            return;
+        }
+        if (page == "library" && sgradeOpen)   // 「S 级优化升级」页（SGradeUpgradePage.cs）：从游戏库进、确认 / 关闭回游戏库
+        {
+            RenderSGradeUpgrade(body);
+            ShowPage("sgrade", body);
             return;
         }
         if (page == "library" && (ShowsWelcome || welcomeHome))

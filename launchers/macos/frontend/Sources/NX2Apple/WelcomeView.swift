@@ -80,19 +80,18 @@ struct WelcomeView: View {
                         Text(loc.backend(error)).font(.manrope(12.5)).foregroundStyle(LauncherPalette.danger)
                             .fixedSize(horizontal: false, vertical: true).padding(.leading, 46).padding(.top, 14)
                     }
+                    // 一键出包放在三步清单正下方（11-14 体验梳理：原先浮在窗口右下角、离清单很远；Windows 上一轮已同样挪到清单下）
+                    if macReady, model.welcomeGame != nil {
+                        Button { model.oneClickExport() } label: { LauncherHeroActionLabel(title: w("oneclick"), symbol: "shippingbox.fill") }
+                            .buttonStyle(.plain).keyboardShortcut(.defaultAction).disabled(model.busy)
+                            .padding(.leading, 46).padding(.top, 26)
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
                 }
                 .padding(.vertical, 44).padding(.trailing, 48)
                 .frame(maxWidth: .infinity, minHeight: column.size.height, alignment: .leading)   // 内容短时和左栏一样垂直居中，长了再滚动
             } }
             .frame(width: 560)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            if macReady, model.welcomeGame != nil {
-                Button { model.oneClickExport() } label: { LauncherHeroActionLabel(title: w("oneclick"), symbol: "shippingbox.fill") }
-                    .buttonStyle(.plain).keyboardShortcut(.defaultAction).disabled(model.busy)
-                    .padding(36)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
-            }
         }
         .animation(.spring(response: 0.5, dampingFraction: 0.75), value: model.welcomeGame?.id)
         .background(alignment: .bottomLeading) {

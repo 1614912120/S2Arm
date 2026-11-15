@@ -57,6 +57,12 @@ s2a_gate_step bash "$android_dir/tools/vk_resid_test.sh"
 # 遮挡查询环形页边界（宿主，Vulkan 调桩）：reset 只重置高水位 / 同批多 pass 累计在 pass 边界合法换页 /
 # 段日志压缩 / 长期不 Reset / 会话重建。这是「进世界约 20 s 必崩」那类窗口失效的回归护栏。
 s2a_gate_step bash "$android_dir/tools/nvn_vk_query_edges.sh"
+# 两级回放队列（nvk_dq；宿主，真队列 + 真录制线程 + 记录桩）：多生产者序列 / 环回绕 / 背压 / 跨线程清空 / 两条线程同时清空 / 运行时开关；
+# TSan 零报告；六种变异（没写完就发布、清空不等、不等环里有地方、环尾长度写错、先报已读、抹掉别人的「在等」标记）都必须红在预期阶段。
+# 队列用 pthread 自旋锁（苹果系统没有）：只在 Linux 上跑，macOS 由 Linux 门禁执行。
+if [ "$(uname -s)" = Linux ]; then
+    s2a_gate_step bash "$android_dir/tests/run_dq_queue.sh"
+fi
 # 描述符写入初始化（宿主）：三路描述符必须整结构清零、dstArrayElement=0；「漏字段」反例必须被抓到。
 # 曾经漏填 dstArrayElement，真机第一笔 draw 就把 Adreno 驱动写崩。
 s2a_gate_step bash "$android_dir/tools/nvn_vk_desc_write_test.sh"
@@ -329,6 +335,8 @@ s2a_gate_step "$PY" "$android_dir/tests/nvk_shader_pool_test.py" --withdraw
 s2a_gate_step "$PY" "$android_dir/tests/nvk_shutdown_test.py"
 # GS 脏位、阶段绑定、管线和原始图元拒绝的独立回退反证。
 s2a_gate_step "$PY" "$repo_dir/graphics/nvn/tests/gs_replay_mutation_test.py"
+# 写跟踪取范围（find_span）与池查找的线程内备忘（#974）：键 / 代际 / 写者纪律 / 开关各处的撤改必红（纯宿主 C 编译）。
+s2a_gate_step "$PY" "$repo_dir/graphics/nvn/tests/dirty_span_memo_mutation_test.py"
 # 原创 Maxwell 经生产请求、真实编译器与生产结果解析；GPU 像素由 Vulkan 门禁另验。
 s2a_gate_step "$PY" "$android_dir/tests/gs_compiler_chain_test.py"
 # BUFFER texture: real producer, Maxwell compiler, SPIR-V parser and replay rejection.

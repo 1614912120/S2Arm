@@ -193,6 +193,22 @@ def runtime_env(c, game, runtime, input_ok=True):
         path = c.private / "runtime-input" / game["id"] / (c.task + ".json")
         atomic(path, config)
         env["S2A_INPUT_CONFIG"] = str(path)
+    # 玩家 2–4 自己的键位（启动器按玩家保存的 input-pN.json，键位设置里选玩家）：有就照玩家 1 同一套校验后交给宿主
+    #   （S2A_INPUT_CONFIG_P2..P4；front_mac.m 槽 i = 玩家 i+1，各手柄照自己玩家的映射采样）；没存的那位照玩家 1 的键位。
+    #   input_ok = False（宿主不认键位映射）时不带，同玩家 1 的口径
+    if input_ok:
+        for player in (2, 3, 4):
+            player_config = read(layout.path(c, game["id"], f"input-p{player}.json", create=False))
+            if not player_config:
+                continue
+            try:
+                validate_input(player_config)
+            except Failure as e:   # 映射不合规（旧版本 / 手改坏了）：这位照玩家 1 的键位照常玩，不挡
+                print(f"[起局] 玩家 {player} 的键位映射不合规（{e}），这位照玩家 1 的键位", file=sys.stderr, flush=True)
+                continue
+            path = c.private / "runtime-input" / game["id"] / f"{c.task}-player{player}.json"
+            atomic(path, player_config)
+            env[f"S2A_INPUT_CONFIG_P{player}"] = str(path)
     if c.r.get("inputGuideHandled") is True:
         env["S2A_INPUT_GUIDE_SHOWN"] = "1"
     if c.r.get("uiLanguage") in ("zh-Hans", "zh-Hant", "en"):   # 宿主自己的界面文案（按键引导等）跟启动器界面语言；不再决定游戏语言（见上 gameLanguage）
@@ -275,7 +291,7 @@ def launch(c):
                 if trial:   # 新宿主试玩：TRIAL_OK_SECONDS 内异常退出 = 不认这款，下次退回原来的；玩过这么久才崩不怪宿主
                     host_update.settle(c, game["id"], host, ok=time.monotonic() - started >= host_update.TRIAL_OK_SECONDS)
                 if f.code == "tool_exit":   # 游戏进程自己非 0 退出（多为崩溃，139 = 段错误）：给启动页一个说人话的码，原文与退出码随错误摘要带走
-                    import cheats   # 开着金手指 / 画面补丁时退出：记下，下次开始前启动器问要不要先关掉（不自动关）
+                    import cheats   # 开着金手指 / 补丁时退出：当场关掉、记下，下次开始时启动器通知关了哪几条（11-13 维护者改定：不问，cheats.note_crash）
                     cheats.note_crash(c, game)
                     broken = missing_after_crash(c, runtime, manifest)
                     if broken:   # 起局前没逐个核（v0.3.1）：退出后再核，运行文件缺 / 坏了就直说，别让玩家以为是游戏崩了

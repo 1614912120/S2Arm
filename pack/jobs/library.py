@@ -767,7 +767,8 @@ def move_library(c, source):
     info = read(source / ".s2arm-library.json", None)
     if not isinstance(info, dict) or not info.get("id"):
         raise Failure("原来的位置不是可搬的游戏库。", code="library_move_failed")
-    if c.library == source or c.library.is_relative_to(source) or source.is_relative_to(c.library):
+    here = resolve_path(c.library)   # c.library 是玩家写的样子（映射盘保留盘符，core.resolve_library_path），和解析过的 source 比要先解析
+    if here == source or here.is_relative_to(source) or source.is_relative_to(here):
         raise Failure("新位置不能在原来的游戏库里面，也不能包含它。", code="library_move_failed")
     with store_meta_quiet(c, source), _source_locked(c, source):
         pairs = _move_pairs(c, source)
@@ -898,7 +899,7 @@ def _setup(c):
     if c.library == Path(c.library.anchor) or c.library == Path.home() or c.library == c.engine:
         raise Failure("请选择独立的游戏库文件夹，不能直接用整个盘或用户文件夹。")
     install = c.r.get("installDir")
-    if install and (_within(c.library, resolve_path(install)) or _within(resolve_path(install), c.library)):
+    if install and (_within(resolve_path(c.library), resolve_path(install)) or _within(resolve_path(install), resolve_path(c.library))):
         raise Failure("游戏库不能放在 S2Arm 启动器自己的文件夹里，也不能包含它（升级时这个文件夹会整个替换，库会被一起删掉）：换一个文件夹。")
     if c.r.get("freeDefault") and _occupied(c.library):
         c.library = next((n for n in (c.library.with_name(f"{c.library.name} Library" + (f" {i}" if i > 1 else "")) for i in range(1, 10))
@@ -1347,7 +1348,8 @@ def require_fat32_fits(c, game, loc):
 
 def check_pack_space(c, game, *, compiler_policy=None):
     """打包前的磁盘预检（Mac 打包与打 iPhone 包共用）：IPA 可先按已有保留规则尝试回收；发最终 space 事件（存任务文件），再按预算拦。
-    请求带 spaceOverride: true（玩家在失败页点「仍然继续」）：不拦，只记一条警告；真写满由出包中途的磁盘写满识别报错"""
+    预估不够一律不拦、只记一条警告（11-14 不许堵门）；请求带 spaceOverride: true 且这款有上一次的 iPhone 包时先删掉它腾地方（旧版失败页「仍然继续」）。
+    真写满由出包中途的磁盘写满识别报错"""
     require_fat32_fits(c, game, _pack_paths(c, game)[0])
     budget = space_budget(c, game)
     cache_result = None
@@ -1386,10 +1388,9 @@ def check_pack_space(c, game, *, compiler_policy=None):
                 continue
             c.diagnostic(head + "已按你的选择仍然继续。", code="disk_full", severity="warning")
             continue
-        # 确认文案只写玩家据此做选择的事（维护者 11-12）：点「仍然继续」会先删旧包、腾多少；预计偏保守可以试
-        if reclaim:
-            raise Failure(head + f"点「仍然继续」会先删掉这款上一次的 iPhone 包，腾出 {_gb(reclaim)}；也可以清出空间后点「重试」。", code="disk_full")
-        raise Failure(head + "清出空间后点「重试」；预计偏保守，也可以点「仍然继续」试试。", code="disk_full")
+        # 预估只当提示、不拦（不许堵门，11-14 定：预估偏保守，玩家盘可能其实够）：记一条警告照常开工；真写满时写盘报 ENOSPC，那才停、归 disk_full
+        c.diagnostic(head + "这是预估，照常开工；真写满时会停下，释放空间后重试即可。"
+                     + (f"这款上一次的 iPhone 包（{_gb(reclaim)}）出完会被新包换掉。" if reclaim else ""), code="disk_full", severity="warning")
 
     return budget
 
@@ -2176,20 +2177,19 @@ def table_rows(path):
 
 
 def sgrade_badge(c, gid, image):
-    """游戏库封面左上角的金色 S（v0.4.0 维护者）：这款有 S 级优化——Mac 运行版本或 iPhone 程序件里已经打进了社区补丁 / 金手指，
-    或者补丁库（随启动器的快照）里有这款的包、下次起局 / 更新 iPhone 就会补上（pack/jobs/rewrite_refresh.py）。出包页取消过「出包时打入」的款不亮"""
+    """游戏库封面左上角的金色 S（v0.4.0 维护者）：这款已经带上 S 级优化——Mac 运行版本或 iPhone 程序件里打进了社区补丁 / 金手指。出包页取消过「出包时打入」的款不亮"""
     gid = gid.upper()
     if layout.game_info(c, gid).get("sgradeOff") is True:
         return False
-    if table_rows(Path(image) / "cpatch.tsv") or table_rows(layout.ios_kit(c, gid) / "cpatch.tsv"):
-        return True
-    import patches
-    main = Path(image) / "exefs/main"
-    try:
-        bid = main.read_bytes()[0x40:0x48].hex().upper() if main.is_file() else (layout.game_info(c, gid).get("ios") or {}).get("mainBid", "")
-        return patches.has_match(c, gid, bid)
-    except (OSError, ValueError):
-        return False
+    # 只认真打进去了的（11-14：原先「补丁库里有这款的包」也亮，没出过包的款也亮了；发布说明写的是「亮起的已经带上了」）：
+    #   Mac 运行版本 / iPhone 程序件里补丁表有条目，或带着随包金手指原文（多数金手指只改内存、不进补丁表）。Mac 老游戏启动器打开时会补上（sgradeMac），补完就亮
+    for d in (Path(image), layout.ios_kit(c, gid)):
+        try:
+            if table_rows(d / "cpatch.tsv") or any(d.glob("cheat-src.*")):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 CONTAINER_KIT = layout.IOS_KIT   # 每款 image/ios/kit：装机组装容器要用的文件，出包成功后从产物根存一份独立副本（游戏库结构 v3；旧布局是 iPhone/<号>/container-kit）
@@ -2748,9 +2748,14 @@ def validate_input(config):
 
 def save_input(c):
     config = validate_input(c.r["config"])
+    # player：键位设置的玩家（1–4；1 / 没给 = 玩家 1 的 input.json，2–4 = 这款文件夹的 input-pN.json）。
+    #   起局时 build.py 读这些文件交给宿主（S2A_INPUT_CONFIG_P2..P4，槽位各照各玩家的映射采样）
+    player = c.r.get("player", 1)
+    if type(player) is not int or not 1 <= player <= 4 or (player != 1 and not c.r.get("gameId")):
+        raise Failure("无效的玩家序号。")
     if c.r.get("gameId"):
         c.game()
-        target = layout.path(c, c.r["gameId"], "input.json")
+        target = layout.path(c, c.r["gameId"], "input.json" if player == 1 else f"input-p{player}.json")
     else:
         target = c.private / "default-input.json"
     atomic(target, config)
@@ -2815,7 +2820,8 @@ def diagnostics(c):
             return {"error": "启动器 Info.plist 无法读取"}
 
     destination = resolve_path(Path(c.r["path"]).expanduser())
-    if c.private == destination or c.private in destination.parents or c.library == destination or c.library in destination.parents:
+    library = resolve_path(c.library)
+    if c.private == destination or c.private in destination.parents or library == destination or library in destination.parents:
         raise Failure("诊断包请选择应用数据和游戏库以外的位置。")
     descriptors = []
     temporary = None
