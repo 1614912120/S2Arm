@@ -108,6 +108,19 @@ with tempfile.TemporaryDirectory(prefix='img test ') as t:
         ck(ix == f'game.img\t{os.path.getsize(g)}\t{want_id}\nromfs_overlay/ui/layout.bin\t4\tx\nshaders/direct/keys.tsv\t1\tx\n', f'⑤ 新 index.tsv：{ix!r}')
         ck((m['version'], m['format'], m['imgFile'], m['index_sha256']) == (3, 'img', 'game.img', hashlib.sha256(ix.encode()).hexdigest()), f'⑤ manifest v3：{m}')
         ck(std_romfs(g, img.header(g)['romfs'][0]) == {'ui/layout.bin': b'ORIG', 'data.bin': b'DATA'} and img.find(g, 'exefs/main.npdm') is not None, '⑤ game.img 内容同 write')
+        # ⑤b 审计 P1-171：删旧形态文件那一步中断（第一次 unlink 就失败）——清单已换成 IMG 形态、game.img 在，再读清单不会指着已删的文件
+        cv2 = T / 'cv2'; shutil.copytree(pk, cv2); real_unlink = os.unlink
+        def boom(p, *a, **k):   # 只让「删旧形态文件」删到第三个时失败（写 IMG 过程中删临时文件照常）
+            if str(p).endswith(os.path.join('cv2', 'aoc', '1', 'x.bin')): raise OSError(13, '中断')
+            return real_unlink(p, *a, **k)
+        os.unlink = boom
+        try:
+            try: img.convert(str(root), str(cv2), romfs_index=cmd); ck(False, '⑤b 删旧文件失败应抛出')
+            except OSError: pass
+        finally: os.unlink = real_unlink
+        ix2 = (cv2 / 'index.tsv').read_text()
+        ck(ix2.startswith('game.img\t') and (cv2 / 'game.img').is_file() and json.loads((cv2 / 'manifest.json').read_text())['format'] == 'img'
+           and all((cv2 / l.split('\t')[0]).is_file() for l in ix2.splitlines()), f'⑤b 删旧文件中断：清单已是 IMG 形态、清单里每个文件都在（{ix2!r}）')
         # ⑥ 原件 + 预建偏移表
         orig = T / 'orig'; (orig / 'romfs/ui').mkdir(parents=True); (orig / 'romfs/ui/layout.bin').write_bytes(b'ORIGINAL'); (orig / 'romfs/data.bin').write_bytes(b'STALE')   # 数据目录播种后变过（非覆盖文件）：应取产物根那份
         r6 = T / 'root6'; (r6 / 'romfs/ui').mkdir(parents=True); (r6 / 'romfs/ui/layout.bin').write_bytes(b'OVER'); (r6 / 'romfs/data.bin').write_bytes(b'DATA')
