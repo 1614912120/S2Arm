@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "contract": "s2a.experience.v1",
-  "revision": 65,
+  "revision": 66,
   "languages": ["zh-Hans", "en"],
   "source_language": "zh-Hans",
   "note": "四端（Mac / iOS / Android / 鸿蒙）启动器的「一套体验」规格。状态、文案、错误码、任务事件到界面的映射只在这里定义一次；各端只负责画，不另写一套措辞。错误码的「下一步」不在本文件里写第二份：一律指向 pack/jobs/errors.py 的 RECOVERY（口径见 README.md）。口径号 revision 改动规则见 README.md。",
@@ -963,7 +963,7 @@
       {"id": "export.note.ios", "zh-Hans": "一个包，iPhone 和 iPad 都能装", "en": "One app for both iPhone and iPad"},
       {"id": "export.note.mac_only", "zh-Hans": "仅 Mac 可出", "en": "Only on a Mac"},
       {"id": "export.soon", "zh-Hans": "即将上线，敬请期待", "en": "Coming soon, stay tuned"},
-      {"id": "export.hint", "zh-Hans": "大游戏第一次出包要几十分钟，请插上电源、别让电脑睡眠。", "en": "A large game's first export takes tens of minutes; keep the PC plugged in and awake."},
+      {"id": "export.hint", "zh-Hans": "大游戏第一次出包要几十分钟，请插上电源、别让电脑睡眠。可以一次放进多款游戏，连续出包。", "en": "A large game's first export takes tens of minutes; keep the PC plugged in and awake. You can add several games and export them in a row."},
       {"id": "export.block.no_platform", "zh-Hans": "先勾选要出包的平台。", "en": "Choose a platform first."},
       {"id": "export.block.keys", "zh-Hans": "还没放入 prod.keys（解密游戏用的密钥），在游戏库导入后才能出包。", "en": "prod.keys (the key that decrypts games) is not imported yet; import it in Library first."},
       {"id": "export.block.busy", "zh-Hans": "正在做别的任务，做完再出包。", "en": "Another task is running; export when it finishes."},
