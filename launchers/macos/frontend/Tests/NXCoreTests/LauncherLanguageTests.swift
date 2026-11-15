@@ -10,7 +10,8 @@ final class LauncherLanguageTests: XCTestCase {
 
     func testFirstLaunchFollowsSystem() {
         XCTAssertEqual(Lang.initial(preferred: ["zh-Hans-CN"]), .zh, "简中系统")
-        XCTAssertEqual(Lang.initial(preferred: ["zh-Hant-TW"]), .zh, "繁中系统暂时落简中")
+        XCTAssertEqual(Lang.initial(preferred: ["zh-Hant-TW"]), Lang("zh-Hant"), "繁中系统落繁中（11-14 加繁中）")
+        XCTAssertEqual(Lang.initial(preferred: ["zh-TW"]), Lang("zh-Hant"), "台湾地区码也落繁中")
         XCTAssertEqual(Lang.initial(preferred: ["en-US"]), .en, "英文系统")
         XCTAssertEqual(Lang.initial(preferred: ["ja-JP"]), .en, "日文系统落英文")
     }

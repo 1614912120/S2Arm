@@ -27,7 +27,7 @@ struct SGradeUpgradeView: View {
 
     var body: some View {
         let lang = loc.lang.sharedCode
-        SGradeUpgradeBody(games: games, failure: failure, zh: loc.lang == .zh, busy: model.busy,
+        SGradeUpgradeBody(games: games, failure: failure.map(loc.backend), zh: loc.cjkPunctuation, busy: model.busy,   // 作业层原句按界面语言显示
                           x: { BackendText.launcherText("sgrade.upgrade." + $0, language: lang) },
                           upgrade: { mode in model.updatePhone(acceptStale: false, repack: [], language: lang, mode: mode, sgradeUpgrade: true); dismiss() },
                           close: { dismiss() })

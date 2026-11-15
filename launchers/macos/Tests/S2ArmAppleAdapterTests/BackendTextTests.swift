@@ -29,6 +29,14 @@ final class BackendTextTests: XCTestCase {
                        "Not enough disk space: on the drive where the games are stored this build needs about 106 GB (Unpack 12 GB; single IMG written while freeing the unpacked files, no extra space; direct shaders up to 4 GB), but only 48 GB is left. Continuing anyway, as you chose.")
     }
 
+    /// 叠加语言（11-14 加繁中）：资源包里的 l10n.zh-Hant.json 生效；没有文件的语言整表回落英文
+    func testOverlayLanguages() {
+        XCTAssertEqual(BackendText.launcherText("report.button", language: "zh-Hant"), "故障報修")
+        XCTAssertEqual(BackendText.translate("游戏已停止。", language: "zh-Hant"), "遊戲已停止。")
+        XCTAssertEqual(BackendText.translate("游戏已停止。", language: "xx"), "Game stopped.")
+        XCTAssertEqual(BackendText.launcherText("report.button", language: "xx"), BackendText.launcherText("report.button", language: "en"))
+    }
+
     func testWholeSentenceAndSharedLabels() {
         XCTAssertEqual(BackendText.translate("游戏已停止。", language: "en"), "Game stopped.")
         XCTAssertEqual(BackendText.translate("游戏库所在磁盘", language: "en"), "Library Drive")

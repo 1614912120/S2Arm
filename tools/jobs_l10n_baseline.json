@@ -1,18 +1,1 @@
-[
- {
-  "file": "install.py",
-  "text": "它们已从这台电脑的游戏库删除，重新加回游戏库、「打 iPhone 包」再装一次就回来："
- },
- {
-  "file": "install.py",
-  "text": "它们是在别的电脑上装的，到那台电脑上再「装到 iPhone」一次就回来："
- },
- {
-  "file": "ipa.py",
-  "text": "它们是旧版 S2Arm 出的 iPhone 版，新版认不得，要重新「打 iPhone 包」："
- },
- {
-  "file": "ipa.py",
-  "text": "这台电脑上没有它们的 iPhone 版："
- }
-]
+[]

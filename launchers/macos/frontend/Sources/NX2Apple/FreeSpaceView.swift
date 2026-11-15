@@ -139,7 +139,7 @@ struct FreeSpaceView: View {
 
     /// 勾选的几项（显示名）+「直接删除、不能撤销」。
     private var confirmMessage: String {
-        let names = (space?.parts ?? []).filter { chosen.contains($0.id) }.map { loc.backend($0.title) }.joined(separator: loc.lang == .zh ? "、" : ", ")
+        let names = (space?.parts ?? []).filter { chosen.contains($0.id) }.map { loc.backend($0.title) }.joined(separator: loc.t("s2arm.punct.list"))
         return String(format: loc.t("s2arm.space.confirmMessage"), names)
     }
 

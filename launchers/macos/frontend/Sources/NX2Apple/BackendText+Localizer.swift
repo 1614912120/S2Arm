@@ -12,6 +12,9 @@ extension Lang {
 }
 
 extension Localizer {
+    /// 这门语言用全角标点（「、」「（）」「；」）还是半角：看文案文件里的列表分隔符 s2arm.punct.list，不按语言名判断（11-14 加新语言）
+    nonisolated var cjkPunctuation: Bool { t("s2arm.punct.list") == "、" }
+
     /// 报错页的「故障报修」指引（BackendText.reportHint，按界面语言）
     nonisolated var reportHint: String { BackendText.reportHint(language: lang.sharedCode) }
     /// 一句作业层文字在当前界面语言下的显示。

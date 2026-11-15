@@ -96,6 +96,17 @@ var extraLanguage = new SharedText("""
 """);
 Check(extraLanguage.Get("action.check", "ja") == "確認", "a language column beyond zh-Hans / en is read");
 Check(extraLanguage.Get("action.check", "fr") == "Check", "a language without this key's translation falls back to English");
+var overlaid = new SharedText("""
+{"schema":1,"contract":"s2a.experience.v1","launcher":{"items":[{"id":"a","zh-Hans":"检查","en":"Check"},{"id":"b","zh-Hans":"出包","en":"Export"}]},"errors":{"items":[]}}
+""");
+overlaid.AddOverlay("zh-Hant", """{"launcher":{"a":"檢查"}}"""); overlaid.AddOverlay("ja", """{"launcher":{"a":"確認"}}""");
+Check(overlaid.Get("a", "zh-Hant") == "檢查" && overlaid.Get("a", "ja") == "確認", "overlay text wins for its language");
+Check(overlaid.Get("b", "zh-Hant") == "出包" && overlaid.Get("b", "ja") == "Export", "missing overlay key: zh-Hant falls back to Simplified Chinese, others to English");
+var backendOverlay = new BackendText("""[{"source":"游戏已停止。","en":"Game stopped."},{"source":"还剩 {0} 款","en":"{0} left"}]""", """{"schema":1}""");
+backendOverlay.AddOverlay("zh-Hant", """{"text":{"游戏已停止。":"遊戲已停止。"}}"""); backendOverlay.AddOverlay("ja", """{"text":{"还剩 {0} 款":"残り {0} 本"}}""");
+Check(backendOverlay.Translate("游戏已停止。", "zh-Hant") == "遊戲已停止。" && backendOverlay.Translate("还剩 3 款", "ja") == "残り 3 本", "backend overlay: whole sentence and pattern");
+Check(backendOverlay.Translate("还剩 3 款", "zh-Hant") == "还剩 3 款" && backendOverlay.Translate("游戏已停止。", "ja") == "Game stopped.", "backend overlay fallback: zh-Hant keeps the source, ja falls back to English");
+Check(backendOverlay.Translate("游戏已停止。", "zh-Hans") == "游戏已停止。" && backendOverlay.Translate("游戏已停止。", "en") == "Game stopped.", "backend: zh-Hans source and English unchanged");
 void RejectResource(string items, string label)
 {
     var json = "{\"schema\":1,\"contract\":\"s2a.experience.v1\",\"launcher\":{\"items\":" + items + "},\"errors\":{\"items\":[]}}";

@@ -639,8 +639,8 @@ def assemble(c, gid, others=(), *, failed=(), root=None, dest=None, agreed=None)
         #   每行一个固定句式（游戏名进 {0} 占位），界面按 Localizable.json 逐行翻
         lost = "".join("「" + names.get(g, g) + "」" for g in stale_ids if g in missing)
         old = "".join("「" + names.get(g, g) + "」" for g in stale_ids if g not in missing)
-        lines = ["手机上有几款游戏这次放不进同一个 App。"] + (["这台电脑上没有它们的 iPhone 版：" + lost] if lost else []) \
-            + (["它们是旧版 S2Arm 出的 iPhone 版，新版认不得，要重新「打 iPhone 包」：" + old] if old else []) \
+        lines = ["手机上有几款游戏这次放不进同一个 App。"] + ([f"这台电脑上没有它们的 iPhone 版：{lost}"] if lost else []) \
+            + ([f"它们是旧版 S2Arm 出的 iPhone 版，新版认不得，要重新「打 iPhone 包」：{old}"] if old else []) \
             + ["确认继续的话，这次先不带它们照装，它们的存档和资源都留在手机上，之后给它们「打 iPhone 包」再装一次就回来。同意一次后，这台手机在这一版 S2Arm 上不再为它们问。"]
         raise Failure("\n".join(lines), code="container_stale", internal=" ".join(stale_ids))
     if stale:

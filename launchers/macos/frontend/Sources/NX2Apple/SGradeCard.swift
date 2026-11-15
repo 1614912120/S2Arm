@@ -38,7 +38,7 @@ struct SGradeCard: View {
     @State private var failed = false
 
     var body: some View {
-        SGradeCardView(match: match, failed: failed, zh: loc.lang == .zh, on: Binding(get: { model.sgradeOn(gameID) }, set: { model.setSgrade(gameID, $0) })) {
+        SGradeCardView(match: match, failed: failed, zh: loc.cjkPunctuation, on: Binding(get: { model.sgradeOn(gameID) }, set: { model.setSgrade(gameID, $0) })) {
             BackendText.launcherText("export.sgrade." + $0, language: loc.lang.sharedCode) }
             .task(id: gameID) {
                 match = nil; failed = false

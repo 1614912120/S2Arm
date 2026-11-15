@@ -29,10 +29,29 @@ public sealed class SharedText
     /// 报错页统一的「故障报修」指引（11-13）：report.hint 里的 {button} 换成顶栏按钮名 report.button（Mac BackendText.reportHint 同一取法）
     public string ReportHint(string language) => Get("report.hint", language).Replace("{button}", Get("report.button", language));
 
-    /// <summary>这门语言还没翻的键回落英文（11-14 i18n 打底，同 Mac BackendText.launcherText）；键本身不存在才显示「[键]」。</summary>
-    public string Get(string key, string language) =>
-        !texts.TryGetValue(key, out var value) ? $"[{key}]"
-        : value.TryGetValue(language, out var text) || value.TryGetValue("en", out text) ? text : $"[{key}]";
+    private readonly Dictionary<string, Dictionary<string, string>> overlays = new(StringComparer.Ordinal);
+
+    /// <summary>一门语言的叠加文案（共享 l10n/<语言>.json 的 launcher 块，按 id）：11-14 加新语言，同 Mac BackendText.overlay。</summary>
+    public void AddOverlay(string language, string json)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        using var doc = JsonDocument.Parse(json);
+        if (doc.RootElement.TryGetProperty("launcher", out var launcher) && launcher.ValueKind == JsonValueKind.Object)
+            foreach (var p in launcher.EnumerateObject())
+                if (p.Value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(p.Value.GetString())) map[p.Name] = p.Value.GetString()!;
+        overlays[language] = map;
+    }
+
+    /// <summary>这门语言还没翻的回落：繁中回落简中，其余回落英文（同 Mac BackendText.fallback）。</summary>
+    public static string Fallback(string language) => language == "zh-Hant" ? "zh-Hans" : "en";
+
+    /// <summary>叠加文案 → 文案表里这门语言的列 → 回落语言 → 英文；键本身不存在才显示「[键]」。</summary>
+    public string Get(string key, string language)
+    {
+        if (!texts.TryGetValue(key, out var value)) return $"[{key}]";
+        if (overlays.TryGetValue(language, out var o) && o.TryGetValue(key, out var hit)) return hit;
+        return value.TryGetValue(language, out var text) || value.TryGetValue(Fallback(language), out text) || value.TryGetValue("en", out text) ? text : $"[{key}]";
+    }
 
     private void ReadLauncher(JsonElement launcher)
     {

@@ -50,6 +50,16 @@ public sealed partial class EnvironmentWindow : Window
             ?? throw new FileNotFoundException("Localization table resource is missing.");
         using var tableReader = new StreamReader(table);
         backend = new BackendText(tableReader.ReadToEnd(), experience);
+        // 各语言叠加文案（内嵌资源 S2Arm.l10n.<语言>.json）：两张表各取一块，可选语言跟着包里有的走
+        var overlays = new List<string>();
+        foreach (var name in Assembly.GetExecutingAssembly().GetManifestResourceNames().Where(n => n.StartsWith("S2Arm.l10n.") && n.EndsWith(".json")))
+        {
+            using var s = Assembly.GetExecutingAssembly().GetManifestResourceStream(name)!;
+            var json = new StreamReader(s).ReadToEnd();
+            var code = name["S2Arm.l10n.".Length..^".json".Length];
+            text.AddOverlay(code, json); backend.AddOverlay(code, json); overlays.Add(code);
+        }
+        LauncherLanguage.SetAvailable(overlays);
         // 界面语言：设置里选过的优先，否则跟随系统（LauncherLanguage，同 Mac / iOS 规则）
         language = LauncherLanguage.Resolve(privateRoot, System.Globalization.CultureInfo.CurrentUICulture.Name);
         MetalFolder.Load(privateRoot);   // 上次手动指定的 Metal 文件夹：设进本进程环境，环境检查 / 出包子进程继承
@@ -184,7 +194,7 @@ public sealed partial class EnvironmentWindow : Window
     private string T(string key) => text.Get(key, language);
     private readonly BackendText backend;
     /// <summary>作业层来的中文原句（报错、阶段、检查项、进度说明）在英文界面下的显示；T() 的文案本来就是英文，原样通过。#361</summary>
-    private string B(string value) => language == "en" ? backend.English(value) : value;
+    private string B(string value) => backend.Translate(value, language);
     private TextBlock Label(string value, double size = 14) => new()
     {
         Text = B(value), FontSize = size, FontWeight = size >= 18 ? FontWeight.SemiBold : FontWeight.Normal,
@@ -379,11 +389,11 @@ public sealed partial class EnvironmentWindow : Window
 
         // 界面语言（原在顶栏）
         // 跟随系统 / 简体中文 / English：选了某种就记住（以后不再跟系统），选「跟随系统」回到按系统（11-13，LauncherLanguage）
-        string?[] choices = [null, "zh-Hans", "en"];
+        string?[] choices = [null, .. LauncherLanguage.Choices];   // 跟随系统 + 包里有文案的各语言（11-14 加新语言）
         var system = LauncherLanguage.FromCulture(System.Globalization.CultureInfo.CurrentUICulture.Name);
         var languages = new ComboBox
         {
-            ItemsSource = new[] { T("language.system") + " · " + T("language." + system), T("language.zh-Hans"), T("language.en") },
+            ItemsSource = choices.Select(c => c is null ? T("language.system") + " · " + T("language." + system) : T("language." + c)).ToArray(),
             SelectedIndex = Array.IndexOf(choices, LauncherLanguage.Saved(privateRoot)), IsEnabled = !busy && !libraryBusy, MinWidth = 160
         };
         Avalonia.Automation.AutomationProperties.SetAutomationId(languages, "settings.language");

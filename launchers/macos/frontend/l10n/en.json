@@ -1847,5 +1847,6 @@
   "s2arm.controller.done": "Done",
   "s2arm.controller.players": "Players",
   "s2arm.controller.bluetoothCount": "{0} Bluetooth controllers",
-  "s2arm.controller.toolbar": "Controller"
+  "s2arm.controller.toolbar": "Controller",
+  "s2arm.punct.list": ", "
 }

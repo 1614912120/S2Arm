@@ -598,7 +598,7 @@ struct ExportSessionView: View {
 
     private func time(_ date: Date) -> String {
         let f = DateFormatter()
-        f.locale = Locale(identifier: loc.lang == .zh ? "zh_CN" : "en_US")
+        f.locale = Locale(identifier: loc.lang.sharedCode)
         f.dateStyle = .none; f.timeStyle = .short
         return f.string(from: date)
     }

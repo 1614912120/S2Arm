@@ -1848,5 +1848,6 @@
   "s2arm.controller.done": "完成",
   "s2arm.controller.players": "玩家",
   "s2arm.controller.bluetoothCount": "{0} 个蓝牙手柄",
-  "s2arm.controller.toolbar": "手柄"
+  "s2arm.controller.toolbar": "手柄",
+  "s2arm.punct.list": "、"
 }

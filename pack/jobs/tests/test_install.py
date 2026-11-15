@@ -1832,6 +1832,10 @@ class ExportPhoneTests(unittest.TestCase):
         self.assertEqual(sorted(p.name for p in zh.iterdir()), sorted(["S2Arm.ipa", "甲.img", "甲 着色器更新包.img", "怎么装到 iPhone.txt"]))
         self.assertFalse(en.exists(), "换回中文：英文名的旧导出删掉")
         self.assertEqual([p.name for p in self.c.library.iterdir() if p.name.startswith(".export-")], [])
+        self._export(dict(gameId=self.A, mode="export", uiLanguage="zh-Hant"))
+        self.assertTrue(zh.exists() and not en.exists(), "繁中界面：中文定名（11-14 加新语言）")
+        self._export(dict(gameId=self.A, mode="export", uiLanguage="ja"))
+        self.assertTrue(en.exists() and not zh.exists(), "日文界面：英文定名，不给中文文件夹")
 
     def test_export_requested_old_format_is_named(self):
         """点的这款还是旧格式资源包：导出不了单个 game.img，报 pack_missing 说要重新打 iPhone 包"""

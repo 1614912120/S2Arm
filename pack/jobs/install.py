@@ -915,8 +915,9 @@ _BAD_NAME = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
 
 
 def ui_lang(c):
-    """玩家看得到的文件名 / 说明用哪种语言：请求 uiLanguage = en 用英文，其余（zh-Hans、没带）用中文"""
-    return "en" if c.r.get("uiLanguage") == "en" else "zh"
+    """玩家看得到的文件名 / 说明用哪种语言：中文界面（zh-Hans / zh-Hant、没带）用中文，其余用英文"""
+    lang = c.r.get("uiLanguage") or "zh-Hans"   # 没带（旧客户端）照旧中文
+    return "zh" if lang.startswith("zh") else "en"   # 中文界面（简 / 繁）用中文定名，其余语言用英文（11-14 加新语言：日 / 西 / 法界面不给中文文件夹）
 
 
 def export_dir(c):
@@ -1836,8 +1837,8 @@ def container_others(c, ph, rec, leave=None):
         deleted = "".join("「" + phone_game_name(c, ph, g, names) + "」" for g in lost if g in known)
         # 每行一个固定句式（游戏名进 {0} 占位），两端界面按 Localizable.json 逐行翻
         lines = ["这次装完，手机上这几款游戏会打不开（存档和资源包都还在手机上）。"] \
-            + (["它们是在别的电脑上装的，到那台电脑上再「装到 iPhone」一次就回来：" + elsewhere] if elsewhere else []) \
-            + (["它们已从这台电脑的游戏库删除，重新加回游戏库、「打 iPhone 包」再装一次就回来：" + deleted] if deleted else []) \
+            + ([f"它们是在别的电脑上装的，到那台电脑上再「装到 iPhone」一次就回来：{elsewhere}"] if elsewhere else []) \
+            + ([f"它们已从这台电脑的游戏库删除，重新加回游戏库、「打 iPhone 包」再装一次就回来：{deleted}"] if deleted else []) \
             + ["确认继续再点一次。"]
         raise Failure("\n".join(lines), code="container_would_drop", internal=" ".join(lost))
     return [g for g in candidates if g not in lost]
