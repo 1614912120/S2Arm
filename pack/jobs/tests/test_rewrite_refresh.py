@@ -104,6 +104,11 @@ class RewriteRefreshTests(unittest.TestCase):
         got = work / "root" / "exefs"
         self.assertTrue(got.is_dir() and not got.is_symlink())
         self.assertEqual(sorted(p.name for p in got.iterdir()), sorted(p.name for p in self.exefs.iterdir()))
+    def test_each_checked_game_gets_its_own_line(self):
+        # #1132：升级后第一次导出每款都在「核对」里重核、整体进度停 0%——逐款报一行「核对程序 i/N：名字」
+        self.c.catalog = lambda: {"games": [{"id": "0100A", "name": "甲游戏"}, {"id": "0100B"}]}
+        self.run_refresh(["0100A", "0100B"], hits=[])
+        self.assertEqual([e for e in self.events if e.startswith("核对程序")], ["核对程序 1/2：甲游戏", "核对程序 2/2：0100B"])
 
     def test_unaffected_game_keeps_kit_but_is_marked_checked(self):
         updated, kits = self.run_refresh(["0100A"], hits=[])
