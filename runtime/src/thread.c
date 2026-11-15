@@ -3027,7 +3027,7 @@ void s2a_thread_dump(void) {
         //   在系统调用里的线程：用进门时存的 x29（栈此刻不动）。在跑（游戏代码里、不在系统调用）的线程：短暂停住它的宿主线程读 pc / lr / fp 再放开
         //   （卡住时主线程多半在跑：看不到它在哪个循环里就定不了卡点）。帧读取一律经 vm_read_overwrite，读不到即停，不会因坏帧指针崩
         if (!t->exited && t->started && t->pt && !pthread_equal(t->pt, pthread_self())) {
-            uint64_t pc = 0, lr = 0, fp = 0; int run = !atomic_load(&t->in_svc);
+            uint64_t pc = 0, lr = 0, fp = 0, xr[29]; int run = !atomic_load(&t->in_svc), got_x = 0;
             if (!run) fp = t->last_fp;
             else if (t->mport && thread_suspend(t->mport) == KERN_SUCCESS) {
                 // 停住后先看宿主线程的运行状态：在内核里不可中断等待（缺页读写文件、驱动调用之类）时 thread_get_state 要等它走到可停的点，
@@ -3038,9 +3038,16 @@ void s2a_thread_dump(void) {
                 arm_thread_state64_t st; mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
                 if (unint) LOG("    【红】这条线程不在系统调用里，宿主线程却在内核里不可中断等待（缺页读写文件 / 驱动调用之类），不取寄存器（取了会把看门线程一起卡住）");
                 else if (thread_get_state(t->mport, ARM_THREAD_STATE64, (thread_state_t)&st, &n) == KERN_SUCCESS) {
-                    pc = arm_thread_state64_get_pc(st); lr = arm_thread_state64_get_lr(st); fp = arm_thread_state64_get_fp(st); }
+                    pc = arm_thread_state64_get_pc(st); lr = arm_thread_state64_get_lr(st); fp = arm_thread_state64_get_fp(st);
+                    for (int i = 0; i < 29; i++) xr[i] = st.__x[i];
+                    got_x = 1; }
                 thread_resume(t->mport);
             }
+            // 在跑线程的通用寄存器（恢复它之后再打，停着时不碰日志锁）：游戏在空转循环里的计数、下标、数据指针都在这里
+            //   （11-14 停帧：166 号在解析 BYML，循环次数来自数据里的节点头，要看计数 / 下标 / 指针才判得了数据是不是坏的）
+            if (got_x) for (int i = 0; i < 29; i += 4)
+                LOG("    寄存器 x%-2d %016llx %016llx %016llx %016llx", i, (unsigned long long)xr[i], (unsigned long long)(i + 1 < 29 ? xr[i + 1] : 0),
+                    (unsigned long long)(i + 2 < 29 ? xr[i + 2] : 0), (unsigned long long)(i + 3 < 29 ? xr[i + 3] : 0));
             char bt[2048], w[256]; int bn = 0;   // 每帧带导出名（s2a_guest_where，#806）：一帧至多约 200 字节
             uint64_t at[2] = {pc, lr};
             for (int k = 0; k < 2; k++) { module_t *rm = at[k] ? module_of((void *)at[k]) : NULL;   // 宿主代码里（门、桩）的 pc / lr 不在游戏模块内，略过

@@ -16,7 +16,7 @@
 static char g_cap[65536]; static size_t g_capn; static _Atomic int g_cap_on;
 void s2a_log_out(int fd, const char *p, size_t n) {
     ssize_t w = write(fd, p, n); (void)w;
-    if (atomic_load(&g_cap_on) && strstr(p, "同步调用") && g_capn + n < sizeof g_cap) { memcpy(g_cap + g_capn, p, n); g_capn += n; g_cap[g_capn] = 0; }
+    if (atomic_load(&g_cap_on) && (strstr(p, "同步调用") || strstr(p, "寄存器 x")) && g_capn + n < sizeof g_cap) { memcpy(g_cap + g_capn, p, n); g_capn += n; g_cap[g_capn] = 0; }
 }
 #include <stdatomic.h>
 #include <sys/mman.h>
@@ -969,6 +969,9 @@ int main(void) {
         char want[160]; snprintf(want, sizeof want, "svc 0x35 参数 %#llx 0 0x7 0x1，地址处值 调前 0x7 调后 0x7，返回 0", (unsigned long long)(uintptr_t)&g_sv);
         int hits = 0; for (const char *q = g_cap; (q = strstr(q, want)); q++) hits++;
         CHECK(ok && hits == 3, "㉙ 停帧现场没打出在跑线程最近的同步调用（期望恰 3 行含「%s」，实 %d 行；空转线程跑到 %d），截到：%s", want, hits, ok, g_cap);
+        // 同一份现场：在跑线程还要打通用寄存器（x0–x28 共 8 行）。反证：去掉寄存器那段 → 0 行
+        int regl = 0; for (const char *q = g_cap; (q = strstr(q, "寄存器 x28 ")); q++) regl++;
+        CHECK(regl >= 1, "㉙ 停帧现场没打在跑线程的通用寄存器（寄存器 x28 行 %d 个）", regl);
         atomic_store(&g_sv_go, 1); wait_flag(&g_sv_exit, 5000);   // 空转线程退出、放核后主线程再往下
     }
 
