@@ -467,6 +467,9 @@
 "settings.language.zhHans" = "简体中文";
 "settings.language.zhHant" = "繁體中文";
 "settings.language.en" = "English";
+"settings.language.ja" = "日本語";
+"settings.language.es" = "Español";
+"settings.language.fr" = "Français";
 "settings.language.restart" = "關閉 S2Arm 再重新開啟後生效。";
 "settings.gameLanguage" = "遊戲語言";
 "settings.gameLanguage.system" = "跟隨系統";

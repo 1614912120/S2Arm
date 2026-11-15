@@ -211,7 +211,7 @@ def runtime_env(c, game, runtime, input_ok=True):
             env[f"S2A_INPUT_CONFIG_P{player}"] = str(path)
     if c.r.get("inputGuideHandled") is True:
         env["S2A_INPUT_GUIDE_SHOWN"] = "1"
-    if c.r.get("uiLanguage") in ("zh-Hans", "zh-Hant", "en"):   # 宿主自己的界面文案（按键引导等）跟启动器界面语言；不再决定游戏语言（见上 gameLanguage）
+    if c.r.get("uiLanguage") in ("zh-Hans", "zh-Hant", "en", "ja", "es", "fr"):   # 宿主自己的界面文案（按键引导等）跟启动器界面语言；不再决定游戏语言（见上 gameLanguage）
         env["S2A_UI_LANGUAGE"] = c.r["uiLanguage"]
     return env
 

@@ -9,6 +9,7 @@ launchers/shared/glossary.json 的固定译法，经 Claude API（ANTHROPIC_BASE
 翻过的句子缓存在 ~/.cache/s2arm-l10n/<语言>.json，中途断了重跑接着翻。
 
 用法：python3 tools/l10n_translate.py ja|es|fr [--model claude-sonnet-5-5] [--workers 8]
+      python3 tools/l10n_translate.py ios ja|es|fr      iOS 宿主字符串表 + 游戏库界面 xcstrings
 """
 import concurrent.futures as cf
 import json
@@ -36,6 +37,14 @@ def slots(text):
     return Counter(re.sub(r"%\d+\$", "%", s) for s in SLOT.findall(text or ""))
 
 
+LANGUAGE_CODES = {"zh-Hans", "zh-Hant", "en", "ja", "es", "fr"}
+
+
+def is_language_name(key):
+    """语言选单里各语言自己的名字（language.ja = 日本語）原样不翻；language.system「跟随系统」等照常翻"""
+    return isinstance(key, str) and key.startswith("language.") and key[len("language."):] in LANGUAGE_CODES
+
+
 def settings():
     base = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com").rstrip("/")
     key = os.environ.get("ANTHROPIC_API_KEY")
@@ -56,6 +65,7 @@ Rules:
 4. Use these fixed translations for product terms:
 {terms}
 5. Keep line breaks (\\n) where they are. Do not add quotes, notes or explanations.
+7. A literal percent sign must never be followed by a space or a letter (iOS reads "% e" as a format placeholder): write "25%" before punctuation or spell it out ("25 pour cent").
 6. Never write bracketed plural forms such as (s), (x), (es), (e) or déconnecté(e); rephrase so the sentence works for any count and gender, e.g. "Games: {{0}}" instead of "{{0}} game(s)".
 
 Reply with one JSON object only: {{"<id>": "<translation>", ...}} for every id you were given."""
@@ -114,7 +124,119 @@ def sources():
     return launcher, text, front
 
 
+STRINGS_LINE = re.compile(r'^"((?:[^"\\]|\\.)*)"\s*=\s*"((?:[^"\\]|\\.)*)";\s*$')
+
+
+def read_strings(path):
+    """Apple .strings → [(键, 值)]（值按 .strings 转义解开）"""
+    out = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        m = STRINGS_LINE.match(line.strip())
+        if m:
+            out.append((m.group(1), json.loads('"' + m.group(2) + '"')))
+    return out
+
+
+def write_strings(path, header, rows):
+    esc = lambda t: json.dumps(t, ensure_ascii=False)[1:-1]
+    path.parent.mkdir(exist_ok=True)
+    path.write_text(header + "".join(f'"{k}" = "{esc(v)}";\n' for k, v in rows), encoding="utf-8")
+
+
+def translate_all(lang, pairs, model, workers):
+    """pairs: {英文: 简中参考} → {英文: 译文}（共用同一份缓存）"""
+    base, key = settings()
+    cache_path = Path.home() / ".cache/s2arm-l10n" / f"{lang}.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache = json.loads(cache_path.read_text(encoding="utf-8")) if cache_path.exists() else {}
+    todo = [en for en in pairs if en not in cache and LETTERS.search(en)]
+    system = system_prompt(lang)
+    call(base, key, model, "Reply with the JSON object {\"0\": \"ok\"} only.", {"0": "ping"})   # 试调：key 被拒就在这里停
+    batches = [todo[i:i + CHUNK] for i in range(0, len(todo), CHUNK)]
+
+    def run(batch):
+        got = call(base, key, model, system, {str(n): {"en": en, "zh": pairs[en]} for n, en in enumerate(batch)})
+        out = {}
+        for n, en in enumerate(batch):
+            t = got.get(str(n))
+            if not (isinstance(t, str) and t.strip() and slots(t) == slots(en)):
+                for _ in range(2):
+                    t = call(base, key, model, system, {"0": {"en": en, "zh": pairs[en]}}).get("0")
+                    if isinstance(t, str) and t.strip() and slots(t) == slots(en):
+                        break
+                else:
+                    continue
+            out[en] = t
+        return out
+    with cf.ThreadPoolExecutor(workers) as pool:
+        for out in pool.map(run, batches):
+            cache.update(out)
+    cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=0), encoding="utf-8")
+    return {en: (cache.get(en) if LETTERS.search(en) else en) for en in pairs}
+
+
+def main_ios(lang, model, workers):
+    """iOS：宿主字符串表 ios/l10n/<语言>.lproj（S2ArmHost.strings、InfoPlist.strings，从 en.lproj 翻）+ 系统「设置」页 Settings.bundle/<语言>.lproj/Root.strings + 游戏库界面 Localizable.xcstrings 补这门语言缺的条目"""
+    l10n = ROOT / "ios/l10n"
+    xc_path = ROOT / "shell/Sources/ShellUI/Resources/Localizable.xcstrings"
+    xc = json.loads(xc_path.read_text(encoding="utf-8"))
+    pairs = {}
+    tables = {}
+    for name in ("S2ArmHost.strings", "InfoPlist.strings"):
+        en = read_strings(l10n / "en.lproj" / name)
+        zh = dict(read_strings(l10n / "zh-Hans.lproj" / name))
+        tables[name] = en
+        for k, v in en:
+            pairs.setdefault(v, zh.get(k, ""))
+    root_zh = read_strings(ROOT / "ios/Settings.bundle/zh-Hans.lproj/Root.strings")   # 系统「设置」App 里 S2Arm 页：键是 Root.plist 的英文原文
+    for k, v in root_zh:
+        pairs.setdefault(k, v)
+    for k, entry in xc["strings"].items():
+        loc = entry.get("localizations", {})
+        if lang not in loc:
+            en = loc.get("en", {}).get("stringUnit", {}).get("value", k)
+            pairs.setdefault(en, loc.get("zh-Hans", {}).get("stringUnit", {}).get("value", ""))
+    got = translate_all(lang, pairs, model, workers)
+    missing = 0
+    for name, en in tables.items():
+        # 语言选单里各语言自己的名字（settings.language.ja = 日本語）原样保留，不按界面语言翻
+        rows = [(k, v if re.fullmatch(r"settings\.language\.(zhHans|zhHant|en|ja|es|fr)", k) else got.get(v)) for k, v in en]
+        missing += sum(1 for _, t in rows if not t)
+        header = f"/* S2Arm 宿主界面文字（{NAMES[lang][0]}）：tools/l10n_translate.py ios {lang} 由 en.lproj 经 Claude 翻译、按 glossary.json 固定译法、占位符逐条核对 */\n"
+        write_strings(l10n / f"{lang}.lproj" / name, header, [(k, t) for k, t in rows if t])
+    root_rows = [(k, got.get(k)) for k, _ in root_zh]
+    missing += sum(1 for _, t in root_rows if not t)
+    write_strings(ROOT / f"ios/Settings.bundle/{lang}.lproj/Root.strings",
+                  f"/* iOS「设置」App 里 S2Arm 页（Root.plist）的{NAMES[lang][0]}：键是 Root.plist 里的英文原文（#316）。tools/l10n_translate.py ios {lang} 生成，tests/ios_l10n_test.sh 核对一一对应 */\n",
+                  [(k, t) for k, t in root_rows if t])
+    for k, entry in xc["strings"].items():
+        loc = entry.setdefault("localizations", {})
+        if lang in loc:
+            continue
+        en = loc.get("en", {}).get("stringUnit", {}).get("value", k)
+        if got.get(en):
+            loc[lang] = {"stringUnit": {"state": "translated", "value": got[en]}}
+        else:
+            missing += 1
+    write_xcstrings(xc_path, xc)
+    print(f"iOS {lang}：宿主 {sum(len(v) for v in tables.values())} 条、游戏库界面补齐；没翻成 {missing} 条（重跑补）")
+    return 0
+
+
+
+def write_xcstrings(path, doc):
+    """同 Xcode 的写法：每条的各语言按字母排、两格缩进、结尾不换行（11-14：不然整份 diff 被打乱）"""
+    for e in doc["strings"].values():
+        if "localizations" in e:
+            e["localizations"] = dict(sorted(e["localizations"].items()))
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+
 def main(argv):
+    if argv and argv[0] == "ios":
+        lang = argv[1]
+        model = argv[argv.index("--model") + 1] if "--model" in argv else "claude-sonnet-5-5"
+        workers = int(argv[argv.index("--workers") + 1]) if "--workers" in argv else 2
+        return main_ios(lang, model, workers)
     if not argv or argv[0] not in NAMES:
         raise SystemExit(__doc__)
     lang = argv[0]
@@ -128,12 +250,12 @@ def main(argv):
     keep = lambda en: not LETTERS.search(en)   # 没有字母的（纯符号 / 数字 / 占位符）原样
     wanted = {}
     for k, (en, zh) in list(launcher.items()) + list(text.items()) + list(front.items()):
-        if en and not keep(en) and not (isinstance(k, str) and k.startswith("language.")):
+        if en and not keep(en) and not is_language_name(k):
             wanted.setdefault(en, zh)
     todo = [en for en in wanted if en not in cache]
     print(f"{lang}：要翻的英文 {len(wanted)} 句（去重后），缓存里已有 {len(wanted) - len(todo)}，这次翻 {len(todo)}")
     system = system_prompt(lang)
-    call(base, key, model, "Reply with OK.", {"0": "ping"})   # 先试一次：key 被拒就在这里停，不开并发空转
+    call(base, key, model, "Reply with the JSON object {\"0\": \"ok\"} only.", {"0": "ping"})   # 先试一次：key 被拒就在这里停，不开并发空转
     batches = [todo[i:i + CHUNK] for i in range(0, len(todo), CHUNK)]
 
     def run(batch):
@@ -161,7 +283,7 @@ def main(argv):
     cache_path.write_text(json.dumps(cache, ensure_ascii=False, indent=0), encoding="utf-8")
 
     def target(k, en):
-        if keep(en) or (isinstance(k, str) and k.startswith("language.")):
+        if keep(en) or is_language_name(k):
             return en
         return cache.get(en)
     out_path = SHARED / "l10n" / f"{lang}.json"

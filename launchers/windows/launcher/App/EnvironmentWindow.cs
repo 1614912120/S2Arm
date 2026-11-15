@@ -429,7 +429,7 @@ public sealed partial class EnvironmentWindow : Window
 
         // 密钥（原在游戏库页状态卡）：状态 + 导入
         if (catalog is not null)
-            body.Children.Add(Card(SettingRow(T("settings.keys"), catalog.KeysMessage,
+            body.Children.Add(Card(SettingRow(T("settings.keys"), B(catalog.KeysMessage),
                 Action("library.import_keys", () => BeginPicker(ChooseKeysAsync), !libraryBusy))));
 
         body.Children.Add(InstallModeCard());   // 装到 iPhone 的方式（v0.3.0，InstallModePage.cs）

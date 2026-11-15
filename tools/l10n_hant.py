@@ -8,6 +8,7 @@ launchers/shared/glossary.json 的 zhHantFixes 纠正固定术语。只在维护
       launcher = 共享体验表 launcher.items（两端界面文案，按 id）
       text     = 共享体验表其余双语句子 + 作业层对照表 Localizable.json 的原句（两端翻作业层文字时按原句查）
   launchers/macos/frontend/l10n/zh-Hant.json   Mac 前端自带文案（同 zh.json 的键）
+  shell/Sources/ShellUI/Resources/Localizable.xcstrings   iOS 游戏库界面：缺 zh-Hant 的条目
 已有的译文不覆盖（人工改过的保留），只补缺的键；--all 全部重转。
 
 用法：python3 tools/l10n_hant.py [--all]
@@ -67,6 +68,14 @@ def fill(have, wanted, overwrite):
     return {k: result[k] for k in wanted if k in result}   # 原表删掉的键跟着删
 
 
+
+def write_xcstrings(path, doc):
+    """同 Xcode 的写法：每条的各语言按字母排、两格缩进、结尾不换行（11-14：不然整份 diff 被打乱）"""
+    for e in doc["strings"].values():
+        if "localizations" in e:
+            e["localizations"] = dict(sorted(e["localizations"].items()))
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+
 def main(argv):
     overwrite = "--all" in argv
     spec = json.loads((SHARED / "experience.v1.json").read_text(encoding="utf-8"))
@@ -91,7 +100,15 @@ def main(argv):
     fdoc = {"_language": {"name": "繁體中文", "order": 2, "locales": ["zh-hant", "zh-tw", "zh-hk", "zh-mo"]}}
     fdoc.update(fill({k: v for k, v in fold.items() if k != "_language"}, keys, overwrite))
     fpath.write_text(json.dumps(fdoc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"zh-Hant：共享界面 {len(doc['launcher'])} 条、作业层与共享句 {len(doc['text'])} 条、Mac 前端 {len(fdoc) - 1} 条")
+    # iOS 游戏库界面（shell/Sources/ShellUI/Resources/Localizable.xcstrings）：缺 zh-Hant 的条目由 zh-Hans 转出（11-14）
+    xc_path = ROOT / "shell/Sources/ShellUI/Resources/Localizable.xcstrings"
+    xc = json.loads(xc_path.read_text(encoding="utf-8"))
+    todo = [(k, e["localizations"]["zh-Hans"]["stringUnit"]["value"]) for k, e in xc["strings"].items()
+            if "zh-Hans" in e.get("localizations", {}) and (overwrite or "zh-Hant" not in e["localizations"])]
+    for (k, _), v in zip(todo, convert([t for _, t in todo])):
+        xc["strings"][k]["localizations"]["zh-Hant"] = {"stringUnit": {"state": "translated", "value": v}}
+    write_xcstrings(xc_path, xc)
+    print(f"zh-Hant：共享界面 {len(doc['launcher'])} 条、作业层与共享句 {len(doc['text'])} 条、Mac 前端 {len(fdoc) - 1} 条、iOS 游戏库界面补 {len(todo)} 条")
     return 0
 
 
