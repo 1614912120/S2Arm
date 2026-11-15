@@ -219,6 +219,8 @@
 "vpad.menu.ns2pro" = "Activar Switch 2 Pro Controller";
 "vpad.menu.pad" = "Mandos y movimiento";
 "vpad.menu.rumble" = "Vibración";
+"vpad.menu.volume" = "Sonido";
+"vpad.volume.mute" = "Silenciar";
 "vpad.menu.rumble.note" = "Compartida por el motor del teléfono y los mandos; elegir un nivel reproduce un ejemplo";
 "vpad.menu.saves" = "Gestionar partidas guardadas";
 "vpad.menu.stickFixed.note" = "Desactivado = el stick se centra donde tocas";

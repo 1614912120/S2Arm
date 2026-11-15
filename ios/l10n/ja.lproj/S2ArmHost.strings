@@ -219,6 +219,8 @@
 "vpad.menu.ns2pro" = "Switch 2 Proコントローラーを有効にする";
 "vpad.menu.pad" = "コントローラーとモーション";
 "vpad.menu.rumble" = "振動";
+"vpad.menu.volume" = "サウンド";
+"vpad.volume.mute" = "ミュート";
 "vpad.menu.rumble.note" = "スマホのモーターとコントローラーで共有します。レベルを選ぶとサンプル振動が再生されます。";
 "vpad.menu.saves" = "セーブデータ管理";
 "vpad.menu.stickFixed.note" = "オフにすると指を置いた位置がスティックの中心になります";

@@ -220,6 +220,8 @@
 "vpad.menu.ns2pro" = "启用 Switch 2 Pro 手柄";
 "vpad.menu.pad" = "手柄与体感";
 "vpad.menu.rumble" = "震动";
+"vpad.menu.volume" = "声音";
+"vpad.volume.mute" = "静音";
 "vpad.menu.rumble.note" = "手机马达和手柄共用；选档位时会按那一档震一下";
 "vpad.menu.saves" = "存档管理";
 "vpad.menu.stickFixed.note" = "关掉 = 手指落点当中心";
