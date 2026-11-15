@@ -74,7 +74,7 @@ void rp_tex_mark_gpu_written(const tex_t *t){(void)t;}int rp_tex_debug_state(uin
 nvn_gpu_tex rp_tex_backend_by_serial(uint64_t s){(void)s;return NULL;}
 static p_set_rt target;
 const p_set_rt *rp_pass_target(void){return &target;}int rp_pass_slot_attached(int i){(void)i;return 0;}
-void rp_pass_slot_size(int i,uint32_t *w,uint32_t *h){(void)i;*w=*h=1;}void rp_pass_note_draw(int d){(void)d;}
+void rp_pass_slot_size(int i,uint32_t *w,uint32_t *h){(void)i;*w=*h=1;}void rp_pass_noatt_size(uint32_t *w,uint32_t *h){(void)w;(void)h;}void rp_pass_note_draw(int d){(void)d;}
 int rp_pass_parked(void){return 0;}void rp_pass_prepare_draw(nvn_gpu_cmd c){(void)c;}void rp_pass_land_reads(nvn_gpu_cmd c,const tex_t *const *ts,int n){(void)c;(void)ts;(void)n;}
 int rp_pass_begin(nvn_gpu_cmd c){(void)c;return 0;}void rp_pass_flush(nvn_gpu_cmd c){(void)c;}
 int main(int argc,char **argv){
