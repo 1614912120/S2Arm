@@ -11,6 +11,7 @@ struct SGradeCategoryState: Equatable {
     var lastRun = ""          // 上一局结果原句（作业层 patch_result，中文原句，界面经 BackendText 翻）
     var autoOffCause = "", autoOffAt: Date? = nil
     var mine = "", available: [String] = [], port = ""
+    var fiSupported: Bool? = nil   // 帧率：设备能不能补帧（作业层 fi_supported；没给 = nil，按能补帧算）
 
     init(_ raw: [String: Any]) {
         state = raw["state"] as? String ?? ""; source = raw["source"] as? String ?? ""
@@ -26,6 +27,7 @@ struct SGradeCategoryState: Equatable {
         autoOffAt = (off["at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
         let v = raw["versions"] as? [String: Any] ?? [:]
         mine = v["mine"] as? String ?? ""; available = v["available"] as? [String] ?? []; port = v["port"] as? String ?? ""
+        fiSupported = raw["fi_supported"] as? Bool
     }
 }
 
@@ -78,5 +80,29 @@ enum SGradeStateText {
         case "mac_only": return (t("sgrade.state.mac_only"), nil)
         default: return nil   // pending（Mac 下次起局自动补上，不用说）/ unknown / 还没有这个字段
         }
+    }
+
+    /// 启动设置 S 级金卡最上面两行（满屏 / 帧率解锁，11-15 维护者定）的副标题：写现在用的是什么；自动关 / 没生效 / 没打入照状态句。
+    ///   与 iPhone ios/sgrade_line.m s2a_sgrade_row_note 同一套判断。→ (那一句, 这一行真用不了要置灰)
+    static func rowNote(cat: String, _ s: SGradeCategoryState?, hasFpsPatch: Bool, fpsOn: Bool, t: (String) -> String,
+                        date: (Date) -> String, backend: (String) -> String = { $0 }) -> (text: String, disabled: Bool)? {
+        let st = s ?? SGradeCategoryState([:])
+        if ["off_auto", "ineffective", "opted_out"].contains(st.state),
+           let l = line(cat: cat, catName: "", st, t: t, date: date, backend: backend) { return (l.text, false) }
+        if cat == "widescreen" {
+            if st.source == "patch" { return (t(st.active == "fixed" ? "sgrade.src.fs.fixed" : "sgrade.src.fs.adaptive"), false) }
+            return (t("sgrade.src.fs.own"), false)   // 没有社区满屏补丁的款一律走 S2Arm 通用满屏（不看名单）
+        }
+        guard cat == "fps" else { return nil }
+        let fi = st.fiSupported ?? true
+        var src = st.source
+        if src.isEmpty { src = hasFpsPatch && fpsOn ? "patch" : fi ? "fi" : "none" }
+        let patchLine = st.target > 0 ? t("sgrade.src.fps.patch").replacingOccurrences(of: "{0}", with: String(st.target)) : nil
+        let fiLine = t(hasFpsPatch ? "sgrade.src.fps.fi" : "sgrade.src.fps.fi.nopatch")
+        if src == "patch" { return (patchLine ?? fiLine, false) }
+        if src == "fi" { return (fiLine, false) }
+        if hasFpsPatch, let patchLine { return (patchLine, false) }
+        if fi { return (fiLine, false) }
+        return (t("sgrade.unavail.fi"), true)
     }
 }
