@@ -401,7 +401,10 @@ void s2a_cpatch_load_source(module_t *m, const void *bytes, size_t length) {
 // 定画幅变体按画幅 A 选（持 g_ad_lock）：开着的几份里取与 A 同在 16:9 一侧、log 比值最近的一份；先关不该开的（写回原值、清位）再开选中的
 static void fx_select(double A) {
     int best = -1; double bd = 0;
-    for (int i = 0; i < g_nfx; i++) {
+    // 自适应满屏开着时定画幅变体让位（11-15 #1152：一款两种都在包里，自适应按 2.167 开、定画幅 2.333 那份也按「最近」开，后写的定画幅把自适应算好的值盖掉，
+    //   画面按 2.333 布局、UI 全部错位）。自适应按屏幕实际画幅算，比挑最近的一份准；没有自适应在开才按最近挑
+    int ad = atomic_load(&g_ad_on);
+    for (int i = 0; i < g_nfx && !ad; i++) {
         struct cp_fx *x = &g_fx[i];
         if (!x->slot || !x->en || !(A > CP_R * 1.001 ? x->a > CP_R * 1.001 : A < CP_R * 0.999 ? x->a < CP_R * 0.999 : 0)) continue;
         double d = fabs(log(x->a / A)); if (best < 0 || d < bd) { best = i; bd = d; }
@@ -410,7 +413,7 @@ static void fx_select(double A) {
         struct cp_fx *x = &g_fx[i]; if (i == best || !x->on) continue;
         if (x->spec[0] && data_writes(x->m, x->spec, 2)) die("宽屏变体已校验的数据写回失败");
         atomic_fetch_and(x->slot, ~(1ull << x->bit)); x->on = 0; st_put(x->id, "关");
-        LOG("社区补丁：%s 宽屏变体 %s（画幅 %.3f）关（当前画幅 %.3f）", x->m->name, x->id, x->a, A);
+        LOG("社区补丁：%s 宽屏变体 %s（画幅 %.3f）关（当前画幅 %.3f%s）", x->m->name, x->id, x->a, A, ad ? "，自适应满屏在开，让位" : "");
     }
     g_fx_aspect = 0;
     if (g_nfx) st_put(CP_FX_ALL, best >= 0 ? "开" : "关");

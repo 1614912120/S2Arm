@@ -30,7 +30,7 @@ static void run(const char *dir, const char *on) {
         unsetenv("DM_PRESENT_LINK"); unsetenv("DM_PRESENT_HZ");   // ⑤ 核出图链与出图节拍：从没设过开始
         if (on && !strcmp(on, "fixed")) on = "widescreen:auto";
         int followlist = on && !strcmp(on, "followlist"); if (followlist) on = "gfx:A";   // ⑨ 的标记：玩家动过补丁开关、列表里没有帧率补丁（iOS 设置页从不写它），再跟 60 帧开关   // ⑧ 的标记：只开定画幅变体的总编号（自适应一族不开，上屏画幅只看变体）
-        if (on && strcmp(on, "follow") && strcmp(on, "cheat") && strcmp(on, "adapt")) setenv("S2A_CPATCH_ON", on, 1); else unsetenv("S2A_CPATCH_ON");   // follow：⑤ 的标记，按表缺省开装载
+        if (on && strcmp(on, "follow") && strcmp(on, "cheat") && strcmp(on, "adapt") && strcmp(on, "adaptfx")) setenv("S2A_CPATCH_ON", on, 1); else unsetenv("S2A_CPATCH_ON");   // follow：⑤ 的标记，按表缺省开装载
         module_t m; memset(&m, 0, sizeof m); snprintf(m.name, sizeof m.name, "%s", "main");
         m.size = 0x8000; m.base = mmap(NULL, m.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
         m.key_page_off = 0x4000; m.key_page_size = 0x4000; m.base[0x20] = 0x11; float one = 1.0f; memcpy(m.base + 0x3100, &one, 4);
@@ -45,6 +45,11 @@ static void run(const char *dir, const char *on) {
             int r0 = s2a_cpatch_cheat("d.txt", "不在包里", 1), rz = s2a_cpatch_cheat("d.txt", "Z", 1); uint8_t z = m.base[0x60];
             printf("RESULT %llx %d %llx %02x %llx %02x %llx %02x %llx %02x %d %d %02x %llx\n", (unsigned long long)c0, r1, (unsigned long long)c1, x1, (unsigned long long)c2, x2,
                    (unsigned long long)c3, x3, (unsigned long long)c4, x4, r0, rz, z, (unsigned long long)(*s & ~0x700ull)); fflush(stdout); _exit(0);
+        }
+        if (on && !strcmp(on, "adaptfx")) {   // ⑪ 自适应与定画幅变体都开着（#1152）：2.2 只开自适应宽模板，变体全让位、0x3200 不写；上屏按 2.2
+            uint64_t *s = (uint64_t *)(m.base + m.key_page_off);
+            s2a_cpatch_aspect(2.2); printf("RESULT %llx %02x %.4f\n", (unsigned long long)(s[2046] & 0x7c00), m.base[0x3200], s2a_cpatch_present_aspect());
+            fflush(stdout); _exit(0);
         }
         if (on && !strcmp(on, "adapt")) {   // ⑦ 自适应画幅：装载时 16:9 两份都关；2.0 开宽；1.6 换窄；16:9 全关、写回
             uint64_t *s = (uint64_t *)(m.base + m.key_page_off); float *d = (float *)(m.base + 0x3100);
@@ -127,8 +132,14 @@ int main(void) {
         char *res = strstr(buf, "RESULT "); char got[256] = "?"; if (res) { sscanf(res + 7, "%255[^\n]", got); }
         CHECK(!strcmp(got, want), "%s%s S2A_CPATCH_ON=%s：期望 %s，实得 %s", k >= 9 ? "[APK 内存表] " : "", k == 18 ? "⑩ 表带 NUL 报红" : i == 0 ? "①" : i == 1 ? "②" : i == 2 ? "③" : i == 3 ? "④" : i == 4 ? "⑤ 帧率类跟 60 帧开关（份数 / 掩码与 0x40：装载后、关、开）" : i == 5 ? "⑥ 金手指逐条开关（掩码 / 开关字 / 不在包里 / 不占位）" : i == 6 ? "⑦ 自适应画幅（宽 / 窄模板随画幅、值槽与数据按画幅算、16:9 全关写回）" : i == 8 ? "⑨ 列表里没有帧率补丁时目标帧率照取（出图链 / 节拍跟到 120）" : "⑧ 定画幅宽屏变体（按画幅选最近同侧一份、上屏按它铺满、16:9 全关写回）", on ? on : "(不设)", want, got);
     }
+    { // ⑪ 手算：2.2 → 自适应宽位 10 = 0x400，变体位 12–14 全不开、0x3200 原值 00，上屏 2.2（旧代码还会开 V1：0x1400、20）
+      int pp[2]; pipe(pp); pid_t c = fork(); g_source = 0; g_nul = 0;
+      if (c == 0) { dup2(pp[1], 1); close(pp[0]); run(dir, "adaptfx"); _exit(0); }
+      close(pp[1]); char buf[4096] = {0}; size_t n = 0; ssize_t r; while ((r = read(pp[0], buf + n, sizeof buf - 1 - n)) > 0) n += (size_t)r; close(pp[0]); waitpid(c, NULL, 0);
+      char *res = strstr(buf, "RESULT "); char got[256] = "?"; if (res) { sscanf(res + 7, "%255[^\n]", got); }
+      CHECK(!strcmp(got, "400 00 2.2000"), "⑪ 自适应与定画幅变体都开着：期望 400 00 2.2000，实得 %s", got); }
     unlink(p); rmdir(dir);
     if (fails) { printf("✗ t_cpatch：%d 项红\n", fails); return 1; }
-    printf("✓ t_cpatch：19 项（目录装载与 APK 内存表各 9 项 + 内存表带 NUL 报红：没选过 = 包里全开 / 只开 A / 全关 / 原值不符不开 / 帧率类跟 60 帧开关 / 金手指逐条开关 / 自适应画幅 / 定画幅变体 / 列表外帧率补丁目标照取）\n");
+    printf("✓ t_cpatch：20 项（目录装载与 APK 内存表各 9 项 + 内存表带 NUL 报红：没选过 = 包里全开 / 只开 A / 全关 / 原值不符不开 / 帧率类跟 60 帧开关 / 金手指逐条开关 / 自适应画幅 / 定画幅变体 / 列表外帧率补丁目标照取 / 自适应开着时定画幅变体让位）\n");
     return 0;
 }
