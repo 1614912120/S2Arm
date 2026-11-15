@@ -258,6 +258,8 @@ import S2ArmAppleAdapter
                     XCTAssertGreaterThan(cancel.frame.midX, bounds.midX, "取消和开始出包都应位于右下角")
                     XCTAssertLessThanOrEqual(cancel.frame.maxX, start.frame.minX)
                     XCTAssertEqual(cancel.frame.midY, start.frame.midY, accuracy: 1)
+                    XCTAssertEqual(cancel.frame.height, start.frame.height, accuracy: 1, "出包页的取消和开始按钮应同高")
+                    XCTAssertEqual(cancel.frame.height, 48, accuracy: 1)
                     XCTAssertLessThan(start.frame.maxY, bounds.minY + 90)
                     let shortcuts = fixture.navigation.shortcutTargets(in: window)
                     XCTAssertEqual(shortcuts[.primary], ["export.start"])
@@ -651,14 +653,14 @@ import S2ArmAppleAdapter
         }
     }
 
-    func testExportPageSharesTheHomeHorizontalInsets() async throws {
+    func testExportContentUsesABoundedWidthAlignedWithTheFooter() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
         fixture.model.refresh()
         for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         let game = try XCTUnwrap(fixture.model.games.first)
         for language in [Lang.zh, .en] {
-            for width: CGFloat in [800, 1120, 1440] {
+            for width: CGFloat in [800, 1120, 1440, 1920] {
                 let padFocus = PadFocus()
                 let page = AnyView(ExportView(model: fixture.model, covers: CoverCache(), game: game, install: {})
                     .environmentObject(padFocus).padScope("main", padFocus)
@@ -670,12 +672,57 @@ import S2ArmAppleAdapter
                 let targets = fixture.navigation.controlTargets(in: window)
                 let cover = try XCTUnwrap(targets.first { $0.id == "export.cover" })
                 let start = try XCTUnwrap(padFocus.frames["main"]?.first { $0.id == "export.start" })
-                print("export-insets \(language.code)/\(width): left=\(cover.frame.minX - bounds.minX), right=\(width - start.frame.maxX)")
-                XCTAssertEqual(cover.frame.minX - bounds.minX, 48, accuracy: 1, "出包内容应与游戏库的 48 pt 内边距对齐")
+                let expectedLeft = max(48, width - 48 - 1120)
+                print("export-bounded \(language.code)/\(width): left=\(cover.frame.minX - bounds.minX), right=\(width - start.frame.maxX)")
+                XCTAssertEqual(cover.frame.minX - bounds.minX, expectedLeft, accuracy: 1, "出包内容最多 1120 pt 宽并靠右，小窗口保持 48 pt 边距")
                 XCTAssertEqual(width - start.frame.maxX, 48, accuracy: 1, "底栏操作应与内容右边缘对齐")
                 XCTAssertTrue(bounds.contains(cover.frame))
                 XCTAssertTrue(CGRect(x: 0, y: 0, width: width, height: 630).contains(start.frame))
-                try snapshot(host, "export-full-width-\(language.code)-\(Int(width))")
+                fixture.navigation.source.controllers = { [] }; fixture.navigation.attach(window); fixture.navigation.source.stop()
+                defer { fixture.navigation.detach() }
+                fixture.navigation.focus("export.location")
+                try await Task.sleep(for: .milliseconds(60))
+                let location = try XCTUnwrap(fixture.navigation.controlTargets(in: window).first { $0.id == "export.location" })
+                XCTAssertEqual(bounds.maxX - location.frame.maxX, 62, accuracy: 1, "存放位置行的右缘也应与内容对齐，只含行内的 14 pt 边距")
+                fixture.navigation.hide()
+                if let scroll = scrollViews(in: host).first, let document = scroll.documentView {
+                    let clip = scroll.contentView
+                    clip.scroll(to: CGPoint(x: 0, y: document.isFlipped ? 0 : max(0, document.bounds.height - clip.bounds.height)))
+                    scroll.reflectScrolledClipView(clip)
+                }
+                try snapshot(host, "export-bounded-\(language.code)-\(Int(width))")
+            }
+        }
+    }
+
+    func testImportFooterUsesTheStandardSheetMargins() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        for language in [Lang.zh, .en] {
+            for kind in [ImportSheet.Kind.games, .keys] {
+                fixture.model.showAddGames = kind == .games
+                fixture.model.showKeys = kind == .keys
+                let (host, window) = try await render(AnyView(ImportSheet(model: fixture.model, kind: kind)), fixture: fixture, language: language)
+                let navigation = fixture.navigation
+                navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
+                defer { navigation.detach(); window.close() }
+                for connected in [false, true] {
+                    navigation.presentation.connected = connected
+                    try await Task.sleep(for: .milliseconds(70))
+                    let cancelID = try XCTUnwrap(navigation.shortcutTargets(in: window)[.back]?.first)
+                    let cancel = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == cancelID })
+                    let bounds = window.convertToScreen(host.bounds)
+                    print("import-footer \(language.code)/\(kind)/\(connected): right=\(bounds.maxX - cancel.frame.maxX), bottom=\(cancel.frame.minY - bounds.minY)")
+                    XCTAssertEqual(bounds.maxX - cancel.frame.maxX, 32, accuracy: 1)
+                    XCTAssertEqual(cancel.frame.minY - bounds.minY, 16, accuracy: 1, "取消按钮与其他弹窗共用 16 pt 底边距")
+                    XCTAssertEqual(cancel.frame.height, 36, accuracy: 1, "普通弹窗仍使用普通控件高度")
+                    XCTAssertTrue(bounds.contains(cancel.frame))
+                    try snapshot(host, "import-footer-\(language.code)-\(kind)-\(connected ? "connected" : "disconnected")")
+                }
+                navigation.handle(.back)
+                XCTAssertFalse(fixture.model.showAddGames)
+                XCTAssertFalse(fixture.model.showKeys)
+                XCTAssertFalse(fixture.runner.requests.contains { ["import", "keys"].contains($0["operation"] as? String ?? "") })
             }
         }
     }

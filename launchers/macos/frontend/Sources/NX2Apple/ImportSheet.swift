@@ -40,23 +40,25 @@ struct ImportSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if page == .results {
-                ZStack(alignment: .topLeading) {
-                    results
-                        .opacity(detail == nil ? 1 : 0)
-                        .accessibilityHidden(detail != nil)
-                        .allowsHitTesting(detail == nil)
-                        .disabled(detail != nil)
-                    if let detail { sourceDetails(detail) }
+            VStack(alignment: .leading, spacing: 0) {
+                if page == .results {
+                    ZStack(alignment: .topLeading) {
+                        results
+                            .opacity(detail == nil ? 1 : 0)
+                            .accessibilityHidden(detail != nil)
+                            .allowsHitTesting(detail == nil)
+                            .disabled(detail != nil)
+                        if let detail { sourceDetails(detail) }
+                    }
+                } else {
+                    ScrollView { picker }
                 }
-            } else {
-                ScrollView { picker }
+                Spacer(minLength: 16)
             }
-            Spacer(minLength: 16)
+            .padding(.horizontal, LauncherTheme.Space.page).padding(.top, LauncherTheme.Space.page)
             footer
                 .layoutPriority(1)
         }
-        .padding(LauncherTheme.Space.page)
         .launcherSheet(.form, height: page == .results ? 560 : 460)
         .onExitCommand {
             if let detail { backFromDetails(detail) }
@@ -129,7 +131,7 @@ struct ImportSheet: View {
     private static let footerButtonWidth: CGFloat = 136
 
     private var footer: some View {
-        HStack {
+        LauncherSheetFooter {
             if page == .results, detail == nil {
                 Button(common("cancel")) { model.cancelImport() }
                     .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerShortcut(.back)

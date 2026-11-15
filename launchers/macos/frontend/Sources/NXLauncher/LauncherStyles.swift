@@ -164,10 +164,13 @@ private struct LauncherRowControlFrame: ViewModifier {
 }
 
 package struct LauncherSecondaryButtonStyle: ButtonStyle {
-    package init(accent: Color? = nil, fill: Bool = false) { self.accent = accent; self.fill = fill }
+    package init(accent: Color? = nil, fill: Bool = false, prominent: Bool = false) {
+        self.accent = accent; self.fill = fill; self.prominent = prominent
+    }
     /// Text and border in this colour (the build bar's Stop); plain white otherwise.
     package var accent: Color? = nil
     package var fill = false
+    package var prominent = false
     /// Inside a setting row the button is exactly LauncherControl.width wide and LauncherControl.height high, its label centred on
     /// one line (a little smaller when it does not fit): the buttons of a page line up in one column and are equally high.
     @Environment(\.launcherControlWidth) private var width
@@ -175,13 +178,13 @@ package struct LauncherSecondaryButtonStyle: ButtonStyle {
     @State private var hovered = false
     package func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(LauncherTheme.TypeStyle.button)
+            .font(prominent ? .manrope(16, .semibold) : LauncherTheme.TypeStyle.button)
             .labelStyle(LauncherLabelStyle())
             .multilineTextAlignment(.center)
             .lineLimit(1)
             .minimumScaleFactor(width == nil ? 1 : LauncherControl.minimumLabelScale)
             .padding(.horizontal, LauncherTheme.Space.large)
-            .frame(width: width, height: LauncherControl.height)
+            .frame(width: width, height: prominent ? LauncherTheme.Metrics.prominentControlHeight : LauncherControl.height)
             .frame(minWidth: width == nil ? LauncherTheme.Metrics.actionMinWidth : nil)
             .frame(maxWidth: fill ? .infinity : nil)
             .background(configuration.isPressed ? LauncherTheme.Colors.pressed : hovered ? LauncherTheme.Colors.hover : LauncherTheme.Colors.control,
@@ -192,7 +195,7 @@ package struct LauncherSecondaryButtonStyle: ButtonStyle {
             .opacity(enabled ? 1 : 0.55)
             .contentShape(RoundedRectangle(cornerRadius: LauncherTheme.Metrics.controlRadius, style: .continuous))
             .onHover { hovered = $0 }
-            .launcherMeasured(label: configuration.label.font(.manrope(13, .semibold)), room: LauncherControl.buttonLabelWidth)
+            .launcherMeasured(label: configuration.label.font(prominent ? .manrope(16, .semibold) : LauncherTheme.TypeStyle.button), room: LauncherControl.buttonLabelWidth)
     }
 }
 

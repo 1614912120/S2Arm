@@ -33,8 +33,9 @@ struct ExportView: View {
                     }
                     platforms
                 }
+                .frame(maxWidth: 1120, alignment: .leading)
                 .padding(.horizontal, LauncherTheme.Metrics.libraryInset).padding(.top, 22).padding(.bottom, 40)
-                .frame(maxWidth: .infinity)
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
             Divider().opacity(0.3)
             actionBar
@@ -293,7 +294,7 @@ struct ExportView: View {
             }
             Spacer(minLength: 12)
             Button(loc.t("s2arm.job.cancel")) { model.exportFor = nil }
-                .controllerButtonStyle(LauncherSecondaryButtonStyle())
+                .controllerButtonStyle(LauncherSecondaryButtonStyle(prominent: true))
                 .keyboardShortcut(.cancelAction).controllerID("export.cancel").controllerShortcut(.back)
             Button { model.export(game, location: location.isEmpty ? nil : location) } label: {
                 Label(model.busy ? x("action.queue") : count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"), systemImage: "shippingbox.fill")
