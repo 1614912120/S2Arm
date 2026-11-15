@@ -160,6 +160,7 @@ int main(void) {
     s2a_fps_start(dir);
     usleep(250000);
     int32_t v; memcpy(&v, img + 0x1000, 4); expect("无条件写 main+0x1000", 60, v);
+    { int s2a_fps_source(void); expect("帧率来源：表装上且 60 帧开 → 2（补帧让路）", 2, s2a_fps_source()); }
     memcpy(&v, img + 0x1004, 4); expect("条件标志 0：main+0x1004 写「== 0」那条", 1, v);
     img[0x1010] = 1; usleep(250000);
     memcpy(&v, img + 0x1004, 4); expect("条件标志改 1：main+0x1004 写「!= 0」那条", 2, v);
@@ -181,6 +182,7 @@ int main(void) {
     expect("起局通知 cpatch 跟随一次（开）", 1, g_follow_n); expect("起局跟随值 1", 1, g_follow_last); expect("起局开：s2a_fps_enabled", 1, s2a_fps_enabled());
     int32_t pre1004; memcpy(&pre1004, img + 0x1004, 4);   // 关之前条件行的开时值（条件选中哪个就是哪个）
     s2a_fps_set_enabled(0); usleep(250000);
+    { int s2a_fps_source(void); expect("帧率来源：局中关 60 帧 → 1（补帧可补）", 1, s2a_fps_source()); }
     expect("关：通知 cpatch 跟随（第 2 次）", 2, g_follow_n); expect("关：跟随值 0", 0, g_follow_last);
     s2a_fps_set_enabled(0); expect("重复关：不再通知", 2, g_follow_n);
     memcpy(&v, img + 0x1000, 4); expect("关：main+0x1000 写关值 30", 30, v);
