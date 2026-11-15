@@ -40,6 +40,7 @@ __attribute__((weak)) void s2a_logcon_flush(void) {}
 #ifdef S2A_LOGCAP_IMPL
 void s2a_log_out(int fd, const char *p, size_t n);
 #else
+#define S2A_LOG_OUT_WEAK 1   // 本编译单元已有弱定义（单测把多份源码拼进同一单元时，后面的强定义要让位，见 runtime/tests/t_thread.c）
 __attribute__((weak)) void s2a_log_out(int fd, const char *p, size_t n) { ssize_t w = write(fd, p, n); (void)w; }
 #endif
 // 一行日志一次写出：多线程同时打不穿插（旧库 sw.h 同做法）

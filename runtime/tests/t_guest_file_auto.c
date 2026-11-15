@@ -62,6 +62,12 @@ int main(void) {
         char path[] = "/tmp/t_grun_XXXXXX"; int fd = mkstemp(path); close(fd); unlink(path); setenv("S2A_GUEST_RUN_MARK", path, 1);
         int d0 = s2a_guest_run_died(); s2a_guest_run_mark(1); int d1 = s2a_guest_run_died(); s2a_guest_run_mark(0); int d2 = s2a_guest_run_died(); s2a_guest_run_mark(1); s2a_guest_run_mark(1); int d3 = s2a_guest_run_died();
         CHECK(d0 == 0 && d1 == 1 && d2 == 0 && d3 == 1, "㉘ 「在跑」标记：没有 0 → 前台写 1 → 进后台删 0 → 再到前台（两次）1（得 %d %d %d %d）", d0, d1, d2, d3);
+        // #909 11-15：本局闪退（崩溃处理改写成 crash）→ 下一局不算死于内存（0），但标记还在（闪退记录 1）；被系统 SIGKILL 不经崩溃处理 → 仍是 pid → 1。
+        //   期望手写：mark(1) 后 crash → died 0 / crashed 1；再到前台 mark(1) → died 1（新一局覆盖成 pid）/ crashed 0。旧实现：标记在就算死掉 → 第一项红
+        { void s2a_guest_run_mark_crash(void); int s2a_guest_run_crashed(void);
+          s2a_guest_run_mark(1); s2a_guest_run_mark_crash(); int c0 = s2a_guest_run_died(), c1 = s2a_guest_run_crashed();
+          s2a_guest_run_mark(1); int c2 = s2a_guest_run_died(), c3 = s2a_guest_run_crashed();
+          CHECK(c0 == 0 && c1 == 1 && c2 == 1 && c3 == 0, "#909 闪退改写标记：闪退后 不算死于内存 0 / 闪退 1；再到前台 1 / 0（得 %d %d %d %d）", c0, c1, c2, c3); }
         unlink(path); unsetenv("S2A_GUEST_RUN_MARK");
     }
     {   // ㉙ 坏记录：峰值文件在但读不出 / 为 0 → 读出 UINT64_MAX，判开；本局实测覆盖后恢复正常

@@ -278,6 +278,9 @@ def substituted(text):
 def discover_files(argv, variables, here):
     start, pat, i, pos = None, 'test*.py', 0, []
     while i < len(argv):
+        # 命令到重定向 / 控制符为止（11-14：「discover -s 目录 -v > 日志 2>&1 &」原先把「>」当位置参数、改写成模式，launchers/macos 的 gui_jobs 单测被判没接线）
+        if re.fullmatch(r'\d*[<>]{1,2}(&\d+|&-)?|&{1,2}|\|{1,2}|;', argv[i]):
+            break
         a = path_word(argv[i], variables, here)
         if a in ('-s', '--start-directory', '-p', '--pattern', '-t', '--top-level-directory'):
             v = path_word(argv[i + 1], variables, here) if i + 1 < len(argv) else None

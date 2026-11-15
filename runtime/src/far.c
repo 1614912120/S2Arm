@@ -308,7 +308,11 @@ int s2a_far_fault(void *ctx, uint64_t fa, int w) {
         uint64_t ea = 0, len = 0;
         int ok = w ? s2a_emul_store_regs(insn, &r, delta, lo, hi, NULL, &ea, &len) : s2a_emul_load_regs(insn, &r, delta, lo, hi, NULL, &ea, &len);
         if (!ok && len && len <= FPG && (ea & ~(FPG - 1)) != ((ea + len - 1) & ~(FPG - 1))) {   // 跨页：两页影子并排进槽再试
-            uint64_t pg = ea & ~(FPG - 1); uint8_t *p1 = g2h(pg, NULL, NULL), *p2 = g2h(pg + FPG, NULL, NULL), *sl = p1 && p2 ? pair_slot(p1, p2) : NULL;
+            uint64_t pg = ea & ~(FPG - 1); uint8_t *p1 = g2h(pg, NULL, NULL), *p2 = g2h(pg + FPG, NULL, NULL);
+            // 前一页是窗口的最后一页（远端紧接窗口末尾）：窗口里游戏地址就是宿主地址，拿它本身和远端首页的影子并排。
+            //   11-14 D-52P7：LDR X8,[X10,X11] 读窗口末尾前 4 字节起的 8 字节，后半落进远端首页，原先这一页取不到影子 → 代执行不了 → SIGSEGV（玩 87 分钟后）
+            if (!p1 && p2 && pg + FPG == g_lo) p1 = (uint8_t *)(uintptr_t)pg;
+            uint8_t *sl = p1 && p2 ? pair_slot(p1, p2) : NULL;
             if (sl) { delta = (uint64_t)(uintptr_t)sl - pg; lo = pg; hi = pg + 2 * FPG;
                 ok = w ? s2a_emul_store_regs(insn, &r, delta, lo, hi, NULL, NULL, NULL) : s2a_emul_load_regs(insn, &r, delta, lo, hi, NULL, NULL, NULL); }
         }

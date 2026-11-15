@@ -1,5 +1,13 @@
 // swift-tools-version: 6.0
+import Foundation
 import PackageDescription
+
+// Sparkle 二进制包不在仓库里、要先备到 Vendor/（见下方 binaryTarget 注释）。没备时 SwiftPM 不报缺文件、直接崩成
+//   「-[NSNull length]: unrecognized selector」，看不出原因（11-14 新开工作树实测）：清单里先查，缺了就说清楚该跑什么
+let sparkleZip = "Vendor/Sparkle-2.10.1.zip"
+if !FileManager.default.fileExists(atPath: Context.packageDirectory + "/" + sparkleZip) {
+    fatalError("缺 launchers/macos/frontend/\(sparkleZip)：先在仓库根目录跑 python3 launchers/macos/sparkle_vendor.py（按钉死的校验值备 Sparkle，本机缓存有就拷）")
+}
 
 // NX2Apple 前端快照（来源、取用与改动见 UPSTREAM.md）。分层同上游 ARCHITECTURE.md：
 // NXCore（Foundation）→ NXModel（NXCore）→ NXLauncher（视图与样式）→ NX2AppleUI（上游 app target 里依赖 app 类型的视图，换成 S2Arm 适配层类型）。
@@ -22,7 +30,7 @@ let package = Package(
         //   zip 不进仓库（公开仓扫描不收二进制包，11-14），构建前 launchers/macos/sparkle_vendor.py 按钉死的 sha256 备到 Vendor/（本机缓存有就拷，没有才下一次）；
         //   不用 URL 形式：那样每个新的出包工作目录都要现连 GitHub，v0.3.10 候选卡在下载 14 分钟。
         //   build_app.py 把 Sparkle.framework 放进 Contents/Frameworks；S2ArmApple 的 rpath 指到那里（launchers/macos/Package.swift）
-        .binaryTarget(name: "Sparkle", path: "Vendor/Sparkle-2.10.1.zip"),
+        .binaryTarget(name: "Sparkle", path: sparkleZip),
         // 界面语言跟随系统 / 记住选择的单测（tests/launcher_language_test.sh 跑；NXCore 是 package 访问级别，只能在本包里测）
         .testTarget(name: "NXCoreTests", dependencies: ["NXCore"], path: "Tests/NXCoreTests"),
     ],

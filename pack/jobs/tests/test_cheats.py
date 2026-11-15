@@ -122,6 +122,41 @@ class CheatsTests(unittest.TestCase):
         with self.assertRaises(Failure):
             community.save(self.c)
 
+    def test_crash_turns_off_default_on_patches(self):
+        # 11-13 起社区补丁没选过 = 默认开：崩溃时包里编进去、玩家没关过的补丁都算开着，一并关掉并记下名字；玩家本来就关了的不再记
+        #   期望（手算）：包里 widescreen:A1（满屏）、gfx:B1（画面）两份，玩家关过 B1 → 只关 A1，launch.json A1 = False，通知列「满屏 A」
+        from layout import image_mac
+        tsv = image_mac(self.c, GID) / "cpatch.tsv"; tsv.parent.mkdir(parents=True, exist_ok=True)
+        head = "编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式"
+        tsv.write_text(head + "\nwidescreen:A1\tmain\t0\twidescreen\t满屏 A\tMIT\to/r\t\t1\t\t\t\ngfx:B1\tmain\t1\tgfx\t画面 B\tMIT\to/r\t\t1\t\t\t\n", encoding="utf-8")
+        data = community.load_launch(self.c, GID); data["patches"]["gfx:B1"] = False
+        p = community.launch_path(self.c, GID); p.parent.mkdir(parents=True, exist_ok=True); p.write_text(json.dumps(data))
+        cheats.note_crash(self.c, self.game)
+        self.assertEqual([(x["kind"], x["key"], x["name"]) for x in cheats.crashed(self.c, self.game)], [("patch", "widescreen:A1", "满屏 A")])
+        self.assertEqual(community.load_launch(self.c, GID)["patches"], {"gfx:B1": False, "widescreen:A1": False})
+
+    def _fps_pack(self):
+        from layout import image_mac
+        tsv = image_mac(self.c, GID) / "cpatch.tsv"; tsv.parent.mkdir(parents=True, exist_ok=True)
+        tsv.write_text("编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\nfps:F1\tmain\t0\tfps\t120 帧\tMIT\to/r\t\t1\t120\t\t\n", encoding="utf-8")
+
+    def test_crash_turns_off_fps_patches_too(self):
+        # 帧率补丁跟「60 帧 / 帧率」开关走、不在 packed_patches 里：包里有帧率补丁、开关没关时崩了 → 开关一并关、通知列「帧率」（kind fps）。期望手写
+        self._fps_pack()
+        cheats.note_crash(self.c, self.game)
+        self.assertIs(community.load_launch(self.c, GID)["settings"].get("fps60"), False)
+        self.assertEqual([x["kind"] for x in cheats.crashed(self.c, self.game)], ["fps"])
+
+    def test_stall_marker_turns_fps_off_once(self):
+        # 停帧救场（runtime cpatch.c 写 S2A_DOCS/cpatch_stall_off）：收局读到 → 「帧率」写关、通知列 fps、标记删掉；没标记 → 不动。期望手写
+        docs = self.t / "docs"; docs.mkdir()
+        self.assertFalse(cheats.note_stall(self.c, self.game, docs))
+        (docs / "cpatch_stall_off").write_text("fps\n")
+        self.assertTrue(cheats.note_stall(self.c, self.game, docs))
+        self.assertFalse((docs / "cpatch_stall_off").exists())
+        self.assertIs(community.load_launch(self.c, GID)["settings"].get("fps60"), False)
+        self.assertEqual([x["kind"] for x in cheats.crashed(self.c, self.game)], ["fps"])
+
     def test_crash_with_nothing_on_records_nothing(self):
         cheats.note_crash(self.c, self.game)
         self.assertEqual(cheats.crashed(self.c, self.game), [])

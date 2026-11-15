@@ -626,6 +626,7 @@ void mtl_init(void) {
     const char *vbc = getenv("DM_NVN_VBUF_CACHE"); g_vbuf_cache = !(vbc && !strcmp(vbc, "0"));
     const char *link = getenv("DM_PRESENT_LINK");
     g_dm_present_link = link ? atoi(link) : 1; if (g_dm_present_link < 0 || g_dm_present_link > 2) g_dm_present_link = 1;   // Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
+    { const char *fi = getenv("DM_PRESENT_FI"); if (fi && !strcmp(fi, "1")) g_dm_present_link = 0; }   // 实验：出图补帧走出图线程自己取画布，一开始就不建显示链接
     const char *latency = getenv("DM_PRESENT_LATENCY");
     if (latency && atoi(latency) > 0) g_present_latency = atoi(latency);
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
@@ -2438,6 +2439,8 @@ static void rt_keep_state(void);
 static void ghost_finish_submission(void);
 static void alias_dead_views(void);
 static void bcal_sweep_overwritten(void);
+int nvn_cmd_call_target(uint64_t h);   // hle_nvn.c：回放 CALL 核目标（#768338 安全阀）
+int nvn_cmd_call_resolve(uint64_t h, uint64_t *to);   // hle_nvn.c：按设备地址解析 CALL 目标（#768338 根修）
 static const char *cctx_snap(void);   // What is in this submission (printed into the failure line on error; defined before nvn_be_exec)
 static void lc_land(void); static int g_nlc;   // lazy clears waiting (lc_push; fb_prepare lands them before a feedback read)
 static _Atomic int g_seg_inflight;   // main command buffers committed and not reported back yet (sub_cut)
@@ -5886,7 +5889,8 @@ static void shmap_load_once(void) {
     uint64_t mis[4];   // mis: texture slots 0-255 already reported for a type mismatch (tex_mis_note)
     uint64_t d2d[4];   // texture slots 0-255 whose sampler type the offline translation did not know and took as 2D (library resolution_scale_reasons "unknown_missing_fact:sampler_type:...slot=N"; audit #1534 P1-20 probe)
     NSString *ventry, *fnpfx; id<MTLFunction> vfn; int vfn_state;   // fnpfx: a batched library's function name prefix s<key>_ (json fn_prefix, dmsh_build.py unity_flush); ventry stays the logical entry name
-    uint32_t spill, spill_slot; } @end   // spill: a compute shader's shared memory moved to a device buffer, bytes per threadgroup, bound at spill_slot (dmsh_build.py spill_fix; dispatch)   // vertex: the entry point loaded (by the depth mode); vfn: the same entry of the shadow-input library <key>_bv (vin_fn; state 0 untried, 1 loaded, 2 failed)
+    uint32_t spill, spill_slot;
+    NSString *mslnote, *mslsrc; } @end   // spill: a compute shader's shared memory moved to a device buffer, bytes per threadgroup, bound at spill_slot (dmsh_build.py spill_fix; dispatch)   // vertex: the entry point loaded (by the depth mode); vfn: the same entry of the shadow-input library <key>_bv (vin_fn; state 0 untried, 1 loaded, 2 failed)
 @implementation NvShader
 - (void)dealloc { free(rf.c1); free(rf.b); }
 @end
@@ -6234,8 +6238,29 @@ static int tensor_native_json(NSDictionary *j) {
     return enabled && (enabled == 1 || (flags & 1)) && [j[@"tensor_mma_abi"] intValue] == 1 && [j[@"tensor_mma_count"] intValue] > 0
         && [g_dev supportsFamily:MTLGPUFamilyApple7];
 }
+// #065090：一份 MSL 的摘要，给慢编译那一行（pso_archive.h par_slow_begin）：总行数、FNV-1a 64 哈希、main0 体行数（「kernel void main0(」那行到其后第一行单独的「}」，
+//   同 DshOutline.Compute 的 end - entry）、拆出的 s2a_outline_ 个数、main0 是否 optnone（GiantFix 压不平时加）。拆分门槛 8192 行同 DshOutline KernelLines：
+//   拆了 → 「split into N helpers」；没拆且 main0 体 ≥ 8192 → 「over the 8192-line split threshold, not split」（满足条件却被 DshOutline 放弃，见其各 return msl）
+static NSString *msl_note(NSString *pc, NSString *src) {
+    const char *p = src.UTF8String; if (!p) return nil;
+    uint64_t h = 1469598103934665603ull; long lines = 0, entry = -1, body = -1, ln = 0; int helpers = 0, optnone = 0;
+    for (const char *q = p, *b = p; ; q++) {
+        if (*q && *q != '\n') { h = (h ^ (uint8_t)*q) * 1099511628211ull; continue; }
+        size_t n = (size_t)(q - b);
+        if (n || *q) lines++;
+        if (entry < 0 && (n >= 18 && !memcmp(b, "kernel void main0(", 18))) entry = ln;
+        else if (entry < 0 && n >= 37 && !memcmp(b, "[[clang::optnone]] kernel void main0(", 37)) { entry = ln; optnone = 1; }
+        else if (entry >= 0 && body < 0 && n == 1 && b[0] == '}') body = ln - entry;
+        if (n >= 50 && !memcmp(b, "static __attribute__((noinline)) void s2a_outline_", 50)) helpers++;
+        if (!*q) break;
+        h = (h ^ (uint8_t)'\n') * 1099511628211ull; b = q + 1; ln++;
+    }
+    const char *v = helpers ? "split" : body >= 8192 ? "over the 8192-line split threshold, not split" : body >= 0 ? "under the 8192-line split threshold" : "no main0 kernel";
+    return helpers ? [NSString stringWithFormat:@"%@ fallback translation, %ld lines, fnv %016llx, main0 body %ld lines, split into %d helpers%s", pc, lines, (unsigned long long)h, body, helpers, optnone ? ", optnone" : ""]
+                   : [NSString stringWithFormat:@"%@ fallback translation, %ld lines, fnv %016llx, main0 body %ld lines, %s%s", pc, lines, (unsigned long long)h, body, v, optnone ? ", optnone" : ""];
+}
 static NvShader *shader_build(NSString *pc, int stage, int layer, int depth_zero) {
-    NSError *e = nil;
+    NSError *e = nil; NSString *mnote = nil, *msrc = nil;   // #065090 msl_note
     // S2Arm: a key missing from the library is looked up in DM_MSL_FALLBACK (the on-device fallback translation writes <key>_b.metal + .json there; iOS cannot store a metallib built at runtime)
     NSString *dir = g_msl_dir;
     NSData *jd = json_from_pack(pc.UTF8String);   // S2Arm: from the library container, or its file without one (lib_pack.inc)
@@ -6265,14 +6290,17 @@ static NvShader *shader_build(NSString *pc, int stage, int layer, int depth_zero
     if (!lib) lib = dir == g_msl_dir ? lib_from_pack(pc.UTF8String, &e) : [NSFileManager.defaultManager fileExistsAtPath:lp] ? lib_from_file(lp, &e) : nil;
     if (lib && ul) { os_unfair_lock_lock(&ulock); if (!ulibs) ulibs = [NSMutableDictionary dictionary]; if (!ulibs[ul]) ulibs[ul] = lib; else lib = ulibs[ul]; os_unfair_lock_unlock(&ulock); }
     if (!lib && dir != g_msl_dir) {   // S2Arm fallback: MSL source compiled here, same options as the offline chain (dm_msl_opts)
-        NSString *src = [NSString stringWithContentsOfFile:[NSString stringWithFormat:@"%@/%@.metal", dir, pc] encoding:NSUTF8StringEncoding error:&e];
-        if (src) { MTLCompileOptions *co = dm_msl_opts(); t_lib_layer = [src containsString:@"render_target_array_index"]; lib = [g_dev newLibraryWithSource:src options:co error:&e]; }
+        NSString *sp = [NSString stringWithFormat:@"%@/%@.metal", dir, pc], *src = [NSString stringWithContentsOfFile:sp encoding:NSUTF8StringEncoding error:&e];
+        if (src) { MTLCompileOptions *co = dm_msl_opts(); t_lib_layer = [src containsString:@"render_target_array_index"]; lib = [g_dev newLibraryWithSource:src options:co error:&e]; mnote = msl_note(pc, src); msrc = sp; }
         if (lib) MLOG("shader %s loaded from the fallback translation (%s)", pc.UTF8String, fb);
     }
     if (!lib || !j) { MLOG("【红】 failed to load shader %s: %s", pc.UTF8String, e ? e.localizedDescription.UTF8String : "no reflection json"); return nil; }
     if (![j[@"chain"] isEqual:@DMSH_CHAIN]) { MLOG("【红】 shader %s has translation chain version %s, but this host expects %s", pc.UTF8String, [[j[@"chain"] description] UTF8String], DMSH_CHAIN); return nil; }
     if (layer && !j[@"entry_layer"]) { MLOG("【红】 vertex shader %s has no layer entry points", pc.UTF8String); return nil; }
     NvShader *o = [NvShader new]; o->gs_loc = o->lay_loc = -1;
+    // 出包库没有源：带上出包时的翻译器指纹与本宿主的（只升级 App 不重写已出包的库，COMPUTE_REPAIR.md：指纹不同 = 别的翻译器出的，拆分要重新出包或 repair_compute.py）
+    o->mslnote = mnote ?: [NSString stringWithFormat:@"%@ %s (no source on the device; translator %@, this build %s)", pc, dir == g_msl_dir ? "packaged library" : "fallback library file",
+                           [j[@"xfp"] isKindOfClass:[NSString class]] ? j[@"xfp"] : @"unknown", fb_xfp() ?: "unknown"]; o->mslsrc = msrc;
     o->fnpfx = [j[@"fn_prefix"] isKindOfClass:[NSString class]] ? j[@"fn_prefix"] : @"";
     if (stage == 0 && [j[@"layer_from"] isKindOfClass:[NSDictionary class]]) { o->lay_loc = [j[@"layer_from"][@"loc"] intValue]; o->lay_comp = [[j[@"layer_from"][@"comp"] description] UTF8String][0]; }
     char err[160];
@@ -9068,7 +9096,9 @@ static void warm_task_(WarmTask *t) {
             if (cs && cs->tensor == 1) { g_warm_skip_fz++; g_warm_done++; return; }   // a tensor-core network program: never dispatched (nvn_tensor.inc), no pipeline
             id<MTLFunction> fn = cs && t->fc ? se_warm(cs, t->fc) : cs ? cs->fn : nil;   // S2Arm #800: a C line's emulation bits (warm_parse): the variant a run before made, else made at its first use
             if (cs && !fn) { g_warm_skip_fz++; g_warm_done++; return; }
+            t_par_msl_note = !cs ? NULL : (t->fc ? [@"sampler-emulation variant of " stringByAppendingString:cs->mslnote ?: @"?"] : cs->mslnote).UTF8String; t_par_msl_src = cs && !t->fc ? cs->mslsrc.fileSystemRepresentation : NULL;
             id ps = fn ? par_compute(fn, par_ckey(cs, t->fc), &e) : nil;
+            t_par_msl_note = t_par_msl_src = NULL;
             if (cs && !ps) MLOG("【红】 background compute pipeline creation failed: %s", e.localizedDescription.UTF8String);
             if (ps) { WarmItem *item = [WarmItem new]; item->kind = 2; item->fc = t->fc; item->key = t->key; item->shader = cs; item->object = ps; warm_enqueue(item); g_warm_cps++; }
             g_warm_done++; return;
@@ -9474,6 +9504,22 @@ static uint64_t pool_seen_gpu(void) {
 typedef struct { uint32_t n, cap; uint32_t e[]; } pin_list;
 static pthread_mutex_t g_pin_mu = PTHREAD_MUTEX_INITIALIZER;
 static nvn_hmap g_pin = {.klen = 8}, g_pin_ret = {.klen = 8};
+// Unpinned but maybe still read: allocation → g_fence + 1 when the last entry naming it went (pin_del), whether or not a retire request came already. A draw encoded before the entry
+//   changed may still read it, so it must stay resident until that submission completes. The retire request can come late: the completion handler drains the deferred queue on
+//   its own thread (defer_drain), takes the object out of the queue, and only then calls res_remove; if the submit thread replaced the entry in between, res_remove saw no pin
+//   and took the texture out of the residency set while the open submission still named it (11-14: t_nvn_pool_tex ⑩ red about 1 in 30 runs under load). pool_pin_retire
+//   defers such a request behind that fence. Pruned of completed fences as it grows (unpin_prune)
+static nvn_hmap g_unpin = {.klen = 8}; static uint32_t g_unpin_next = 1024;
+static _Atomic uint64_t g_unpin_late;   // retire requests deferred this way (pool tables stat line: without the fix each was a texture leaving the residency set too early)
+static uint64_t pin_done(void) { return __atomic_load_n(&g_done, __ATOMIC_ACQUIRE); }   // g_done without g_mu (g_res_mu / g_pin_mu are held here): a stale value only keeps an entry longer
+static void unpin_prune(void) {   // g_pin_mu held
+    uint64_t done = pin_done();
+    for (uint32_t i = 0; i < g_unpin.cap;) {
+        if (g_unpin.vals[i] && (uint64_t)(uintptr_t)g_unpin.vals[i] <= done) { void *k; memcpy(&k, g_unpin.keys + (size_t)i * 8, 8); nvn_hm_del(&g_unpin, &k); continue; }   // the backward shift may bring another entry to i
+        i++;
+    }
+    g_unpin_next = g_unpin.n * 2 + 1024;
+}
 static void **g_pin_new; static uint32_t g_pin_nnew, g_pin_cnew;   // retired while pinned since the last pool_gpu
 static int pool_pin_keys(void *o, void *k[4]) {   // the allocations a table entry naming o keeps (always the same for the same object: a view's parent and buffer never change)
     int n = 0; k[n++] = o;
@@ -9490,6 +9536,7 @@ static void pin_add(void *k, uint32_t code) {
     pin_list *l = nvn_hm_get(&g_pin, &k);
     if (!l || l->n == l->cap) { uint32_t c = l ? l->cap * 2 : 4; pin_list *g = realloc(l, sizeof *g + c * sizeof g->e[0]); if (!g) MDIE("pool pins: out of memory"); if (!l) g->n = 0; g->cap = c; l = g; nvn_hm_put(&g_pin, &k, l); }
     l->e[l->n++] = code;
+    if (g_unpin.n) nvn_hm_del(&g_unpin, &k);   // named again: the pins cover it
     pthread_mutex_unlock(&g_pin_mu);
 }
 static int pin_del(void *k, uint32_t code) {   // 1: no entry names k any more and res_remove was asked to retire it while pinned (the caller retires it now)
@@ -9497,21 +9544,25 @@ static int pin_del(void *k, uint32_t code) {   // 1: no entry names k any more a
     pthread_mutex_lock(&g_pin_mu);
     pin_list *l = nvn_hm_get(&g_pin, &k);
     if (l) { for (uint32_t j = 0; j < l->n; j++) if (l->e[j] == code) { l->e[j] = l->e[--l->n]; break; }
-        if (!l->n) { nvn_hm_del(&g_pin, &k); free(l); ret = nvn_hm_del(&g_pin_ret, &k) != NULL; } }
+        if (!l->n) { nvn_hm_del(&g_pin, &k); free(l); ret = nvn_hm_del(&g_pin_ret, &k) != NULL;
+            nvn_hm_put(&g_unpin, &k, (void *)(uintptr_t)(g_fence + 1)); if (g_unpin.n >= g_unpin_next) unpin_prune(); } }   // submit thread: g_fence + 1 = the open submission. Also when ret: a second retire request may still be on its way (the pool's finalize and the serial's delete each queue one)
     pthread_mutex_unlock(&g_pin_mu);
     return ret;
 }
 static int pool_pin_retire(void *r) {   // res_remove (g_res_mu held): 1 = pinned, stays resident
     if (!atomic_load_explicit(&g_ptab_any, memory_order_relaxed)) return 0;
     pthread_mutex_lock(&g_pin_mu);
-    int pinned = g_pin.n && nvn_hm_get(&g_pin, &r) != NULL;
+    int pinned = g_pin.n && nvn_hm_get(&g_pin, &r) != NULL, late = 0;
+    if (!pinned && g_unpin.n) { void *v = nvn_hm_get(&g_unpin, &r); late = v && (uint64_t)(uintptr_t)v > pin_done(); }   // unpinned this submission: retire behind it (g_unpin).
+    //   Look up, not take: a texture often gets two retire requests (the pool's finalize and the serial's delete) and both may arrive late; the entry goes with unpin_prune / pin_add
     if (pinned && !nvn_hm_get(&g_pin_ret, &r)) {
         nvn_hm_put(&g_pin_ret, &r, (void *)1);
         if (g_pin_nnew == g_pin_cnew) { uint32_t c = g_pin_cnew ? g_pin_cnew * 2 : 64; void **g = realloc(g_pin_new, c * sizeof *g); if (!g) MDIE("pool pins: out of memory"); g_pin_new = g; g_pin_cnew = c; }
         g_pin_new[g_pin_nnew++] = r;
     }
     pthread_mutex_unlock(&g_pin_mu);
-    return pinned;
+    if (late) { defer_obj_release((__bridge id)r); atomic_fetch_add_explicit(&g_unpin_late, 1, memory_order_relaxed); }   // g_res_mu held: defer_obj_release only takes g_deferred_mu, which nothing holds while taking another lock
+    return pinned || late;
 }
 // Entry i of table ti names o (NULL: the dummy)
 static void pool_ent_put(int ti, uint32_t i, void *o, uint64_t rid) {
@@ -9699,8 +9750,8 @@ static uint64_t pool_gpu(int samp, int dtt, int dpf, int base, __unsafe_unretain
     g_pool_ms += (double)(mach_absolute_time() - t0) * tb.numer / tb.denom / 1e6;
     if (!(g_pool_calls & 0x3fff)) {   // how the tables stand: whole walks, buffers, entries looked up again by cause, time in all
         unsigned nseen = 0; uint64_t bseen = 0; for (int id_ = 1; id_ < g_ntreg; id_++) if (g_treg[id_].ok && pool_seen(id_)) { nseen++; bseen += pool_tex_size(&g_treg[id_].t); }
-        MLOG("pool tables: %llu calls, whole walks %llu (%.0f ms), buffers %llu; entries looked up again: registrations %llu, retired %llu, read by a shader %llu, left out %llu; %.0f ms in all; %u IDs read by a shader (%llu MB), %u left out, allocated %llu MB",
-             (unsigned long long)g_pool_calls, (unsigned long long)g_pool_walks, g_pool_walk_ms, (unsigned long long)g_pool_made, (unsigned long long)g_pool_upd_dirty, (unsigned long long)g_pool_upd_ret,
+        MLOG("pool tables: %llu calls, whole walks %llu (%.0f ms), buffers %llu; entries looked up again: registrations %llu, retired %llu (late, deferred behind the unpinning submission %llu), read by a shader %llu, left out %llu; %.0f ms in all; %u IDs read by a shader (%llu MB), %u left out, allocated %llu MB",
+             (unsigned long long)g_pool_calls, (unsigned long long)g_pool_walks, g_pool_walk_ms, (unsigned long long)g_pool_made, (unsigned long long)g_pool_upd_dirty, (unsigned long long)g_pool_upd_ret, (unsigned long long)atomic_load(&g_unpin_late),
              (unsigned long long)g_pool_upd_seen, (unsigned long long)g_pool_upd_left, g_pool_ms, nseen, (unsigned long long)(bseen >> 20), g_pleft.n, (unsigned long long)(g_dev.currentAllocatedSize >> 20)); }
     if (ti < 0) { *out = dummy_buf(); return dummy_buf_gpu(); }
     *out = g_ptab[ti].buf; return g_ptab[ti].gpu;
@@ -9712,7 +9763,7 @@ static void pool_session_reset(void) {
         free(t->obj); res_remove(t->buf); *t = (pool_tab){0}; }
     pthread_mutex_lock(&g_pin_mu);
     for (uint32_t i = 0; i < g_pin.cap; i++) if (g_pin.vals[i]) free(g_pin.vals[i]);
-    nvn_hm_clear(&g_pin, NULL); nvn_hm_clear(&g_pin_ret, NULL); g_pin_nnew = 0;
+    nvn_hm_clear(&g_pin, NULL); nvn_hm_clear(&g_pin_ret, NULL); nvn_hm_clear(&g_unpin, NULL); g_pin_nnew = 0;
     pthread_mutex_unlock(&g_pin_mu);
     atomic_store(&g_ptab_any, 0);
     for (int s = 0; s < 2; s++) pool_dset_clear(&g_pdirty[s]);
@@ -10715,7 +10766,7 @@ static int fz_next(fz_cursor *c, const uint8_t **out, op_hdr *oh, const void **o
                 continue;
             case OP_JUMP: memcpy(&c->p, a, 8); continue;
             case OP_MULTI_DRAW: c->bad = 1; return 0;   // its live draws and their argument addresses are resolved at replay (draw_multi): a lookahead cannot move work across the range (c7ba23df)
-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (c->ret_n >= (int)(sizeof c->ret / sizeof *c->ret)) { c->bad = 1; return 0; }
+            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (nvn_cmd_call_resolve(t, &t) < 0) break; if (c->ret_n >= (int)(sizeof c->ret / sizeof *c->ret)) { c->bad = 1; return 0; }
                 c->ret[c->ret_n++] = c->p + h.size; c->p = (const uint8_t *)t; continue; }
             default: break;
         }
@@ -10820,7 +10871,7 @@ static int ds_scan(const uint8_t *p, ds_st *ds, int depth) {
         switch (h.op) {
             case OP_END: return DS_RET;
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (depth >= 8) return DS_USED;
+            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (nvn_cmd_call_resolve(t, &t) < 0) break; if (depth >= 8) return DS_USED;
                 int r = ds_scan((const uint8_t *)t, ds, depth + 1); if (r != DS_RET) return r; break; }
             case OP_UPDATE_UB: if (ubd_on()) break; return DS_FREE;   // deferred in-pass updates (ubd_on) no longer end the pass: keep scanning, or a later draw in this pass that needs depth would find it unattached
             case OP_SET_RT: case OP_COPY_B2B: case OP_CLEAR_BUF: case OP_COPY_B2T: case OP_COPY_T2B: case OP_COPY_T2T: case OP_CLEAR_TEX: case OP_DISPATCH: case OP_DLSS: return DS_FREE;
@@ -11441,7 +11492,7 @@ static void sdx_walk(const uint8_t *p, int depth) {
         switch (h.op) {
             case OP_END: return;
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
-            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); sdx_walk((const uint8_t *)t, depth + 1); break; }
+            case OP_CALL: { uint64_t t; memcpy(&t, a, 8); if (nvn_cmd_call_resolve(t, &t) >= 0) sdx_walk((const uint8_t *)t, depth + 1); break; }
             case OP_SET_RT: { const p_set_rt *r = set_rt_rec(a, h.size, &g_pp_rt_buf); g_pp_rt = r; g_pp_rtseq = seq; seq_push(&g_rtx_seq, &g_rtx_n, &g_rtx_cap, seq);
                 for (int k = 0; k < r->n && k < 8; k++) if (r->color[k]) sdx_bucket(r->color[k]->serial, 1);
                 if (r->depth) sdx_bucket(r->depth->serial, 1);
@@ -14309,11 +14360,14 @@ static void dispatch(const p_dispatch *dp) {
     id<MTLComputePipelineState> ps = hm_get_id(cps, ck);
     if ((id)ps == (id)NSNull.null) return;   // its pipeline failed before: built once, reported once (see below)
     if (!ps) {
-        // #884：Metal 编译服务对一条计算管线现编一直不返回，提交线程跟着卡死（开场剧情固定定格）。至多等 DM_NVN_CPSO_WAIT_MS（缺省 10000，0 = 不限，
-        //   同渲染「不能跳过的绘制」上限 DM_NVN_PSO_UNSAFE_WAIT_MS）：等不到就跳过这一次派发、不记失败，后台编完下一次派发直接用（pso_archive.h par_compute_wait）
-        static int64_t cwait = -2; if (cwait == -2) { const char *v = getenv("DM_NVN_CPSO_WAIT_MS"); long ms = v && *v ? strtol(v, NULL, 10) : 10000; cwait = ms > 0 ? (int64_t)ms * 1000000 : -1; }
+        // #884：Metal 编译服务对一条计算管线现编一直不返回，提交线程跟着卡死（开场剧情固定定格）。至多等 DM_NVN_CPSO_WAIT_MS（缺省 60000，0 = 不限）：
+        //   等不到就跳过这一次派发、不记失败，后台编完下一次派发直接用（pso_archive.h par_compute_wait）。缺省原为 10 秒，11-14 改 60 秒（#065090）：309 份诊断里编满 5 秒的
+        //   计算管线最终编好的 18 支，7 支用了 10–60 秒；跳过的那次派发游戏不会重发（D-EVQ3：那支 20.5 秒编好后 18 秒仍不出帧），10 秒跳过把「顿一下」变成整局卡死
+        static int64_t cwait = -2; if (cwait == -2) { const char *v = getenv("DM_NVN_CPSO_WAIT_MS"); long ms = v && *v ? strtol(v, NULL, 10) : 60000; cwait = ms > 0 ? (int64_t)ms * 1000000 : -1; }
         NSError *e = nil; uint64_t bt = bp_now(); int gave_up = 0;
+        t_par_msl_note = (fc ? [@"sampler-emulation variant of " stringByAppendingString:cs->mslnote ?: @"?"] : cs->mslnote).UTF8String; t_par_msl_src = fc ? NULL : cs->mslsrc.fileSystemRepresentation;
         ps = par_compute_wait(fc ? se_fn(cs, fc) : cs->fn, par_ckey(cs, fc), &e, cwait, &gave_up);
+        t_par_msl_note = t_par_msl_src = NULL;
         { uint64_t d_ = bp_now() - bt; g_bp_pso_n++; g_bp_pso_ns += d_; fe_sync_note(d_); }
         if (gave_up) { if (!(cs->logged & (1ull << 40))) { cs->logged |= 1ull << 40; MLOG("【红】 compute pipeline %s%s still compiling after %lld ms: this dispatch skipped (not recorded as failed; used once the background build returns)",
                                                     cs->key, fc ? " (sampler-emulation variant)" : "", (long long)(cwait / 1000000)); } return; }
@@ -15394,6 +15448,20 @@ void nvn_be_exec(const uint8_t *p) {
             case OP_BEGIN: break;
             case OP_JUMP: { const uint8_t *t; memcpy(&t, a, 8); p = t; continue; }
             case OP_CALL: { uint64_t t; memcpy(&t, a, 8);
+                {   // #768338 安全阀 + 探针（hle_nvn.c nvn_cmd_call_target）：目标块已被别的录制复用 → 记现场、跳过这次调用；目标已被覆盖但还在隔离区 → 照常执行，记一行
+                    uint64_t to; int ck = nvn_cmd_call_resolve(t, &to);
+                    if (ck == 2) { static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+                        if (k <= 4 || !(k & (k - 1))) MLOG("command-list call follows the device address: target %#llx was re-recorded at the same command memory, running %#llx (as the device does; %llu so far)",
+                                                           (unsigned long long)t, (unsigned long long)to, (unsigned long long)k);
+                        t = to; ck = 0; }
+                    if (ck < 0) { static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+                        if (k <= 8 || !(k & (k - 1))) MLOG("【红】 command-list call into reused host blocks: target %#llx is in the command-record area but is no recording's handle (its recording was overwritten and the blocks reused): call skipped; caller list %p, depth %d, frame %llu (%llu so far)",
+                                                           (unsigned long long)t, list, g_ret_n - base, (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)k);
+                        break; }
+                    if (ck > 0) { static _Atomic uint64_t n; uint64_t k = atomic_fetch_add(&n, 1) + 1;
+                        if (k <= 8 || !(k & (k - 1))) MLOG("【黄】 command-list call into an overwritten recording still in quarantine: target %#llx (blocks intact, run as recorded); caller list %p, depth %d, frame %llu (%llu so far)",
+                                                           (unsigned long long)t, list, g_ret_n - base, (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)k); }
+                }
                 if (g_ret_n - base >= CALL_DEPTH_MAX || !call_push(p + h.size, list)) {
                     static int red; if (!red++) MLOG("【红】 command-list call nested %d deep (limit %d, or the return stack could not grow): skipped this call; the commands may call back into themselves (first case)", g_ret_n - base, CALL_DEPTH_MAX);
                     break; }
@@ -15541,6 +15609,7 @@ static id<MTLRenderPipelineState> g_blit_pso; static MTLPixelFormat g_blit_fmt;
 static id<MTLSamplerState> g_blit_samp;
 static uint64_t g_present_n;
 uint64_t mtl_present_count(void) { return g_present_n; }   // Actual present count (heat attribution DM_HEAT computes the present frame rate)
+uint64_t s2a_direct_draws(void) { return g_stat_draw; }   // 编码出去的绘制总数（runtime/src/direct_prompt.c「画面没出来」按名字取：起局后一直为 0 = 上屏的全是空帧）
 void mtl_res_snapshot(mtl_res_count *out) {
     memset(out, 0, sizeof *out);
     out->pso = g_pso.n;
@@ -16433,6 +16502,12 @@ static void rl_row(const uint8_t *q, NSUInteger w, NSUInteger h, unsigned long l
     for (NSUInteger k = 0; k < ng; k++) fprintf(g_rlf, "%02x", g[k]);
     fputc('\n', g_rlf); fflush(g_rlf); pthread_mutex_unlock(&g_rlmu);
 }
+// 出图补帧（nvn_present_fi.inc）用的三个 Metal 4 包装：补帧有自己一套命令槽，在补帧队列上与出图线程的 g_present_cb 并行编码提交，
+//   重置分配器并开始 / 在指定命令缓冲上开渲染编码器 / 提交一条命令缓冲这三处原先没有包装（enc_r_begin 只开在 g_cb 上）；补帧代码里一律用 id（MTL4 棘轮，11-14）
+API_AVAILABLE(macos(26.0), ios(26.0)) static inline void m4_begin_on(id cb, id alloc) { [(id<MTL4CommandAllocator>)alloc reset]; [cb beginCommandBufferWithAllocator:alloc]; }   // 槽的上一次提交已做完（slot_free）才重置
+API_AVAILABLE(macos(26.0), ios(26.0)) static inline id m4_render_on(id cb, id d) { return [(id<MTL4CommandBuffer>)cb renderCommandEncoderWithDescriptor:d]; }
+API_AVAILABLE(macos(26.0), ios(26.0)) static inline void m4_commit_one(id cb, id o) { id<MTL4CommandBuffer> b[] = {cb}; [g_q4 commit:b count:1 options:o]; }
+#include "nvn_present_fi.inc"   // 出图补帧（没有社区帧率补丁的 30 帧款缺省补到 60，开关按游戏）
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (mtl_gpu_halted()) { atomic_fetch_add_explicit(&g_gpu_refused, 1, memory_order_relaxed); return 0; }   // GPU 安全停：不取画布、不交上屏（调用方按「没交」把票记完成）
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
@@ -16536,6 +16611,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     present_pipeline(layer.pixelFormat);   // Same as the original path: the first frame compiles the pipeline before taking the drawable
     fit_geom(layer.drawableSize.width, layer.drawableSize.height, pcw, pch);   // game units (was the crop / source size read here)
     if (g_grab_cb) grab_present(src, crop, layer.drawableSize, ticket);   // Game picture needed by the whole-window screenshot (peek without the lock first; the real take locks inside the function)
+    if (fi_wanted() && !supplied) { if (@available(macOS 26.0, iOS 26.0, *)) { int fr = fi_frame(src, crop, layer, period, ticket); if (fr >= 0) return fr; } }   // 实验：出图补帧接手这一帧
     uint64_t dt0 = now_ns();
     id<CAMetalDrawable> dr = supplied ? supplied : [layer nextDrawable];
     if (!supplied) g_drawable_ns += now_ns() - dt0;

@@ -59,6 +59,8 @@ int s2a_widen_full(void) { return 0; }
 // The diagnostic target has no guest threads to freeze. Game mode excludes
 // this file and reads the actual freeze state from runtime/src/thread.c.
 int s2a_guest_frozen(void) { return 0; }
+void s2a_aud_late_note(long long ns) { (void)ns; }   // 声音迟到探针（runtime/src/ap_host.c）：诊断组合不链 runtime，不记
+uint64_t s2a_aud_late_take(void) { return 0; }
 // The Android host links real s2a_alt_phase (alt.c) and s2a_gfx_mode (plat_android.c).
 uint64_t s2a_event_create(uint32_t *h_read, uint32_t *h_write) {
     if (h_read) *h_read = 0;
