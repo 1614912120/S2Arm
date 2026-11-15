@@ -3989,8 +3989,10 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
                     atomic_store_explicit(ph_state(h, n), !ok || nvn_dirty_since_span(span, mem, size, st) ? PH_BAD : PH_OK, memory_order_release);
                 });
                 *ph = h; *nph = n;
-            } else if (h) { for (uint32_t k = 0; k < n; k++) { const uint8_t *lo; size_t m; page_span(t, k, &lo, &m); h[k] = span_hash(host_rd(lo), m); }
-                atomic_store_explicit(ph_state(h, n), PH_OK, memory_order_relaxed); *ph = h; *nph = n; }
+            } else if (h) {   // 提交线程上直接哈希（重传）：存储读不全（诊断#a4a895：起点落在没映射的块里）就不读，这份哈希作废（下次照样整张重传，同后台读不了）
+                uint64_t rs = tex_rd_size(t); int ok = mem_readable(t->mem, rs) >= rs;
+                if (ok) for (uint32_t k = 0; k < n; k++) { const uint8_t *lo; size_t m; page_span(t, k, &lo, &m); h[k] = span_hash(host_rd(lo), m); }
+                atomic_store_explicit(ph_state(h, n), ok ? PH_OK : PH_BAD, memory_order_relaxed); *ph = h; *nph = n; }
             else { *ph = NULL; *nph = 0; } }
         stl_add(STL_HASH, stl0); }
     int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
@@ -4062,11 +4064,13 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
     // #b5a081 / #8328e7（v0.4.0，3 台 3 款，Mac + iPhone）：存储不在任何内存池里的贴图（「not in a memory pool」那条红）没有池尾可截，按声明的全长读；
     //   游戏只映射了它真用到的那段，尾巴落进没映射的 2 MB 区（当前权限 ---），这里的整段拷贝读到就 SIGBUS（真机 GPU 只读用到的字节）。
     //   可读的不到全长：可读部分进副本、其余按 0（同稀疏池的未映射页），记一次红
-    else if (!t->pool) { uint64_t rd = mem_readable(t->mem, t->L.size);
+    //   诊断#a4a895（0.4.1 仍崩）：贴图挂着池指针、存储却不在池登记的缓冲里（同样打「not in a memory pool」），起点落在没映射的块里——
+    //   原先只在没有池指针时截短，这种跳过了、块线性拷贝直接从起点读，提交线程 SIGBUS。CPU 拷贝前一律先问可读长度（不看有没有池指针）
+    else { uint64_t rd = mem_readable(t->mem, t->L.size);
         if (rd < t->L.size) {
             if (!(part = calloc(1, t->L.size ? t->L.size : 1))) MDIE("texture copy of %llu bytes failed", (unsigned long long)t->L.size);
             memcpy(part, t->mem, rd); src = part;
-            RED_ONCE(193, "texture ser=%llu %ux%u format %#x outside any memory pool: only %llu of its %llu storage bytes are mapped; the rest is read as 0", (unsigned long long)t->serial,
+            RED_ONCE(193, "texture ser=%llu %ux%u format %#x not readable from a memory pool buffer: only %llu of its %llu storage bytes are mapped; the rest is read as 0", (unsigned long long)t->serial,
                      t->d.width, t->d.height, t->d.format, (unsigned long long)rd, (unsigned long long)t->L.size);
         } }
     up_begin();
