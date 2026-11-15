@@ -214,6 +214,8 @@
 "vpad.menu.holdLock.note" = "按住 2 秒锁定，只对这款游戏";
 "vpad.menu.hud" = "性能浮层";
 "vpad.menu.hud.note" = "右上角显示帧率和内存";
+"vpad.menu.fi" = "补帧";
+"vpad.menu.fi.note" = "30 帧补到 60 帧，更顺但操作稍慢一点；切换当场生效";
 "vpad.menu.manageLayouts" = "导入 / 导出 / 另存布局…";
 "vpad.menu.ns2pro" = "启用 Switch 2 Pro 手柄";
 "vpad.menu.pad" = "手柄与体感";

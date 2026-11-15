@@ -320,6 +320,10 @@ int s2a_pack_apply(const char *docs) {
     if (!rc) { char ex[2200]; unsigned core = 0, miss = index_check_core(root, ex, sizeof ex, 1, &core);
         if (miss && !core) { partial = miss; snprintf(pex, sizeof pex, "%s", ex); }   // v0.3.1 缺件照玩：只缺非核心文件 → 记部分可玩（.partial），不记已应用，执行器下次照样补推
         else if (miss) { rc = -8; snprintf(what, sizeof what, "核对：index.tsv 里 %u 个文件机上缺或大小不符（例：%s），不记已应用，执行器下次按旧的已应用索引补推", miss, ex); } }   // 核对在清旧文件之前：核不过不删任何文件
+    // 程序描述 exefs/main.npdm 不在 / 是空的：物理上起不来，游戏库就绪判据（applied_ready / partial_ready）也要它。原先只按 index.tsv 核，清单里没列它时照报「解开了」，
+    //   库却一直判「等解开」、每秒重解一次、失败原因为空（#1059 D-PB7S：installing → failed(reason nil) 循环、Play 被拒）。两边判据合成一条：这里核不过就按缺文件失败、说清缺的是它
+    if (!rc) { char np[2100]; struct stat ns; snprintf(np, sizeof np, "%s/exefs/main.npdm", root);
+        if (stat(np, &ns) || !S_ISREG(ns.st_mode) || ns.st_size <= 0) { rc = -8; snprintf(what, sizeof what, "核对：程序描述 exefs/main.npdm %s，不记已应用，请回电脑重新装到设备", stat(np, &ns) ? "不在" : !S_ISREG(ns.st_mode) ? "不是文件" : "是空的"); } }
     if (!rc) { unsigned nd = 0; uint64_t db = 0; int r2 = prune(root, &nd, &db);   // 清旧文件：资源包下不在 index.tsv 里的（旧版分卷等）
         if (r2) { rc = r2; snprintf(what, sizeof what, "清旧文件（读 index.tsv）"); }
         else if (nd) log_line(logp, "进度：清掉不在 index.tsv 里的旧文件 %u 个 %llu MB", nd, (unsigned long long)(db >> 20)); }

@@ -1042,6 +1042,26 @@ namespace S2A.Services.Tests
                 Ryujinx.Common.S2AInputCaps.Reset();
             }
 
+            // #cef2ab 虚拟手柄在声明这一刻跟随：经真 IPC 调 SetSupportedNpadIdType（hid 102）只给 Player1 → 这次调用返回时主手柄已改到 Player1（不等输入泵的 250 ms 一拍）；
+            //   再声明 Player1 + 掌机格 → 返回时已挪回掌机格。期望手写（同真机：掌机里握着的 Joy-Con 在声明时就归到游戏收的手柄号）。
+            //   反证：IHidServer 里不调 NpadDevices.S2ASupportedChanged（或 InputPump.Start 不登记）→ 第一项仍是 Handheld
+            {
+                InputPump.Start(Host.Device);   // 登记回调；非主机档时主手柄在掌机格
+                InputPump.SetPrimary(Host.Device, Ryujinx.HLE.HOS.Services.Hid.PlayerIndex.Handheld, Ryujinx.HLE.HOS.Services.Hid.ControllerType.Handheld);
+                var npid = (uint*)(_game + 0x3E00);
+                Msg IdType(int n) { Msg m = Msg.Cmif(102, Bytes(0L)); m.X.Add(((ulong)npid, (ulong)(n * 4))); return m; }   // SetSupportedNpadIdType(aruid, X 数组)
+                npid[0] = 0;   // NpadIdType.Player1
+                Call(hid, IdType(1));
+                string only1 = InputPump.Player.ToString();
+                npid[0] = 0; npid[1] = 0x20;   // Player1 + Handheld
+                Call(hid, IdType(2));
+                string back = InputPump.Player.ToString();
+                var npads = Host.Device.Hid.Npads;
+                for (int i = 0; i < 9; i++) npads.SetSupportedPlayer((Ryujinx.HLE.HOS.Services.Hid.PlayerIndex)i);   // 还原成都收
+                InputPump.SetPrimary(Host.Device, Ryujinx.HLE.HOS.Services.Hid.PlayerIndex.Handheld, Ryujinx.HLE.HOS.Services.Hid.ControllerType.Handheld);
+                Check("声明手柄号的那次 hid 调用里就跟随改接（只收 Player1 → Player1；再收掌机格 → 挪回）", "Player1 / Handheld", $"{only1} / {back}");
+            }
+
             // 每帧都调的上游桩（01006F8002326000 pctl IsFreeCommunicationAvailable 每秒 25 次）：稳态零分配、汇总里次数照计
             MeasureAlloc("hid EndPermitVibrationSession（上游桩，反复调）", hid, () => Msg.Cmif(210));
             string stubLine = Red.StubSummary();

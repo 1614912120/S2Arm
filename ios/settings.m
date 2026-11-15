@@ -55,7 +55,7 @@ void s2a_ios_apply_overlay_settings(NSUserDefaults *defaults) {
 //   以及撑不住就问玩家的「问过」与「本款原生 60 帧」记号——原先全在 App 级，一款游戏自动退回 16:9、关 60 帧会串到所有游戏
 NSArray *s2a_ios_per_game_keys(void) {
     return @[@"S2AResolutionScale", @"S2AAntiAliasing", @"S2AScalingFilter", @"S2AFrameRateLimit", @"S2AWidescreen", @"S2AFps60",
-             @"S2AFps60Manual", @"S2ADockedMode", @"S2ACommunityPatches", @"S2AWidescreenAsked", @"S2AFps60Asked", @"S2AFpsNative60", @"S2AFpsPick", S2AGameLanguageKey];
+             @"S2AFps60Manual", @"S2ADockedMode", @"S2ACommunityPatches", @"S2AWidescreenAsked", @"S2AFps60Asked", @"S2AFpsNative60", @"S2AFpsPick", S2AGameLanguageKey, @"S2AFrameInterp"];
 }
 NSArray<NSString *> *s2a_ios_game_languages(void) {
     return @[@"system", @"SimplifiedChinese", @"TraditionalChinese", @"AmericanEnglish", @"BritishEnglish", @"Japanese", @"Korean", @"French", @"CanadianFrench", @"German",
@@ -195,6 +195,9 @@ void s2a_ios_set_fps60_for(NSString *gid, BOOL on) {
     [d setBool:on forKey:@"S2AFps60"]; [d setBool:on forKey:@"S2AFps60Manual"];
 }
 BOOL s2a_ios_fps60_on(void) { return s2a_ios_fps60_on_for(current_gid()); }
+// 补帧开关（按游戏存，S2AFrameInterp；没设过 = 开）：有社区帧率补丁时补帧自己让路（runtime/src/fps.c s2a_fps_source），开关不用管
+BOOL s2a_ios_fi_on(void) { id v = [s2a_ios_settings_defaults() objectForKey:@"S2AFrameInterp"]; return v ? [v boolValue] : YES; }
+void s2a_ios_set_fi(BOOL on) { [s2a_ios_settings_defaults() setBool:on forKey:@"S2AFrameInterp"]; }
 void s2a_ios_set_fps60(BOOL on) { s2a_ios_set_fps60_for(current_gid(), on); }
 
 // 满屏（自适应：按这台设备的屏幕比例铺满，11-13 合并原「宽屏」与「宽屏强制启用」两个开关）：
@@ -372,6 +375,9 @@ void s2a_ios_apply_graphics_settings(NSUserDefaults *defaults) {
         apply_environment("S2A_WIDESCREEN", @"0");
         fprintf(stderr, "[S2A 画面设置] S2A_WIDESCREEN=0（宽屏关：%s）\n", game && [game objectForKey:@"S2AWidescreen"] ? "这款" : "所有游戏的默认");
     }
+    // 补帧（11-14 维护者手测后定，取代我方 60 帧）：出图补帧（graphics/nvn/gfx/nvn/nvn_present_fi.inc）进程里一律备好，开不开按这款的设置当场定
+    //   （齿轮菜单「补帧」→ s2a_fi_set_live，vpad.m 起局按 s2a_ios_fi_on 设），所以这里只打开功能本身；启动环境显式给的优先（对照局写 DM_PRESENT_FI=0）
+    if (!getenv("DM_PRESENT_FI")) apply_environment("DM_PRESENT_FI", @"1");
     // 60 帧（11-11 维护者：缺省游戏原帧率、玩家手动开；速度已验证正确的款保留默认 60）：只转玩家明确的选择——开 S2A_FPS60=1、关 S2A_FPS60=0；
     //   没选过不写，由宿主按清单原因自己定（runtime/src/caps.c：验证过的款开、其余原帧率）。没选也写 0 会把验证过的款一起关掉。
     //   先后：启动环境显式给的 > 这款在游戏库的选择 > App 级开关关 > 玩家在设置页手动开（S2AFps60Manual，只有设置页开关会写）；

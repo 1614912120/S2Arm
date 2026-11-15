@@ -187,6 +187,8 @@
 "vpad.menu.holdLock.note" = "按住 2 秒鎖定，只對這款遊戲";
 "vpad.menu.hud" = "效能浮層";
 "vpad.menu.hud.note" = "在右上角顯示幀率和記憶體";
+"vpad.menu.fi" = "補幀";
+"vpad.menu.fi.note" = "30 幀補到 60 幀，更順但操作稍慢一點；切換當場生效";
 "vpad.menu.manageLayouts" = "匯入 / 匯出 / 另存配置…";
 "vpad.menu.ns2pro" = "啟用 Switch 2 Pro 手把";
 "vpad.menu.pad" = "手把與體感";

@@ -626,6 +626,7 @@ void mtl_init(void) {
     const char *vbc = getenv("DM_NVN_VBUF_CACHE"); g_vbuf_cache = !(vbc && !strcmp(vbc, "0"));
     const char *link = getenv("DM_PRESENT_LINK");
     g_dm_present_link = link ? atoi(link) : 1; if (g_dm_present_link < 0 || g_dm_present_link > 2) g_dm_present_link = 1;   // Default 1 (real-device same-process alternation: when load exceeds one display-link period, long frames 15% → 0 and frame intervals even out; no difference from 0 at a steady 60); DM_PRESENT_LINK=0 turns it off   // 1 = present on every tick of a 60 Hz display link; 2 = 120 Hz display link, the game presents a frame every other display-link tick (when behind, it can present on the next 8.33 ms display-link tick)
+    { const char *fi = getenv("DM_PRESENT_FI"); if (fi && !strcmp(fi, "1")) g_dm_present_link = 0; }   // 实验：出图补帧走出图线程自己取画布，一开始就不建显示链接
     const char *latency = getenv("DM_PRESENT_LATENCY");
     if (latency && atoi(latency) > 0) g_present_latency = atoi(latency);
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
@@ -14374,9 +14375,10 @@ static void dispatch(const p_dispatch *dp) {
     id<MTLComputePipelineState> ps = hm_get_id(cps, ck);
     if ((id)ps == (id)NSNull.null) return;   // its pipeline failed before: built once, reported once (see below)
     if (!ps) {
-        // #884：Metal 编译服务对一条计算管线现编一直不返回，提交线程跟着卡死（开场剧情固定定格）。至多等 DM_NVN_CPSO_WAIT_MS（缺省 10000，0 = 不限，
-        //   同渲染「不能跳过的绘制」上限 DM_NVN_PSO_UNSAFE_WAIT_MS）：等不到就跳过这一次派发、不记失败，后台编完下一次派发直接用（pso_archive.h par_compute_wait）
-        static int64_t cwait = -2; if (cwait == -2) { const char *v = getenv("DM_NVN_CPSO_WAIT_MS"); long ms = v && *v ? strtol(v, NULL, 10) : 10000; cwait = ms > 0 ? (int64_t)ms * 1000000 : -1; }
+        // #884：Metal 编译服务对一条计算管线现编一直不返回，提交线程跟着卡死（开场剧情固定定格）。至多等 DM_NVN_CPSO_WAIT_MS（缺省 60000，0 = 不限）：
+        //   等不到就跳过这一次派发、不记失败，后台编完下一次派发直接用（pso_archive.h par_compute_wait）。缺省原为 10 秒，11-14 改 60 秒（#065090）：309 份诊断里编满 5 秒的
+        //   计算管线最终编好的 18 支，7 支用了 10–60 秒；跳过的那次派发游戏不会重发（D-EVQ3：那支 20.5 秒编好后 18 秒仍不出帧），10 秒跳过把「顿一下」变成整局卡死
+        static int64_t cwait = -2; if (cwait == -2) { const char *v = getenv("DM_NVN_CPSO_WAIT_MS"); long ms = v && *v ? strtol(v, NULL, 10) : 60000; cwait = ms > 0 ? (int64_t)ms * 1000000 : -1; }
         static int slow_env; if (!slow_env++) { const char *v = getenv("DM_NVN_PSO_SLOW_MS"); if (v && *v) g_par_slow_ms = atoi(v); }   // 慢编译提示与重译抢跑的起点（缺省 5000；诊断 / 核对重译时设小）
         NSError *e = nil; uint64_t bt = bp_now(); int gave_up = 0;
         t_par_msl_note = (fc ? [@"sampler-emulation variant of " stringByAppendingString:cs->mslnote ?: @"?"] : cs->mslnote).UTF8String; t_par_msl_src = fc ? NULL : cs->mslsrc.fileSystemRepresentation;
@@ -15630,6 +15632,7 @@ static id<MTLRenderPipelineState> g_blit_pso; static MTLPixelFormat g_blit_fmt;
 static id<MTLSamplerState> g_blit_samp;
 static uint64_t g_present_n;
 uint64_t mtl_present_count(void) { return g_present_n; }   // Actual present count (heat attribution DM_HEAT computes the present frame rate)
+uint64_t s2a_direct_draws(void) { return g_stat_draw; }   // 编码出去的绘制总数（runtime/src/direct_prompt.c「画面没出来」按名字取：起局后一直为 0 = 上屏的全是空帧）
 void mtl_res_snapshot(mtl_res_count *out) {
     memset(out, 0, sizeof *out);
     out->pso = g_pso.n;
@@ -16522,6 +16525,12 @@ static void rl_row(const uint8_t *q, NSUInteger w, NSUInteger h, unsigned long l
     for (NSUInteger k = 0; k < ng; k++) fprintf(g_rlf, "%02x", g[k]);
     fputc('\n', g_rlf); fflush(g_rlf); pthread_mutex_unlock(&g_rlmu);
 }
+// 出图补帧（nvn_present_fi.inc）用的三个 Metal 4 包装：补帧有自己一套命令槽，在补帧队列上与出图线程的 g_present_cb 并行编码提交，
+//   重置分配器并开始 / 在指定命令缓冲上开渲染编码器 / 提交一条命令缓冲这三处原先没有包装（enc_r_begin 只开在 g_cb 上）；补帧代码里一律用 id（MTL4 棘轮，11-14）
+API_AVAILABLE(macos(26.0), ios(26.0)) static inline void m4_begin_on(id cb, id alloc) { [(id<MTL4CommandAllocator>)alloc reset]; [cb beginCommandBufferWithAllocator:alloc]; }   // 槽的上一次提交已做完（slot_free）才重置
+API_AVAILABLE(macos(26.0), ios(26.0)) static inline id m4_render_on(id cb, id d) { return [(id<MTL4CommandBuffer>)cb renderCommandEncoderWithDescriptor:d]; }
+API_AVAILABLE(macos(26.0), ios(26.0)) static inline void m4_commit_one(id cb, id o) { id<MTL4CommandBuffer> b[] = {cb}; [g_q4 commit:b count:1 options:o]; }
+#include "nvn_present_fi.inc"   // 出图补帧（没有社区帧率补丁的 30 帧款缺省补到 60，开关按游戏）
 static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t ticket, const int crop[4], id<CAMetalDrawable> supplied, double target_ts) {
     if (mtl_gpu_halted()) { atomic_fetch_add_explicit(&g_gpu_refused, 1, memory_order_relaxed); return 0; }   // GPU 安全停：不取画布、不交上屏（调用方按「没交」把票记完成）
     if (g_present_stall_ns) { struct timespec ts = {0, (long)g_present_stall_ns}; nanosleep(&ts, NULL); }
@@ -16625,6 +16634,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     present_pipeline(layer.pixelFormat);   // Same as the original path: the first frame compiles the pipeline before taking the drawable
     fit_geom(layer.drawableSize.width, layer.drawableSize.height, pcw, pch);   // game units (was the crop / source size read here)
     if (g_grab_cb) grab_present(src, crop, layer.drawableSize, ticket);   // Game picture needed by the whole-window screenshot (peek without the lock first; the real take locks inside the function)
+    if (fi_wanted() && !supplied) { if (@available(macOS 26.0, iOS 26.0, *)) { int fr = fi_frame(src, crop, layer, period, ticket); if (fr >= 0) return fr; } }   // 实验：出图补帧接手这一帧
     uint64_t dt0 = now_ns();
     id<CAMetalDrawable> dr = supplied ? supplied : [layer nextDrawable];
     if (!supplied) g_drawable_ns += now_ns() - dt0;
