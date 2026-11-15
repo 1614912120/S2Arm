@@ -292,6 +292,14 @@ static int layout_ent(const struct fd_binding *b, nvn_gpu_layout_ent *e) {
         else return 0;
         return 1;
     }
+    // 句柄在游戏用户常量缓冲里（iOS NVN_RB_TEXU / TBUFU）：src_reg / src_off = 句柄字所在的常量槽与字节偏移；
+    //   另一半与采样器来源放进程序的 usrc 表（usrc_put，src_reg2 = 表下标），核心逐笔从常量缓冲读句柄
+    if (b->kind == 2 && b->tex_ubo && b->count == 1) {
+        e->cls = b->texel_buffer ? NVN_GPU_RES_TBUF : NVN_GPU_RES_TEX_SAMP;
+        e->src_kind = b->texel_buffer ? NVN_RB_TBUFU : NVN_RB_TEXU;
+        e->src_reg = b->tex_u.slot; e->src_off = b->tex_u.offset;
+        return 1;
+    }
     // 贴图数组：着色器按运行时下标取句柄，数组第 k 项 = 驱动句柄表的第 (src_reg + k) 个 8 字节项（核心按项逐个绑）
     if (b->kind == 2 && b->texel_buffer && b->count == 1 && b->tex_slot >= 0) {
         e->cls = NVN_GPU_RES_TBUF; e->src_kind = NVN_RB_TBUF; e->src_reg = (uint16_t)b->tex_slot; return 1;
@@ -315,6 +323,22 @@ static int layout_ent(const struct fd_binding *b, nvn_gpu_layout_ent *e) {
         return 1;
     }
     return 0;   // 图形阶段的图像、存储缓冲的其它地址来源：随对应命令接
+}
+
+// TEXU / TBUFU 项的句柄来源进程序的 usrc 表（rp_shader.h rp_usrc），布局项 src_reg2 = 下标。0 = 表满
+static struct rp_uword uword_of(const struct fd_ubo_word *w) {
+    return (struct rp_uword){ .reg = w->slot, .sid = w->sid, .pair = w->pair, .pair_sid = w->pair_sid, .pair_reg = w->pair_slot, .off = w->offset, .pair_off = w->pair_offset };
+}
+static int usrc_put(struct rp_prog *pg, const struct fd_binding *b, nvn_gpu_layout_ent *e) {
+    if (pg->nusrc >= RP_PROG_USRC_MAX) return 0;
+    struct rp_usrc *u = &pg->usrc[pg->nusrc];
+    memset(u, 0, sizeof *u);
+    u->tex = uword_of(&b->tex_u);
+    if (b->samp_src == FD_SAMP_UBO) { u->samp_kind = NVN_RB_SAMPU; u->samp = uword_of(&b->samp_u); }
+    else if (b->samp_src == FD_SAMP_ID) { u->samp_kind = NVN_RB_SAMPI; u->samp_reg = b->samp_val; }
+    else if (b->samp_src == FD_SAMP_SLOT) { u->samp_kind = NVN_RB_SAMP; u->samp_reg = b->samp_val; }
+    e->src_reg2 = (uint16_t)pg->nusrc++;
+    return 1;
 }
 
 // 只读组合采样贴图的声明；无法识别时保留 0，不根据绑定对象猜类型。
@@ -421,6 +445,7 @@ static struct entry *build(const uint8_t *bytes, size_t len, const struct s2a_so
             if (e->prog.nent[st] == RP_PROG_ENT_MAX) { red1("too_many_bindings", ""); e->failed = 1; break; }
             nvn_gpu_layout_ent *le = &e->prog.ent[st][e->prog.nent[st]];
             if (!layout_ent(b, le)) { char nm[40]; snprintf(nm, sizeof nm, "binding_kind_%d_slot_%d", b->kind, b->slot); red1(nm, b->stage); e->failed = 1; break; }
+            if ((le->src_kind == NVN_RB_TEXU || le->src_kind == NVN_RB_TBUFU) && !usrc_put(&e->prog, b, le)) { red1("too_many_uniform_handles", b->stage); e->failed = 1; break; }
             if (le->cls == NVN_GPU_RES_TBUF) { red1("texture_buffer_replay_unsupported", b->stage); e->failed = 1; break; }
             le->stages = b->is_support ? (1u << nst) - 1u : 1u << st;
             if (b->kind == 2) sampled_decl(fp.stage[st].spirv, fp.stage[st].spirv_bytes, (uint32_t)b->set, (uint32_t)b->binding,
