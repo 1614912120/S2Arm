@@ -6643,7 +6643,7 @@ void nvn_be_set_depth_zero(int on) {
     if (atomic_exchange(&g_depth_zero, on) == on) return;
     MLOG("depth mode: %s", on ? "near=0, vertex shaders use the main0_z entry" : "near=-w (GL), vertex shaders use the main0 entry");
     int n = atomic_load(&g_vs_loaded);
-    if (n) MLOG("【红】 depth mode changed after %d vertex shader constructions: already bound shaders keep the old convention; subsequent loads use the new identity (bound programs are not rebound)", n);
+    if (n) MLOG("depth mode changed after %d vertex shader constructions: programs resolved before it are resolved again at their next use, with the new convention's vertex entry points", n);
 }
 // layer: a vertex shader's layer entry points (entry_layer / entry_layer_z, which also write the layer) instead of main0 / main0_z, for a program whose geometry shader is a slice writer (prog_fold_gs)
 // The argument buffer's length (S2Arm 10-30): 8 bytes per argument id, so 8 × (highest id + 1), from the reflection alone. It used to come from Metal
@@ -7091,12 +7091,18 @@ static int tess_init(void) {
     return 1;
 }
 static const prog_t *g_prog_last_ptr; static uint64_t g_prog_last_serial, g_prog_last_gen; static NvProg *g_prog_last;
+// S2Arm 11-15: a program whose vertex / mesh shader (the stages that follow the depth mode, stage_depth_moded) was loaded under the other depth mode than the game's now
+static int prog_depth_stale(NvProg *o, int dz) { for (int st = 0; st <= 4; st += 4) if (o->sh[st] && o->sh[st]->load_depth_zero != dz) return 1; return 0; }
+static NvProg *bind_rebuild(const prog_t *p, NvProg *old);   // a combined program (per-stage binding, bind_stages) put together again; nil when p is not one
 static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only on the submit thread
     prog_t *p = (prog_t *)cp;
-    uint64_t gen = g_ser_gen;
-    if (p == g_prog_last_ptr && p->serial == g_prog_last_serial && gen == g_prog_last_gen && g_prog_last) return g_prog_last;
+    uint64_t gen = g_ser_gen; int dz = atomic_load(&g_depth_zero);
+    if (p == g_prog_last_ptr && p->serial == g_prog_last_serial && gen == g_prog_last_gen && g_prog_last && !prog_depth_stale(g_prog_last, dz)) return g_prog_last;
+    // S2Arm 11-15 (#790 D-6XQT, 22 of 728 diagnoses in 7 titles): a game that sets the depth mode after drawing kept the programs resolved before it, whose vertex shaders
+    //   rewrite z for the other convention, so whole scenes (characters, terrain) fell outside the depth range. A program resolved under the other mode is resolved again
     __unsafe_unretained NvProg *have = p->serial ? serial_get(p->serial) : nil;
-    if (have) { g_prog_last_ptr = p; g_prog_last_serial = p->serial; g_prog_last_gen = gen; g_prog_last = have; return have; }
+    if (have && !prog_depth_stale(have, dz)) { g_prog_last_ptr = p; g_prog_last_serial = p->serial; g_prog_last_gen = gen; g_prog_last = have; return have; }
+    if (have) { NvProg *re = bind_rebuild(p, have); if (re) { serial_put(p->serial, re); return re; } }   // a combined program has no shaders of its own (nstage 0): its stages' programs again
     shmap_load();
     NvProg *o = [NvProg new];
     for (unsigned i = 0; i < p->nstage; i++) {
@@ -8263,6 +8269,21 @@ static const prog_t *prog_by_serial(uint64_t ser) {
 }
 enum { NCMP = 64 };
 static struct { prog_t cp[NCMP]; const prog_t *ck[NCMP][5]; uint64_t cs[NCMP][5]; int ncp, next; } g_bind_cache;
+// Slot i's combination from the stage programs it was made of (ck): each stage's shader from its own program (prog_get, which resolves it again after a depth mode change).
+//   old: the slot's previous combination; a stage whose program was finalized or reused since (its serial no longer the one taken, cs) keeps old's shader for it
+static NvProg *bind_combine(int i, NvProg *old) {
+    NvProg *o = [NvProg new];
+    for (int st = 0; st < 5; st++) { const prog_t *sp = g_bind_cache.ck[i][st]; if (!sp) continue;
+        if (old && sp->serial != g_bind_cache.cs[i][st]) { o->sh[st] = old->sh[st]; continue; }
+        __unsafe_unretained NvProg *src = prog_get(sp); o->sh[st] = src ? src->sh[st] : nil; }
+    prog_fold_gs(o);   // the geometry stage came from another program (see prog_fold_gs)
+    o->gp = g_bind_cache.ck[i][1];   // S2Arm: the guest program the fragment stage came from (pso_fout_variant finds the fragment shader's code / control there); bound for this draw, checked by pointer and serial above
+    return o;
+}
+static NvProg *bind_rebuild(const prog_t *p, NvProg *old) {
+    if (p < g_bind_cache.cp || p >= g_bind_cache.cp + NCMP) return nil;
+    return bind_combine((int)(p - g_bind_cache.cp), old);
+}
 static const prog_t *bind_stages(const prog_t *p, int stages) {
     // A program binds only the stages it has shaders for: Taiko no Tatsujin (0100383012646000, 10-30) makes one program per stage and binds each with
     //   all graphics bits (0x1f), vertex then fragment, before every draw; taking every bit replaced the vertex stage with the fragment-only program and all
@@ -8291,10 +8312,8 @@ static const prog_t *bind_stages(const prog_t *p, int stages) {
     }
     int i = ncp < NCMP ? g_bind_cache.ncp++ : g_bind_cache.next++ % NCMP;
     if (cp[i].serial) serial_del(cp[i].serial);
-    NvProg *o = [NvProg new];
-    for (int st = 0; st < 5; st++) { ck[i][st] = S.bst[st]; cs[i][st] = S.bst[st] ? S.bst[st]->serial : 0; if (S.bst[st]) { __unsafe_unretained NvProg *src = prog_get(S.bst[st]); o->sh[st] = src ? src->sh[st] : nil; } }
-    prog_fold_gs(o);   // the geometry stage came from another program (see prog_fold_gs)
-    o->gp = S.bst[1];   // S2Arm: the guest program the fragment stage came from (pso_fout_variant finds the fragment shader's code / control there); bound for this draw, checked by pointer and serial above
+    for (int st = 0; st < 5; st++) { ck[i][st] = S.bst[st]; cs[i][st] = S.bst[st] ? S.bst[st]->serial : 0; }
+    NvProg *o = bind_combine(i, nil);
     memset(&cp[i], 0, sizeof cp[i]); cp[i].magic = MAGIC('P', 'R', 'O', 'G'); cp[i].serial = nvn_new_serial(); serial_put(cp[i].serial, o);
     { static int once; if (!once++) MLOG("per-stage program binding: first combined program (vertex %s fragment %s)", o->sh[0] ? o->sh[0]->key : "-", o->sh[1] ? o->sh[1]->key : "-"); }
     return &cp[i];
@@ -11752,9 +11771,10 @@ static void rt_sub(const p_set_rt *r, int k, uint64_t *ser, int *lv, int *sl);
 //   first, the first draw's wait came to 8.5 s and the frame to 38 s (68 libraries)
 static __unsafe_unretained NvProg *prog_peek(const prog_t *p) {
     if (!p) return nil;
+    int dz = atomic_load(&g_depth_zero);
     __unsafe_unretained NvProg *have = p->serial ? serial_get(p->serial) : nil;
-    if (have) return have;
-    int ok = p->nstage > 0, dz = atomic_load(&g_depth_zero), nm = 0; NSString *mk[6]; int ms[6];
+    if (have && !prog_depth_stale(have, dz)) return have;   // resolved under the other depth mode: as not resolved (prog_get resolves it again)
+    int ok = p->nstage > 0, nm = 0; NSString *mk[6]; int ms[6];
     os_unfair_lock_lock(&g_shader_lock);
     for (unsigned i = 0; i < p->nstage && i < 6; i++) {
         uint8_t md[8]; char hx[17]; prog_key(p, i, md);
