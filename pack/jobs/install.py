@@ -815,27 +815,36 @@ def app_running(c, ident, bid):
 
 def pull_kept_nros(c, ident, bid, gid, docs="Documents"):
     """装之前把这台设备上宿主留下的 NRO（runtime/src/loader.c s2a_nro_keep：包里没有改写映像、游戏解开的整份，Documents/wire/<号>/nro/<SHA-256>.nro）
-    拉回游戏库 games/<号>/nro_kept/，下次准备这款时改写进包（#8be819）。机上没有 / 列不出 / 拉不到都不算错；只收文件名 = 内容 SHA-256 的。→ 新收的个数"""
-    import hashlib
+    拉回游戏库 games/<号>/nro_kept/，下次准备这款时改写进包（#8be819）。机上没有 / 列不出 / 拉不到都不算错；只收文件名 = 内容 SHA-256 的。→ 新收的个数
+    Mac：devicectl 列 / 拉；Windows 走 s2a-devpush（WinPhone.pull_kept），收文件这段共用 keep_nros"""
     from diag import devicectl
     rc, data, _ = devicectl(c, "device", "info", "files", "--device", ident, "--domain-type", "appDataContainer", "--domain-identifier", bid,
                             "--subdirectory", f"{docs}/wire/{gid.upper()}/nro", timeout=120)
     if rc:
         return 0
-    names = sorted({p.rsplit("/", 1)[-1] for p in (f.get("relativePath") or f.get("path") for f in ((data.get("result") or {}).get("files") or [])
-                                                   if isinstance(f, dict) and not (f.get("resources") or {}).get("isDirectory")) if p})
+    names = {p.rsplit("/", 1)[-1] for p in (f.get("relativePath") or f.get("path") for f in ((data.get("result") or {}).get("files") or [])
+                                            if isinstance(f, dict) and not (f.get("resources") or {}).get("isDirectory")) if p}
+    def fetch(name, dst):
+        rc, _, _ = devicectl(c, "device", "copy", "from", "--device", ident, "--domain-type", "appDataContainer", "--domain-identifier", bid,
+                             "--source", f"{docs}/wire/{gid.upper()}/nro/{name}", "--destination", dst, timeout=300)
+        return rc == 0
+    return keep_nros(c, gid, names, fetch)
+
+
+def keep_nros(c, gid, names, fetch):
+    """机上列出的名字里，文件名 = 内容 SHA-256 的 NRO 逐个拉到临时文件（fetch(名字, 本地路径) → 成功?）、核过摘要收进 games/<号>/nro_kept/；
+    已收过的不再拉。→ 新收的个数"""
+    import hashlib
     new = 0
-    for name in names:
+    for name in sorted(set(names)):
         if not re.fullmatch(r"[0-9a-f]{64}\.nro", name):
             continue
         dest = layout.nro_kept(c, gid, create=True) / name
         if dest.is_file():
             continue
         with tempfile.TemporaryDirectory(dir=c.private) as d:
-            rc, _, _ = devicectl(c, "device", "copy", "from", "--device", ident, "--domain-type", "appDataContainer", "--domain-identifier", bid,
-                                 "--source", f"{docs}/wire/{gid.upper()}/nro/{name}", "--destination", f"{d}/n", timeout=300)
             got = Path(d, "n")
-            if rc or not got.is_file() or hashlib.sha256(got.read_bytes()).hexdigest() != name[:64]:
+            if not fetch(name, str(got)) or not got.is_file() or hashlib.sha256(got.read_bytes()).hexdigest() != name[:64]:
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(got, dest); new += 1
@@ -1858,8 +1867,24 @@ class WinPhone:
         self.info = dict(device=self.udid, deviceName="", deviceKind=kind)
         self.pending = None   # 资源传完但没拉起 App 解开时的那句（put_game 带进结果 unpackPending）
 
-    def pull_kept(self, games):   # 留下的 NRO（#8be819）：Windows 没有 devicectl，先不收（后续项：经 s2a-devpush 列 / 拉 Documents 文件）
-        return 0
+    def pull_kept(self, games):
+        """这几款在手机上留下的 NRO 都收回游戏库（#8be819，同 Mac pull_kept_nros）：Windows 没有 devicectl，经 s2a-devpush 列目录、逐个拉回，
+        收文件共用 keep_nros。→ 新收的个数；没记过包名 / 连不上 / 列不出（目录还没建、锁屏）都按 0，不挡装机"""
+        if not self.bid:
+            return 0
+        n = 0
+        with tempfile.TemporaryDirectory(dir=self.c.private) as work:
+            try:
+                dp = self.client(work)
+            except (Failure, OSError, ImportError):   # 装机前也调（put_game）：收不到绝不挡装机，工具缺 / 起不来都按 0
+                return 0
+            for g in games:
+                rel = f"{game_docs(g)}/wire/{g.upper()}/nro"
+                try:
+                    n += keep_nros(self.c, g, dp.ls(rel) or [], lambda name, dst, rel=rel: dp.get(f"{rel}/{name}", dst))
+                except OSError as e:
+                    print(f"[s2a] 收回 {g} 留下的 NRO 失败：{e}", file=sys.stderr)
+        return n
 
     def app_running(self):   # 查不了进程（Windows 没有 devicectl）：调用方改用 playing（游玩时间心跳）
         return None

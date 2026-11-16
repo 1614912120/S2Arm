@@ -922,6 +922,42 @@ class KeptNroTests(unittest.TestCase):
             self.assertEqual(install.pull_kept_nros(self.c, "C891", "s2arm.z", self.G), 0)   # 机上没有：0、不报错
 
 
+    def test_windows_pull_via_devpush(self):
+        # Windows 没有 devicectl：经 s2a-devpush 列 <文档根>/wire/<号>/nro、逐个拉回（期望手写，同 iPhone 口径）：只收名 = 内容 SHA-256 的；
+        #   列不出（目录还没建 / 锁屏，ls → None）、没记过包名、连不上（client 抛 Failure）都按 0、不报错
+        import hashlib
+        good = b"NRO-W" * 11; sg = hashlib.sha256(good).hexdigest(); bad = "2" * 64
+        rel = f"{install.game_docs(self.G)}/wire/{self.G.upper()}/nro"
+        files = {f"{sg}.nro": good, f"{bad}.nro": b"content differs from its name", "notes.txt": b"x"}
+        got = []
+        class Dp:
+            def ls(_, r):
+                self.assertEqual(r, rel); return [".", "..", *files]
+            def get(_, r, dst):
+                got.append(r); Path(dst).write_bytes(files[r.rsplit("/", 1)[-1]]); return True
+        ph = object.__new__(install.WinPhone); ph.c, ph.bid = self.c, "s2arm.z"
+        ph.client = lambda work: Dp()
+        msgs = self._msgs()
+        self.assertEqual(ph.pull_kept([self.G]), 1)
+        self.assertEqual(ph.pull_kept([self.G]), 0)   # 已收：不重复
+        kept = self.c.library / f"games/{self.G}/nro_kept"
+        self.assertEqual(sorted(p.name for p in kept.iterdir()), [f"{sg}.nro"])
+        self.assertEqual((kept / f"{sg}.nro").read_bytes(), good)
+        self.assertEqual(got, [f"{rel}/{bad}.nro", f"{rel}/{sg}.nro", f"{rel}/{bad}.nro"])
+        self.assertEqual(len(msgs), 1)
+        class Empty:
+            def ls(_, r): return None
+        ph.client = lambda work: Empty()
+        self.assertEqual(ph.pull_kept([self.G]), 0)
+        def down(work): raise install.Failure("找不到 s2a-devpush", code="tool_missing")
+        ph.client = down
+        self.assertEqual(ph.pull_kept([self.G]), 0)
+        def broken(work): raise ModuleNotFoundError("No module named 'push_pack'")   # 装机前也调：工具起不来不挡装机
+        ph.client = broken
+        self.assertEqual(ph.pull_kept([self.G]), 0)
+        ph.bid = None
+        self.assertEqual(ph.pull_kept([self.G]), 0)
+
 class PullSeenTests(unittest.TestCase):
     setUp = tj.JobsTests.setUp; tearDown = tj.JobsTests.tearDown
 
