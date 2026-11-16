@@ -608,3 +608,4 @@
 20261116-1552-audio-dsp-biquad-and-mix-local-state.patch
 20261116-1552-audio-dsp-command-fault-isolation.patch
 20261116-0223-offline-socket-error-log.patch
+20261116-0353-audio-ac-level.patch
