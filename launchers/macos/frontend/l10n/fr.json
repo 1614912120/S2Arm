@@ -1837,6 +1837,7 @@
   "s2arm.controller.autoConnect": "Connecter automatiquement les manettes Switch 2",
   "s2arm.controller.disconnectOnClose": "Déconnecter à la fermeture du jeu",
   "s2arm.controller.openBluetooth": "Ouvrir les réglages Bluetooth",
+  "s2arm.controller.thirdPartyMotion": "Les manettes au format Xbox, comme celles de 8BitDo ou GameSir, n'ont les commandes de mouvement qu'en mode Switch.",
   "s2arm.controller.assignPlayers": "Attribuer les joueurs",
   "s2arm.controller.howPair": "Associer deux / Manette complète",
   "s2arm.controller.howPairKeys": "Appuyez simultanément sur L + R",

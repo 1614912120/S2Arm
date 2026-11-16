@@ -229,6 +229,7 @@
 "vpad.menu.face.xbox" = "Botones: Diseño Xbox";
 "vpad.menu.face.xbox.note" = "Posiciones de botones Xbox; el botón inferior confirma";
 "vpad.menu.gyro" = "Giroscopio del teléfono";
+"vpad.menu.gyro.note" = "Los mandos con forma de Xbox, como los de 8BitDo o GameSir, solo tienen controles de movimiento en modo Switch.";
 "vpad.menu.haptic.note" = "Una vibración ligera al presionar un botón";
 "vpad.menu.holdLock.note" = "Mantén 2 s para bloquear; solo para este juego";
 "vpad.menu.hud" = "Información de rendimiento";

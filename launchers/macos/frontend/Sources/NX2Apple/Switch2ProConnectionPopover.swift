@@ -130,6 +130,9 @@ struct Switch2ProConnectionPopover: View {
                     }
                     .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("controller.system.status")
+                    // 第三方手柄（八位堂、盖世小鸡等 Xbox 外形）切到 Switch 模式才有体感（11-16，同 iPhone 齿轮菜单「手柄与体感」）
+                    Text(t("thirdPartyMotion")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("controller.system.motionHint")
                     Button(t("openBluetooth")) { SystemControllers.openBluetoothSettings() }
                         .controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true))
                         .controllerID("controller.system.settings")

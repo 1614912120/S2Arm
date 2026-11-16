@@ -1840,6 +1840,7 @@
   "s2arm.controller.autoConnect": "自動連線 Switch 2 手把",
   "s2arm.controller.disconnectOnClose": "關閉遊戲後斷開手把",
   "s2arm.controller.openBluetooth": "開啟藍牙設定",
+  "s2arm.controller.thirdPartyMotion": "八位堂、蓋世小雞這類 Xbox 外形的手把，切到 Switch 模式才有體感。",
   "s2arm.controller.assignPlayers": "分配玩家",
   "s2arm.controller.howPair": "兩隻合併 / 整隻手把",
   "s2arm.controller.howPairKeys": "同時按 L + R",

@@ -230,6 +230,7 @@
 "vpad.menu.face.xbox" = "手柄按键：Xbox 布局";
 "vpad.menu.face.xbox.note" = "按 Xbox 的按键位置，下键确认";
 "vpad.menu.gyro" = "手机陀螺仪";
+"vpad.menu.gyro.note" = "八位堂、盖世小鸡这类 Xbox 外形的手柄，切到 Switch 模式才有体感。";
 "vpad.menu.haptic.note" = "按下时轻震一下";
 "vpad.menu.holdLock.note" = "按住 2 秒锁定，只对这款游戏";
 "vpad.menu.hud" = "性能浮层";
