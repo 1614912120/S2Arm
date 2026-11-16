@@ -1838,6 +1838,7 @@
   "s2arm.controller.autoConnect": "自动连接 Switch 2 手柄",
   "s2arm.controller.disconnectOnClose": "关闭游戏后断开手柄",
   "s2arm.controller.openBluetooth": "打开蓝牙设置",
+  "s2arm.controller.thirdPartyMotion": "八位堂、盖世小鸡这类 Xbox 外形的手柄，切到 Switch 模式才有体感。",
   "s2arm.controller.assignPlayers": "分配玩家",
   "s2arm.controller.howPair": "两只合并 / 整只手柄",
   "s2arm.controller.howPairKeys": "同时按 L + R",

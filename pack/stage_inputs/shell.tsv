@@ -145,6 +145,7 @@
 入	runtime/ns2pro/NS2Transport.m
 入	runtime/ns2pro/include
 入	runtime/src
+入	runtime/third_party
 入	runtime/tests/mk
 入	pack/app.entitlements
 入	pack/app_bundle.py

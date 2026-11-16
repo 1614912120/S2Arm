@@ -56,6 +56,11 @@ def _get(url):
     return data
 
 
+def lzma_error():
+    import lzma
+    return lzma.LZMAError
+
+
 def _base():
     return (os.environ.get("S2A_PATCH_BASE") or BASE).rstrip("/")
 
@@ -67,25 +72,39 @@ def _snapshot_path(c):
     if e:
         return Path(e)
     r = getattr(c, "r", None) or {}
-    return Path(r.get("resources") or c.private) / "CommunityPatches" / "patches-v2.tar"
+    d = Path(r.get("resources") or c.private) / "CommunityPatches"
+    return d / "patches-v3.tar" if (d / "patches-v3.tar").is_file() else d / "patches-v2.tar"   # 0.5.0 起随包是 v3（分块 xz），老安装是 v2
 
 
 def _snapshot(c):
-    """→ (清单 bundles, 取包函数) ；没有快照 / 读不了 = ({}, None)"""
+    """→ (清单 bundles, 取包函数) ；没有快照 / 读不了 = ({}, None)。
+    取包函数自己按快照清单核内容，核不过回 None：v2（tar 里各包是 .json.gz）核 gz 的 sha256、回 gz 字节；
+    v3（tools/patch_pack.py to_v3：包原文按约 1 MB 一块拼起来 xz 压，安装包小 11 MB）核原文的 raw_sha256、回原文。bundle 两种都认"""
     import tarfile
     p = _snapshot_path(c)
     if not p.is_file():
         return {}, None
-    def fetch(key):   # 每次取包开一次、用完即关（不让快照句柄挂到进程结束）
-        with tarfile.open(p) as t:
-            return t.extractfile(key + ".json.gz").read()
     try:
         with tarfile.open(p) as t:
             index = json.load(t.extractfile("index.json"))
-        return index.get("bundles", {}), fetch
     except (OSError, KeyError, ValueError, tarfile.TarError) as e:
         print(f"补丁：本地快照读不了（{type(e).__name__}），只用云端", file=sys.stderr)
         return {}, None
+    bundles = index.get("bundles", {})
+    def fetch(key):   # 每次取包开一次、用完即关（不让快照句柄挂到进程结束）
+        meta = bundles.get(key) or {}
+        try:
+            with tarfile.open(p) as t:
+                if index.get("schema") == 3:
+                    import lzma
+                    blk = lzma.decompress(t.extractfile(f"blk/{meta['block']:04d}.xz").read())
+                    data, want = blk[meta["off"]:meta["off"] + meta["len"]], meta.get("raw_sha256")
+                else:
+                    data, want = t.extractfile(key + ".json.gz").read(), meta.get("sha256")
+        except (OSError, KeyError, ValueError, tarfile.TarError, lzma_error()):
+            return None
+        return data if want and hashlib.sha256(data).hexdigest() == want else None
+    return bundles, fetch
 
 
 def cloud_manifest():
@@ -134,8 +153,8 @@ def bundle(c, key, cloud, snap, snap_get):
         data = _local(have, snap, snap_get, key)
         if data is None:
             return []
-    try:
-        return json.loads(gzip.decompress(data)).get("items", [])
+    try:   # 增量缓存 / 云端 / v2 快照给 gz，v3 快照给原文
+        return json.loads(gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data).get("items", [])
     except (OSError, ValueError):
         return []
 
@@ -144,9 +163,8 @@ def _local(have, snap, snap_get, key):
     """本地已有的这个包：增量下过的（私有缓存）> 随启动器装的快照（核过快照清单里的 sha256）；都没有 = None"""
     if have is not None:
         return have
-    sw = (snap.get(key) or {}).get("sha256")
-    data = snap_get(key) if snap_get and sw else None
-    return data if data is not None and hashlib.sha256(data).hexdigest() == sw else None
+    # 快照的取包函数自己按快照清单核过内容（v2 核 gz、v3 核原文），这里不再按 gz 的 sha256 重核
+    return snap_get(key) if snap_get and (snap.get(key) or {}).get("sha256") else None
 
 
 _MANIFEST = {}
@@ -407,7 +425,8 @@ def boost(c, game, image, result=None):
     result（record 记的这次打入结果）给了：再带 applied / failed（逐条名字；没打上的带原因文案键），完成页列「没打上」（11-14）"""
     import cheats
     out = dict(cheats=sum(1 for it in cheats.listing(c, game)["items"] if it["ok"]), fps=0, widescreen=0, gfx=0)
-    tsv = next((p for p in (Path(image) / "cpatch.tsv", Path(image) / "kit" / "cpatch.tsv") if p.is_file()), None)   # Mac 运行版本根 / iPhone kit（ship_ext 拷进去的）
+    import layout
+    tsv = next((p for p in (Path(image) / "cpatch.tsv", layout.ios_kit(c, game["id"]) / "cpatch.tsv") if p.is_file()), None)   # Mac 运行版本根 / iPhone 程序件（ship_ext 拷进去的）
     seen = set()
     for line in (tsv.read_text(encoding="utf-8", errors="replace").splitlines()[1:] if tsv else []):
         uid = line.split("\t", 1)[0]

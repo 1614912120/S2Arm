@@ -169,6 +169,9 @@ def metal_bin():
     return metal_exe().parent
 
 
+ROMFS_EXE = 'romfs/' + ('romfs_index.exe' if WIN else 'romfs_index')   # 预编 RomFS 索引：NativeAOT 单文件（launchers/windows/bundle_prepare_win.py），玩家机不要 .NET
+
+
 def prebuilt(rel, ident=None):
     """启动器随发版预编的件（S2A_PREBUILT_TOOLS = Binaries/Prepare，launchers/windows/bundle_prepare_win.py 编；同 dsh_batch.py prebuilt 的口径）：
     文件在、且给了身份时与同目录 .src_digest 相同 → 路径；没设 / 不在 / 身份不符（引擎源码比预编件新）→ None，调用方照旧现编"""
@@ -182,14 +185,6 @@ def prebuilt(rel, ident=None):
     return p if p.is_file() else None
 
 
-def dotnet_runtime_ok():   # 预编件只要 .NET 10 运行时（framework-dependent）：dotnet --list-runtimes 里有 Microsoft.NETCore.App 10.x
-    dn = os.environ.get('DOTNET') or shutil.which('dotnet')
-    if not dn: return False
-    try: out = subprocess.run([dn, '--list-runtimes'], capture_output=True, text=True).stdout
-    except OSError: return False
-    return bool(re.search(r'^Microsoft\.NETCore\.App 10\.', out, re.M))
-
-
 def env_items(target, shell):
     """环境自检：(项, 好?, 说明, 状态, 官方下载页)。只读不改、不下载；缺件写清去哪拿。
     状态：ok / missing / mismatch（有、但版本或身份不符，给了 found 为真的）；官方下载页（第 5 项）只给玩家要自己装、不能随包带的件（许可不许再分发），现无（Metal 由 winenv 核，下载页在 winenv.OFFICIAL）"""
@@ -198,12 +193,11 @@ def env_items(target, shell):
     pre = os.environ.get('S2A_PREBUILT_TOOLS')   # 启动器随发版预编（launchers/windows/bundle_prepare_win.py）：编译器 / 构建工具 / .NET SDK 各项改核对应预编件在不在
     add('python', sys.version_info >= (3, 12), f'{sys.version.split()[0]}（要 ≥ 3.12）', found=True)
     if pre:
-        add('dotnet', dotnet_runtime_ok(), '预编的 C# 件要 .NET 10 运行时（dotnet --list-runtimes 有 Microsoft.NETCore.App 10.x）')
         sys.path.insert(0, str(R / 'translator')); import dsh_batch
         try: gd = prebuilt('gamedec/' + ('gamedec.exe' if WIN else 'gamedec'), gamedec_id())
         except Fail: gd = None
         miss = [n for n, ok in (('nx_unpack', prebuilt('nx_unpack/' + ('nx_unpack.exe' if WIN else 'nx_unpack'), nx_unpack_id())), ('gamedec', gd),
-                                ('romfs', prebuilt('romfs/romfs_index.dll')),
+                                ('romfs', prebuilt(ROMFS_EXE)),
                                 ('dsh_batch', dsh_batch.prebuilt(dsh_batch.src_digest(os.path.join(dsh_batch.DSH, 'batch', 'dsh_batch.csproj'))) and dsh_batch.prebuilt_xfp())) if not ok]
         add('prebuilt-dotnet', not miss, f'预编 C# 件（{pre}，源码身份与本引擎相同才用）' + (f'缺或身份不符：{"、".join(miss)}' if miss else '齐'))
     else:
@@ -478,7 +472,7 @@ def stages(run, game, x, src_dir, own=False):
     # RomFS 索引阶段按合同 --no-restore 编（不在阶段里悄悄下载）：新检出的代码树（Windows 出包机道按提交新建，11-05 海贼无双4 联调退 75）先在这里还原一次；
     #   包都在本机 NuGet 全局缓存里时不联网，缺包才会去源取
     proj = R / 'services/romfs_index'
-    if not prebuilt('romfs/romfs_index.dll') and not (proj / 'obj/project.assets.json').is_file():   # 用预编 RomFS 索引（stages.py 同口径）就不编、不用还原
+    if not prebuilt(ROMFS_EXE) and not (proj / 'obj/project.assets.json').is_file():   # 用预编 RomFS 索引（stages.py 同口径）就不编、不用还原
         run.step('还原 RomFS 索引依赖', lambda: run.sh(['dotnet', 'restore', str(proj), '-nologo', '-v', 'q'], 'romfs_index_restore.log'))
     run.step('八个轻阶段', lambda: run.sh([PY, '-X', 'utf8', '-m', 'pack.orch.refresh', game, '--roots', str(roots), '--stages', 'all-light'], 'light.log', env=env))
     cur = roots / f'{game}@现行'

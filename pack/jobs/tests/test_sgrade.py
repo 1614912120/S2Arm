@@ -38,6 +38,7 @@ class SGradeTests(unittest.TestCase):
         for p in (patch.object(layout, "path", side_effect=game_path),
                   patch.object(layout, "image_mac", side_effect=lambda c, g, create=True: game_path(c, g, "image", "mac")),
                   patch.object(layout, "ios_kit", side_effect=lambda c, g: game_path(c, g, "image", "ios", "kit")),
+                  patch.object(layout, "program_exefs", side_effect=lambda c, g: game_path(c, g, "original-exefs")),
                   patch.object(layout, "game_info", side_effect=lambda c, g: self.info.get(g.upper(), {})),
                   patch.object(build, "extract_valid", return_value=False)):
             p.start(); self.addCleanup(p.stop)

@@ -54,7 +54,7 @@ public static class LibraryJobClient
             if (selectedPaths?.Count != 1) throw new ArgumentException("Choose exactly one file.");
             payload["path"] = selectedPaths[0];
         }
-        using var request = PrivateJobRequest.Create(privateRoot, JsonSerializer.Serialize(payload));
+        using var request = PrivateJobRequest.Create(privateRoot, JsonOut.Serialize(payload));
         var info = EnvironmentProbe.StartInfo(paths, request.FilePath);
         info.Arguments = "/d /v:off /s /c \"\"%S2A_UI_RUNTIME%\\s2arm_env.cmd\" && cd /d \"%S2A_UI_ENGINE%\" && python -X utf8 pack/jobs/main.py run --request \"%S2A_UI_REQUEST%\"\"";
         using var forcedStop = new CancellationTokenSource();

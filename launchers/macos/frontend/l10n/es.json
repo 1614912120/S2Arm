@@ -1837,6 +1837,7 @@
   "s2arm.controller.autoConnect": "Conectar automáticamente mandos de Switch 2",
   "s2arm.controller.disconnectOnClose": "Desconectar al cerrar el juego",
   "s2arm.controller.openBluetooth": "Abrir Ajustes de Bluetooth",
+  "s2arm.controller.thirdPartyMotion": "Los mandos con forma de Xbox, como los de 8BitDo o GameSir, solo tienen controles de movimiento en modo Switch.",
   "s2arm.controller.assignPlayers": "Asignar jugadores",
   "s2arm.controller.howPair": "Unir dos / Mando completo",
   "s2arm.controller.howPairKeys": "Pulsa L + R a la vez",

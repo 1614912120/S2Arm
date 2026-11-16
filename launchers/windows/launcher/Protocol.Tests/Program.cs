@@ -129,6 +129,7 @@ Check(report.Checks[1].Blocking, "reports without the field still block on anyth
 LibraryJobCases.Run(Check);
 LibraryFolderCases.Run(Check);
 MetalFolderCases.Run(Check);
+JsonOutCases.Run(Check);
 LauncherLanguageCases.Run(Check);
 SGradeVersionsCases.Run(Check);
 PackCases.Run(Check);
