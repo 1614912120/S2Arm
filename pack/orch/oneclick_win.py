@@ -593,8 +593,9 @@ def direct(run, cur, target, jobs, tid=None, name='direct'):
         finally:
             mine = run.out / dname / 'logs'; shutil.rmtree(mine, ignore_errors=True); mine.mkdir(parents=True)
             for f in (c / 'logs').glob('*.log'): shutil.copy2(f, mine / f.name)
-        dcache_lru(run, root, tid.upper())
     finally: lk.close()
+    # 淘汰放在放锁之后（11-16 极速出包定因：原先拿着同款锁淘汰，同款下一单白等 98 秒）：本款照旧列在「在用」里、整款不动，接手的同款单用的也是这一款
+    dcache_lru(run, root, tid.upper())
     return out
 
 
