@@ -273,26 +273,26 @@ struct LauncherView: View {
                 Button { installFor = nil; model.goToLibrary() } label: {
                     Label(loc.t("s2arm.nav.library"), systemImage: "square.grid.2x2")
                 }
-                .controllerButtonStyle(ConsoleIconButtonStyle()).help(loc.t("s2arm.nav.library"))
+                .controllerButtonStyle(ConsoleIconButtonStyle()).launcherTooltip(loc.t("s2arm.nav.library"), placement: .below)
                 .controllerID("top.library")
                 Button { model.showAddGames = true } label: {
                     Label(loc.t("s2arm.action.import"), systemImage: "plus")
                 }
                 .controllerButtonStyle(ConsoleIconButtonStyle()).disabled(model.busy)
-                .help(loc.t("s2arm.action.import")).controllerID("top.import")
+                .launcherTooltip(loc.t("s2arm.action.import"), placement: .below).controllerID("top.import")
                 Button { model.showEnvironment = true } label: {
                     Image(systemName: "gearshape").overlay(alignment: .topTrailing) {
                         Circle().fill(environmentColor).frame(width: 5, height: 5).offset(x: 5, y: -3)
                     }
                 }
                 .controllerButtonStyle(ConsoleIconButtonStyle())
-                .help(txt("nav.settings")).accessibilityLabel(txt("nav.settings")).controllerID("top.settings")
+                .launcherTooltip(txt("nav.settings"), placement: .below).accessibilityLabel(txt("nav.settings")).controllerID("top.settings")
                 // 故障报修（11-13）：任何页面同一位置（顶栏最右，Windows 同位），点开就是全局「上传给开发者」弹窗（不针对某款，
                 //   作业层自动附最近一次失败的错误摘要）；报错页的指引 ReportHint 指的就是它
                 Button { model.diagUploadFor = "" } label: {
                     Label(BackendText.launcherText("report.button", language: uiLanguage), systemImage: "exclamationmark.bubble")
                 }
-                .controllerButtonStyle(ConsoleIconButtonStyle()).help(txt("report.button"))
+                .controllerButtonStyle(ConsoleIconButtonStyle()).launcherTooltip(txt("report.button"), placement: .below)
                 .controllerID("top.report").accessibilityIdentifier("top.report")
         }
         .padding(.trailing, LauncherTheme.Metrics.libraryInset)
@@ -413,7 +413,7 @@ struct LauncherView: View {
                 Label(txt("update.top.available").replacingOccurrences(of: "{0}", with: model.availableUpdate?["version"] as? String ?? ""), systemImage: "arrow.down.circle")
             }
             .controllerButtonStyle(ConsoleIconButtonStyle())
-            .help(txt("update.top.available").replacingOccurrences(of: "{0}", with: model.availableUpdate?["version"] as? String ?? ""))
+            .launcherTooltip(txt("update.top.available").replacingOccurrences(of: "{0}", with: model.availableUpdate?["version"] as? String ?? ""), placement: .below)
             .controllerID("top.update")
         case .failed(let code):
             // 顶栏只留「重试」；失败原因（人话 + 错误码 + 打开下载页）放到底部的错误 toast，× 可关，不再挤在顶栏里跑版
@@ -466,7 +466,7 @@ struct LauncherView: View {
                 }
             }
         }
-        .controllerButtonStyle(ConsoleIconButtonStyle()).help(txt("messages.button"))
+        .controllerButtonStyle(ConsoleIconButtonStyle()).launcherTooltip(txt("messages.button"), placement: .below)
         .accessibilityLabel(txt("messages.button")).accessibilityValue("\(model.unreadMessages)").controllerID("top.messages")
         .popover(isPresented: $showMessages, arrowEdge: .bottom) { MessagesPanel(model: model, language: uiLanguage) }
     }
@@ -577,7 +577,7 @@ private struct ControllerToolbarButton: View {
             }
         }
         .controllerButtonStyle(ConsoleIconButtonStyle())
-        .help(controller.title(lang: lang) + "：" + toolbarStatus)   // #901：顶栏提示写实际连着的手柄名（两条通道合并看）
+        .launcherTooltip(controller.title(lang: lang) + "：" + toolbarStatus, placement: .below)   // #901：顶栏提示写实际连着的手柄名（两条通道合并看）
         .accessibilityLabel(controller.title(lang: lang) + "：" + toolbarStatus)
         .controllerID("top.controller")
         // 面板用 AppKit 的 NSPopover 自己开关，不用 SwiftUI .popover：实机上 .popover 会在背后重新呈现、套回打开时记下的高度，
