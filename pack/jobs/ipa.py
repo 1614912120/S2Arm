@@ -373,7 +373,7 @@ def _build(c):
     import sgrade   # iPhone 设置页的 S 级状态底料（版本对照 / 满屏来源 / 出包时选不打入；手机上没有补丁库，开关与自动关由手机本机算）
     sgrade.write_kit_state(c, gid, layout.ios_kit(c, gid))
     prune_unless_follow_up(c, gid)
-    cache_result = trim(c.work_root, current_gid=gid, **compiler_policy)
+    cache_result = trim(c.work_root, current_gid=gid, skip_scan_when_free=True, **compiler_policy)   # 盘不紧就不全量扫（一条都不会删）
     from cache_retention import engine_installed_at, prune_tool_keys
     prune_tool_keys(c.work_root, engine_installed_at(c.engine))   # 当前引擎用不到的工具缓存旧键（NativeAOT / libvpx / opus / dav1d）
     from cache_retention import trim_build_caches
@@ -383,9 +383,12 @@ def _build(c):
                      (cache_result['scanErrors'], cache_result['evictionErrors'], cache_result['diskErrors'],
                       cache_result['unscannedRoots'], cache_result['protectedLinks'], cache_result['changedEntries']),
                      code="compiler_cache_incomplete", severity="warning")
-    c.emit("message", "编库缓存保护最近 %d 款；已观察保留 %d 字节、淘汰 %d 条；盘余量 %s 字节，底线 %d 字节，仍低于底线：%s。逻辑字节不触发裁剪。" %  # 非玩家句
-           (cache_result['keepTitles'], cache_result['retainedBytes'], cache_result['removedEntries'],
-            cache_result['freeBytes'], cache_result['minFreeBytes'], cache_result['pressureRemaining']))
+    if not cache_result.get('scanned', True):
+        c.emit("message", "编库缓存：盘余量 %s 字节，不低于底线 %d 字节，不用清，没扫描。" % (cache_result['freeBytes'], cache_result['minFreeBytes']))  # 非玩家句
+    else:
+        c.emit("message", "编库缓存保护最近 %d 款；已观察保留 %d 字节、淘汰 %d 条；盘余量 %s 字节，底线 %d 字节，仍低于底线：%s。逻辑字节不触发裁剪。" %  # 非玩家句
+               (cache_result['keepTitles'], cache_result['retainedBytes'], cache_result['removedEntries'],
+                cache_result['freeBytes'], cache_result['minFreeBytes'], cache_result['pressureRemaining']))
     from library import _part_bytes
     image = layout.image_ios(c, gid)
     result = dict(compilerCache=cache_result, outputPath=str(image), ipa="", ipaBytes=0, packBytes=_part_bytes([image / layout.IOS_PACK]), buildId=res.get("build_id") or "", target=tgt, graphicsMode=res.get("graphics_mode") or "unknown",
