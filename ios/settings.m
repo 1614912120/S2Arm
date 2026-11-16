@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#include "s2a_docs.h"   // s2a_container_docs：容器文档根（Apple TV 在 Library/Caches/S2Arm）
 #import "settings.h"
 #import "cpatch_model.h"
 #import "s2a_l10n.h"
@@ -504,7 +505,7 @@ void s2a_ios_apply_diag_run(NSUserDefaults *defaults) {
     if (![defaults boolForKey:@"S2ADiagRunNext"]) return;
     [defaults setBool:NO forKey:@"S2ADiagRunNext"];
     const char *d = getenv("S2A_DOCS");
-    NSString *docs = d && *d ? @(d) : NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *docs = d && *d ? @(d) : ({ char _d[1024]; s2a_container_docs(_d, sizeof _d); @(_d); });
     NSString *dir = [docs stringByAppendingPathComponent:@"diagrun"];
     NSFileManager *fm = NSFileManager.defaultManager;
     [fm removeItemAtPath:dir error:nil];   // 上一次诊断局的图不混进来
@@ -566,7 +567,7 @@ void s2a_ios_load_graphics_settings(void) {
         NSDictionary<NSString *, NSString *> *player = getenv("S2A_PLAYER_USER") ? nil : s2a_ios_local_player(NSUserDefaults.standardUserDefaults);
         if (!getenv("S2A_SAVE_FOLDER")) {
             const char *d = getenv("S2A_DOCS");
-            NSString *docs = d && *d ? @(d) : NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+            NSString *docs = d && *d ? @(d) : ({ char _d[1024]; s2a_container_docs(_d, sizeof _d); @(_d); });
             setenv("S2A_SAVE_FOLDER", [docs stringByAppendingPathComponent:player ? player[@"folder"] : @"SaveData"].fileSystemRepresentation, 0);
         }
         if (player) {

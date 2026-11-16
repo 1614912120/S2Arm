@@ -1,4 +1,5 @@
 // 崩溃现场（旧库 crash.c 改后搬，只留信号处理本身）：出错地址、pc / lr 换成模块内偏移、寄存器、帧指针回溯、线程表。
+#include <errno.h>
 #include "native.h"
 #include "s2a_docs.h"   // 崩溃落点标记写在文档根（s2a_crash_install 时算好路径，信号里只 open / write）
 #include "../../platform/plat.h"
@@ -542,7 +543,7 @@ void s2a_crash_thread_init(void) {
     // 缺页处模拟读的只读别名槽（alias.c，每线程 16 KB）
     s2a_alias_thread_init();
     int e = plat_fault_altstack_init();
-    if (e) LOG("【红】崩溃：备用栈安装失败 errno=%d", e);
+    if (e && e != ENOTSUP) LOG("【红】崩溃：备用栈安装失败 errno=%d", e);   // ENOTSUP = tvOS 没有备用栈（platform/apple/plat_apple.c），不算故障
 }
 void s2a_crash_install(void) {
     s2a_docs_path(g_where_path, sizeof g_where_path, "crash_where");

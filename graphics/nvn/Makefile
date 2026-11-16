@@ -34,6 +34,8 @@ $(OUT)/gen/gal_tess_msl.h: $(ROOT)/graphics/metal/gal_tess_d3d.h $(ROOT)/graphic
 	python3 $(ROOT)/graphics/metal/tools/embed_msl.py $(ROOT)/graphics/metal/gal_tess_d3d.h k_nvn_tess_core $@
 IOS_SDK := $(shell DEVELOPER_DIR=$(DEVELOPER_DIR) xcrun --sdk iphoneos --show-sdk-path 2>/dev/null)
 IOS_FLAGS := -arch arm64 -isysroot $(IOS_SDK) -mios-version-min=$(IPHONEOS_DEPLOYMENT_TARGET)
+# glslang 的平台标识（Apple TV 由顶层 graphics/build.mk 从命令行换成 tvos-arm64）
+GLSLANG_RID ?= ios-arm64
 
 mac: $(OUT)/mac/libnvn.a
 ios: $(OUT)/ios/libnvn.a
@@ -83,7 +85,7 @@ $(OUT)/mac/libglx.a: $(GLX_DEP) $(SRCSTAMP)
 	  && libtool -static -o $@.$$$$ "$$d/gl_xlate.o" "$$L" 2> /dev/null && mv -f $@.$$$$ $@
 $(OUT)/ios/libglx.a: $(GLX_DEP) $(SRCSTAMP)
 	@mkdir -p $(OUT)/ios
-	L=$$(bash $(ROOT)/graphics/third_party/glslang/build.sh ios-arm64 | tail -1) && [ -s "$$L" ] && d=$$(mktemp -d $@.o.XXXXXX) && trap 'rm -rf "$$d" "$@.$$$$"' EXIT \
+	L=$$(bash $(ROOT)/graphics/third_party/glslang/build.sh $(GLSLANG_RID) | tail -1) && [ -s "$$L" ] && d=$$(mktemp -d $@.o.XXXXXX) && trap 'rm -rf "$$d" "$@.$$$$"' EXIT \
 	  && clang $(PFX) $(GLX_CF) -Os -g $(IOS_FLAGS) -I"$$(dirname "$$L")/include" -c $(ROOT)/graphics/nvn/gfx/gl/gl_xlate.c -o "$$d/gl_xlate.o" \
 	  && libtool -static -o $@.$$$$ "$$d/gl_xlate.o" "$$L" 2> /dev/null && mv -f $@.$$$$ $@
 
