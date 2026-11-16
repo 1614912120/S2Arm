@@ -1393,6 +1393,13 @@ extern "C" JNIEXPORT jint JNICALL
 Java_org_s2arm_android_NativeBridge_pollSaveAtomic(JNIEnv *, jclass) {
     return s2a_save_atomic_poll();
 }
+// 游玩时间落盘（共用 runtime/src/playtime.c，口径同 iOS app.m 的 10 秒心跳与进后台）：Java 侧游戏在前台时每 10 秒、
+//   onPause 与收局前各调一次；攒着不满 1 秒时内部空转。诊断目标不链 playtime.c，弱引用取不到就跳过。
+extern "C" int s2a_playtime_flush(void) __attribute__((weak));
+extern "C" JNIEXPORT void JNICALL
+Java_org_s2arm_android_NativeBridge_flushPlaytime(JNIEnv *, jclass) {
+    if (s2a_playtime_flush) s2a_playtime_flush();
+}
 // 直连安全网提示出口（dguard_android.c 弱引用，这里是强实现）：在游戏线程上被调，
 // 经 JNI 上叫 NativeBridge.dguardPrompt 弹阻塞对话框；玩家选「仍然启动」才返回
 // （同 iOS s2a_ios_dguard_prompt 的等待语义）。没有 JavaVM / 桥接类（探针、宿主测试）时

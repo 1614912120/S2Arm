@@ -79,6 +79,15 @@ public class MainActivity extends Activity
     private final android.os.Handler lifecycleProbe = new android.os.Handler(android.os.Looper.getMainLooper());
     private long lastLifecyclePresent;
     private final Runnable lifecycleSample = this::sampleLifecyclePresent;
+    // 游玩时间（共用 runtime/src/playtime.c）：游戏在前台时每 10 秒落一次盘（同 iOS app.m 的 10 秒心跳），闪退 / 被杀最多丢这 10 秒；
+    //   onPause 与收局前另各落一次。计时本身在原生上屏出口里，这里只管什么时候写文件
+    private final Runnable playtimeTick = new Runnable() {
+        @Override public void run() {
+            if (!resumed || !gameMode || !runtimeLoaded || gameStopping) return;
+            if (host != 0) NativeBridge.flushPlaytime();
+            lifecycleProbe.postDelayed(this, 10000);
+        }
+    };
     // B3（debug.s2a.buffer_geometry）：交换链缓冲按渲染目标尺寸出图时，native 把
     // 缓冲尺寸报上来；这里按它把 surface 的 frame 布成同比例居中矩形，
     // 合成器的 SCALE_TO_WINDOW 拉伸才不变形（native_window 没有 SCALE_FIT）。
@@ -632,6 +641,9 @@ public class MainActivity extends Activity
         if (surface != null) surface.setKeepScreenOn(false);
         maybeExportShaderCache("session");
         if (gameSession != null) gameSession.stop();
+        lifecycleProbe.removeCallbacks(playtimeTick);
+        // 游玩时间收局前落盘：原生收尾以 _exit 结束进程；收局路径 lifecycle.c 按 dlsym(RTLD_DEFAULT) 找它，安卓单库里不靠它（见坑记录同名一节）
+        if (host != 0) NativeBridge.flushPlaytime();
         // 先让原生收尾在 Surface 仍然有效时开始：Activity 一 finish，BufferQueue 就撤销，
         // GPU/present fence 的排空会和 surfaceDestroyed 抢同一份资源（真机上表现为收尾超时或崩溃）。
         // 进程最终由原生 _exit 结束；这里的延迟 finish 只是「原生没能结束进程」时的兜底。
@@ -687,6 +699,7 @@ public class MainActivity extends Activity
         if (powerState != null) powerState.start();
         tryStartGame();
         if (gameMode) lifecycleProbe.postDelayed(geometrySample, 500);   // B3 输出尺寸轮询（开关关时全部回落 MATCH_PARENT）
+        if (gameMode) { lifecycleProbe.removeCallbacks(playtimeTick); lifecycleProbe.postDelayed(playtimeTick, 10000); }
         if (gameMode && host != 0 && !gameStopping && getIntent().getBooleanExtra(GameActivity.LIFECYCLE_TEST_EXTRA, false)
                 && (getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
             lastLifecyclePresent = NativeBridge.gamePresentCount();
@@ -737,12 +750,14 @@ public class MainActivity extends Activity
         if (dguardNotice != null) dguardNotice.pause();
         lifecycleProbe.removeCallbacks(lifecycleSample);
         lifecycleProbe.removeCallbacks(geometrySample);
+        lifecycleProbe.removeCallbacks(playtimeTick);
         if (runtimeLoaded) {
             clearInput();
             hostKeyboard.pause();
             frameRate.setResumed(false);
             // Rendering stops; the surface stays with the render thread until surfaceDestroyed.
             if (host != 0) NativeBridge.setForeground(host, false);
+            if (gameMode && host != 0) NativeBridge.flushPlaytime();   // 进后台落盘：之后失焦不再计时（同 iOS 进后台）
         }
         if (powerSampler != null) powerSampler.stop();
         if (systemTuning != null) systemTuning.stop();

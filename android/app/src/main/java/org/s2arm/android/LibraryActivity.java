@@ -469,6 +469,7 @@ public final class LibraryActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         fpsOverlay.setChecked(getSharedPreferences("display", MODE_PRIVATE).getBoolean("fps", false));
+        if (shelf != null) shelf.refreshPlaytime();   // 刚玩完回来：重读游玩时间
         if (library != null) {
             boolean receive = getIntent().hasExtra(EXTRA_IMPORT_RECEIVE);
             getIntent().removeExtra(EXTRA_IMPORT_RECEIVE);
