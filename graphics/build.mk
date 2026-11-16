@@ -23,6 +23,11 @@ $(NVN_A): FORCE
 # GL 层运行时兜底的 GLSL 翻译 + glslang（graphics/nvn/Makefile libglx：库里没有的 GLSL 首遇现编；SPIRV-Cross 用 libdsx 那份）
 GLX_A := build/nvn/mac/libglx.a
 HOST_LIBS += $(GLX_A)
+# 插桩版（S2A_PGO_GEN=1，tools/pgo_record.sh 录剖析数据用）：libnvn 带计数器，链接时要带上剖析运行时。
+#   不写 -fprofile-instr-generate：宿主是「编 HOST_SRCS + 链接」一条命令，写了原生层源码也一起插桩，剖析数据里混进原生层用不上的函数
+ifeq ($(S2A_PGO_GEN),1)
+HOST_LIBS += -Wl,-u,___llvm_profile_runtime $(shell DEVELOPER_DIR=$(DEVELOPER_DIR) xcrun clang -print-file-name=libclang_rt.profile_osx.a)
+endif
 $(BUILD)/s2arm-host: $(GLX_A)
 $(GLX_A): FORCE
 	$(MAKE) -C graphics/nvn glx-mac
