@@ -727,7 +727,7 @@ def push_cheats(c, device, bid, gid, docs):
     拷不进只记黄、不挡装机"""
     import cheats
     d = cheats.cheats_dir(c, gid.upper(), create=False)
-    files = [f for f in sorted(d.glob("*.txt")) if f.name not in cheats.SKIP] if d.is_dir() else []
+    files = [f for f in layout.entries(d, "*.txt") if f.name not in cheats.SKIP]   # ._<名>.txt（exFAT 附属文件）不推进手机金手指目录
     bad = 0
     for f in files:
         r = subprocess.run(["xcrun", "devicectl", "device", "copy", "to", "--device", device, "--domain-type", "appDataContainer",
@@ -744,7 +744,7 @@ def push_mods(c, ph, gid, had):
     推不进只记黄、不挡装机。→ 这次推完后机上的 {名字: 记号}（推失败的那份按没推算，下次再推）"""
     import mods
     home = mods.mods_dir(c, gid, create=False)
-    local = {d.name: mods.fingerprint(d) for d in sorted(home.iterdir()) if d.is_dir() and not d.name.startswith(".")} if home.is_dir() else {}
+    local = {d.name: mods.fingerprint(d) for d in layout.entries(home) if d.is_dir() and not d.name.startswith(".")}
     if not local and not had:
         return {}
     now, base = dict(had), f"{game_docs(gid)}/{mods.DIR}"
@@ -759,7 +759,7 @@ def push_mods(c, ph, gid, had):
             for n, fp in local.items():
                 if had.get(n) == fp:
                     continue
-                files = [f for f in sorted((home / n).rglob("*")) if f.is_file() and not f.is_symlink()]
+                files = [f for f in layout.entries(home / n, recursive=True) if f.is_file() and not f.is_symlink()]   # ._<名> 不推进 romfs 叠加层
                 c.emit("message", f"正在把 mod「{n}」推进 iPhone（{len(files)} 个文件）")
                 for f in files:
                     cl.put(str(f), f"{base}/{n}/{f.relative_to(home / n).as_posix()}")
@@ -1085,7 +1085,7 @@ def _full_imgs(folder):
     不当这款的完整文件给出去、也不随「推到手机」推（推过去手机上还没本体就认领不了）"""
     if not folder.is_dir():
         return []
-    return [p for p in sorted(folder.glob("*.img")) if p.is_file() and int.from_bytes(_img_head(p)[1][8:12], "little") != 2]
+    return [p for p in layout.entries(folder, "*.img") if p.is_file() and int.from_bytes(_img_head(p)[1][8:12], "little") != 2]   # 导出文件夹在 exFAT 上：._<名>.img 不是游戏文件
 
 
 def _devpush_exe(c):

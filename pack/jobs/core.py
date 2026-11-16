@@ -1626,7 +1626,8 @@ def status(private):
             newest = (stamp, path.name)
         if oldest is None or stamp < oldest[0]:
             oldest = (stamp, path.name)
-    for record_path in (p for d in dirs for p in d.glob("*.json")):
+    import layout
+    for record_path in (p for d in dirs for p in layout.entries(d, "*.json")):   # ._<任务>.json（数据目录在 exFAT 上搬过）不是坏记录（#1010）
         if record_path.name.endswith(".request.json") or record_path.is_symlink():
             continue
         record, reason = _scan_job_record(record_path)
