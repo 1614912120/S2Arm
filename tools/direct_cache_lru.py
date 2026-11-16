@@ -11,7 +11,7 @@ import argparse, os, sys
 def scan(root):
     """→ (合计字节, [(修改时间, 字节, 路径, 程序号)] 仓条目)。
     逐层 os.scandir、取目录项自带的 stat（11-16 极速出包定因：原先 os.walk + 逐个 os.lstat，Windows 上每个文件一次真系统调用，
-    天眼共用缓存八十多万个文件每单 87–300 秒；目录项在 Windows 上枚举时就带大小与修改时间，POSIX 上等于一次 lstat）。
+    Windows 出包机共用缓存八十多万个文件每单 87–300 秒；目录项在 Windows 上枚举时就带大小与修改时间，POSIX 上等于一次 lstat）。
     口径与原先相同：指向目录的链接不进、也不计；其余（文件、指向文件的链接）按 lstat 计"""
     total, ents = 0, []
     for tid in sorted(os.listdir(root)):
