@@ -96,6 +96,11 @@
     <string name="library_position">第 %1$d 个，共 %2$d</string>
     <string name="library_empty">还没有游戏</string>
     <string name="library_empty_hint">用电脑上的 S2Arm 安装游戏。</string>
+    <string name="library_playtime_minutes">玩了 {0} 分钟</string>
+    <string name="library_playtime_hours">玩了 {0} 小时</string>
+    <string name="library_playtime_today">今天</string>
+    <string name="library_playtime_yesterday">昨天</string>
+    <string name="library_playtime_days_ago">{0} 天前</string>
     <string name="mods_title">Mod（资源替换）</string>
     <string name="mods_for_game">当前游戏：%1$s</string>
     <string name="mods_no_game">先安装游戏：mod 按游戏存放。</string>

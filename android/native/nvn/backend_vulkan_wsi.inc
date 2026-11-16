@@ -544,6 +544,10 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
         wsi_timing_poll(&s->timing, g.d, s->swapchain);
         tnow = now_ns();
         wsi_timing_report(&s->timing, tnow);
+        // 每上屏一帧调一次共用 ap_host 的上屏出口（游玩时间、直连安全网帧证据、停帧看门、HUD 与帧计数；同 iOS dm_guest_frame_tick、
+        //   旧层 mtl_vk_shim.c mtl_present 的口径）。新旧两层不会编进同一个包（LinkSources.cmake 两张清单互斥），一帧只调一次；
+        //   ap_host.c 只在游戏目标里，独立直连探针 / vk 宿主用例没链就跳过
+        { extern void s2a_frame_presented(void) __attribute__((weak)); if (s2a_frame_presented) s2a_frame_presented(); }
         shown.status = NVN_GPU_SHOWN_UNKNOWN;   // 交给了呈现引擎，但没有实际上屏时刻（没有 CAP_SHOWN_TIME）
         if ((r == VK_SUBOPTIMAL_KHR && wsi_suboptimal_stale(s)) || s->outdated == 2) s->outdated = 1;
     } else if (r == VK_ERROR_OUT_OF_DATE_KHR) { s->outdated = 1; out = fail(err, NVN_GPU_E_OUTDATED, "呈现时交换链已过期"); }
