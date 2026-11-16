@@ -32,6 +32,11 @@ for name, path, text, want in [
 ]: ck(name, P.classify(path, text)[0], want)
 ck('⑪ 画面合集仓库里只写版本号的 → gfx（按仓库）', P.classify('Yoshi/1.0.1.pchtxt', '# Yoshi [01006000040C2800]', 'cucholix/NX-IPS-romfs-compilation')[0], 'gfx')
 ck('⑪b 同样的文件在别的仓库 → other', P.classify('Yoshi/1.0.1.pchtxt', '# Yoshi [01006000040C2800]', 'someone/other-repo')[0], 'other')
+# ⑬ 金手指文件认法（11-16 加 tomvita 库）：cheats/<构建号>.txt 与多一层目录 cheats/<程序号或游戏名>/<构建号>.txt 都认，构建号大小写不论；别的文件名不认
+for name, path, want in [('⑬a 直接放', 'x/cheats/044BED84A37A2F63.txt', '044BED84A37A2F63'), ('⑬b 多一层程序号', 'cheats/0100000000010000/3ca12dfaaf9c82da.txt', '3ca12dfaaf9c82da'),
+                         ('⑬c 多一层游戏名', 'cheats/Vampire Survivors/0123456789ABCDEF.txt', '0123456789ABCDEF'), ('⑬d toggles.txt 不认', 'cheats/0100000000010000/toggles.txt', None),
+                         ('⑬e 多两层不认', 'cheats/a/b/0123456789ABCDEF.txt', None)]:
+    m = P.CHEAT.search(path); ck(name, m.group(1) if m else None, want)
 ck('⑥ own_name 取 exefs 往上两级', P.own_name('a/b/c/[mod]/exefs/x.pchtxt'), 'c/[mod]/exefs/x.pchtxt')
 # ⑫ 画面类方向（gfx_dir，11-16 维护者：iOS 只收降负载；判据 cmdr 判据表：比底座档默认少干活 = load、多干活 = quality、判不出 / 中性 = ''）
 D = lambda name, text='': P.gfx_dir(f'Repo/Game [0100000000010000][mods].zip/[{name} v1.3.0]/exefs/1.3.0.pchtxt', text)

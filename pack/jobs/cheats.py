@@ -90,6 +90,7 @@ def parse(text):
 
 
 SHORT = {"bad1dea/NXCheats": "nxcheats", "HamletDuFromage/switch-cheats-db": "cheatsdb", "ChanseyIsTheBest/NX-60FPS-RES-GFX-Cheats": "gfx",
+         "tomvita/MyNXCheats": "tomvita", "WerWolv/EdiZon_CheatsConfigsAndScripts": "edizon",   # 11-16 加（社区补丁候选第一轮）：补丁库只取它们的 cheats/<构建号>.txt
          "s2arm/player-cheats": "player"}   # 玩家分享：<构建号>.player.txt，iPhone 金手指面板按文件名认「玩家分享、未验证」（ios/vpad_cheats.m）   # 文件名里的库简名（同 11-12 起的文件名，玩家已开的开关键不变）
 
 
