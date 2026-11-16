@@ -334,9 +334,12 @@
 "gfx.antiAliasing.high" = "SMAA 高";
 "gfx.antiAliasing.medium" = "SMAA 中";
 "gfx.antiAliasing.off" = "關閉";
-"gfx.filter" = "縮放濾鏡";
-"gfx.filter.bilinear" = "雙線性（平滑）";
-"gfx.filter.nearest" = "最近鄰（像素清晰）";
+"gfx.filter" = "畫質提升";
+"gfx.filter.bilinear" = "標準";
+"gfx.filter.metalfx" = "銳利放大（MetalFX）";
+"gfx.filter.metalfx.noDirect" = "這款遊戲沒有走直連渲染，用不了銳利放大（MetalFX）。";
+"gfx.filter.metalfx.note" = "銳利放大（MetalFX）每一幀會多花一點顯示卡時間，幀率和耗電會略受影響。";
+"gfx.filter.nearest" = "2D 遊戲專用";
 "gfx.fpsLimit" = "幀率上限";
 "gfx.fpsLimit.none" = "不限";
 "gfx.resolution" = "渲染解析度";

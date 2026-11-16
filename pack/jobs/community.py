@@ -86,8 +86,8 @@ def launch_path(c, gid, create=True):
 def _from_community(old):
     """旧 community.json → launch.json：只带玩家明确选过的（schema 2 存盘总带 fps60=真，不算玩家选的）"""
     settings = {}
-    if isinstance(old.get("metalfx"), bool):
-        settings["enhance"] = old["metalfx"]
+    if old.get("metalfx") is True:   # 旧「MetalFX」开关 = 画质提升选锐利放大（11-15）；关 = 缺省标准，不记
+        settings["quality"] = "MetalFX"
     # 满屏（11-13 并入「宽屏强制启用」，明确开 = 没验证过也铺满）：旧文件的 widescreen=真是旧面板存盘带的缺省（同 fps60），只带关；
     #   widenForce=真才是玩家明确要铺满
     if old.get("widescreen") is False:
@@ -121,6 +121,10 @@ def load_launch(c, gid):
     data = data if isinstance(data, dict) else {}
     settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
     patches = data.get("patches") if isinstance(data.get("patches"), dict) else {}
+    # 「画面增强模式」开关（enhance）11-15 并进「画质提升」三档：开 = 锐利放大（MetalFX），关 = 缺省标准。读时换成新键，下次存盘旧键就没了
+    if settings.get("enhance") is True and "quality" not in settings:
+        settings["quality"] = "MetalFX"
+    settings.pop("enhance", None)
     return dict(schema=1, settings=settings, patches={str(k): bool(v) for k, v in patches.items()})
 
 
@@ -191,7 +195,7 @@ def fps60_default(rows):
 
 
 NO_FPS60 = "这款游戏没有可用的 60 帧方案。"
-NO_DIRECT = "这款游戏没有走直连渲染，用不了 MetalFX 放大。"
+NO_DIRECT = "这款游戏没有走直连渲染，用不了锐利放大（MetalFX）。"
 NO_WIDEN = "本款满屏有已知问题，暂不可开。"
 
 
@@ -214,7 +218,7 @@ def mac_settings(c, gid):
     picked = chosen(c, gid, table)
     # 满屏改不动只认强信号（tools/caps_policy.py 原因写「强信号：…」）；「发布缺省关」只是没验证过，玩家可以明确开（同 iPhone settings.m s2a_ios_fullscreen_state）
     strong = caps.get("widen") == "0" and "强信号" in rows.get("widen", ("", ""))[1]  # 非玩家句
-    need = {"fps60": ("fps60" in caps, NO_FPS60), "enhance": (caps.get("direct") == "1", NO_DIRECT), "widescreen": (not strong, NO_WIDEN)}
+    need = {"fps60": ("fps60" in caps, NO_FPS60), "widescreen": (not strong, NO_WIDEN)}
     out = {}
     for key, item in table.items():
         if "mac" not in item.get("platforms", []) or item["type"] not in ("bool", "choice"):
@@ -228,6 +232,10 @@ def mac_settings(c, gid):
         out[key] = dict(available=ok, value=value if ok else _default(item, caps, rows=rows), reason="" if ok else why)
         if key == "language":
             out[key].update(language_state(c, gid, item, out[key]["value"]))
+    # 画质提升：标准 / 2D 游戏专用哪款都能用；锐利放大（MetalFX）要走直连。清单明说没走直连的，锐利放大置灰（blocked）、写一句为什么（这一行照样能选另两档）
+    if caps and caps.get("direct") != "1" and "quality" in out:
+        out["quality"]["blocked"] = ["MetalFX"]
+        out["quality"]["reason"] = NO_DIRECT
     # 只用社区补丁（11-13 维护者撤掉我方 60 帧与通用满屏，tools/caps_policy.py patch_only）：没有帧率补丁的款不出「60 帧」，没有宽屏补丁的款不出「满屏」
     #   （读到了能力清单才判：还没出 Mac 版时照旧都列、先存偏好）
     if caps:
@@ -584,8 +592,9 @@ def launch_env(c, gid):
         env["S2A_CPATCH_ON"] = ",".join(on) or "none"
         if any(k.startswith(("widescreen:", "wsauto:")) for k in on):
             env["S2A_WIDESCREEN"] = "0"   # 开着社区宽屏 / 画幅补丁：游戏自己画宽画面，S2Arm 的满屏（图形层加宽渲染目标）让开，不拉宽两次；关掉补丁恢复
-    if s.get("enhance") is True and caps.get("direct") == "1":
-        env["S2A_SCALING_FILTER"] = "MetalFX"   # 画面增强模式 = 直连上屏 MetalFX 空间放大（graphics/nvn/gfx/nvn/nvn_present_fx.inc）
+    # 画质提升（11-15，同 iPhone S2AScalingFilter）：2D 游戏专用 = 最近邻；锐利放大 = 直连上屏 MetalFX 空间放大（graphics/nvn/gfx/nvn/nvn_present_fx.inc），没走直连不设
+    if s.get("quality") == "Nearest" or (s.get("quality") == "MetalFX" and caps.get("direct") == "1"):
+        env["S2A_SCALING_FILTER"] = s["quality"]
     if "docked" in s:
         env["S2A_DOCKED"] = "1" if s["docked"] == "docked" else "0"
     if s.get("language", "system") != "system":

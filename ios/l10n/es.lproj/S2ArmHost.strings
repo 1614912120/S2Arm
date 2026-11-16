@@ -358,9 +358,12 @@
 "gfx.antiAliasing.high" = "SMAA Alto";
 "gfx.antiAliasing.medium" = "SMAA Medio";
 "gfx.antiAliasing.off" = "Desactivado";
-"gfx.filter" = "Filtro de escalado";
-"gfx.filter.bilinear" = "Bilineal (suavizado)";
-"gfx.filter.nearest" = "Vecino más cercano (píxeles nítidos)";
+"gfx.filter" = "Calidad de imagen";
+"gfx.filter.bilinear" = "Estándar";
+"gfx.filter.metalfx" = "Escalado nítido (MetalFX)";
+"gfx.filter.metalfx.noDirect" = "Este juego no usa renderizado directo, así que el escalado nítido (MetalFX) no está disponible.";
+"gfx.filter.metalfx.note" = "El escalado nítido (MetalFX) añade un poco de trabajo de GPU en cada fotograma, por lo que la tasa de fotogramas y el consumo de batería pueden verse ligeramente afectados.";
+"gfx.filter.nearest" = "Para juegos 2D";
 "gfx.fpsLimit" = "Límite de velocidad de fotogramas";
 "gfx.fpsLimit.none" = "Sin límite";
 "gfx.resolution" = "Resolución de renderizado";
