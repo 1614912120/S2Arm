@@ -818,9 +818,11 @@ def pull_kept_nros(c, ident, bid, gid, docs="Documents"):
     拉回游戏库 games/<号>/nro_kept/，下次准备这款时改写进包（#8be819）。机上没有 / 列不出 / 拉不到都不算错；只收文件名 = 内容 SHA-256 的。→ 新收的个数
     Mac：devicectl 列 / 拉；Windows 走 s2a-devpush（WinPhone.pull_kept），收文件这段共用 keep_nros"""
     from diag import devicectl
-    rc, data, _ = devicectl(c, "device", "info", "files", "--device", ident, "--domain-type", "appDataContainer", "--domain-identifier", bid,
+    rc, data, err = devicectl(c, "device", "info", "files", "--device", ident, "--domain-type", "appDataContainer", "--domain-identifier", bid,
                             "--subdirectory", f"{docs}/wire/{gid.upper()}/nro", timeout=120)
     if rc:
+        if not dir_missing(err):   # 目录不在 = 这款没留下 NRO（常态）；别的列不出要看得见，不然真问题被吞成「收 0 个」
+            note(c, f"收回 {gid} 留下的 NRO：列不出手机上的目录（{(err or '').strip().splitlines()[-1:] or rc}），这次没收")  # 非玩家句
         return 0
     names = {p.rsplit("/", 1)[-1] for p in (f.get("relativePath") or f.get("path") for f in ((data.get("result") or {}).get("files") or [])
                                             if isinstance(f, dict) and not (f.get("resources") or {}).get("isDirectory")) if p}
@@ -844,7 +846,11 @@ def keep_nros(c, gid, names, fetch):
             continue
         with tempfile.TemporaryDirectory(dir=c.private) as d:
             got = Path(d, "n")
-            if not fetch(name, str(got)) or not got.is_file() or hashlib.sha256(got.read_bytes()).hexdigest() != name[:64]:
+            if not fetch(name, str(got)) or not got.is_file():
+                note(c, f"收回 {gid} 留下的 NRO {name}：拉不回来，这次没收")  # 非玩家句
+                continue
+            if hashlib.sha256(got.read_bytes()).hexdigest() != name[:64]:
+                note(c, f"收回 {gid} 留下的 NRO {name}：内容摘要与文件名不符，丢掉")  # 非玩家句
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(got, dest); new += 1
@@ -1876,14 +1882,20 @@ class WinPhone:
         with tempfile.TemporaryDirectory(dir=self.c.private) as work:
             try:
                 dp = self.client(work)
-            except (Failure, OSError, ImportError):   # 装机前也调（put_game）：收不到绝不挡装机，工具缺 / 起不来都按 0
+            except (Failure, OSError, ImportError) as e:   # 装机前也调（put_game）：收不到绝不挡装机，但要看得见（工具缺 / 起不来不能静默当「没留下」）
+                note(self.c, f"收回留下的 NRO：s2a-devpush 起不来（{e}），这次没收")  # 非玩家句
                 return 0
             for g in games:
                 rel = f"{game_docs(g)}/wire/{g.upper()}/nro"
                 try:
-                    n += keep_nros(self.c, g, dp.ls(rel) or [], lambda name, dst, rel=rel: dp.get(f"{rel}/{name}", dst))
+                    rc, out = dp.call("ls", rel)
+                    if rc:
+                        if not dir_missing(out):   # 目录不在 = 这款没留下（常态）；锁屏 / 断开等列不出的记一行
+                            note(self.c, f"收回 {g} 留下的 NRO：列不出手机上的目录（{out.splitlines()[-1:] or rc}），这次没收")  # 非玩家句
+                        continue
+                    n += keep_nros(self.c, g, out.splitlines(), lambda name, dst, rel=rel: dp.get(f"{rel}/{name}", dst))
                 except OSError as e:
-                    print(f"[s2a] 收回 {g} 留下的 NRO 失败：{e}", file=sys.stderr)
+                    note(self.c, f"收回 {g} 留下的 NRO 失败：{e}")  # 非玩家句
         return n
 
     def app_running(self):   # 查不了进程（Windows 没有 devicectl）：调用方改用 playing（游玩时间心跳）

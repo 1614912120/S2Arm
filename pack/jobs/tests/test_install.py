@@ -931,13 +931,15 @@ class KeptNroTests(unittest.TestCase):
         files = {f"{sg}.nro": good, f"{bad}.nro": b"content differs from its name", "notes.txt": b"x"}
         got = []
         class Dp:
-            def ls(_, r):
-                self.assertEqual(r, rel); return [".", "..", *files]
+            def call(_, op, r):
+                self.assertEqual((op, r), ("ls", rel)); return 0, "\n".join([".", "..", *files])
             def get(_, r, dst):
                 got.append(r); Path(dst).write_bytes(files[r.rsplit("/", 1)[-1]]); return True
         ph = object.__new__(install.WinPhone); ph.c, ph.bid = self.c, "s2arm.z"
         ph.client = lambda work: Dp()
         msgs = self._msgs()
+        noted = []
+        um.patch.object(install, "note", lambda c, text: noted.append(text)).start(); self.addCleanup(um.patch.stopall)
         self.assertEqual(ph.pull_kept([self.G]), 1)
         self.assertEqual(ph.pull_kept([self.G]), 0)   # 已收：不重复
         kept = self.c.library / f"games/{self.G}/nro_kept"
@@ -945,16 +947,22 @@ class KeptNroTests(unittest.TestCase):
         self.assertEqual((kept / f"{sg}.nro").read_bytes(), good)
         self.assertEqual(got, [f"{rel}/{bad}.nro", f"{rel}/{sg}.nro", f"{rel}/{bad}.nro"])
         self.assertEqual(len(msgs), 1)
-        class Empty:
-            def ls(_, r): return None
-        ph.client = lambda work: Empty()
-        self.assertEqual(ph.pull_kept([self.G]), 0)
+        # 名不符那个两次都拉回、核摘要丢掉：各记一行（看得见，不静默）
+        self.assertEqual(len(noted), 2); self.assertTrue(all("摘要" in t for t in noted))
+        # 失败都按 0、不挡装机，但除「目录不在」（这款没留下，常态）外都记一行
+        for ls_out, logged in (((1, "S2A_AFC_ERR 8 ObjectNotFound"), False), ((1, "device socket io failed"), True)):
+            noted.clear()
+            class Fail:
+                def call(_, op, r, out=ls_out): return out
+            ph.client = lambda work: Fail()
+            self.assertEqual(ph.pull_kept([self.G]), 0)
+            self.assertEqual(bool(noted), logged, ls_out)
         def down(work): raise install.Failure("找不到 s2a-devpush", code="tool_missing")
-        ph.client = down
-        self.assertEqual(ph.pull_kept([self.G]), 0)
         def broken(work): raise ModuleNotFoundError("No module named 'push_pack'")   # 装机前也调：工具起不来不挡装机
-        ph.client = broken
-        self.assertEqual(ph.pull_kept([self.G]), 0)
+        for bad_client in (down, broken):
+            noted.clear(); ph.client = bad_client
+            self.assertEqual(ph.pull_kept([self.G]), 0)
+            self.assertEqual(len(noted), 1); self.assertIn("起不来", noted[0])
         ph.bid = None
         self.assertEqual(ph.pull_kept([self.G]), 0)
 
