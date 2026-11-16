@@ -15566,7 +15566,13 @@ void nvn_be_read_texels(const tex_t *t, unsigned level, unsigned layer0, const N
     id<MTLTexture> mt = tex_mtl(t);
     { uint32_t upf; int ubpp; if (fmt_unpack(t->d.format, &upf, &ubpp)) { RED_ONCE(116, "ReadTexels of GPU-made texture ser=%llu (format %#x) returns zeros: the host stores it in another format (BC decompressed / expanded, fmt_unpack)", t->serial, t->d.format); mt = nil; } }
     if (!mt) { memset(dst, 0, img * nz); return; }
-    mtl_finish_gpu();
+    // CPU 读 GPU 写过的贴图前等整条 GPU 队列排空（不只等写这张图的那份）：游戏每帧读一次（例：一款开放世界游戏的雾图）就每帧把 CPU / GPU 串一次。
+    //   先只计数，量「每局读几次、每次等多久」再决定要不要改成只等必要的：第 1、10、100 次及之后每 1000 次打一行（只读计数，不改行为）
+    { static _Atomic uint64_t n, ns, mx; uint64_t t0 = stl_now(); mtl_finish_gpu(); uint64_t d = stl_now() - t0;
+      uint64_t k = atomic_fetch_add(&n, 1) + 1, tot = atomic_fetch_add(&ns, d) + d, m = atomic_load(&mx); while (d > m && !atomic_compare_exchange_weak(&mx, &m, d)) {}
+      if (k == 1 || k == 10 || k == 100 || k % 1000 == 0)
+          MLOG("ReadTexels of a GPU-written texture waited for the whole GPU queue: %llu reads so far, %.1f ms waited in all, longest %.2f ms (this one %.2f ms, %ux%u)",
+               (unsigned long long)k, tot / 1e6, (d > m ? d : m) / 1e6, d / 1e6, (unsigned)r->width, (unsigned)r->height); }
     if (!is3d && bw == 1 && bh == 1 && rs_state(mt) == RS_SCALED) {   // S2Arm internal resolution: read the storage rectangle, then take each game texel's nearest storage texel on the CPU
         double sc = g_rs; long sx = r->xoffset, sy = r->yoffset, sw = r->width, sh = r->height; rs_rect(sc, &sx, &sy, &sw, &sh);   // (this runs on the caller's thread: no copy draw)
         long lw = (long)MAX(mt.width >> level, 1u), lh = (long)MAX(mt.height >> level, 1u);
