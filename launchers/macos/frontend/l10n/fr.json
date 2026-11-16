@@ -1855,5 +1855,7 @@
   "s2arm.controller.gameController": "Manette de jeu",
   "s2arm.controller.bluetooth": "Bluetooth",
   "s2arm.controller.toolbar": "Manette",
-  "s2arm.punct.list": ", "
+  "s2arm.punct.list": ", ",
+  "home.card.daysLeft": "Encore %d jours",
+  "home.card.expired": "Expiré"
 }

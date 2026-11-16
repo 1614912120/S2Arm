@@ -1889,5 +1889,7 @@
   "s2arm.install.teamGuide.step1": "打开引导项目，选择 S2ArmSigning → Signing & Capabilities → Personal Team",
   "s2arm.install.teamGuide.step2": "连接并解锁 iPhone，在 Xcode 顶部选择设备后点击运行",
   "s2arm.install.teamGuide.step3": "运行成功后返回，点击「重新检查」更新签名状态",
-  "s2arm.install.teamGuide.failed": "未能打开引导项目：{0}"
+  "s2arm.install.teamGuide.failed": "未能打开引导项目：{0}",
+  "home.card.daysLeft": "还剩 %d 天",
+  "home.card.expired": "签名已过期"
 }

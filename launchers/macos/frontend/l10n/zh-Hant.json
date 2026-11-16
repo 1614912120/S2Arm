@@ -1858,5 +1858,7 @@
   "s2arm.controller.gameController": "遊戲手把",
   "s2arm.controller.bluetooth": "藍牙",
   "s2arm.controller.toolbar": "手把",
-  "s2arm.punct.list": "、"
+  "s2arm.punct.list": "、",
+  "home.card.daysLeft": "還剩 %d 天",
+  "home.card.expired": "簽名已過期"
 }

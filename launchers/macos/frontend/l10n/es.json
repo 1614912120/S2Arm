@@ -1855,5 +1855,7 @@
   "s2arm.controller.gameController": "Mando de juego",
   "s2arm.controller.bluetooth": "Bluetooth",
   "s2arm.controller.toolbar": "Mando",
-  "s2arm.punct.list": ", "
+  "s2arm.punct.list": ", ",
+  "home.card.daysLeft": "Quedan %d días",
+  "home.card.expired": "Caducado"
 }

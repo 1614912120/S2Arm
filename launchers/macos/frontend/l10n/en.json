@@ -1888,5 +1888,7 @@
   "s2arm.install.teamGuide.step1": "Open the helper project and select S2ArmSigning → Signing & Capabilities → Personal Team",
   "s2arm.install.teamGuide.step2": "Connect and unlock your iPhone, select it in Xcode and click Run",
   "s2arm.install.teamGuide.step3": "After it runs, return and click Check again to refresh the signing status",
-  "s2arm.install.teamGuide.failed": "Could not open the helper project: {0}"
+  "s2arm.install.teamGuide.failed": "Could not open the helper project: {0}",
+  "home.card.daysLeft": "%d days left",
+  "home.card.expired": "Expired"
 }
