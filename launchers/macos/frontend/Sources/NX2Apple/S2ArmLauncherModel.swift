@@ -412,6 +412,11 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
     }
 
+    /// 「自动更新 iPhone 上的 S2Arm」开关（缺省开；存的是「关」，玩家没碰过就是开）：启动器升级后手机连上、没在玩就自动换新版 App
+    static let autoUpdatePhoneOffKey = "S2AAutoUpdatePhoneOff"
+    static func autoUpdatePhoneOn(_ defaults: UserDefaults = .standard) -> Bool { !defaults.bool(forKey: autoUpdatePhoneOffKey) }
+    static func setAutoUpdatePhone(_ on: Bool, _ defaults: UserDefaults = .standard) { defaults.set(!on, forKey: autoUpdatePhoneOffKey) }
+
     /// 手机插着、启动器开着时（#8be819）：每 2 分钟把手机上宿主留下的代码模块（游戏运行中才取到的 NRO）拉回游戏库（phoneKeptPull 作业），
     ///   有还没补进 iPhone 件的就自动发起「更新 iPhone」：只改程序、只推程序部分，玩家不用判断要重出什么。同一批只自动发起一次，
     ///   没成（要确认 / 失败）就留给游戏库右上角的「更新 iPhone」按钮（phoneUpdates 列着这台）。有局 / 任务在跑、装法是导出时不发起
@@ -432,9 +437,12 @@ public final class S2ArmLauncherModel: ObservableObject {
         if busy { return false }
         guard let r = try? await provider.client.perform("phoneKeptPull").result else { return false }
         let kept = (r["kept"] as? [String]) ?? [], device = r["device"] as? String ?? ""
-        if kept.isEmpty || device.isEmpty { return false }
+        // 启动器升级顺带更新 iPhone App（11-16 jhz「点一次完成整个流程」）：连着的这台壳比本版旧、且没有要按新版重出包的款（shellUpdate），
+        //   开关开着（缺省开）就同样自动更新；要重出的款照旧留给顶栏按钮问
+        let shellUpdate = (r["shellUpdate"] as? Bool ?? false) && Self.autoUpdatePhoneOn()
+        if (kept.isEmpty && !shellUpdate) || device.isEmpty { return false }
         if r["running"] as? Bool != false { return false }   // 手机上 S2Arm 正在跑（或查不清）：装 App 会杀掉玩家这一局，等它退了下一轮再推（这一批不记已试）
-        let batch = device + ":" + kept.sorted().joined(separator: ",")
+        let batch = device + ":" + kept.sorted().joined(separator: ",") + (shellUpdate ? ":shell" : "")
         if keptAutoTried.contains(batch) || busy { return false }
         keptAutoTried.insert(batch)
         let language = provider.client.environment.uiLanguage ?? "zh-Hans"
