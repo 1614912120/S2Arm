@@ -15431,6 +15431,7 @@ static void dispatch(const p_dispatch *dp) {
 // Ryujinx reads a scaled texture back at scale 1 too, DmaClass): a readback sees the game's width, an upload fills the whole widened width. One cached scratch per format and size
 static int copy_t2t_draw(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsigned ss, unsigned dl, unsigned ds, const NVNcopyRegion *sr, const NVNcopyRegion *dr, int linear, int mirror);
 static const char *g_t2t_draw_why;   // copy_t2t_draw 上一次画不了的原因（NULL = 画了或没走到）
+uint64_t g_t2t_unimpl;   // 贴图拷贝走到「没实现」、目标没写的次数（t_nvn_rscale 30 判这笔深度拷贝没被丢）
 static id<MTLTexture> wd_scratch(MTLPixelFormat pf, int w, int h) {
     static __strong id<MTLTexture> t;
     if (t && t.pixelFormat == pf && (int)t.width == w && (int)t.height == h) return t;
@@ -15903,7 +15904,10 @@ static void copy_t2t_(const p_copy_t2t *c) {
     // The draw path renders into the destination: one made without render-target use (packaged) gets it first, as a whole-level clear does (Paper Mario: The Thousand-Year Door copies a
     // 128x128 RGBA8 render target into an RG8 texture, mirrored in Y)
     if ((c->sr.width != c->dr.width || c->sr.height != c->dr.height || s.pixelFormat != d.pixelFormat || (c->flags & (NVN_COPY_FLAGS_MIRROR_X_BIT | NVN_COPY_FLAGS_MIRROR_Y_BIT))) && !s3 && !d3
-        && !(d.usage & MTLTextureUsageRenderTarget) && !mtl_fmt_block(d.pixelFormat) && d.sampleCount == 1 && !fmt_int_or_ds(s.pixelFormat) && !fmt_int_or_ds(d.pixelFormat))
+        && !(d.usage & MTLTextureUsageRenderTarget) && !mtl_fmt_block(d.pixelFormat) && d.sampleCount == 1
+        && ((!fmt_int_or_ds(s.pixelFormat) && !fmt_int_or_ds(d.pixelFormat)) || (s.pixelFormat == d.pixelFormat && (d.pixelFormat == MTLPixelFormatDepth32Float || d.pixelFormat == MTLPixelFormatDepth32Float_Stencil8))))
+        // 同格式 D32F / D32F+S8 也补渲染目标用途：copy_t2t_draw 画得了深度（fsd / fsds），缺这个用途就退到下面「没实现」、目标留旧深度。D-HT4P（渲染倍率不是 1x）：
+        //   源深度按内部分辨率缩成 1080x608、目标是打包的 1440x810 深度图（建时不带渲染目标用途），这笔拷贝每次都丢，3D 场景按旧深度算雾 → 隔几帧蒙一层白（t_nvn_rscale 30）
         d = tex_upgrade(c->dst, d, MTLTextureUsageRenderTarget, d.pixelFormat);
     if ((c->sr.width != c->dr.width || c->sr.height != c->dr.height || s.pixelFormat != d.pixelFormat || (c->flags & (NVN_COPY_FLAGS_MIRROR_X_BIT | NVN_COPY_FLAGS_MIRROR_Y_BIT))) && !s3 && !d3
         && (c->sr.depth ? c->sr.depth : 1) == (c->dr.depth ? c->dr.depth : 1)
@@ -15911,6 +15915,7 @@ static void copy_t2t_(const p_copy_t2t *c) {
         && copy_t2t_draw(s, d, sl, sz0, dl, dz0, &c->sr, &c->dr, !!(c->flags & NVN_COPY_FLAGS_LINEAR_FILTER_BIT), c->flags)) return;   // format change / scaling / mirroring: draw it (see copy_t2t_draw)
     if (c->sr.width != c->dr.width || c->sr.height != c->dr.height || (c->sr.depth ? c->sr.depth : 1) != (c->dr.depth ? c->dr.depth : 1) || (c->flags & ~NVN_COPY_FLAGS_ENGINE_2D_BIT & ~NVN_COPY_FLAGS_LINEAR_FILTER_BIT)
         || s.pixelFormat != d.pixelFormat || s3 != d3) {
+        g_t2t_unimpl++;
         RED_ONCE(33, "texture→texture copy case not implemented: %dx%dx%d→%dx%dx%d flags %#x format %lu→%lu 3D %d→%d; storage %lux%lu→%lux%lu, samples %lu→%lu, destination render-target use %d, internal-resolution state %d→%d; draw path: %s",
                  c->sr.width, c->sr.height, c->sr.depth, c->dr.width, c->dr.height, c->dr.depth, c->flags, (unsigned long)s.pixelFormat, (unsigned long)d.pixelFormat, s3, d3,
                  (unsigned long)s.width, (unsigned long)s.height, (unsigned long)d.width, (unsigned long)d.height, (unsigned long)s.sampleCount, (unsigned long)d.sampleCount,
