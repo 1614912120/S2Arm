@@ -4,6 +4,9 @@
 //   再逐条核 index.tsv 的文件在、大小对（-8），都对才写 .applied / index.applied.tsv——「已应用」= 机上真有。
 //   iOS 上在后台线程跑（host_main.c），UIKit 照常起来——近 10 GB 在启动路径上同步跑会被启动看门狗杀（测试设备1 10-19 首局实测）。tar 是执行器用 `tar --format pax` 打的：只认普通文件、目录、pax 扩展头（path / size），
 //   路径相对资源包根；绝对路径、含 .. 的路径、其他条目类型一律判失败（不猜）。
+// zstd 只解压：官方单文件解码器（v1.5.7 build/single_file_libs 生成，BSD，许可 runtime/third_party/zstd/LICENSE，登记 THIRD_PARTY_LICENSES.md）；
+//   只给压缩传输的 game.img 块用（img_unzst）。整份编进本文件：各平台（Mac 宿主、iOS、安卓、单测）都只链 pack_apply.c，不加构建清单
+#include "../third_party/zstd/zstddeclib.c"
 #include "native.h"
 #include "s2a_docs.h"   // iOS 进程级容器 Documents（s2a_container_docs）
 #include "s2a_launch_ctx.h"   // 资源包闸门按启动上下文定文档根（多款容器 = 本款 Documents/games/<游戏号>）
@@ -200,6 +203,99 @@ static int img_extract(const char *root, unsigned *nf, uint64_t *nb) {
     }
     free(buf); close(fd); img_free(e, n); return rc;
 }
+// ---- 压缩传输的 game.img（v0.5.0，tools/push_pack.py send_zst）：电脑把 game.img 按 S2A_ZCHUNK 原始字节切块、每块压成一个 zstd 帧（带内容校验），
+//   推成 .incoming/game.img.<sha 前 16 位>.<块号 4 位>.zst；块号 k 的原始字节在 game.img 的 k × S2A_ZCHUNK 处。机上仍存未压缩的 game.img，运行时零改动。
+//   这里按块号顺序流式解（ZSTD_decompressStream，1 MB 读写缓冲，不先解出整块）、pwrite 到位、fsync 后删掉这一块：
+//   机上峰值 ≤ 未压缩 game.img + 一块（已解的部分 + 剩下的压缩块），不落整份压缩件再解。
+//   sha 前 16 位不是 index.tsv 里 game.img 那行的（别的版本留下的）、空文件（推送端盖掉的）→ 删掉不解。
+//   第 0 块截断 game.img 从头写；第 k 块要 game.img 已有 ≥ k × S2A_ZCHUNK（前面的块解过了、只在解完后删），不然就是缺块；
+//   缺块 / 截短 / 帧校验不对 / 解出的字节数不是整块（最后一块 1..S2A_ZCHUNK）→ 按截短包处理：删掉这块与其后各块、推送记录 .pushed，
+//   电脑端下次不信推送记录、按已应用索引重推（tools/push_pack.py plan）。块大小是两端的契约，改要两边一起改（tests/push_pack_test.py 核两边同值）
+#ifndef S2A_ZCHUNK
+#define S2A_ZCHUNK (1ULL << 30)
+#endif
+static int img_sha16(const char *root, char out[17]) {   // index.tsv 里 game.img 那行 sha256 的前 16 位；没有这行 → -1
+    char ip[2100], line[4600]; snprintf(ip, sizeof ip, "%s/index.tsv", root); FILE *f = fopen(ip, "r"); if (!f) return -1;
+    int rc = -1;
+    while (rc && fgets(line, sizeof line, f)) {
+        if (strncmp(line, "game.img\t", 9)) continue;
+        char *s = strchr(line + 9, '\t'); if (!s || strlen(s + 1) < 16) break;
+        memcpy(out, s + 1, 16); out[16] = 0; rc = 0; }
+    fclose(f); return rc;
+}
+static int zchunk_name(const char *n, char sha[17], unsigned *k) {   // game.img.<16 位小写十六进制>.<4 位块号>.zst → 1
+    if (strlen(n) != 34 || strncmp(n, "game.img.", 9) || n[25] != '.' || strcmp(n + 30, ".zst")) return 0;
+    for (int i = 9; i < 25; i++) if (!((n[i] >= '0' && n[i] <= '9') || (n[i] >= 'a' && n[i] <= 'f'))) return 0;
+    for (int i = 26; i < 30; i++) if (n[i] < '0' || n[i] > '9') return 0;
+    memcpy(sha, n + 9, 16); sha[16] = 0; *k = (unsigned)atoi(n + 26); return 1;
+}
+// 一块流式解进 ofd 的 off 处：0 成功（*got = 解出字节）；-4 截短 / 读写失败；-2 帧坏（校验不对、不是 zstd）
+static int unzst_one(const char *src, int ofd, uint64_t off, uint64_t *got) {
+    *got = 0; int fd = open(src, O_RDONLY); if (fd < 0) { untar_err("打开压缩块", src, errno); return -4; }
+    ZSTD_DStream *z = ZSTD_createDStream(); size_t isz = ZSTD_DStreamInSize(), osz = 1 << 20;
+    uint8_t *ib = malloc(isz), *ob = malloc(osz); int rc = 0; ssize_t r = 0; size_t ret = 1;
+    if (!z || !ib || !ob) { untar_err("解压缓冲", src, ENOMEM); rc = -4; goto out; }
+    ZSTD_initDStream(z);
+    // 官方流式示例的口径：完整的帧在吐完全部输出之前不会吃掉最后一个输入字节，所以「这段输入吃完」即可换下一段；读到文件尾时帧还没收尾 = 截短
+    while (!rc && (r = read(fd, ib, isz)) > 0) {
+        ZSTD_inBuffer in = {ib, (size_t)r, 0};
+        while (!rc && in.pos < in.size) {
+            if (!ret) { untar_err("压缩块帧后还有多余字节", src, EINVAL); rc = -2; break; }   // 一块就一帧
+            ZSTD_outBuffer out = {ob, osz, 0};
+            ret = ZSTD_decompressStream(z, &out, &in);
+            if (ZSTD_isError(ret)) { untar_err("压缩块帧坏（校验不对或不是 zstd）", src, EINVAL); rc = -2; break; }
+            if (*got + out.pos > S2A_ZCHUNK) { untar_err("压缩块解出来超过一块", src, EINVAL); rc = -2; break; }
+            for (size_t w = 0; w < out.pos;) { ssize_t k = pwrite(ofd, ob + w, out.pos - w, (off_t)(off + *got + w)); if (k <= 0) { untar_err("写 game.img", src, errno); rc = -4; break; } w += (size_t)k; }
+            *got += out.pos;
+        }
+    }
+    if (!rc && r < 0) { untar_err("读压缩块", src, errno); rc = -4; }
+    if (!rc && ret) { untar_err("压缩块被截短（帧没收尾）", src, EIO); g_untar_trunc = 1; rc = -4; }
+out:
+    free(ib); free(ob); ZSTD_freeDStream(z); close(fd); return rc;
+}
+// 解 .incoming 里本份 game.img 的压缩块 → 0 / 负数（g_untar_err 记现场）；*n 解了几块、*nb 解出字节
+static int img_unzst(const char *root, const char *inc, const char *logp, unsigned *n, uint64_t *nb) {
+    *n = 0; char want[17]; if (img_sha16(root, want)) want[0] = 0;
+    DIR *d = opendir(inc); if (!d) return 0;
+    unsigned ks[4096]; int nk = 0, rc = 0; struct dirent *e;
+    while ((e = readdir(d))) { char s[17]; unsigned k; char p[2400]; struct stat st;
+        if (!zchunk_name(e->d_name, s, &k)) continue;
+        snprintf(p, sizeof p, "%s/%s", inc, e->d_name);
+        if (strcmp(s, want) || stat(p, &st) || !st.st_size) { int r = unlink(p); log_line(logp, "进度：删掉不属于这份 game.img 的压缩块 %s（%s）", e->d_name, r ? strerror(errno) : "已删"); continue; }
+        if (nk < (int)(sizeof ks / sizeof *ks)) ks[nk++] = k; }
+    closedir(d);
+    if (!nk) return 0;
+    for (int i = 1; i < nk; i++) for (int j = i; j > 0 && ks[j - 1] > ks[j]; j--) { unsigned t = ks[j]; ks[j] = ks[j - 1]; ks[j - 1] = t; }
+    char ip[2200]; snprintf(ip, sizeof ip, "%s/game.img", root);
+    PHASE(1, 0, (uint64_t)nk);
+    for (int i = 0; i < nk && !rc; i++) {
+        char p[2400]; snprintf(p, sizeof p, "%s/game.img.%s.%04u.zst", inc, want, ks[i]);
+        uint64_t off = (uint64_t)ks[i] * S2A_ZCHUNK, got = 0, t1 = now_ns(); struct stat st;
+        int ofd = open(ip, O_WRONLY | O_CREAT | (ks[i] == 0 ? O_TRUNC : 0), 0644);
+        if (ofd < 0) { untar_err("打开 game.img 写", ip, errno); rc = -4; break; }
+        if (ks[i] && (fstat(ofd, &st) || (uint64_t)st.st_size < off)) { untar_err("缺压缩块（前一块没解进 game.img）", p, EIO); g_untar_trunc = 1; rc = -4; }
+        if (!rc) rc = unzst_one(p, ofd, off, &got);
+        // 不是最后一块就得正好一整块；最后一块解完把 game.img 截到实长（旧的更长的内容不留）
+        if (!rc && i + 1 < nk && got != S2A_ZCHUNK) { untar_err("压缩块解出来不足一块", p, EIO); g_untar_trunc = 1; rc = -4; }
+        if (!rc && i + 1 == nk && (!got || ftruncate(ofd, (off_t)(off + got)))) { untar_err(got ? "截 game.img 到实长" : "最后一块是空的", ip, got ? errno : EIO); rc = -4; }
+        if (!rc && fsync(ofd)) { untar_err("落盘 game.img", ip, errno); rc = -4; }
+        close(ofd);
+        if (rc) { g_untar_trunc = 1;   // 这块与其后各块、推送记录都删：电脑端下次按已应用索引重推（同截短 tar）
+            for (int j = i; j < nk; j++) { char u[2400]; snprintf(u, sizeof u, "%s/game.img.%s.%04u.zst", inc, want, ks[j]); unlink(u); }
+            char pp[2100]; snprintf(pp, sizeof pp, "%s/.pushed", root); unlink(pp); break; }
+        unlink(p); (*n)++; *nb += got;
+        PHASE(1, (uint64_t)(i + 1), (uint64_t)nk);
+        log_line(logp, "进度：解开 game.img.%s.%04u.zst（%d/%d）%llu MB（%.1f 秒）", want, ks[i], i + 1, nk, (unsigned long long)(got >> 20), (now_ns() - t1) / 1e9);
+    }
+    return rc;
+}
+// .incoming 里有没有压缩块（导入状态判「待导入」用；不分是不是本份，解的时候再分）
+static int has_zchunks(const char *inc) {
+    DIR *d = opendir(inc); if (!d) return 0; struct dirent *e; int any = 0; char s[17]; unsigned k;
+    while (!any && (e = readdir(d))) any = zchunk_name(e->d_name, s, &k);
+    closedir(d); return any;
+}
 // 资源包根有 game.img、还没按这份清单应用过（.applied ≠ manifest 的 index_sha256）→ 要先解开（导入状态判「待导入」，游戏库 / 闸门照常触发 s2a_pack_apply）
 static int manifest_sha(const char *path, char *out, size_t n);
 //   清单读不出（推送开头置空了、还没写回）按「要解」：原先当「不用解」，闸门判就绪放行半截镜像（iOS 装机剃刀 #29）；在不在传由闸门另判（s2a_import_transferring）
@@ -338,6 +434,8 @@ int s2a_pack_apply(const char *docs) {
     { const char *dirs[] = {docs, root, inc}; struct stat ds;
       for (int i = 0; i < 3 && !rc; i++) if (!stat(dirs[i], &ds) && S_ISDIR(ds.st_mode) && access(dirs[i], W_OK)) {
           rc = -12; snprintf(what, sizeof what, "目录 App 写不进：%s（属主 uid %u、权限 %o，App 是 uid %u），App 改不了也删不掉（只有删除重装 S2Arm 能清）", dirs[i], (unsigned)ds.st_uid, (unsigned)(ds.st_mode & 07777), (unsigned)getuid()); } }
+    // 压缩传输的 game.img 块先解（img_unzst）：后面从 game.img 解小文件、核对都要整份 game.img
+    if (!rc) { int r = img_unzst(root, inc, logp, &ntar, &nb); if (r) { rc = r; snprintf(what, sizeof what, "解压缩传输的 game.img 块"); } }   // 解开的块计进「解开 N 个包」
     // 待解包只由推送端（tools/push_pack.py）写进 .incoming：不再跳过访达拷来的 `._` 附属文件、不设个数上限（iOS 装机剃刀 #20，随 #28）
     DIR *d = rc ? NULL : opendir(inc); char **names = NULL; int nn = 0, cap = 0;
     if (d) { struct dirent *e; while ((e = readdir(d))) { size_t l = strlen(e->d_name); if (l > 4 && !strcmp(e->d_name + l - 4, ".tar")) {
@@ -443,7 +541,7 @@ int s2a_import_state(const char *docs) {
     if (partial_ready(root)) return S2A_IMPORT_PARTIAL;
     char inc[2100]; snprintf(inc, sizeof inc, "%s/.incoming", root); int ntar = 0;
     DIR *d = opendir(inc); if (d) { struct dirent *e; while ((e = readdir(d))) if (ends_with(e->d_name, ".tar")) ntar++; closedir(d); }
-    if (ntar) return S2A_IMPORT_PENDING;
+    if (ntar || has_zchunks(inc)) return S2A_IMPORT_PENDING;   // 压缩传输的 game.img 块（img_unzst）同待解包
     char mf[2100]; snprintf(mf, sizeof mf, "%s/manifest.json", root);
     if (stat(mf, &st)) return S2A_IMPORT_NONE;
     unsigned core = 0; g_pack_bad = (int)index_check_core(root, g_pack_first, sizeof g_pack_first, 0, &core);
