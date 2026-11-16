@@ -517,6 +517,19 @@ int main(void) {
         CHECK(g_phn[1] == 0, "⑭ 没有推送包不报 ①（报了 %d 次）", g_phn[1]);
         snprintf(c, sizeof c, "cmp -s '%s/src/npdm' '%s/资源包/exefs/main.npdm'", D, g3); CHECK(sh(c) == 0, "⑭ 小文件逐字节解出"); }
       CHECK(s2a_img_scan(D3) == 0, "⑭ 再扫一次：没有新的（拷到一半的仍不动）");
+      { // ⑭h D-4VAX 复现：拷贝方先把目标撑到全长、再从头往后填（长度已等于头里的总长，尾巴的目录表还是 0）——原先照样认领挪走，
+        //   之后解包 / 套更新包读到半截目录表。期望手写：撑到全长只写了前一半 → 认领 0 个、文件原样留在导入文件夹；补写完 → 认领 1 个
+        char D9[1300]; snprintf(D9, sizeof D9, "%s/scan_docs9", T);
+        snprintf(c, sizeof c, "mkdir -p '%s/放这里导入' && python3 '%s/pack/img.py' build - '%s/src/others.tsv' '%s/full.img' --gid 0100abcd0000000b --pack-id img9 > /dev/null"
+                 " && python3 -c \"import os,sys;s,d=sys.argv[1],sys.argv[2];b=open(s,'rb').read();fd=os.open(d,os.O_WRONLY|os.O_CREAT,0o644);os.ftruncate(fd,len(b));os.write(fd,b[:len(b)//2]);os.close(fd)\" '%s/full.img' '%s/放这里导入/半截.img'",
+                 D9, R, D, D9, D9, D9);
+        CHECK(sh(c) == 0, "⑭h 造撑到全长的半截 IMG");
+        int h0 = s2a_img_scan(D9);
+        snprintf(c, sizeof c, "test -e '%s/放这里导入/半截.img'", D9); int stay = sh(c) == 0;
+        CHECK(h0 == 0 && stay, "⑭h 半截（长度对、目录表还是 0）：认领 0 个（实际 %d）、原样留着（%s）", h0, stay ? "留着" : "被挪走了");
+        snprintf(c, sizeof c, "cp '%s/full.img' '%s/放这里导入/半截.img'", D9, D9); sh(c);
+        CHECK(s2a_img_scan(D9) == 1, "⑭h 补写完：认领 1 个"); }
+
       CHECK(!*s2a_img_scan_code(), "⑭ 认领没失败：码为空（实际 %s）", s2a_img_scan_code());
       // ⑭b 认领时有没有着色器库（诊断 D-9864 / D-F6W7 / D-9ZF9：自签玩家把电脑资源包文件夹里的 game.img 直接放进来）。物理上做得下去（现编），
       //   一律认领、不拦（不许堵门）；不带着色器库的只记一行【黄】（换完整包的提示由游戏库那边弹）。期望手写：三个都认领；
