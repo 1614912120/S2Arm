@@ -156,6 +156,9 @@ static int img_toc_file(const char *p, img_ent **out, size_t *n) {   // 同上�
 out:
     close(fd); return rc;
 }
+// 目录表 / index.tsv 里以「/」结尾的是目录项（D-4VAX：出包端把系统数据下的空目录也写进了表，如 823/ac_2_b1_nxsystemdata/0100000000000823/）：
+//   建出目录即可，不当文件写、不按文件核。已经出好的包玩家不会重出，App 这边必须吃得下
+static int is_dir_entry(const char *rel) { size_t l = strlen(rel); return l > 0 && rel[l - 1] == '/'; }
 static void img_free(img_ent *e, size_t n) { for (size_t i = 0; i < n; i++) free(e[i].rel); free(e); }
 // 把目录表里的文件解到资源包根：已在且长度对的跳过（重复调用是空操作）；先写 .img.tmp 再改名，断了不留半个文件。→ 0 / 负数（g_untar_err 记现场）
 static int img_extract(const char *root, unsigned *nf, uint64_t *nb) {
@@ -167,6 +170,10 @@ static int img_extract(const char *root, unsigned *nf, uint64_t *nb) {
     for (size_t i = 0; i < n && !rc; i++) {
         if (!safe(e[i].rel)) { untar_err("IMG 路径不安全", e[i].rel, EINVAL); rc = -3; break; }
         char p[2400], tmp[2500]; struct stat st; snprintf(p, sizeof p, "%s/%s", root, e[i].rel);
+        if (is_dir_entry(e[i].rel)) {   // 目录项：建出来就算（原先当文件写 …/.img.tmp 再改名到目录，EISDIR，每次同一处 -4）
+            char q[2500]; snprintf(q, sizeof q, "%sx", p); clear_stale(root, q);
+            if (mkdirs(q)) { rc = -4; break; }
+            got += e[i].len; PHASE(2, got, all); continue; }
         if (!stat(p, &st) && S_ISREG(st.st_mode) && (uint64_t)st.st_size == e[i].len) { got += e[i].len; PHASE(2, got, all); continue; }
         clear_stale(root, p);
         if (mkdirs(p)) { rc = -4; break; }
@@ -207,6 +214,7 @@ static int prune_dir(const char *p, const struct stat *st, int flag, struct FTW 
     (void)st; if (flag != FTW_DP || f->level == 0) return 0;
     const char *rel = p + g_rootlen + 1;
     if (rel[0] == '.' || strstr(rel, "/.")) return 0;
+    { char d[4600]; snprintf(d, sizeof d, "%s/", rel); const char *dk = d; if (bsearch(&dk, g_keep, g_nkeep, sizeof *g_keep, keep_cmp)) return 0; }   // 清单里点名的目录项（D-4VAX）：空也留着
     rmdir(p);
     return 0;
 }
@@ -249,6 +257,7 @@ static unsigned index_check_core(const char *root, char *ex, size_t exn, int pro
         char *t = strchr(line, '\t'); if (!t) continue; *t = 0; long long want = atoll(t + 1);
         snprintf(p, sizeof p, "%s/%s", root, line);
         int gone = stat(p, &st) != 0;
+        if (is_dir_entry(line)) { if (gone || !S_ISDIR(st.st_mode)) { if (!miss++ && exn) snprintf(ex, exn, "%s（%s）", line, gone ? "不在" : "不是目录"); } continue; }   // 目录项：在、且是目录就对
         if (gone || !S_ISREG(st.st_mode) || st.st_size != want) { if (!miss++ && exn) snprintf(ex, exn, "%s（%s）", line, gone ? "不在" : !S_ISREG(st.st_mode) ? "不是文件" : "大小不符");
             if (core && s2a_pack_core_path(line)) (*core)++; }
     }
