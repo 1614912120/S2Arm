@@ -18,6 +18,7 @@ API_AVAILABLE(macos(26.0), ios(26.0))
     id<MTLFXFrameInterpolator> mfx; id<MTLCommandQueue> mq;   // MetalFX 帧插值在自己的 Metal 命令队列上编码
     id<MTLRenderPipelineState> psoCopy;
     id<MTLComputePipelineState> mvDown, mvMatch, mvSpread; id<MTLTexture> lumaCur, lumaPrev; id<MTLBuffer> mvBlocks; int qw, qh, bw, bh;   // 自算运动矢量（DM_PRESENT_FI_MV）
+    id<MTLComputePipelineState> mvDown1; id<MTLTexture> luma16Cur, luma16Prev; id<MTLBuffer> mvCoarse, sadCoarse, sadBlocks; int cw16, ch16, cbw, cbh;   // 金字塔粗层（DM_PRESENT_FI_MVPYR）
     id<MTLComputePipelineState> keepStatic; id<MTLTexture> mid_keep;   // 静止像素取真帧（DM_PRESENT_FI_STATIC）：补出的帧过一遍写进 mid_keep，上屏用它
     id<MTLBuffer> uv[4]; id tab[4];   // 命令槽 0 写输入（出图线程）、1 上补出的帧、2 上真帧（补帧队列）
     id alloc[3], cb[3];   // Metal 4 分配器 / 命令缓冲（MTL4 棘轮：用 id，经 nvn_mtl.m 的 m4_* 包装）
@@ -86,6 +87,8 @@ API_AVAILABLE(macos(26.0), ios(26.0))
 //   块位移按块中心双线性铺成整张运动矢量图（输入图像素，当前帧 → 前一帧）；-1 = 取反（MetalFX 方向约定没把握时对照用）。
 //   11-14 第一版每块一个线程（全画面约 920 线程、每线程串行 7 万次比较）在iPhone 实机 上多花约 5 ms、九成多帧超预算跳过，改成每块一组
 static int fi_mv_mode(void) { static int v = -2; if (v == -2) { const char *e = getenv("DM_PRESENT_FI_MV"); v = e ? atoi(e) : 1; if (v) MLOG("present frame interpolation: computed motion vectors (DM_PRESENT_FI_MV=%d), 8x8 blocks on a quarter-size luma, search +-16", v); } return v; }
+// 金字塔（DM_PRESENT_FI_MVPYR=1）：先在 1/16 亮度图上粗搜（±256 像素），1/4 层在粗层矢量附近 ±16 修正。只搜 ±64 像素时，30 帧档持续转镜头一对帧间平移 80 像素上下，超出搜索窗
+static int fi_mv_pyr(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_PRESENT_FI_MVPYR"); v = e && !strcmp(e, "1"); if (v) MLOG("present frame interpolation: two-level motion search, coarse 1/16 luma +-256 px (DM_PRESENT_FI_MVPYR=1)"); } return v; }
 API_AVAILABLE(macos(26.0), ios(26.0))
 static int fi_mv_setup(NvPresentFI *f) {
     static const char *msl =
@@ -94,12 +97,18 @@ static int fi_mv_setup(NvPresentFI *f) {
         "  if (g.x >= dst.get_width() || g.y >= dst.get_height()) return; float s = 0;\n"
         "  for (uint y = 0; y < 4; y++) for (uint x = 0; x < 4; x++) { float3 c = src.read(uint2(g.x * 4 + x, g.y * 4 + y)).rgb; s += dot(c, float3(0.299, 0.587, 0.114)); }\n"
         "  dst.write(float4(s / 16, 0, 0, 0), g); }\n"
+        "kernel void down1(texture2d<float, access::read> src [[texture(0)]], texture2d<float, access::write> dst [[texture(1)]], uint2 g [[thread_position_in_grid]]) {   // 亮度图再缩 1/4（金字塔粗层）\n"
+        "  if (g.x >= dst.get_width() || g.y >= dst.get_height()) return; float s = 0;\n"
+        "  for (uint y = 0; y < 4; y++) for (uint x = 0; x < 4; x++) s += src.read(min(uint2(g.x * 4 + x, g.y * 4 + y), uint2(src.get_width() - 1, src.get_height() - 1))).r;\n"
+        "  dst.write(float4(s / 16, 0, 0, 0), g); }\n"
+        // pz = (输出换算到原图像素的倍数, 每个粗块含几个本层块（0 = 不用预测）, 粗层每行块数)：有预测时搜索窗中心挪到粗层矢量处，结果 = 粗层矢量 + 本层 ±16 的修正
         "kernel void match(texture2d<float, access::read> cur [[texture(0)]], texture2d<float, access::read> prev [[texture(1)]], device float2* out [[buffer(0)]], constant uint2& nb [[buffer(1)]],\n"
+        "                  device const float2* pred [[buffer(2)]], constant uint4& pz [[buffer(3)]], device float* bsad [[buffer(4)]],\n"
         "                  uint2 b [[threadgroup_position_in_grid]], uint2 t [[thread_position_in_threadgroup]], uint li [[thread_index_in_threadgroup]], uint sl [[thread_index_in_simdgroup]], uint sg [[simdgroup_index_in_threadgroup]]) {\n"
         "  threadgroup float blk[64]; threadgroup float win[40 * 40]; threadgroup uint part[32]; threadgroup float zsad;\n"
-        "  int W = cur.get_width(), H = cur.get_height(); int2 o = int2(b) * 8;\n"
+        "  int W = cur.get_width(), H = cur.get_height(); int2 o = int2(b) * 8; int2 po = pz.y ? int2(round(pred[(b.y / pz.y) * pz.z + b.x / pz.y] / float(pz.x))) : int2(0);\n"
         "  if (li < 64) { int2 p = clamp(o + int2(li % 8, li / 8), int2(0), int2(W - 1, H - 1)); blk[li] = cur.read(uint2(p)).r; }\n"
-        "  for (uint k = li; k < 1600; k += 1024) { int2 q = clamp(o + int2(int(k % 40) - 16, int(k / 40) - 16), int2(0), int2(W - 1, H - 1)); win[k] = prev.read(uint2(q)).r; }\n"
+        "  for (uint k = li; k < 1600; k += 1024) { int2 q = clamp(o + po + int2(int(k % 40) - 16, int(k / 40) - 16), int2(0), int2(W - 1, H - 1)); win[k] = prev.read(uint2(q)).r; }\n"
         "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
         "  float sad = 0; for (int y = 0; y < 8; y++) for (int x = 0; x < 8; x++) sad += abs(blk[y * 8 + x] - win[(int(t.y) + y) * 40 + int(t.x) + x]);\n"
         "  if (t.x == 16 && t.y == 16) zsad = sad;\n"
@@ -108,8 +117,9 @@ static int fi_mv_setup(NvPresentFI *f) {
         "  threadgroup_barrier(mem_flags::mem_threadgroup);\n"
         "  if (sg == 0) { uint k2 = simd_min(sl < 32 ? part[sl] : 0xFFFFFFFFu);\n"
         "    if (sl == 0) { uint bi = k2 & 0x3FFu; float best = as_type<float>(k2 & ~0x3FFu); int2 bd = int2(int(bi % 32) - 16, int(bi / 32) - 16);\n"
-        "      if (zsad <= best * 1.02 + 0.05) bd = int2(0);   // 不动或平坦处偏向零位移，免得乱跳\n"
-        "      out[b.y * nb.x + b.x] = float2(bd) * 4; } } }\n"
+        "      if (zsad <= best * 1.02 + 0.05) { bd = int2(0); best = zsad; }   // 不动或平坦处偏向窗中心（零位移 / 粗层矢量），免得乱跳\n"
+        "      uint i = b.y * nb.x + b.x; if (pz.w && !(best < bsad[i] * 0.98)) return;   // pz.w：第二遍（以粗层矢量为中心）只在明显更好时换掉第一遍（以零为中心）的结果\n"
+        "      out[i] = float2(bd + po) * float(pz.x); bsad[i] = best; } } }\n"
         "kernel void spread(device const float2* blk [[buffer(0)]], constant uint2& nb [[buffer(1)]], constant float& sign [[buffer(2)]], constant uint& sc [[buffer(3)]], texture2d<float, access::write> mv [[texture(0)]],\n"
         "                   texture2d<float, access::read> cur [[texture(1)]], texture2d<float, access::read> prev [[texture(2)]], uint2 g [[thread_position_in_grid]]) {\n"
         "  if (g.x >= mv.get_width() || g.y >= mv.get_height()) return;\n"
@@ -122,12 +132,22 @@ static int fi_mv_setup(NvPresentFI *f) {
     if (!lib) { MLOG("【红】 frame interpolation motion shader: %s", e.localizedDescription.UTF8String); return 0; }
     f->mvDown = [g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"down"] error:&e];
     f->mvMatch = [g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"match"] error:&e];
+    if (fi_mv_pyr()) {   // 金字塔粗层：1/16 亮度图上 8×8 块（原图 128 像素）±16（原图 ±256 像素）
+        f->mvDown1 = [g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"down1"] error:&e];
+        f->cw16 = (f->w / 4 + 3) / 4; f->ch16 = (f->h / 4 + 3) / 4; f->cbw = (f->cw16 + 7) / 8; f->cbh = (f->ch16 + 7) / 8;
+        f->luma16Cur = fi_tex(MTLPixelFormatR16Float, f->cw16, f->ch16, MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite);
+        f->luma16Prev = fi_tex(MTLPixelFormatR16Float, f->cw16, f->ch16, MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite);
+        f->mvCoarse = [g_dev newBufferWithLength:(NSUInteger)(f->cbw * f->cbh) * 8 options:MTLResourceStorageModePrivate];
+        f->sadCoarse = [g_dev newBufferWithLength:(NSUInteger)(f->cbw * f->cbh) * 4 options:MTLResourceStorageModePrivate];
+        if (!f->mvDown1 || !f->luma16Cur || !f->luma16Prev || !f->mvCoarse || !f->sadCoarse) { MLOG("【红】 frame interpolation coarse motion setup failed"); return 0; }
+    }
     f->mvSpread = [g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"spread"] error:&e];
     f->qw = f->w / 4; f->qh = f->h / 4; f->bw = (f->qw + 7) / 8; f->bh = (f->qh + 7) / 8;
     f->lumaCur = fi_tex(MTLPixelFormatR16Float, f->qw, f->qh, MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite);
     f->lumaPrev = fi_tex(MTLPixelFormatR16Float, f->qw, f->qh, MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite);
     f->mvBlocks = [g_dev newBufferWithLength:(NSUInteger)(f->bw * f->bh) * 8 options:MTLResourceStorageModePrivate];
-    if (!f->mvDown || !f->mvMatch || !f->mvSpread || !f->lumaCur || !f->lumaPrev || !f->mvBlocks) { MLOG("【红】 frame interpolation motion setup: %s", e.localizedDescription.UTF8String ?: "resources"); return 0; }
+    f->sadBlocks = [g_dev newBufferWithLength:(NSUInteger)(f->bw * f->bh) * 4 options:MTLResourceStorageModePrivate];
+    if (!f->mvDown || !f->mvMatch || !f->mvSpread || !f->lumaCur || !f->lumaPrev || !f->mvBlocks || !f->sadBlocks) { MLOG("【红】 frame interpolation motion setup: %s", e.localizedDescription.UTF8String ?: "resources"); return 0; }
     return 1;
 }
 // 在 MetalFX 之前编进同一条命令缓冲：前后两帧缩成 1/4 亮度 → 逐块匹配 → 铺成运动矢量图（写 f->motion）
@@ -139,10 +159,26 @@ static void fi_mv_encode(NvPresentFI *f, id<MTLCommandBuffer> c, id<MTLTexture> 
     [en setTexture:cur atIndex:0]; [en setTexture:f->lumaCur atIndex:1]; [en dispatchThreads:MTLSizeMake(f->qw, f->qh, 1) threadsPerThreadgroup:tg];
     [en setTexture:prev atIndex:0]; [en setTexture:f->lumaPrev atIndex:1]; [en dispatchThreads:MTLSizeMake(f->qw, f->qh, 1) threadsPerThreadgroup:tg];
     [en memoryBarrierWithScope:MTLBarrierScopeTextures];
-    uint32_t nb[2] = {(uint32_t)f->bw, (uint32_t)f->bh};
+    uint32_t nb[2] = {(uint32_t)f->bw, (uint32_t)f->bh}, pz[4] = {4, 0, 0, 0};
+    if (fi_mv_pyr()) {
+        [en setComputePipelineState:f->mvDown1];
+        [en setTexture:f->lumaCur atIndex:0]; [en setTexture:f->luma16Cur atIndex:1]; [en dispatchThreads:MTLSizeMake(f->cw16, f->ch16, 1) threadsPerThreadgroup:tg];
+        [en setTexture:f->lumaPrev atIndex:0]; [en setTexture:f->luma16Prev atIndex:1]; [en dispatchThreads:MTLSizeMake(f->cw16, f->ch16, 1) threadsPerThreadgroup:tg];
+        [en memoryBarrierWithScope:MTLBarrierScopeTextures];
+        uint32_t cnb[2] = {(uint32_t)f->cbw, (uint32_t)f->cbh}, cpz[4] = {16, 0, 0, 0};
+        [en setComputePipelineState:f->mvMatch]; [en setTexture:f->luma16Cur atIndex:0]; [en setTexture:f->luma16Prev atIndex:1];
+        [en setBuffer:f->mvCoarse offset:0 atIndex:0]; [en setBytes:cnb length:sizeof cnb atIndex:1]; [en setBuffer:f->mvCoarse offset:0 atIndex:2]; [en setBytes:cpz length:sizeof cpz atIndex:3]; [en setBuffer:f->sadCoarse offset:0 atIndex:4];
+        [en dispatchThreadgroups:MTLSizeMake(f->cbw, f->cbh, 1) threadsPerThreadgroup:MTLSizeMake(32, 32, 1)];
+        [en memoryBarrierWithScope:MTLBarrierScopeBuffers];
+    }
     [en setComputePipelineState:f->mvMatch]; [en setTexture:f->lumaCur atIndex:0]; [en setTexture:f->lumaPrev atIndex:1];
-    [en setBuffer:f->mvBlocks offset:0 atIndex:0]; [en setBytes:nb length:sizeof nb atIndex:1];
+    [en setBuffer:f->mvBlocks offset:0 atIndex:0]; [en setBytes:nb length:sizeof nb atIndex:1]; [en setBuffer:f->mvBlocks offset:0 atIndex:2]; [en setBytes:pz length:sizeof pz atIndex:3]; [en setBuffer:f->sadBlocks offset:0 atIndex:4];
     [en dispatchThreadgroups:MTLSizeMake(f->bw, f->bh, 1) threadsPerThreadgroup:MTLSizeMake(32, 32, 1)];   // 每块一组，组内 1024 线程各算一个位移（±16 → 32×32）
+    if (fi_mv_pyr()) {   // 第二遍：窗中心挪到粗层矢量（1/4 层一块 32 像素、粗层一块 128 像素：每个粗块含 4×4 个本层块），比第一遍明显更好的块才换
+        [en memoryBarrierWithScope:MTLBarrierScopeBuffers];
+        uint32_t pz2[4] = {4, 4, (uint32_t)f->cbw, 1}; [en setBuffer:f->mvCoarse offset:0 atIndex:2]; [en setBytes:pz2 length:sizeof pz2 atIndex:3];
+        [en dispatchThreadgroups:MTLSizeMake(f->bw, f->bh, 1) threadsPerThreadgroup:MTLSizeMake(32, 32, 1)];
+    }
     [en memoryBarrierWithScope:MTLBarrierScopeBuffers];
     [en setComputePipelineState:f->mvSpread]; [en setBuffer:f->mvBlocks offset:0 atIndex:0]; [en setBytes:nb length:sizeof nb atIndex:1]; [en setBytes:&sign length:4 atIndex:2]; uint32_t sc = (uint32_t)(f->w / f->motion.width); [en setBytes:&sc length:4 atIndex:3];
     [en setTexture:f->motion atIndex:0]; [en setTexture:cur atIndex:1]; [en setTexture:prev atIndex:2]; [en dispatchThreads:MTLSizeMake(f->motion.width, f->motion.height, 1) threadsPerThreadgroup:tg];
