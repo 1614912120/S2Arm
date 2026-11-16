@@ -1476,6 +1476,30 @@ NVN(nvnQueueWaitSync, NVNboolean, NVNqueue *q, const NVNsync *s) {
 // ZCull data: the host does no ZCull, so there is nothing to save / restore
 NVN(nvnCommandBufferRestoreZCullData, void, NVNcommandBuffer *c, NVNbufferAddress a, size_t n) { (void)c; (void)a; (void)n; }
 NVN(nvnCommandBufferSaveZCullData, void, NVNcommandBuffer *c, NVNbufferAddress a, size_t n) { (void)c; (void)a; (void)n; }
+// 领先 GPU 一帧（按款开关，缺省关；开关读 s2a_lead_frame_on，runtime/src/fps.c：环境变量 S2A_LEAD_FRAME 优先，其次按款表 lead 行）。
+//   游戏在 CPU 上等「刚上屏那一帧」的栅栏（帧尾等 GPU）时，CPU 和 GPU 串行：帧时间 = CPU + GPU 尾巴。开关开着时，这类等待只等到再前一帧的帧边界
+//   （上一次上屏前的最后一个栅栏），CPU 先开始下一帧、和 GPU 重叠，帧时间趋向 max(CPU, GPU)；代价是输入延迟多一帧。
+//   帧边界 = 每次 nvnQueuePresentTexture 时的最后一个提交栅栏（g_pb_last；g_pb_prev 是再前一次）。只放宽 g_pb_prev < 栅栏 ≤ g_pb_last 这一类：
+//   等更早的栅栏（游戏自己已领先一帧）照等，不叠成领先两帧；等本帧刚提交、还没上屏的工作（帧中读回）照等。nvnQueueFinish、读纹素、宿主内部等待不受影响。
+//   不安全情形（所以只能按款开）：① 游戏等完这一帧就在 CPU 上读它的 GPU 结果（查询 / 计数器 / 读回缓冲 / 按 GPU 时间调分辨率）→ 读到上一帧或写到一半的值；
+//   ② 游戏等完就覆写这一帧 GPU 还在读的内存（只给一帧在飞的常量 / 顶点环、往池里直接改纹理）——内存池是统一内存直读、没有影子副本，GPU 会读到下一帧的数据 → 闪烁 / 错画。
+//   这里回的「已满足」不是真完成：之后对同一栅栏的等待照真实进度判（g_done），没有要补的状态。
+static _Atomic uint64_t g_pb_last, g_pb_prev;
+__attribute__((weak)) int s2a_lead_frame_on(void) { return 0; }   // 宿主由 runtime/src/fps.c 提供；回放单测用这个缺省（关）
+// 读数（不管开关）：每帧游戏在 CPU 上被 GPU 挡住的时间，按等的是哪一帧的工作分三类——帧尾（刚上屏那帧，领先一帧放宽的就是它）/ 本帧（还没上屏）/ 更早；
+//   另记 nvnQueueFinish 的阻塞、放宽了多少次。每 300 帧在上屏处打一行，DM_NVN_TSV 开着时逐帧写 @sync_tail_ms / @sync_cur_ms / @finish_ms
+static _Atomic uint64_t g_sw_ns[3], g_sw_n[3], g_fin_ns, g_lead_n;
+static void sw_note(uint64_t fence, uint64_t ns) {
+    uint64_t bl = atomic_load_explicit(&g_pb_last, memory_order_relaxed), bp = atomic_load_explicit(&g_pb_prev, memory_order_relaxed);
+    int k = fence > bl ? 1 : fence > bp ? 0 : 2;   // 0 帧尾、1 本帧、2 更早
+    atomic_fetch_add_explicit(&g_sw_ns[k], ns, memory_order_relaxed); atomic_fetch_add_explicit(&g_sw_n[k], 1, memory_order_relaxed);
+}
+// 开关开着、这次等的是帧尾：要等的栅栏换成再前一帧的边界。返回 0 = 不放宽
+static uint64_t lead_target(uint64_t fence) {
+    if (!s2a_lead_frame_on()) return 0;
+    uint64_t bl = atomic_load_explicit(&g_pb_last, memory_order_relaxed), bp = atomic_load_explicit(&g_pb_prev, memory_order_relaxed);
+    return bp && fence > bp && fence <= bl ? bp : 0;
+}
 // A sync never fenced counts as signaled: ALREADY_SIGNALED at once, whatever the timeout. 11-06 质量线（DOOM Eternal 起局 90 秒无首帧，c1106_rj3）：渲染线程在
 //   main+0x2c2cac0 以超时 0 轮询每帧两个同步对象里的「上一个」，回 TIMEOUT_EXPIRED 就睡 50 µs 再查（svc 0xb 21 万次）；两个槽只 SyncInitialize、要提交后才
 //   QueueFenceSync，帧开头先等的槽 1 第一次一定没打过栅栏——游戏在真机上能跑，真机对「初始化过、没打栅栏」的同步对象就不回超时（同 InitializeFromNvRmSyncNVX
@@ -1497,7 +1521,14 @@ NVN(nvnSyncWait, NVNsyncWaitResult, const NVNsync *s, uint64_t timeout) {
     { int ext = 0; if (sync_ext_wait((const sync_t *)s, 0, &ext)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
       if (ext) return sync_ext_wait((const sync_t *)s, timeout, &ext) ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED; }
     if (nvn_be_wait(fence, 0)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
-    return nvn_be_wait(fence, timeout) ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
+    uint64_t lt = lead_target(fence);
+    if (lt) { atomic_fetch_add_explicit(&g_lead_n, 1, memory_order_relaxed);
+        if (nvn_be_wait(lt, 0)) return NVN_SYNC_WAIT_RESULT_ALREADY_SIGNALED;
+        uint64_t w0 = now_ns(); int ok = nvn_be_wait(lt, timeout); sw_note(fence, now_ns() - w0);
+        return ok ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED; }
+    if (!timeout) { sw_note(fence, 0); return NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED; }   // 轮询没到（游戏自己睡了再查）：计次，时长记 0
+    uint64_t w0 = now_ns(); int ok = nvn_be_wait(fence, timeout); sw_note(fence, now_ns() - w0);
+    return ok ? NVN_SYNC_WAIT_RESULT_CONDITION_SATISFIED : NVN_SYNC_WAIT_RESULT_TIMEOUT_EXPIRED;
 }
 NVN(nvnEventBuilderSetDefaults, void, NVNeventBuilder *b) { memset(b, 0, sizeof(ev_builder_t)); }
 NVN(nvnEventBuilderSetStorage, void, NVNeventBuilder *b, const NVNmemoryPool *p, int64_t off) { *(ev_builder_t *)b = (ev_builder_t){(const pool_t *)p, off}; }
@@ -1590,7 +1621,7 @@ NVN(nvnQueueGetError, NVNqueueGetErrorResult, NVNqueue *q, NVNqueueErrorInfo *in
 }
 NVN(nvnQueueFlush, void, NVNqueue *q) { (void)q; }
 static void queue_finish(void);   // 持提交锁（g_sub_mu，定义在 nvnQueueSubmitCommands 前）
-NVN(nvnQueueFinish, void, NVNqueue *q) { xq_lock(); nvn_be_xq_flush(q, "QueueFinish on it"); xq_unlock(); queue_finish(); }   // 停在跨队列等待上的工作先放行（nvn_xqueue.inc）
+NVN(nvnQueueFinish, void, NVNqueue *q) { xq_lock(); nvn_be_xq_flush(q, "QueueFinish on it"); xq_unlock(); uint64_t w0 = now_ns(); queue_finish(); atomic_fetch_add_explicit(&g_fin_ns, now_ns() - w0, memory_order_relaxed); }   // 停在跨队列等待上的工作先放行（nvn_xqueue.inc）
 
 // ---------- Command buffer: records go to host shadow blocks; the game's command memory is only each recording's identity and anchor ----------
 // The game's command memory used to hold the host records themselves, and GetCommandMemoryUsed reported host record bytes, 5-10 times the real device's commands. Games that read
@@ -3789,6 +3820,8 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
     if (dm_gfx_session_stopping()) return;
     win_t *o = (win_t *)w; o->presents++; nat_itv_sync(o);
     if (q) { pthread_mutex_lock(&g_sub_mu); nvn_be_xq_flush(q, "a present on it"); pthread_mutex_unlock(&g_sub_mu); }   // 上屏排在这条队列的工作后面：停在跨队列等待上的部分先放行（nvn_xqueue.inc）
+    { uint64_t lf = nvn_be_last_fence(); if (lf != atomic_load_explicit(&g_pb_last, memory_order_relaxed)) {   // 帧边界（领先一帧用）：两次上屏之间没有新提交就不挪
+        atomic_store_explicit(&g_pb_prev, atomic_load_explicit(&g_pb_last, memory_order_relaxed), memory_order_relaxed); atomic_store_explicit(&g_pb_last, lf, memory_order_relaxed); } }
     if (q && dev_ok(((queue_t *)q)->dev) && atomic_load(&g_cur_dev) != ((queue_t *)q)->dev) { pthread_mutex_lock(&g_sub_mu); dev_follow(((queue_t *)q)->dev); pthread_mutex_unlock(&g_sub_mu); }   // 上屏翻转跟上屏队列的设备
     {   // 节拍主人：被上屏这张的取图线程（取图线程未知 = 上屏线程自己）；连续 PACE_SWITCH 次同一个才换
         uintptr_t by = idx >= 0 && idx < 4 ? atomic_load_explicit(&g_acq_thr[idx], memory_order_relaxed) : 0; if (!by) by = (uintptr_t)pthread_self();
@@ -3901,6 +3934,17 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int idx) {
         trow(f, "@sub_wall_ms", sw / 1e6); trow(f, "@sub_cpu_ms", sc / 1e6); trow(f, "@sub_instr", (double)atomic_exchange(&g_sub_instr, 0));
     } else atomic_store(&g_nvn_ns, 0);
     g_acq_wait_ns = g_pq_wait_ns = 0;
+    {   // CPU 等 GPU 读数（见 sw_note）：逐帧行 + 每 300 帧一行（窗内每帧均值、占帧比例 = 领先一帧的收益上限）
+        static uint64_t acc[3], accn[3], accf, accfr_us, accl, nfr; double fr_ms = prev_in ? (t0 - prev_in) / 1e6 : 0;
+        uint64_t d[3], dn[3]; for (int k = 0; k < 3; k++) { d[k] = atomic_exchange(&g_sw_ns[k], 0); dn[k] = atomic_exchange(&g_sw_n[k], 0); acc[k] += d[k]; accn[k] += dn[k]; }
+        uint64_t fn = atomic_exchange(&g_fin_ns, 0), ln = atomic_exchange(&g_lead_n, 0); accf += fn; accl += ln;
+        trow(f, "@sync_tail_ms", d[0] / 1e6); trow(f, "@sync_cur_ms", d[1] / 1e6); trow(f, "@finish_ms", fn / 1e6);
+        if (fr_ms > 0) { accfr_us += (uint64_t)(fr_ms * 1000); nfr++; }
+        if (f && f % 300 == 0 && nfr) { double fm = accfr_us / 1e3 / nfr;
+            LOG("[nvn] CPU waits on GPU up to frame %llu (per frame, %llu frames): frame %.2f ms; SyncWait on the frame just presented %.2f ms (%.1f%% of the frame, %llu waits), on work not presented yet %.2f ms (%llu), on older work %.2f ms (%llu); QueueFinish %.2f ms; lead-one-frame %s, relaxed %llu waits",
+                (unsigned long long)f, (unsigned long long)nfr, fm, acc[0] / 1e6 / nfr, 100.0 * acc[0] / 1e6 / nfr / fm, (unsigned long long)accn[0], acc[1] / 1e6 / nfr, (unsigned long long)accn[1],
+                acc[2] / 1e6 / nfr, (unsigned long long)accn[2], accf / 1e6 / nfr, s2a_lead_frame_on() ? "on" : "off", (unsigned long long)accl);
+            memset(acc, 0, sizeof acc); memset(accn, 0, sizeof accn); accf = accfr_us = accl = nfr = 0; } }
     if (f >= 8) { double g = nvn_be_gpu_ms(f - 8); if (g >= 0) { tpush(3, g); trow(f - 8, "@gpu_ms", g); g_gpu_busy_ms += g; uint64_t a, b; if (nvn_be_gpu_span(f - 8, &a, &b) && b / 1e6 > g_gpu_clk_ms) g_gpu_clk_ms = b / 1e6; }   // GPU time is taken 8 frames late (already completed)
         { lf_rec *r = &g_lf[(f - 8) % LFN];   // long-frame log (on by default, DM_LONGFRAME=0 turns it off): a line is printed only when the whole frame > 20 ms or GPU > 16.7 ms, and it is clearly above recent conditions
           static int on = -1; if (on < 0) { const char *e = getenv("DM_LONGFRAME"); on = !(e && !strcmp(e, "0")); }

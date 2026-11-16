@@ -18,6 +18,10 @@
 //   speed <槽> <最小> <最大> <秒槽>    同上，另把同一步长换成秒（÷ 30）写进秒槽（关时 1/30）：游戏按 {倍率 / 30, 倍率} 写死一对时钟的地方（王国之泪布料 / 头发）改读这两槽
 //   present30 if slot <槽> ==|!= <值>  条件成立时出图间隔退回游戏自己设的（如塞尔达预渲染过场要按 30 帧放）
 //   c …                              改指令行（出包时由改写器读，runtime/rewriter），这里跳过
+//   lead <0|1>                       这款这个版本允许「领先 GPU 一帧」（graphics/nvn hle_nvn.c lead_target：游戏等刚上屏那帧的栅栏时只等到再前一帧，输入延迟 +1 帧），
+//                                    值是缺省（登记时一律写 0 = 缺省关）。只在实测有效、画面不出错的款登记（每款一组同存档对照）。玩家选择 S2A_LEAD_FRAME=0/1（设置页按款写、
+//                                    起局生效）优先于表里的缺省；没登记的款 s2a_lead_frame_available() 回 0，设置页不显示开关（环境变量照样能强开，供对照局用，日志黄一行）。
+//                                    只有 lead 行、没有帧率行的表不算「有帧率表」（不让 60 帧开关因此显示）
 // 首次写入时日志记原值（核位置对不对：原值应是游戏的 30 帧口径）
 // 随包表：fps.tsv（出包组装 pack/ship_ext.py 从产物根拷进 App，runtime/build.mk 按这行自动收清单）
 #include "native.h"
@@ -86,7 +90,16 @@ int s2a_fps_cap_reason(void) {
 // 运行中关 60 帧（玩家点「切回原生帧率」、档位梯子压回）能不能真退回原帧率：表里每条 w 行都写了关值才能（槽 / 速度 / 出图间隔本来就能热切）。
 //   0 = 有 w 行没关值：运行中关只退出图间隔与槽，游戏自己的限帧变量留在 60 帧口径，要重启（下一局表从起局就关、游戏的值没人碰）才完全回原帧率。体验线提示据此写「重启后生效」
 int s2a_fps_hot_revert_ok(void) { for (int i = 0; i < g_nfw; i++) if (!g_fw[i].has_off) return 0; return 1; }
-int s2a_fps_effective(void) { return eff(); }   // 60 帧此刻真在生效（撑不住就问玩家 runtime/src/qprompt_host.c 逐帧读）
+int s2a_fps_effective(void) { return eff(); }
+// 领先 GPU 一帧（见头注释 lead 行）：g_lead_have = 表里登记了；g_lead_on = 本局生效（起局定，运行中不切）
+static _Atomic int g_lead_have, g_lead_on;
+int s2a_lead_frame_available(void) { return atomic_load(&g_lead_have); }   // 设置页据此决定显不显示「领先一帧」开关
+int s2a_lead_frame_on(void) { return atomic_load_explicit(&g_lead_on, memory_order_relaxed); }   // 图形层每次 nvnSyncWait 读
+static void lead_resolve(int have, int def) {
+    const char *e = getenv("S2A_LEAD_FRAME"); int set = e && (!strcmp(e, "0") || !strcmp(e, "1")), on = set ? e[0] == '1' : have && def;
+    atomic_store(&g_lead_have, have); atomic_store(&g_lead_on, on);
+    if (on || have) LOG("领先 GPU 一帧：%s（%s%s）", on ? "开" : "关", set ? "S2A_LEAD_FRAME 指定" : "按款表缺省", have ? "" : "；这款表里没登记，只供对照局");
+}   // 60 帧此刻真在生效（撑不住就问玩家 runtime/src/qprompt_host.c 逐帧读）
 static struct { int sl; uint32_t on, off; } g_sl[16]; static int g_nsl, g_word_rows, g_present_row;   // g_present_row：表里有 present display
 static void spd_store(float v) {   // 步长槽（30 帧为 1）与秒槽（÷ 30）同写
     host_store32(key_slot(g_spd_slot), *(uint32_t *)&v);
@@ -267,9 +280,9 @@ void s2a_fps_start(const char *dir) {
     g_own = s2a_caps_own(); atomic_store(&g_on, fps_on_at_start()); cpatch_follow(atomic_load(&g_on));   // 没有我方帧率表的款，社区帧率补丁也按这个开关定
     char path[1100]; const char *e = getenv("S2A_FPS_TABLE");
     if (e && *e) strlcpy(path, e, sizeof path); else snprintf(path, sizeof path, "%s/fps.tsv", dir);
-    FILE *f = fopen(path, "r"); if (!f) { start_published(s2a_cpatch_fps_count() > 0, 0); return; }
+    FILE *f = fopen(path, "r"); if (!f) { lead_resolve(0, 0); start_published(s2a_cpatch_fps_count() > 0, 0); return; }
     g_boot_file = f;
-    char line[256]; int present = 0, bad = 0; const char *bid = s2a_main_build_id();
+    char line[256]; int present = 0, bad = 0, lead = -1, nfps = 0; const char *bid = s2a_main_build_id();
     while (fgets(line, sizeof line, f)) {
         // 超出缓冲的行（11-06 旷野之息表：中文注释 279 / 293 字节）：读完这一行剩下的部分丢掉，不当下一行解析（原先剩下那截报「不认的行」红）。
         //   超出的部分落在注释里（前半截已有 #）照常用；数据段本身超长整行报红、不用
@@ -286,7 +299,9 @@ void s2a_fps_start(const char *dir) {
         //   现在至少 16 位且全是十六进制才算，不合格按对不上处理（整表不用、报红）
         if (!strcmp(a, "build") && n >= 2) { size_t bl = strlen(b); int ok = bl >= 16 && strspn(b, "0123456789abcdefABCDEF") == bl;
             if (!ok) LOG("【红】帧率表 %s 的 build 行「%s」不是至少 16 位的十六进制构建号：按对不上处理", path, b);
-            if (!ok || strncasecmp(bid, b, bl)) { LOG("【红】帧率表 %s 是构建号 %s 的，本包主程序是 %s：整表不用", path, b, bid); fclose(f); g_boot_file = NULL; start_published(s2a_cpatch_fps_count() > 0, 0); return; } continue; }
+            if (!ok || strncasecmp(bid, b, bl)) { LOG("【红】帧率表 %s 是构建号 %s 的，本包主程序是 %s：整表不用", path, b, bid); fclose(f); g_boot_file = NULL; lead_resolve(0, 0); start_published(s2a_cpatch_fps_count() > 0, 0); return; } continue; }
+        if (!strcmp(a, "lead")) { if (n == 2 && (!strcmp(b, "0") || !strcmp(b, "1"))) lead = b[0] == '1'; else { LOG("【红】帧率表 %s：lead 行只认「lead 0」或「lead 1」", path); bad++; } continue; }
+        nfps++;   // 以下都是帧率行（坏行也算：原先只要有表就算有）
         if (!strcmp(a, "present") && n >= 2 && !strcmp(b, "display")) { present = 1; continue; }
         if (!strcmp(a, "c")) { key_rw(mod_named(b)); if (n >= 4 && !strcmp(t, "word")) g_word_rows++; continue; }   // 改指令：出包时改写器已经打进去；bl_rec 跳板运行时写键页
         if (!strcmp(a, "slot") || !strcmp(a, "speed") || !strcmp(a, "present30")) {
@@ -342,7 +357,8 @@ void s2a_fps_start(const char *dir) {
       if (no) LOG("帧率表：%d 条数据写入没写关值（off），运行中关 60 帧退不回这几处，重启后生效", no); }
     LOG("帧率表 %s：60 帧%s；出图间隔%s，数据写入 %d 处%s", path, !g_own ? "关（我方帧率表不用，按关值写；只用社区帧率补丁，S2A_CAPS_OWN=1 才按开关）" : atomic_load(&g_on) ? "开" : "关（S2A_FPS60=0，回游戏原生帧率）",
         present && g_own && atomic_load(&g_on) ? "放开（每个显示节拍一帧）" : present ? "按游戏（60 帧关：表里的 present display 不生效）" : "按游戏", g_nfw, bad ? "（有坏行，见上）" : "");
-    start_published(1, 1);   // 包含只有槽/社区补丁的款；所有表读完后才允许创建写入线程。
+    lead_resolve(lead >= 0, lead > 0);
+    start_published(1, nfps > 0 || lead < 0);   // 包含只有槽/社区补丁的款；所有表读完后才允许创建写入线程。只有 lead 行的表不算有帧率表
 }
 static int writer_stop_locked(void) {
     g_writer_closed = 1; g_writer_admit = 0;
@@ -377,6 +393,7 @@ int s2a_fps_session_reset(void) {
     dm_fps_state = NULL; memset(g_fs_page, 0, sizeof g_fs_page);
     memset(g_sl, 0, sizeof g_sl); g_nsl = g_word_rows = g_present_row = 0;
     atomic_store(&g_on, 1);
+    atomic_store(&g_lead_have, 0); atomic_store(&g_lead_on, 0);
     const char *present = getenv("DM_PRESENT_INTERVAL");
     if (g_default_present && present && !strcmp(present, "display")) unsetenv("DM_PRESENT_INTERVAL");
     g_default_present = 0;

@@ -14,6 +14,7 @@ void s2a_fps_start(const char *dir);
 int s2a_fps_session_stop(void);
 int s2a_fps_session_reset(void);
 void s2a_fps_set_enabled(int on);
+int s2a_lead_frame_available(void), s2a_lead_frame_on(void), s2a_fps_available(void);
 
 #define TARGET_ADDR 0x12340000ull
 // 多级指针链（11-02 补丁包 FPSLocker 转换）：img+0x1028 → CHAIN_A；*(CHAIN_A+8) = CHAIN_B；写 CHAIN_B+0x10。期望写入 61（表里的值），不经别的地址
@@ -164,7 +165,28 @@ int main(void) {
     pthread_mutex_lock(&mu); require(value == 25, "off writes the table's off value (25), not the value read at start (12)"); pthread_mutex_unlock(&mu);
     require(s2a_fps_session_stop() == 0, "stop succeeds");
     require(s2a_fps_session_reset() == 0, "final reset succeeds");
+    // 领先 GPU 一帧（lead 行）：登记 = 设置页显示开关、缺省按表值（登记一律写 0）；玩家的 S2A_LEAD_FRAME 优先于表；没登记的款环境变量照样能开（对照局），但不显示开关；
+    //   只有 lead 行的表不算「有帧率表」（60 帧开关不因此显示）
+    struct { const char *table, *env; int avail, on, fps; } lc[] = {
+        {"build 1234abcd5678ef00\nlead 0\n", NULL, 1, 0, 0},
+        {"build 1234abcd5678ef00\nlead 0\n", "1", 1, 1, 0},
+        {"build 1234abcd5678ef00\nlead 1\n", "0", 1, 0, 0},
+        {"build 1234abcd5678ef00\nlead 1\n", NULL, 1, 1, 0},
+        {"build 1234abcd5678ef00\nw main 0x1000 i32 60 *0 off 25\n", "1", 0, 1, 1},
+        {"build 1234abcd5678ef00\nw main 0x1000 i32 60 *0 off 25\nlead 0\n", NULL, 1, 0, 1},
+        {"build 1234abcd5678ef00\nlead 2\n", "1", 0, 1, 1},   // 坏 lead 行：报红、不登记（表里有坏行照旧算有表）
+    };
+    for (unsigned i = 0; i < sizeof lc / sizeof lc[0]; i++) {
+        f = fopen(path, "w"); require(f != NULL, "open lead table"); fputs(lc[i].table, f); fclose(f);
+        if (lc[i].env) setenv("S2A_LEAD_FRAME", lc[i].env, 1); else unsetenv("S2A_LEAD_FRAME");
+        s2a_fps_start(dir);
+        char why[96]; snprintf(why, sizeof why, "lead case %u: available / on / fps table", i);
+        require(s2a_lead_frame_available() == lc[i].avail && s2a_lead_frame_on() == lc[i].on && s2a_fps_available() == lc[i].fps, why);
+        require(s2a_fps_session_stop() == 0 && s2a_fps_session_reset() == 0, "lead case reset");
+        require(!s2a_lead_frame_on() && !s2a_lead_frame_available(), "reset clears lead");
+    }
+    unsetenv("S2A_LEAD_FRAME");
     unlink(path); rmdir(dir);
-    puts("✓ t_fps_portable: safe I/O, two-level pointer chain, and joined stop");
+    puts("✓ t_fps_portable: safe I/O, two-level pointer chain, joined stop, lead-one-frame row");
     return 0;
 }
