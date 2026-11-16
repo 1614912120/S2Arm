@@ -7084,6 +7084,10 @@
   "en": "Install to iPhone from the computer again; it resumes from what was already sent."
  },
  {
+  "source": "在游戏库里长按这款，选「删除游戏…」，再把电脑上导出的这款 .img 重新放进「放这里导入」。",
+  "en": "In the library, press and hold this game and choose “Delete game…”, then put this game's .img exported on the computer into Import Here again."
+ },
+ {
   "source": "重新连电脑推送，会自动补齐。",
   "en": "Connect to the computer and push again; the missing part is filled in automatically."
  },
