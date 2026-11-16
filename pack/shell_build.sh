@@ -58,6 +58,8 @@ HL=$S/build/gal/ios/gal_helpers
 { [ -f "$HL/.stamp" ] || "$MK" -C "$SN" ROOT="$SN" -s "$SN/build/gal/ios/gal_helpers/.stamp" >> "$B/make.log" 2>&1; } \
   && mkdir -p "$APP/gal_helpers/m3" && cp "$HL"/*.metallib "$APP/gal_helpers/" && cp "$HL"/m3/*.metallib "$APP/gal_helpers/m3/" \
   || { echo "【红】渲染器内部辅助库拷不进壳（${HL}）"; exit 1; }
+# 壳本体去调试映射与本地符号（11-15 瘦身：125 → 50 MB；玩家机器上没有代码读本地符号）；未去符号原件放壳目录旁 <壳目录>.symbols/（不进壳、不进 App，发版存档用来离线还原崩溃报告）
+rm -rf "$OUT.symbols" && mkdir -p "$OUT.symbols" && cp "$APP/S2Arm" "$OUT.symbols/S2Arm" && xcrun strip -S -x "$APP/S2Arm" || { echo "【红】壳去符号失败"; exit 1; }
 TABLES=$("$MK" -C "$SN" -s print-app-tables) || { echo "【红】取不到随包表清单"; exit 1; }
 "${S2A_PY:-python3}" "$H/ship_ext.py" shell --app "$APP" --out "$OUT" --tables "$TABLES" || exit 1
 if [ -n "${S2A_SHELL_CLOSURE_SUGGEST:-}" ]; then "${S2A_PY:-python3}" "$H/shell/closure.py" suggest "$S" > "$S2A_SHELL_CLOSURE_SUGGEST" || exit 1

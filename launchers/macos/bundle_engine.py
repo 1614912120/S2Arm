@@ -119,8 +119,9 @@ def bundle_prebuilt_libs(tools, source_root=ROOT, env=None):
             (out / "build.txt").write_text("key=%s\nversion=%s\nsource_sha256=%s\nlib_sha256=%s\n" % (key, pin.group(1), pin.group(2), digest(out / lib)))
 
 
-def strip_debug_maps(root, developer_dir):
-    """发布进 App 的二进制去掉调试映射（N_OSO / N_SO 记着出包机 .o 与源码目录的绝对路径）：strip -S 只删调试信息，符号表保留、崩溃栈照样有函数名。
+def strip_debug_maps(root, developer_dir, keep_dir=None):
+    """发布进 App 的二进制去掉调试映射与本地符号（strip -S -x）：调试映射记着出包机 .o 与源码目录的绝对路径；本地符号玩家机器上没有代码读
+    （11-15 瘦身：宿主 121.5 → 48.7 MB，导出符号一个不少，dlsym 照常）。keep_dir 给了就先把未去符号的原件按相对路径存过去（发版存档，离线还原崩溃报告）。
     strip 会让签名失效，所以随后由里到外重签（保留原 entitlements / 标识）。玩家机器上现编的宿主不走这里，照常可调试。"""
     env = dict(os.environ, DEVELOPER_DIR=developer_dir)
     def is_macho(p):
@@ -129,7 +130,11 @@ def strip_debug_maps(root, developer_dir):
     machos = [p for p in sorted(root.rglob("*")) if p.is_file() and not p.is_symlink() and is_macho(p)]
     keep = ["--preserve-metadata=identifier,entitlements,flags,runtime"]
     for p in machos:
-        subprocess.run(["xcrun", "strip", "-S", str(p)], env=env, check=True, capture_output=True)
+        if keep_dir:
+            dst = Path(keep_dir) / p.relative_to(root)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, dst)
+        subprocess.run(["xcrun", "strip", "-S", "-x", str(p)], env=env, check=True, capture_output=True)
         subprocess.run(["codesign", "--force", "--sign", "-", *keep, str(p)], env=env, check=True, capture_output=True)
     bundles = sorted((p for p in root.rglob("*") if p.is_dir() and p.suffix in (".app", ".framework")), key=lambda p: -len(p.parts))
     for b in bundles:
@@ -282,7 +287,8 @@ def bundle(destination, developer_dir):
     shutil.copy2(ROOT / "build/gal/gal_xc", tools / "gal/gal_xc")
     (tools / "dsx").mkdir()   # 直连翻译库（pack/stage_direct.sh 认 dsx/libdsx.dylib，11-08 从 libnxgal 拆出）
     shutil.copy2(ROOT / "build/dsx/libdsx.dylib", tools / "dsx/libdsx.dylib")
-    strip_debug_maps(destination / "Binaries", developer_dir)
+    sym = os.environ.get("S2A_SYMBOLS_OUT")   # 发版存档未去符号原件（private-tools release/build_mac.sh 给 <产物目录>/symbols）
+    strip_debug_maps(destination / "Binaries", developer_dir, Path(sym) / "Engine/Binaries" if sym else None)
     if source_fingerprint(ROOT) != fingerprint:
         raise RuntimeError("Engine sources changed during packaging; retry with stable inputs")
     precompile(destination, destination.parent / RUNTIME_PYTHON)   # 先于清单：.pyc 和源码一起进 engine.json、一起签
