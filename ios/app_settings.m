@@ -515,7 +515,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
             for (NSNumber *n in lv) [labels addObject:[NSString stringWithFormat:S2AL(@"settings.fps.pick.level"), n.longValue]];
             NSInteger cur = [s2a_ios_settings_defaults() integerForKey:@"S2AFpsPick"], sel = cur > 0 ? (NSInteger)[lv indexOfObject:@(cur)] + 1 : 0;
             if (sel < 0 || sel > (NSInteger)lv.count) sel = 0;
-            return [self dropdown:S2AL(@"settings.fps.pick") labels:labels selected:sel enabled:^BOOL(NSInteger index) { (void)index; return YES; } choose:^(NSInteger index) {
+            return [self dropdown:S2AL(@"settings.fps.pick") note:S2AL(@"settings.fps.pick.note") labels:labels selected:sel enabled:^BOOL(NSInteger index) { (void)index; return YES; } choose:^(NSInteger index) {
                 NSInteger v = index > 0 ? lv[index - 1].integerValue : 0;
                 [s2a_ios_settings_defaults() setInteger:v forKey:@"S2AFpsPick"];
                 if (s2a_cpatch_fps_pick) s2a_cpatch_fps_pick((int)v);
