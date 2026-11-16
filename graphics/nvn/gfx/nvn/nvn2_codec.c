@@ -69,6 +69,8 @@ void s2a_av1_close(void *h) __attribute__((weak));
 #define CV_IMAGES 1024
 #define SP_COUNTERS 64
 #define SP_SLOTS 64
+#define CV_TRACE_N 48
+#define CV_TR(d, fmt, ...) do { int k_ = atomic_fetch_add(&(d)->ntr, 1); if (k_ < CV_TRACE_N) LOG("Switch 2 视频调用 #%d（%s 解码器 %p）：" fmt, k_ + 1, cv_name[(d)->codec], (d)->guest, __VA_ARGS__); } while (0)
 #define CV_RED(n, ...) do { static _Atomic int red_##n; if (!atomic_exchange(&red_##n, 1)) LOG("【红】" __VA_ARGS__); } while (0)
 
 static void *gsym(const char *n) { void *p = guest_sym(n); if (!p) die("Switch 2 视频解码接管：游戏 SDK 缺符号 %s", n); return p; }
@@ -635,6 +637,8 @@ typedef struct cvdec {
     uint8_t sps[256], pps[256]; size_t nsps, npps; int64_t h264_pts; int h264_any;
     // 解码耗时（每包：送进解码器到拿到图，不含写进图像）
     uint64_t frames, dec_n, dec_ns, dec_max;
+    // 游戏对这个解码器的前 CV_TRACE_N 次调用逐条记一行（D-2KHS：RGBA 输出那段片子 2/2 局游戏自己中止，宿主没一行红：要看它最后调了什么、回了什么）
+    _Atomic int ntr;
     // 写进图像的耗时（YUV 转 RGBA / 拷 NV12 / 交换 BGRA）
     uint64_t wr_n, wr_ns;
 } cvdec;
@@ -1080,14 +1084,16 @@ static Result cv_register(void *t, uint32_t i, const cv_pool *pool, uint32_t img
     if (i >= CV_BUFS || img >= pool->count) { LOG("【红】Switch 2 视频：登记缓冲 %u（图像 %u / %u）越界", i, img, pool->count); return RES_FAIL; }
     pthread_mutex_lock(&d->mu);
     // SDK 对重复登记的结果
-    if (d->buf[i].reg) { pthread_mutex_unlock(&d->mu); return 0xfa26f; }
+    if (d->buf[i].reg) { pthread_mutex_unlock(&d->mu); LOG("【红】Switch 2 视频：缓冲 %u 重复登记，回 0xfa26f（游戏拿到失败会自己中止）", i); return 0xfa26f; }
     d->buf[i].reg = 1; d->buf[i].img = pool->first + img; memset(&d->buf[i].fence, 0, sizeof d->buf[i].fence);
     cv_img im; if (cv_img_get(d->buf[i].img, &im)) d->vt_nv12 = im.kind == IMG_NV12;
     cv_queue(d, i);
+    int rn = d->rn, kind = cv_img_get(d->buf[i].img, &im) ? im.kind : 0;
     pthread_mutex_unlock(&d->mu);
+    CV_TR(d, "Register 缓冲 %u ← 图像 %u（%s），环里 %d", i, pool->first + img, kind == IMG_NV12 ? "NV12" : kind == IMG_RGBA ? "RGBA" : kind == IMG_HDR ? "HDR" : "不认识", rn);
     return RES_OK;
 }
-static Result cv_start(void *t) { cvdec *d = cv_of(t); pthread_mutex_lock(&d->mu); d->started = 1; pthread_cond_broadcast(&d->cv); cv_ready_signal(d); pthread_mutex_unlock(&d->mu); return RES_OK; }
+static Result cv_start(void *t) { cvdec *d = cv_of(t); pthread_mutex_lock(&d->mu); d->started = 1; pthread_cond_broadcast(&d->cv); cv_ready_signal(d); int rn = d->rn; pthread_mutex_unlock(&d->mu); CV_TR(d, "Start，环里 %d", rn); return RES_OK; }
 // 排队的包丢掉、解码器重来；等帧的缓冲继续等
 static Result cv_flush(void *t, int stop) {
     cvdec *d = cv_of(t);
@@ -1095,7 +1101,9 @@ static Result cv_flush(void *t, int stop) {
     cv_drop_inputs(d); d->gen++;
     if (stop) d->started = 0;
     pthread_cond_broadcast(&d->cv); cv_ready_signal(d);
+    int rn = d->rn, fn = d->fn;
     pthread_mutex_unlock(&d->mu);
+    CV_TR(d, "%s，环里 %d、等帧 %d", stop ? "Stop" : "Flush", rn, fn);
     return RES_OK;
 }
 static Result cv_submit(uint64_t *id, void *t, const void *p, uint64_t n, int64_t pts_ns, uint32_t eos) {
@@ -1111,6 +1119,7 @@ static Result cv_submit(uint64_t *id, void *t, const void *p, uint64_t n, int64_
     }
     d->q[(d->qh + d->qn++) % d->qcap] = in;
     *id = ++d->nsub;
+    if (d->nsub <= 4 || eos) CV_TR(d, "Submit 第 %llu 包 %llu 字节 时间 %lld ns%s", (unsigned long long)d->nsub, (unsigned long long)n, (long long)pts_ns, eos & 1 ? "（流结束）" : "");
     if (d->qn >= CV_MAXQ) s2a_event_clear(d->ready_ev);
     pthread_cond_broadcast(&d->cv); cv_ready_signal(d);
     pthread_mutex_unlock(&d->mu);
@@ -1119,23 +1128,29 @@ static Result cv_submit(uint64_t *id, void *t, const void *p, uint64_t n, int64_
 static Result cv_acquire(uint32_t *idx, cv_sync *h, void *t) {
     cvdec *d = cv_of(t);
     pthread_mutex_lock(&d->mu);
-    if (!d->rn) { pthread_mutex_unlock(&d->mu); return CV_NOT_READY; }
+    if (!d->rn) { int fn = d->fn; pthread_mutex_unlock(&d->mu); CV_TR(d, "Acquire 环空，回 %#x（等帧 %d）", CV_NOT_READY, fn); return CV_NOT_READY; }
     uint32_t i = d->ring[d->rh]; d->rh = (d->rh + 1) % CV_BUFS; d->rn--;
     *idx = i; *h = (cv_sync){ ~d->ctr, 1, d->buf[i].seq };
+    uint64_t seq = d->buf[i].seq; int rn = d->rn;
     pthread_mutex_unlock(&d->mu);
+    CV_TR(d, "Acquire → 缓冲 %u 句柄 %llu，环里剩 %d", i, (unsigned long long)seq, rn);
     return RES_OK;
 }
 static void cv_release(void *t, uint32_t i, uint64_t h0, uint64_t h1) {
     cvdec *d = cv_of(t);
     if (i >= CV_BUFS) return;
     pthread_mutex_lock(&d->mu);
-    if (d->buf[i].reg) { uint64_t hv[2] = { h0, h1 }; memcpy(&d->buf[i].fence, hv, 16); cv_queue(d, i); }
+    int reg = d->buf[i].reg;
+    if (reg) { uint64_t hv[2] = { h0, h1 }; memcpy(&d->buf[i].fence, hv, 16); cv_queue(d, i); }
+    int rn = d->rn;
     pthread_mutex_unlock(&d->mu);
+    CV_TR(d, "Release 缓冲 %u 读栅栏 %#llx %#llx%s，环里 %d", i, (unsigned long long)h0, (unsigned long long)h1, reg ? "" : "（没登记，丢掉）", rn);
 }
 // 退登记：缓冲出两条次序（取帧环、填帧序），之后 Acquire 不再给它；没登记过的回 SDK 对重复登记同族的错
 static Result cv_unregister(void *t, uint32_t i) {
     cvdec *d = cv_of(t);
-    if (i >= CV_BUFS) return RES_FAIL;
+    CV_TR(d, "Unregister 缓冲 %u", i);
+    if (i >= CV_BUFS) { LOG("【红】Switch 2 视频：退登记缓冲 %u 越界（宿主 %d 格）", i, CV_BUFS); return RES_FAIL; }
     pthread_mutex_lock(&d->mu);
     if (!d->buf[i].reg) { pthread_mutex_unlock(&d->mu); LOG("【红】Switch 2 视频：退登记缓冲 %u，它没登记", i); return RES_FAIL; }
     d->buf[i].reg = 0; d->buf[i].filled = 0;
@@ -1147,7 +1162,7 @@ static Result cv_unregister(void *t, uint32_t i) {
 }
 static Result cv_props(uint16_t *w, uint16_t *h, uint16_t *w2, uint16_t *h2, int64_t *pts, uint8_t *eos, void *t, uint32_t i) {
     cvdec *d = cv_of(t);
-    if (i >= CV_BUFS) return RES_FAIL;
+    if (i >= CV_BUFS) { LOG("【红】Switch 2 视频：取缓冲 %u 的帧属性，越界（宿主 %d 格）", i, CV_BUFS); return RES_FAIL; }
     pthread_mutex_lock(&d->mu);
     // SDK 也等服务的下一帧（一般已经在了）
     struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl); dl.tv_sec += 1;
@@ -1158,6 +1173,7 @@ static Result cv_props(uint16_t *w, uint16_t *h, uint16_t *w2, uint16_t *h2, int
     if (!d->buf[i].filled) { pthread_mutex_unlock(&d->mu); LOG("【红】Switch 2 视频：取缓冲 %u 的帧属性，它还没有帧", i); return CV_NOT_READY; }
     *w = *w2 = d->buf[i].fw; *h = *h2 = d->buf[i].fh; *pts = d->buf[i].pts_ns; *eos = (uint8_t)d->buf[i].eos;
     pthread_mutex_unlock(&d->mu);
+    CV_TR(d, "GetProperties 缓冲 %u → %ux%u 时间 %lld ns%s", i, *w, *h, (long long)*pts, *eos ? " 流结束" : "");
     return RES_OK;
 }
 // SDK 19 的取输出缓冲属性（#955：大金刚新版本导入它；nxnative 同名实现，MIT）：时间前多一个 nn::movie::ColorSpace*，9 个参数、序号在第一个栈槽
