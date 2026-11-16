@@ -190,7 +190,7 @@ export TMPDIR="$repo/build/vk-tests"
 out=$(mktemp -d "$TMPDIR/s2a-nvn-vk.XXXXXX")
 trap 'rm -rf "$out"' EXIT
 mkdir -p "$out/shaders"
-for s in vs_store.vert vs_load.vert vs_clip.vert vs_cull.vert count_args.comp logic_float.frag logic_uint.frag logic_float_mrt.frag logic_uint_mrt.frag gs_probe.vert gs_probe.geom gs_probe.frag gs_tstrip.vert gs_tstrip.geom gs_tstrip.frag tri.vert tri.frag tri_combined.frag tri3.vert tri_solid.frag tri_invert.frag solid_green.frag solid_blue.frag out1_green.frag tex_u.frag quad.vert quad.frag inst.vert div.vert point.vert cube_at.comp quad2.frag arr.frag cube.frag cubearr.frag tex3d.frag comp.comp pushc.frag pushc.comp tbuf.comp itbuf.comp itbuf_unknown.comp itbuf_unknown_read.comp img.comp tsamp.comp arr2.frag separate.vert samp_at.comp samp_at_i.comp samp_at_u.comp separate.frag; do
+for s in vs_store.vert vs_load.vert vs_clip.vert vs_cull.vert count_args.comp logic_float.frag logic_uint.frag logic_float_mrt.frag logic_uint_mrt.frag ubo_dyn.frag ubo_dyn9.frag ubo_dyn34.frag gs_probe.vert gs_probe.geom gs_probe.frag gs_tstrip.vert gs_tstrip.geom gs_tstrip.frag tri.vert tri.frag tri_combined.frag tri3.vert tri_solid.frag tri_invert.frag solid_green.frag solid_blue.frag out1_green.frag tex_u.frag quad.vert quad.frag inst.vert div.vert point.vert cube_at.comp quad2.frag arr.frag cube.frag cubearr.frag tex3d.frag comp.comp pushc.frag pushc.comp tbuf.comp itbuf.comp itbuf_unknown.comp itbuf_unknown_read.comp img.comp tsamp.comp arr2.frag separate.vert samp_at.comp samp_at_i.comp samp_at_u.comp separate.frag; do
     "$glslc" --target-env=vulkan1.1 "$repo/android/tests/vk/shaders/$s" -o "$out/shaders/$s.spv"
 done
 "$glslc" --target-env=vulkan1.1 "$repo/android/tests/vk/shaders/tbuf_replay.frag" -o "$out/shaders/tbuf_replay.frag.spv"
@@ -620,14 +620,16 @@ if [ "$bad" -ne 0 ] || ! grep -q "两级回放：交给录制线程" "$out/log_d
     exit 1
 fi
 
-# 描述符组备忘开着（开关 nvk_desc_memo）再跑一遍：像素期望不变、校验层 0 条。
+# 描述符组备忘关掉（开关 nvk_desc_memo=0：UBO 用静态偏移、不备忘，回到 #1233 之前的老路径）再跑一遍：像素期望不变、校验层 0 条。
+# 缺省那几遍跑的是备忘开着（缺省开，管线的 UBO 不超设备上限就走动态偏移）；C208 在这一遍里核「备忘关则一律静态」，
+# 并保留按「分配了几组」写的那几条期望（备忘开着时内容相同的组不再分配，那几条在缺省遍里不比）。
 set +e
-S2A_TEST_DESC_MEMO=1 timeout 600 "$out/t_backend_vk" "$out/shaders" 2>&1 | tee "$out/log_memo"
+S2A_TEST_DESC_MEMO=0 timeout 600 "$out/t_backend_vk" "$out/shaders" 2>&1 | tee "$out/log_memo"
 rc=${PIPESTATUS[0]}
 set -e
 bad=$(grep -cE "Validation Error|VUID-" "$out/log_memo" || true)
 if [ "$rc" -ne 0 ] || [ "$bad" -ne 0 ]; then
-    echo "【红】描述符组备忘开着的那一遍：rc=${rc}，validation 报错 $bad 条" >&2
+    echo "【红】描述符组备忘关着的那一遍：rc=${rc}，validation 报错 $bad 条" >&2
     grep -E "Validation Error|VUID-" "$out/log_memo" | head -20 >&2
     exit 1
 fi

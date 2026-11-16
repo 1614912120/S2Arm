@@ -139,6 +139,9 @@ struct nvn_gpu_pipe_s {
     struct dset_lay *dlay[4];   // 各组布局在布局表里的表项（#1096：结构相同的布局全后端只建一个，管线只借用、不销毁；表项归布局表所有，会话收尾才销毁）；dsl[set] == dlay[set]->dsl
     uint32_t nset;
     nvn_gpu_layout_ent *stage_ents[6];
+    int16_t *stage_dyn[6];   // 动态 UBO 偏移（#1233）：与 stage_ents 同下标，>= 0 = 这一项是动态 UBO、值是它在所属组里的动态序号起点（按 binding 升序累加个数）；-1 = 静态；整条管线不用动态时为 NULL
+    uint8_t ndyn[4];         // 每组的动态描述符个数
+    uint8_t dyn_all;         // 整条管线布局里动态描述符总数（≤ 设备 maxDescriptorSetUniformBuffersDynamic 且 ≤ 32）；0 = 这条管线的 UBO 都是静态的
     VkFormat *stage_tfmt[6];
     int8_t texel_binds;   // 有没有纹素缓冲类的绑定项：0 还没数，1 有，-1 没有（见 bind_descriptor_groups）
     uint32_t stage_nent[6];
@@ -230,6 +233,8 @@ struct nvn_gpu_cmd_s {
     VkDescriptorSet desc_sets[4];   // 仅本命令段；旧组仍归本段的池所有，不就地覆盖在途绑定
     VkPipelineLayout desc_layout;
     uint32_t desc_dirty;
+    uint32_t dyn_off[4][32];   // 动态 UBO 偏移（#1233）：每组每个动态描述符当前要给 vkCmdBindDescriptorSets 的偏移；换布局时清零，每笔绘制从 binds 里重算
+    uint8_t dyn_dirty;         // 只有动态 UBO 的偏移变了（组内容没变）：这一笔不重写组，只用新偏移重绑
     // 描述符写入影子（开关 nvk_desc_skip，缺省开）：同一个组对象里，内容和上次真正写进去的一样就不再写。
     // 真机上一帧约 1030 次整组重建、每次 11 条描述符；其中大部分条目（贴图句柄、采样器、常量缓冲片）和上一笔相同。
     struct desc_shadow { uint64_t a, b, c; uint32_t type; uint16_t binding; uint8_t valid; } dsh[4][32];
@@ -337,6 +342,11 @@ static void pc_fb_note_desc(const nvn_gpu_pass_desc *d, int slot, uint32_t gen, 
 static void pc_destroy_all(void);
 enum { PIPE_HT_N = 1024 };
 static uint64_t g_desc_ns[4], g_desc_nw, g_desc_sets, g_desc_hit;   // 描述符四步：分配 / 构造写入项 / 写入 / 绑定；写入的描述符条数；重写的组数
+static uint32_t g_max_dyn_ubo, g_max_dyn_ubo_dev;   // 设备 maxDescriptorSetUniformBuffersDynamic（开会话时读；契约头不动，只在本后端里存）；后一个是设备真值（宿主用例压低前者之后还原用）
+static uint64_t g_dyn_rebind, g_dyn_pipes[2], g_dyn_fast;   // 诊断：只换动态偏移、不重写组、只重绑的次数；用动态 UBO 的管线条数 / 建过的带 UBO 的管线条数；绑定表里「只换偏移」直接放过的项数（用例钉这条近路）
+// 描述符组备忘开关 nvk_desc_memo（缺省开；0 = 关，回到「静态 UBO、不备忘」的老路径）。开 = 段内备忘 + 动态 UBO 偏移（备忘的键里没有偏移才有命中，见 pipe_build / write_binds）。
+// 建管线时读一次（决定这条管线的 UBO 用不用动态偏移），绑定时按段读（bind_descriptor_groups 里有短缓存）；两处读到不一样也能正确：动态与否是管线自己的属性，备忘与否只是这一笔要不要查表。
+static int desc_memo_flag(void) { return nvn_plat_flag("nvk_desc_memo", 1) != 0; }
 // 诊断累加器（g_desc_* / g_draw_ns）只增不清零：每个读者自带一份「上次读到的值」，读数 = 当前 − 上次。
 // 近 300 帧读数（backend_vulkan_wsi.inc）与每 5 秒的逐笔读数（nvn_gpu_draw 末尾）原先各自对同一批累加器 exchange 清零，
 // 互相取走对方窗口里的一部分，两边读数的每帧值、每笔值都偏小（nvk_gputime 开着时）。
@@ -768,11 +778,12 @@ static void dset_free_run(VkDescriptorPool pool, const VkDescriptorSet *sets, ui
     if (n) (void)vkFreeDescriptorSets(g.d, pool, n, sets);
 }
 static int dset_new_pool(void) {   // 持 g_dset_mu
-    VkDescriptorPoolSize ps[8] = {
+    VkDescriptorPoolSize ps[9] = {
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, DSET_POOL_PER_TYPE}, {VK_DESCRIPTOR_TYPE_SAMPLER, DSET_POOL_PER_TYPE},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, DSET_POOL_PER_TYPE}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, DSET_POOL_PER_TYPE},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, DSET_POOL_PER_TYPE}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, DSET_POOL_PER_TYPE},
-        {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, DSET_POOL_PER_TYPE}, {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, DSET_POOL_PER_TYPE}};
+        {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, DSET_POOL_PER_TYPE}, {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, DSET_POOL_PER_TYPE},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, DSET_POOL_PER_TYPE}};
     if (g_dset_npools == g_dset_pools_cap) {
         uint32_t cap = g_dset_pools_cap ? g_dset_pools_cap * 2 : 8;
         VkDescriptorPool *np = realloc(g_dset_pools, cap * sizeof *np);
@@ -784,7 +795,7 @@ static int dset_new_pool(void) {   // 持 g_dset_mu
     dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dpi.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     dpi.maxSets = DSET_POOL_SETS;
-    dpi.poolSizeCount = 8;
+    dpi.poolSizeCount = 9;
     dpi.pPoolSizes = ps;
     VkDescriptorPool p = VK_NULL_HANDLE;
     OC(OC_DPOOL);
@@ -1255,6 +1266,7 @@ static void fill_caps(struct nvn_gpu_vk *vk, const nvn_gpu_open_desc *d) {
     c->max_stage_res[NVN_GPU_RES_TEX_SAMP] = comb;
     c->max_stage_res[NVN_GPU_RES_IMAGE] = l->maxPerStageDescriptorStorageImages;
     c->max_sets = l->maxBoundDescriptorSets;
+    g_max_dyn_ubo_dev = g_max_dyn_ubo = l->maxDescriptorSetUniformBuffersDynamic;
 
     VkPhysicalDeviceFeatures f = vk->dev->core_features;   // 已启用记录，不是「设备支持」
     // debug 强制设备特性不能绕开 GS+遮挡探测门；缺记录或未通过保持未接。
@@ -3073,7 +3085,7 @@ static void destroy_pipe_objects(struct nvn_gpu_pipe_s *p) {
     if (p->pass) vkDestroyRenderPass(g.d, p->pass, NULL);
     if (p->layout) vkDestroyPipelineLayout(g.d, p->layout, NULL);
     // 描述符组布局（p->dsl / p->dlay）归布局表所有，会话收尾由 dlay_close 销毁，这里只借用过、不销毁
-    for (int i = 0; i < 6; i++) { free(p->stage_ents[i]); free(p->stage_tfmt[i]); }
+    for (int i = 0; i < 6; i++) { free(p->stage_ents[i]); free(p->stage_tfmt[i]); free(p->stage_dyn[i]); }
     free(p);
 }
 
@@ -3172,7 +3184,7 @@ static nvn_gpu_rc pipe_build(const nvn_gpu_pipe_desc *d, struct nvn_gpu_pipe_s *
     for (int i = NVN_GPU_SH_TCS; i < 5; i++)
         if (d->st[i].sh) return fail(err, NVN_GPU_E_UNSUPPORTED, "细分阶段：本段未实现");
 
-    struct merged { uint8_t set, binding, cls; uint16_t count; uint32_t stages; } m[64];
+    struct merged { uint8_t set, binding, cls; uint16_t count; uint32_t stages; int16_t dbase; } m[64];   // dbase：动态 UBO 在所属组里的动态序号起点，-1 = 静态
     uint32_t nm = 0, maxset = 0;
     for (int st = 0; st < 5; st++) {
         struct nvn_gpu_shader_s *sh = d->st[st].sh;
@@ -3190,7 +3202,7 @@ static nvn_gpu_rc pipe_build(const nvn_gpu_pipe_desc *d, struct nvn_gpu_pipe_s *
             uint32_t stagebit = 1u << st;
             if (j == nm) {
                 if (nm == 64) return fail(err, NVN_GPU_E_UNSUPPORTED, "描述符项超过 64");
-                m[nm++] = (struct merged){e->set, e->binding, e->cls, e->count ? e->count : 1, stagebit};
+                m[nm++] = (struct merged){e->set, e->binding, e->cls, e->count ? e->count : 1, stagebit, -1};
             } else {
                 if (m[j].cls != e->cls || m[j].count != (e->count ? e->count : 1))
                     return fail(err, NVN_GPU_E_LAYOUT, "set %u binding %u 的阶段布局冲突", e->set, e->binding);
@@ -3204,15 +3216,33 @@ static nvn_gpu_rc pipe_build(const nvn_gpu_pipe_desc *d, struct nvn_gpu_pipe_s *
     struct nvn_gpu_pipe_s *p = calloc(1, sizeof *p);
     if (!p) return fail(err, NVN_GPU_E_OOM, "管线结构分配失败");
     p->nset = nm ? maxset + 1 : 0;
+    // 动态 UBO 偏移（#1233）：备忘开着（nvk_desc_memo，缺省开）时，这条管线布局里的 UBO 个数不超过设备的动态 UBO 上限
+    // （maxDescriptorSetUniformBuffersDynamic，按整条管线布局计；也不超过 32）就全部做成动态——
+    // 描述符里只放缓冲和范围，偏移在绑定时给；这样「只是偏移不同」的两组内容完全一样，不用重写也不用另分一组，备忘才有命中。超限的管线保持静态（按设备能力取舍，不是 A/B 开关）。
+    uint32_t dyn_n = 0;
+    for (uint32_t i = 0; i < nm; i++) if (m[i].cls == NVN_GPU_RES_UBO) dyn_n += m[i].count;
+    const int ubo_dyn = dyn_n && dyn_n <= g_max_dyn_ubo && dyn_n <= 32 && desc_memo_flag();
+    if (dyn_n) __atomic_fetch_add(&g_dyn_pipes[1], 1, __ATOMIC_RELAXED);
+    if (ubo_dyn) __atomic_fetch_add(&g_dyn_pipes[0], 1, __ATOMIC_RELAXED);
     for (uint32_t set = 0; set < p->nset; set++) {
         VkDescriptorSetLayoutBinding b[32];
         uint32_t nb = 0;
+        if (ubo_dyn) {   // 本组每条动态 UBO 的组内动态序号：按 binding 升序累加个数（Vulkan 按这个顺序消费动态偏移）
+            for (uint32_t i = 0; i < nm; i++) {
+                if (m[i].set != set || m[i].cls != NVN_GPU_RES_UBO) continue;
+                uint32_t base = 0;
+                for (uint32_t j = 0; j < nm; j++) if (m[j].set == set && m[j].cls == NVN_GPU_RES_UBO && m[j].binding < m[i].binding) base += m[j].count;
+                m[i].dbase = (int16_t)base;
+                p->ndyn[set] = (uint8_t)(p->ndyn[set] + m[i].count);
+            }
+            p->dyn_all = (uint8_t)(p->dyn_all + p->ndyn[set]);
+        }
         for (uint32_t i = 0; i < nm; i++) {
             if (m[i].set != set) continue;
             if (nb == 32) { free(p); return fail(err, NVN_GPU_E_UNSUPPORTED, "单 set 描述符项超过 32"); }
             memset(&b[nb], 0, sizeof b[nb]);
             b[nb].binding = m[i].binding;
-            b[nb].descriptorType = vk_desc_type(m[i].cls);
+            b[nb].descriptorType = m[i].dbase >= 0 ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC : vk_desc_type(m[i].cls);
             b[nb].descriptorCount = m[i].count;
             b[nb].stageFlags = 0;
             for (int st = 0; st < 5; st++)
@@ -3530,6 +3560,18 @@ static nvn_gpu_rc pipe_build(const nvn_gpu_pipe_desc *d, struct nvn_gpu_pipe_s *
                 return fail(err, NVN_GPU_E_OOM, "图形管线阶段布局分配失败");
             }
             memcpy(p->stage_ents[st], sh->ents, (size_t)sh->nent * sizeof *p->stage_ents[st]);
+            if (ubo_dyn) {   // 每一项的动态序号起点：和上面布局里的同一张 m 表对着取
+                p->stage_dyn[st] = calloc(sh->nent, sizeof *p->stage_dyn[st]);
+                if (!p->stage_dyn[st]) {
+                    destroy_pipe_objects(p);
+                    return fail(err, NVN_GPU_E_OOM, "图形管线动态偏移表分配失败");
+                }
+                for (uint32_t i = 0; i < sh->nent; i++) {
+                    int16_t v = -1;
+                    for (uint32_t j = 0; j < nm; j++) if (m[j].set == sh->ents[i].set && m[j].binding == sh->ents[i].binding) { v = m[j].dbase; break; }
+                    p->stage_dyn[st][i] = v;
+                }
+            }
             if (sh->tfmt) {
                 p->stage_tfmt[st] = calloc(sh->nent, sizeof *p->stage_tfmt[st]);
                 if (!p->stage_tfmt[st]) {
@@ -4461,6 +4503,13 @@ void nvn_gpu_bind(nvn_gpu_cmd ch, nvn_gpu_stage st, const nvn_gpu_binding *b, ui
         for (uint32_t i = 0; i < max; i++) {
             const nvn_gpu_binding *old = i < c->nbinds[st] ? &c->binds[st][i].b : NULL, *next = i < n ? &b[i] : NULL;
             if (old && next && binding_equal(old, next)) continue;
+            if (old && next && c->pipe->stage_dyn[st] && old->cls == NVN_GPU_RES_UBO && next->cls == NVN_GPU_RES_UBO && old->ent == next->ent && old->elem == next->elem
+                && old->ent < c->pipe->stage_nent[st] && c->pipe->stage_dyn[st][old->ent] >= 0 && old->u.b.buf == next->u.b.buf && old->u.b.len == next->u.b.len
+                && (old->u.b.off >> 32) == (next->u.b.off >> 32)) {   // 偏移的高 32 位在描述符里（write_binds），不同就是内容变了，走脏组
+                c->dyn_dirty = 1;   // 动态 UBO 只换了偏移的低 32 位：组内容没变，不重写，只用新偏移重绑（见 bind_descriptor_groups）
+                __atomic_fetch_add(&g_dyn_fast, 1, __ATOMIC_RELAXED);
+                continue;
+            }
             if (old && old->ent < c->pipe->stage_nent[st]) c->desc_dirty |= 1u << c->pipe->stage_ents[st][old->ent].set;
             if (next && next->ent < c->pipe->stage_nent[st]) c->desc_dirty |= 1u << c->pipe->stage_ents[st][next->ent].set;
         }
@@ -4549,16 +4598,17 @@ void nvn_gpu_push(nvn_gpu_cmd ch, nvn_gpu_stage st, uint32_t off, const void *da
 // 池的上限按规范可以被驱动放宽也可以严格执行，所以「分满」只认分配调用返回的池耗尽 / 碎片两种结果，不自己数。
 enum { DPOOL_SETS = 256, DPOOL_PER_TYPE = 1024 };
 static int new_dpool(struct nvn_gpu_cmd_s *c) {
-    VkDescriptorPoolSize ps[8] = {
+    VkDescriptorPoolSize ps[9] = {
         {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, DPOOL_PER_TYPE}, {VK_DESCRIPTOR_TYPE_SAMPLER, DPOOL_PER_TYPE},
         {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, DPOOL_PER_TYPE}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, DPOOL_PER_TYPE},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, DPOOL_PER_TYPE}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, DPOOL_PER_TYPE},
-        {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, DPOOL_PER_TYPE}, {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, DPOOL_PER_TYPE}};
+        {VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, DPOOL_PER_TYPE}, {VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, DPOOL_PER_TYPE},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, DPOOL_PER_TYPE}};
     VkDescriptorPoolCreateInfo dpi;
     memset(&dpi, 0, sizeof dpi);
     dpi.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     dpi.maxSets = DPOOL_SETS;
-    dpi.poolSizeCount = 8;
+    dpi.poolSizeCount = 9;
     dpi.pPoolSizes = ps;
     if (seg_reuse_on() && (c->dpool = seg_take_desc()) != VK_NULL_HANDLE) return 1;
     OC(OC_DPOOL);
@@ -4626,6 +4676,12 @@ static int write_binds(struct nvn_gpu_cmd_s *c, const struct nvn_gpu_pipe_s *p, 
         const nvn_gpu_binding *b = &c->binds[st][i].b;
         if (!p->stage_nent[st]) { set_sticky(c, NVN_GPU_E_LAYOUT, "阶段 %d 没有布局项却给了绑定", st); return -1; }
         const nvn_gpu_layout_ent *e = &p->stage_ents[st][b->ent];
+        const int dynb = p->stage_dyn[st] && p->stage_dyn[st][b->ent] >= 0;   // 动态 UBO（#1233）：描述符里放偏移的高 32 位（一般为 0），低 32 位记进 dyn_off、绑定时给；两者相加还是原偏移
+        if (dynb) {
+            const uint32_t di = (uint32_t)p->stage_dyn[st][b->ent] + b->elem;
+            if (e->set >= 4 || b->elem >= (e->count ? e->count : 1u) || di >= p->ndyn[e->set]) { set_sticky(c, NVN_GPU_E_LAYOUT, "动态 UBO 绑定项 ent %u 的数组下标 %u 越界", b->ent, b->elem); return -1; }
+            c->dyn_off[e->set][di] = (uint32_t)b->u.b.off;
+        }
         const int live = (int)(dirty >> e->set & 1u);
         if (!live && e->cls != NVN_GPU_RES_TBUF && e->cls != NVN_GPU_RES_IMAGE_TBUF) continue;
         VkWriteDescriptorSet *w = &wr[nw];
@@ -4635,7 +4691,7 @@ static int write_binds(struct nvn_gpu_cmd_s *c, const struct nvn_gpu_pipe_s *p, 
         w->dstBinding = e->binding;
         w->dstArrayElement = b->elem;
         w->descriptorCount = 1;
-        w->descriptorType = vk_desc_type(e->cls);
+        w->descriptorType = dynb ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC : vk_desc_type(e->cls);
         if (live) sig[e->set] += dset_sig_mix(e->binding, b->elem);
         VkDescriptorImageInfo *im = &ii[nw];
         VkDescriptorBufferInfo *bf = &bi[nw];
@@ -4672,7 +4728,7 @@ static int write_binds(struct nvn_gpu_cmd_s *c, const struct nvn_gpu_pipe_s *p, 
         case NVN_GPU_RES_SSBO:
             memset(bf, 0, sizeof *bf);
             bf->buffer = b->u.b.buf ? b->u.b.buf->buffer : VK_NULL_HANDLE;
-            bf->offset = b->u.b.off;
+            bf->offset = dynb ? (b->u.b.off & ~0xffffffffull) : b->u.b.off;
             bf->range = b->u.b.len;
             if (e->cls == NVN_GPU_RES_UBO && b->u.b.len > g.caps.max_ubo_range) {   // UBO 没有 WHOLE_SIZE 例外：超过范围上限只能准确拒绝
                 set_sticky(c, NVN_GPU_E_ARG, "常量缓冲范围 %llu 超过 maxUniformBufferRange %llu", (unsigned long long)b->u.b.len, (unsigned long long)g.caps.max_ubo_range);
@@ -4718,6 +4774,7 @@ static int bind_descriptor_groups(struct nvn_gpu_cmd_s *c, const struct nvn_gpu_
     if (c->desc_layout != p->layout || c->desc_point != point) {
         c->desc_layout = p->layout; c->desc_point = point; c->desc_dirty = 0xfu;
         memset(c->desc_sets, 0, sizeof c->desc_sets);
+        memset(c->dyn_off, 0, sizeof c->dyn_off); c->dyn_dirty = 0;   // 换了布局全部重写重绑，动态偏移在下面从 binds 里重算
     }
     // A descriptor-free pipeline ignores bindings left by the previous pipeline.
     if (!p->nset) return 1;
@@ -4731,14 +4788,16 @@ static int bind_descriptor_groups(struct nvn_gpu_cmd_s *c, const struct nvn_gpu_
             if (p->stage_ents[st][i].cls == NVN_GPU_RES_TBUF || p->stage_ents[st][i].cls == NVN_GPU_RES_IMAGE_TBUF) has = 1;
         pm->texel_binds = has;
     }
-    if (!dirty && p->texel_binds < 0) return 1;
+    if (!dirty && !c->dyn_dirty && p->texel_binds < 0) return 1;
+    const uint8_t dynd = c->dyn_dirty;   // 只有动态 UBO 偏移变了：不重写组，下面只用新偏移重绑
     const int tm = g_draw_tm; const uint64_t t0 = tm ? now_ns() : 0;   // 诊断：这四步各用多久（nvk_gputime 开着才计）
-    // 描述符组备忘（调试开关 nvk_desc_memo，缺省关；照 d2r-mobile 安卓笔记 perf-round2 发现 4）：
+    // 描述符组备忘（nvk_desc_memo，缺省开，0 = 关；照 d2r-mobile 安卓笔记 perf-round2 发现 4）：
     // 同一段里内容完全相同的组（同一布局、每条描述符的绑定号 / 类型 / 资源都相同）直接用上次写好的那一组，不再分配、不再写。
     // 一款 3D 游戏每帧重写 2800 组、1.13 万条描述符（分配 2.3 毫秒 + 写入 2.05 毫秒）。组归这一段的描述符池，段做完才销毁；
     // 内容相同就是资源相同，资源由首次写入那笔的引用保活到段完成。
+    // UBO 用动态偏移时（pipe_build）描述符里没有偏移（高 32 位一般为 0），只换偏移的两组键相同，才会命中；静态 UBO 的管线偏移在键里，命中率低（#1233）。
     static int memo_cur = -1; static uint32_t memo_k;
-    if (memo_cur < 0 || !(++memo_k & 255)) memo_cur = nvn_plat_flag("nvk_desc_memo", 0) != 0;
+    if (memo_cur < 0 || !(++memo_k & 255)) memo_cur = desc_memo_flag();
     const int memo = memo_cur && dirty;
     // 先不分配：写入项里先放记号（认出每条属于哪一组），写完才知道每一组这一笔的「写法」（write_binds 的 sig），再按写法去回收表取组（见 dset_take）。
     // 备忘开着时命中的组连取都省了；备忘关着时取完组把记号换成真的组。
@@ -4826,9 +4885,14 @@ static int bind_descriptor_groups(struct nvn_gpu_cmd_s *c, const struct nvn_gpu_
     const uint64_t t2 = tm ? now_ns() : 0;
     if (nw) { OC(OC_DWRITE); vkUpdateDescriptorSets(g.d, nw, wr, 0, NULL); }
     const uint64_t t3 = tm ? now_ns() : 0;
-    c->desc_dirty = 0;
-    if (dirty && p->nset) vkCmdBindDescriptorSets(c->cb, compute ? VK_PIPELINE_BIND_POINT_COMPUTE : VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                                  p->layout, 0, p->nset, c->desc_sets, 0, NULL);
+    c->desc_dirty = 0; c->dyn_dirty = 0;
+    if ((dirty || dynd) && p->nset) {
+        uint32_t offs[32], no = 0;   // 动态偏移按（组号、组内动态序号）顺序拼成一串；每次绑定都把所有组的偏移一并给出
+        if (p->dyn_all) for (uint32_t s = 0; s < p->nset && s < 4; s++) for (uint32_t k = 0; k < p->ndyn[s]; k++) offs[no++] = c->dyn_off[s][k];
+        vkCmdBindDescriptorSets(c->cb, compute ? VK_PIPELINE_BIND_POINT_COMPUTE : VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                p->layout, 0, p->nset, c->desc_sets, no, no ? offs : NULL);
+        if (tm && !dirty) __atomic_fetch_add(&g_dyn_rebind, 1, __ATOMIC_RELAXED);
+    }
     if (tm) { const uint64_t t4 = now_ns();
         __atomic_fetch_add(&g_desc_ns[0], (t1 - t0) + ta, __ATOMIC_RELAXED); __atomic_fetch_add(&g_desc_ns[1], (t2 - t1) - ta, __ATOMIC_RELAXED);
         __atomic_fetch_add(&g_desc_ns[2], t3 - t2, __ATOMIC_RELAXED); __atomic_fetch_add(&g_desc_ns[3], t4 - t3, __ATOMIC_RELAXED);
@@ -7082,6 +7146,22 @@ void nvn_gpu_stats(nvn_gpu_stat_fn fn, void *user, int take) {
 // 2 帧缓冲缓存里现存的项数；3 自检档（nvk_fbdrop=2）扫到的残留数（缺省档恒为 0）；
 // 4 视图链的结构违例数（每个节点：前驱指针指回自己、后继的反向指针指回本节点的 all_next，应恒为 0）；
 // 5 让 nvk_ulist / nvk_fbdrop 两个开关的缓存作废（用例改了开关值后立刻生效，返回 0）；6 帧缓冲缓存全表扫的累计次数。
+// 动态 UBO 偏移（#1233）的用例读数钩子（只给宿主单测，C208）：0 = 建管线时选了动态 UBO 的管线条数，1 = 建过的带 UBO 的管线条数（进程内累计，用例取前后之差），
+// 2 = 设备 maxDescriptorSetUniformBuffersDynamic（开会话时读），3 = 绑定表里「只换偏移」直接放过的项数（进程内累计，用例取前后之差）。
+uint64_t nvn_vk_dbg_dyn_stat(int which);
+uint64_t nvn_vk_dbg_dyn_stat(int which) {
+    if (which == 0) return __atomic_load_n(&g_dyn_pipes[0], __ATOMIC_RELAXED);
+    if (which == 1) return __atomic_load_n(&g_dyn_pipes[1], __ATOMIC_RELAXED);
+    if (which == 2) return g_max_dyn_ubo;
+    if (which == 3) return __atomic_load_n(&g_dyn_fast, __ATOMIC_RELAXED);
+    return 0;
+}
+// 用例把「设备动态 UBO 上限」压低到 v（只降不升；v = 0 还原成设备真值）：宿主设备（lavapipe）的上限比真机大，要核对「刚好在上限」「超上限一个」的取舍只能这样压。
+// 只在会话已打开、没有管线正在建的时候调（用例线程同步建管线）。
+void nvn_vk_dbg_dyn_limit(uint32_t v);
+void nvn_vk_dbg_dyn_limit(uint32_t v) {
+    g_max_dyn_ubo = (v && v < g_max_dyn_ubo_dev) ? v : g_max_dyn_ubo_dev;
+}
 // 描述符组按布局回收的用例读数钩子（只给宿主单测）：0 新分（向驱动）/ 1 复用 / 2 放回 / 3 放弃的段还给池 / 4 交给 alloc_sets 的总数 /
 // 5 空闲串里现有的组（沿登记表遍历数出来的）/ 6 表项数（登记的计数）/ 7 增长池个数 / 8 dead 的表项数（一组也放不进空池的布局）/ 9 回收开着吗（开会话时读的开关）/
 // 10 到总量上限、退回老路径的次数 / 11 取组碰锁退回老路径的次数（不要锁）/
