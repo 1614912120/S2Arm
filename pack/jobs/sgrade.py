@@ -111,26 +111,41 @@ def scan(c):
         pats = local_patches(c, gid, bid, oth) if bid else {}
         import patches as _p   # 维护者 11-15「两者合成一套」：没社区满屏补丁、这一版在宽屏已验证名单 → 满屏算我方通用满屏
         own = not pats.get("widescreen") and _p.own_widen(c, gid, bid)
-        games.append(dict(id=gid, name=g.get("name") or gid, program=where, build=bid, patches=pats, total=sum(pats.values()) + (1 if own else 0),
+        import sgrade_bf   # 直连库缺可读瓦片版着色器（_bf）：iPhone 看 game.json ios.bfGen，Mac 看运行版本清单 bfGen
+        from core import read
+        bf = dict(iphone=iphone and sgrade_bf.due(c, gid),
+                  mac=mac and sgrade_bf.stale(read(layout.image_mac(c, gid, create=False) / "manifest.json", {}).get("bfGen"))
+                      and (layout.image_mac(c, gid, create=False) / "shaders/direct/keys.tsv").is_file())
+        games.append(dict(id=gid, name=g.get("name") or gid, bfPending=bf, program=where, build=bid, patches=pats, total=sum(pats.values()) + (1 if own else 0),
                           ownWiden=bool(own), iphone=iphone, mac=mac, off=info.get("sgradeOff") is True,
                           versions={"mine": _p.display_version(c, g) or "",
                                     "available": {k: sorted(v) for k, v in oth.items() if not pats.get(k)}}))
     found = [x for x in games if x["program"] != "none"]
-    return dict(games=games, found=len(found), upgradable=sum(1 for x in found if x["total"] and not x["off"]),
+    return dict(games=games, found=len(found), upgradable=sum(1 for x in found if (x["total"] and not x["off"]) or any(x["bfPending"].values())),
                 noPatch=sum(1 for x in found if not x["total"]), missing=len(games) - len(found))
 
 
 def mac_all(c):
-    """启动器打开时后台跑（v0.4.0）：有 Mac 运行版本的款逐款补上 S 级优化；补丁记号没变的 refresh_mac 自己跳过。一款出错不挡别的"""
+    """启动器打开时后台跑（v0.4.0）：有 Mac 运行版本的款逐款补上 S 级优化；补丁记号没变的 refresh_mac 自己跳过。一款出错不挡别的
+    后台活给玩家让路（诊断 D-R8NG：原先整款改写都拿着与开始游戏同一把 execution 锁，一款要两分多钟，玩家点开始等 30 秒报「另一个任务正在使用游戏库」）：
+      库里有任务在用这把锁（正在玩 / 正在出包）就这款不做，不抢 CPU；改写在锁外的临时目录里做，只有换进运行版本那一下「没人用才拿锁」，
+      拿不到就放弃这款——开始游戏起局前自己会补它（build.launch → refresh_mac）"""
     from rewrite_refresh import refresh_mac
+    import sgrade_bf
     games = [g for g in c.catalog()["games"] if (layout.image_mac(c, g["id"], create=False) / "exefs/main").is_file()]
     c.begin("给 Mac 游戏补上 S 级优化", 1, 1)
     done = []
     for g in games:
         try:
-            with c.lock("execution"):   # 与开始游戏同一把锁：正在玩的那款不在运行中改
-                if refresh_mac(c, g["id"], layout.image_mac(c, g["id"], create=False)):
-                    done.append(g["id"].upper())
+            with c.idle("execution") as free:
+                pass
+            if not free:
+                continue
+            if refresh_mac(c, g["id"], layout.image_mac(c, g["id"], create=False), hold=lambda: c.idle("execution")):
+                done.append(g["id"].upper())
+            # 老包直连库缺可读瓦片版着色器（_bf）：整份重出在锁外做（几分钟到几十分钟），换进运行版本前同样进 c.idle，玩家正在开局就这次放弃
+            if sgrade_bf.upgrade_mac(c, g["id"], layout.image_mac(c, g["id"], create=False), hold=lambda: c.idle("execution")) and g["id"].upper() not in done:
+                done.append(g["id"].upper())
         except (Failure, OSError) as e:
             c.emit("message", f"【黄】{g.get('name') or g['id']} 这次没补上：{str(e)[:160]}")
     if done:
@@ -166,6 +181,13 @@ def _match(c, gid):
         return {}
     finally:
         c.r = keep
+
+
+def fi_supported():
+    """这台 Mac 能不能补帧：出图补帧只走 Metal 4（macOS 26 起，graphics/nvn/gfx/nvn/nvn_present_fi.inc）"""
+    import platform
+    v = platform.mac_ver()[0]
+    return bool(v) and int(v.split(".")[0]) >= 26
 
 
 def state(c, game, match=None):
@@ -210,9 +232,9 @@ def state(c, game, match=None):
     fams, _ = community.adaptive_patches(c, gid)
     ws_ids = sorted({(r.get("编号") or "") for r in rows if (r.get("编号") or "").startswith("widescreen:")})   # 非玩家句（表列名 / 运行时状态值）
     fixed = any(float(r.get("画幅") or 0) > 0 for r in rows if (r.get("编号") or "").startswith("widescreen:") and (r.get("画幅") or "").replace(".", "", 1).isdigit())   # 非玩家句（表列名 / 运行时状态值）
-    own = (img / "widen_verified.tsv").is_file() and community.runtime_caps(c, gid).get("widen") == "1"
-    src = "patch" if fams or ws_ids else "own" if own else "none"
-    switch = sset.get("widescreen", True) is not False
+    # 11-15 维护者「没补丁的游戏手动打开满屏就走咱们通用方案」：没有社区满屏补丁的款一律可开我方通用满屏（第三层整套放宽，不看已验证名单），缺省关
+    src = "patch" if fams or ws_ids else "own" if exported else "none"
+    switch = sset.get("widescreen", True) is not False if src == "patch" else sset.get("widescreen") is True
     keys = [("fs", "fullscreen")] + [("patch", k) for k in ws_ids] + ([("patch", "widescreen:auto")] if fixed else [])
     ws_st = next((st[k] for k in [*(fams or []), "widescreen:auto", *ws_ids] if k in st), None)
     if opted: s = "opted_out"
@@ -223,20 +245,23 @@ def state(c, game, match=None):
     else: s = "on"
     out["widescreen"] = {"state": s, "source": src, "active": "adaptive" if fams else "fixed" if fixed else "own" if src == "own" else "",
                          "lastRun": community.patch_result(ws_st), "autoOff": auto(keys), "versions": versions("widescreen")}
-    # 帧率：社区帧率补丁跟「帧率」开关，按档
+    # 帧率解锁（11-15 维护者「补帧稳定了就直接用补帧」）：有社区帧率补丁用补丁（按档），没有用补帧（MetalFX 30→60，Metal 4 才有）；二选一。
+    #   Mac 今天缺省不补帧：没补丁的款玩家明确开才补（pack/jobs/community.py launch_env 写 DM_PRESENT_FI），不退化
     levels = community.fps_levels(c, gid)
-    on = sset.get("fps60", True) is not False
+    fi_ok = fi_supported()
+    on = sset.get("fps60", True) is not False if levels else sset.get("fps60") is True
     pick = str(sset.get("fpsPick") or "0")
     fst = next((v for k, v in st.items() if k.startswith("fps:") and v[0] == "开"), None)   # 非玩家句（表列名 / 运行时状态值）
     target = int(pick) if pick.isdigit() and int(pick) else (max(levels) if levels else 0)
     weak = bool(fst) and fst[1].startswith("fps=") and fst[1][4:].isdigit() and int(fst[1][4:]) < (min(target, 60) if pick == "0" else target) - 5
     if opted: s = "opted_out"
-    elif not levels: s = missing("fps")
+    elif not levels and not exported: s = "unknown"
+    elif not levels and not fi_ok: s = "unsupported"
     elif auto([("fps", "fps60")]) and not on: s = "off_auto"
     elif not on: s = "off_user"
     elif weak: s = "ineffective"
     else: s = "on"
-    out["fps"] = {"state": s, "active": {"levels": levels, "pick": pick}, "lastRun": community.patch_result(fst),
+    out["fps"] = {"state": s, "source": "patch" if levels else "fi", "fiSupported": fi_ok, "active": {"levels": levels, "pick": pick}, "lastRun": community.patch_result(fst),
                   "autoOff": auto([("fps", "fps60")]), "versions": versions("fps")}
     # 画面：Mac 才打（iPhone 一律 mac_only）
     gfx = [it for it in community.packed_patches(c, gid) if it["kind"] == "gfx"]
@@ -294,7 +319,7 @@ def write_kit_state(c, gid, kit):
         m = _match(c, gid)
         vers = lambda cat: {"mine": m.get("version") or "", "available": [o["version"] for o in m.get("others") or [] if cat in o.get("cats", [])],
                             "exact": int((m.get("exact") or {}).get(cat) or 0)}
-        ws = "patch" if any(i.startswith(("widescreen:", "wsauto:")) for i in ids) else "own" if (kit / "widen_verified.tsv").is_file() else "none"
+        ws = "patch" if any(i.startswith(("widescreen:", "wsauto:")) for i in ids) else "own"   # 11-15：没补丁一律可开我方通用满屏（不看已验证名单）
         out = {"schema": 1, "build": m.get("build") or "", "optedOut": (layout.game_info(c, gid) or {}).get("sgradeOff") is True,
                "widescreen": dict(source=ws, port="failed" if m.get("port") and not (m.get("exact") or {}).get("widescreen") else "none", versions=vers("widescreen")),
                "fps": dict(versions=vers("fps")), "gfx": dict(state="mac_only"), "cheats": dict(versions=vers("cheat"))}

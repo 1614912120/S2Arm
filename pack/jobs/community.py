@@ -86,8 +86,8 @@ def launch_path(c, gid, create=True):
 def _from_community(old):
     """旧 community.json → launch.json：只带玩家明确选过的（schema 2 存盘总带 fps60=真，不算玩家选的）"""
     settings = {}
-    if isinstance(old.get("metalfx"), bool):
-        settings["enhance"] = old["metalfx"]
+    if old.get("metalfx") is True:   # 旧「MetalFX」开关 = 画质提升选锐利放大（11-15）；关 = 缺省标准，不记
+        settings["quality"] = "MetalFX"
     # 满屏（11-13 并入「宽屏强制启用」，明确开 = 没验证过也铺满）：旧文件的 widescreen=真是旧面板存盘带的缺省（同 fps60），只带关；
     #   widenForce=真才是玩家明确要铺满
     if old.get("widescreen") is False:
@@ -121,6 +121,10 @@ def load_launch(c, gid):
     data = data if isinstance(data, dict) else {}
     settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
     patches = data.get("patches") if isinstance(data.get("patches"), dict) else {}
+    # 「画面增强模式」开关（enhance）11-15 并进「画质提升」三档：开 = 锐利放大（MetalFX），关 = 缺省标准。读时换成新键，下次存盘旧键就没了
+    if settings.get("enhance") is True and "quality" not in settings:
+        settings["quality"] = "MetalFX"
+    settings.pop("enhance", None)
     return dict(schema=1, settings=settings, patches={str(k): bool(v) for k, v in patches.items()})
 
 
@@ -191,7 +195,7 @@ def fps60_default(rows):
 
 
 NO_FPS60 = "这款游戏没有可用的 60 帧方案。"
-NO_DIRECT = "这款游戏没有走直连渲染，用不了 MetalFX 放大。"
+NO_DIRECT = "这款游戏没有走直连渲染，用不了锐利放大（MetalFX）。"
 NO_WIDEN = "本款满屏有已知问题，暂不可开。"
 
 
@@ -214,7 +218,7 @@ def mac_settings(c, gid):
     picked = chosen(c, gid, table)
     # 满屏改不动只认强信号（tools/caps_policy.py 原因写「强信号：…」）；「发布缺省关」只是没验证过，玩家可以明确开（同 iPhone settings.m s2a_ios_fullscreen_state）
     strong = caps.get("widen") == "0" and "强信号" in rows.get("widen", ("", ""))[1]  # 非玩家句
-    need = {"fps60": ("fps60" in caps, NO_FPS60), "enhance": (caps.get("direct") == "1", NO_DIRECT), "widescreen": (not strong, NO_WIDEN)}
+    need = {"fps60": ("fps60" in caps, NO_FPS60), "widescreen": (not strong, NO_WIDEN)}
     out = {}
     for key, item in table.items():
         if "mac" not in item.get("platforms", []) or item["type"] not in ("bool", "choice"):
@@ -228,6 +232,10 @@ def mac_settings(c, gid):
         out[key] = dict(available=ok, value=value if ok else _default(item, caps, rows=rows), reason="" if ok else why)
         if key == "language":
             out[key].update(language_state(c, gid, item, out[key]["value"]))
+    # 画质提升：标准 / 2D 游戏专用哪款都能用；锐利放大（MetalFX）要走直连。清单明说没走直连的，锐利放大置灰（blocked）、写一句为什么（这一行照样能选另两档）
+    if caps and caps.get("direct") != "1" and "quality" in out:
+        out["quality"]["blocked"] = ["MetalFX"]
+        out["quality"]["reason"] = NO_DIRECT
     # 只用社区补丁（11-13 维护者撤掉我方 60 帧与通用满屏，tools/caps_policy.py patch_only）：没有帧率补丁的款不出「60 帧」，没有宽屏补丁的款不出「满屏」
     #   （读到了能力清单才判：还没出 Mac 版时照旧都列、先存偏好）
     if caps:
@@ -509,7 +517,7 @@ def save(c):
         if c.r.get("cheatsImport"):
             if not isinstance(c.r["cheatsImport"], list):
                 raise Failure("金手指导入格式不对。", code="job_failed")
-            cheats.import_files(c, game, c.r["cheatsImport"])
+            c.r["cheatsImported"] = cheats.import_files(c, game, c.r["cheatsImport"], c.r.get("cheatsShare"))   # 勾了「分享给其他玩家」逐份上传（没给 = 缺省 cheats.SHARE_DEFAULT）
         if c.r.get("cheats") is not None:
             cheats.save(c, game, c.r["cheats"])
     if c.r.get("crashAnswer") is not None:   # 上次开着金手指 / 补丁时异常退出、已当场关掉，玩家看过通知 ack（pack/jobs/cheats.py answer_crash）
@@ -538,7 +546,10 @@ def save(c):
     atomic(launch_path(c, game["id"]), data)
     if any(table[k]["scope"] == "app" for k in want):
         atomic(app_path(c), shared)
-    return describe_game(c, game)
+    out = describe_game(c, game)
+    if c.r.get("cheatsImported") is not None:
+        out = dict(out, cheatsImported=c.r["cheatsImported"])   # 每份导入的分享结果（shared / duplicate / no_build / failed / off），界面据此说一句
+    return out
 
 
 def launch_env(c, gid):
@@ -552,6 +563,12 @@ def launch_env(c, gid):
     elif s.get("fps60") is False:
         env["S2A_FPS60"] = "0"
     # 帧率档位（11-13 维护者：60 / 120 帧补丁都带进去，玩家自己选）：选了具体档才写，宿主（runtime/src/cpatch.c fps_pick）取不超过它的最高一档；没选 / 自动不写，宿主按屏幕最高刷新率挑
+    # 帧率解锁（11-15 维护者「补帧稳定了就直接用补帧」）：同一个开关——有社区帧率补丁用补丁，没有就用补帧（二选一，补丁开着时补帧每帧让路，
+    #   graphics/nvn/gfx/nvn/nvn_present_fi.inc fi_wanted）。Mac 今天缺省不补帧：只有玩家明确开才写 DM_PRESENT_FI=1，明确关写 0，没选过不写（不退化）
+    if s.get("fps60") is True:
+        env["DM_PRESENT_FI"] = "1"
+    elif s.get("fps60") is False:
+        env["DM_PRESENT_FI"] = "0"
     if str(s.get("fpsPick") or "0") not in ("", "0"):
         env["S2A_FPS_PICK"] = str(s["fpsPick"])
     # 满屏（11-13 合并「宽屏」与「宽屏强制启用」，同 iPhone settings.m）：明确开 = 没验证过也铺满（画面被拉伸会自动退回 16:9）；明确关 = 16:9；
@@ -560,7 +577,9 @@ def launch_env(c, gid):
     strong = caps.get("widen") == "0" and "强信号" in runtime_caps_rows(c, gid).get("widen", ("", ""))[1]  # 非玩家句
     fams, fam_default = adaptive_patches(c, gid)
     full = False if strong else s["widescreen"] if isinstance(s.get("widescreen"), bool) else (caps.get("widen") == "1" or bool(fams))   # 有自适应满屏补丁 = 默认开（11-13）
-    if s.get("widescreen") is True and not strong and not fams and os.environ.get("S2A_CAPS_OWN") == "1":   # 11-15：我方通用满屏缺省不用（runtime/src/widen.c），老设置不再绕过
+    # 11-15 维护者「没补丁的游戏手动打开满屏就走咱们通用方案」：玩家明确开满屏、没有自适应满屏补丁 → 我方通用满屏（第三层整套放宽，不看已验证名单）。
+    #   原先这里还要 S2A_CAPS_OWN=1（v0.4.0 撤通用满屏时加的），手动开也不生效。没选过照旧不开（宿主缺省关，runtime/src/widen.c）
+    if s.get("widescreen") is True and not strong and not fams:
         env["S2A_WIDEN_VERIFIED"] = "1"
         env["S2A_WIDESCREEN"] = "1"
     elif s.get("widescreen") is False:
@@ -573,8 +592,9 @@ def launch_env(c, gid):
         env["S2A_CPATCH_ON"] = ",".join(on) or "none"
         if any(k.startswith(("widescreen:", "wsauto:")) for k in on):
             env["S2A_WIDESCREEN"] = "0"   # 开着社区宽屏 / 画幅补丁：游戏自己画宽画面，S2Arm 的满屏（图形层加宽渲染目标）让开，不拉宽两次；关掉补丁恢复
-    if s.get("enhance") is True and caps.get("direct") == "1":
-        env["S2A_SCALING_FILTER"] = "MetalFX"   # 画面增强模式 = 直连上屏 MetalFX 空间放大（graphics/nvn/gfx/nvn/nvn_present_fx.inc）
+    # 画质提升（11-15，同 iPhone S2AScalingFilter）：2D 游戏专用 = 最近邻；锐利放大 = 直连上屏 MetalFX 空间放大（graphics/nvn/gfx/nvn/nvn_present_fx.inc），没走直连不设
+    if s.get("quality") == "Nearest" or (s.get("quality") == "MetalFX" and caps.get("direct") == "1"):
+        env["S2A_SCALING_FILTER"] = s["quality"]
     if "docked" in s:
         env["S2A_DOCKED"] = "1" if s["docked"] == "docked" else "0"
     if s.get("language", "system") != "system":

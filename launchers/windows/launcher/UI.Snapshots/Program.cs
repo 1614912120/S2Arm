@@ -186,21 +186,37 @@ SaveP("win_04c_export_success_sgrade", () => Navigate(pack, "progress"));
 SetW(pack, "packBoost", null);
 SetW(pack, "packNotes", (object?)new List<string>());
 
-// 两路（维护者 11-13：出包页起分两路）：导出模式的进度页最后一步是「整理 iPhone 版程序与资源包」、完成页主按钮与说明照导出写
-SetW(pack, "installMode", "export");
+// 导出自签包（11-15 起不是装法）：「导出自签包」点在没出过包的款上，出包进度最后一步是「整理 iPhone 版程序与资源包」、完成页主按钮与说明照导出写
+var selfSignSet = (HashSet<string>)GetW(pack, "selfSignAfterPack")!;
+selfSignSet.Add(MockGame(false).Id);
 InjectMockProgress(pack, fraction: 0.85, stepIndex: 2, running: true, exportMode: true);
 SaveP("win_04c_export_selfsign_progress", () => Navigate(pack, "progress"));
 InjectMockProgress(pack, fraction: 1.0, stepIndex: -1, running: false, state: "succeeded",
     ipaBytes: 1_200_000_000L, packBytes: 3_400_000_000L, elapsed: 247, exportMode: true);
 SaveP("win_04d_export_selfsign_success", () => Navigate(pack, "progress"));
-SetW(pack, "installMode", "device");
+selfSignSet.Clear();
 
 InjectMockProgress(pack, fraction: 0.12, stepIndex: 0, running: false, state: "failed",
     summary: "磁盘空间不足，无法继续出包。");
 SaveP("win_05_export_failed", () => Navigate(pack, "progress"));
 
 InjectMockGame(pack, ready: true);
-SaveP("win_06_library_iphone_ready", () => Navigate(pack, "library"));
+SaveP("win_06_library_iphone_ready", () => Navigate(pack, "library"));   // 大卡：装到 iPhone + 导出自签包 + 出包
+// 导出自签包的进度 / 完成（11-15：装机页只画结局卡，不画装机说明、清单、开始装机 / 删除）
+{
+    var g = MockGame(true);
+    SetW(pack, "installExport", true); SetW(pack, "installGameId", g.Id); SetW(pack, "installGameName", g.Name); SetW(pack, "selectedGame", g.Id);
+    var it = GetW(pack, "installTrack")!;
+    void ITrack(string f, object? v) => it.GetType().GetField(f)!.SetValue(it, v);
+    ITrack("Kind", "install"); ITrack("Started", DateTime.UtcNow.AddSeconds(-40));
+    SetW(pack, "installState", "running");
+    SaveP("win_06b_selfsign_running", () => Navigate(pack, "install"));
+    SetW(pack, "installState", "succeeded"); ITrack("Ended", (DateTime?)DateTime.UtcNow);
+    ITrack("ExportFolder", @"D:\S2Arm Games\S2Arm 自签导出"); ITrack("ExportGames", 3); ITrack("ExportBytes", (long?)9_800_000_000L);
+    SaveP("win_06c_selfsign_done", () => Navigate(pack, "install"));
+    ITrack("ExportFolder", ""); ITrack("ExportGames", 0); ITrack("ExportBytes", (long?)null);
+    SetW(pack, "installExport", false); SetW(pack, "installState", ""); SetW(pack, "installGameId", null);
+}
 
 InjectMockGame(pack, ready: false);
 InjectMockProgress(pack, fraction: 0.35, stepIndex: 1, running: true);

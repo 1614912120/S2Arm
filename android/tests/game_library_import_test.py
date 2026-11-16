@@ -86,7 +86,8 @@ STUBS = {
  public void setClipData(ClipData value){throw new AssertionError("diagnostic share unexpectedly called");}
  public static Intent createChooser(Intent intent,CharSequence title){throw new AssertionError("diagnostic share unexpectedly called");}
  public Intent addCategory(String category){throw new AssertionError("diagnostic save unexpectedly called");} }''',
-'android/view/View.java': '''package android.view; public class View { public static final int VISIBLE=0, GONE=8; public void setBackgroundColor(int c){} public void setPadding(int a,int b,int c,int d){} private int vis; public void setVisibility(int v){vis=v;} public int getVisibility(){return vis;} public interface OnClickListener {void onClick(View v);} public void setEnabled(boolean enabled){throw new AssertionError("diagnostic export unexpectedly called");} }''',
+'android/view/View.java': '''package android.view; public class View { public static final int VISIBLE=0, GONE=8; public void setBackgroundColor(int c){} public void setPadding(int a,int b,int c,int d){} private int vis; public void setVisibility(int v){vis=v;} public int getVisibility(){return vis;} public interface OnClickListener {void onClick(View v);} public void setEnabled(boolean enabled){throw new AssertionError("diagnostic export unexpectedly called");}
+ private static int nextId=1; private int id; public static int generateViewId(){return nextId++;} public void setId(int v){id=v;} public int getId(){return id;} }''',
 'android/widget/TextView.java': '''package android.widget; import android.view.View; import android.content.Context; import java.util.concurrent.*;
  public class TextView extends View { public static final BlockingQueue<String> messages=new LinkedBlockingQueue<>();
  public TextView(Context c){} public void setText(String s){messages.add(s);} public void setText(int i){} public void setTextSize(float f){} public void setTextColor(int c){} }''',
@@ -99,7 +100,13 @@ STUBS = {
  public void setOnCheckedChangeListener(OnCheckedChangeListener value){listener=value;} }''',
 'android/widget/CheckBox.java': '''package android.widget; import android.content.Context; public class CheckBox extends CompoundButton { public CheckBox(Context c){super(c);} }''',
 'android/widget/LinearLayout.java': '''package android.widget; import android.content.Context; import android.view.View; public class LinearLayout extends View {
- public static final int VERTICAL=1; public LinearLayout(Context c){} public void setOrientation(int x){} public void setPadding(int a,int b,int c,int d){} public void addView(View v){} }''',
+ public static final int HORIZONTAL=0, VERTICAL=1; public LinearLayout(Context c){} public void setOrientation(int x){} public void setPadding(int a,int b,int c,int d){} public void addView(View v){} }''',
+'android/widget/RadioButton.java': '''package android.widget; import android.content.Context; public class RadioButton extends CompoundButton { public RadioButton(Context c){super(c);} }''',
+'android/widget/RadioGroup.java': '''package android.widget; import android.content.Context; import android.view.View;
+ public class RadioGroup extends LinearLayout { public interface OnCheckedChangeListener {void onCheckedChanged(RadioGroup group,int checkedId);}
+ private int checked=-1; private OnCheckedChangeListener listener; public RadioGroup(Context c){super(c);}
+ public void check(int id){if(checked!=id){checked=id;if(listener!=null)listener.onCheckedChanged(this,id);}} public int getCheckedRadioButtonId(){return checked;}
+ public void setOnCheckedChangeListener(OnCheckedChangeListener l){listener=l;} }''',
 'android/view/Gravity.java': '''package android.view; public class Gravity { public static final int END=8388613, BOTTOM=80; }''',
 'android/widget/FrameLayout.java': '''package android.widget; import android.content.Context; import android.view.View; public class FrameLayout extends View {
  public static class LayoutParams { public LayoutParams(int w,int h){} public LayoutParams(int w,int h,int g){} }
@@ -130,7 +137,7 @@ STUBS = {
  save_diagnostics=116, save_diagnostics_done=117, save_diagnostics_failed=118,
  player_err_all_files=130, player_err_all_files_next=131, player_err_in_place=132, player_err_in_place_next=133,
  in_place_game=134, in_place_access_title=135, in_place_access_text=136, in_place_access_open=137, in_place_not_local=138,
- last_session_dismiss=119; } }''',
+ last_session_dismiss=119, quality_high=139, quality_saver=140, quality_note=141; } }''',
 # These unrelated app boundaries must never be called in an import test.
 'org/s2arm/android/DiagnosticExport.java': '''package org.s2arm.android; import android.content.Context; import java.io.IOException; import java.nio.file.Path;
  public class DiagnosticExport { public static Path run(Context context) throws IOException {throw new AssertionError("diagnostic export unexpectedly called");} }''',

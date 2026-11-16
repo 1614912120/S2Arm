@@ -71,6 +71,23 @@ public final class LibraryActivity extends Activity {
                 display.edit().putBoolean("fps", checked).apply();
         });
         more.addView(fpsOverlay);
+        // 画质：高画质（打开 EASU 等上屏增强）/ 更省电（缺省）。存在 display 偏好 quality_high，游戏进程开局时读（MainActivity → NativeBridge.configureHighQuality）
+        android.widget.RadioGroup quality = new android.widget.RadioGroup(this);
+        quality.setOrientation(android.widget.RadioGroup.HORIZONTAL);
+        android.widget.RadioButton high = new android.widget.RadioButton(this), saver = new android.widget.RadioButton(this);
+        high.setId(android.view.View.generateViewId()); saver.setId(android.view.View.generateViewId());
+        high.setText(R.string.quality_high); saver.setText(R.string.quality_saver);
+        high.setTextColor(0xFFFFFFFF); saver.setTextColor(0xFFFFFFFF);
+        quality.addView(high); quality.addView(saver);
+        quality.check(display.getBoolean("quality_high", false) ? high.getId() : saver.getId());
+        quality.setOnCheckedChangeListener((group, id) -> {
+            boolean on = id == high.getId();
+            if (display.getBoolean("quality_high", false) != on) display.edit().putBoolean("quality_high", on).apply();
+        });
+        more.addView(quality);
+        android.widget.TextView qualityNote = new android.widget.TextView(this);
+        qualityNote.setText(R.string.quality_note); qualityNote.setTextColor(0xFFB0B0B0); qualityNote.setTextSize(12);
+        more.addView(qualityNote);
         // #528 item 15: works without any game; the bundle goes to whatever app the player picks.
         Button exportButton = new Button(this); exportButton.setText(R.string.export_diagnostics);
         exportButton.setOnClickListener(v -> exportDiagnostics(exportButton, false));

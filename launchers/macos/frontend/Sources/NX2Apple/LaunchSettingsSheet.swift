@@ -10,6 +10,14 @@ import NXModel
 import NXLauncher
 import S2ArmAppleAdapter
 
+/// 下拉里这一档置灰（画质提升：没走直连时的锐利放大）。前端最低 macOS 13，selectionDisabled 要 14：13 上照常可选，起局不生效、原因照写在标题下
+private struct SelectionBlocked: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        if #available(macOS 14, *) { content.selectionDisabled(on) } else { content }
+    }
+}
+
 /// 一项的状态（作业层 community 结果的 mac 字段）：值是 Bool（开关）或 String（选项）。
 struct LaunchOption {
     let available: Bool
@@ -21,6 +29,8 @@ struct LaunchOption {
     let choices: [String]?
     /// 游戏语言：选的 / 系统语言这款不支持时，作业层写明起局实际用哪种（中英两份，不弹窗）
     let note: [String: String]
+    /// 列着但这款用不了的选项值（画质提升：没走直连时的锐利放大）：置灰，原因在 reason
+    let blocked: [String]
 
     init(_ raw: Any?) {
         let row = raw as? [String: Any] ?? [:]
@@ -30,6 +40,7 @@ struct LaunchOption {
         reason = row["reason"] as? String ?? ""
         choices = row["choices"] as? [String]
         note = row["note"] as? [String: String] ?? [:]
+        blocked = row["blocked"] as? [String] ?? []
     }
 }
 
@@ -55,13 +66,14 @@ struct LaunchCheat: Identifiable {
     let license: String
     let status: String
     let fixed: Bool   // 写死地址（pack/jobs/cheats.py fixed_address）：标「地址写死，可能不生效」
+    let shared: Bool  // 玩家分享、未验证（补丁库「玩家分享」上游，pack/jobs/cheats.py PLAYER_REPO）：打开前提示一句可能坏存档，不拦
 
     init?(_ raw: [String: Any]) {
         guard let key = raw["key"] as? String else { return nil }
         id = key; name = raw["name"] as? String ?? key; enabled = raw["enabled"] as? Bool ?? false; ok = raw["ok"] as? Bool ?? false
         reason = raw["reason"] as? String ?? ""; fromLibrary = raw["from"] as? String == "library"; repo = raw["repo"] as? String ?? ""
         author = raw["author"] as? String ?? ""; license = raw["license"] as? String ?? ""; status = raw["status"] as? String ?? ""
-        fixed = raw["fixed"] as? Bool ?? false
+        fixed = raw["fixed"] as? Bool ?? false; shared = raw["shared"] as? Bool ?? false
     }
 }
 
@@ -81,12 +93,13 @@ extension S2ArmLauncherModel {
 
     /// 同上，另带 S 级每类状态（作业层 sgradeState：widescreen / fps / gfx，作业层；没出这个字段 = 空，界面不画状态句）
     func launchSettingsFull(_ gameID: String, change: [String: Any]? = nil, patches: [String: Bool]? = nil, cheats: [String: Bool]? = nil,
-                            cheatsImport: [String]? = nil) async throws -> ([String: LaunchOption], [LaunchPatch], [LaunchCheat], String, [String: SGradeCategoryState]) {
+                            cheatsImport: [String]? = nil, cheatsShare: Bool? = nil) async throws -> ([String: LaunchOption], [LaunchPatch], [LaunchCheat], String, [String: SGradeCategoryState]) {
         var extra: [String: Any] = [:]
         if let change { extra["settings"] = change }
         if let patches { extra["graphics"] = patches }
         if let cheats { extra["cheats"] = cheats }
         if let cheatsImport { extra["cheatsImport"] = cheatsImport }
+        if let cheatsShare { extra["cheatsShare"] = cheatsShare }
         let result = try await saveJob(extra.isEmpty ? "community" : "communitySave", gameID: gameID, extra: extra)
         let mac = (result["mac"] as? [String: Any] ?? [:]).mapValues(LaunchOption.init)
         let gfx = (result["graphics"] as? [[String: Any]] ?? []).compactMap { g -> LaunchPatch? in
@@ -144,7 +157,7 @@ struct LaunchSettingsSheet: View {
                     VStack(alignment: .leading, spacing: 14) {
                         // 分组顺序：画面 → S 级优化（社区补丁 + 金手指，金色卡）→ 手柄 → 其他（定义表 launchers/shared/game_settings.v1.json 的 group）
                         ForEach(["display", "sgrade", "controls", "other"], id: \.self) { group in
-                            let rows = items.filter { $0.group == group && visible($0) }
+                            let rows = items.filter { groupOf($0) == group && visible($0) }
                             if !rows.isEmpty {
                                 if group == "sgrade" {
                                     SGradeGroupCard(t("display.group.sgrade"), note: t("export.sgrade.hit.note")) { sgradeRows(rows) }
@@ -171,20 +184,54 @@ struct LaunchSettingsSheet: View {
         .task { if !loaded { await load(nil) } }
     }
 
-    /// S 级优化组：社区补丁 / 金手指两个小节（SGradeSettingsRows：小标题与各行文字同一条起始线、开关靠右）
+    /// 满屏 / 帧率解锁（连同帧率档位）放进 S 级金卡最上面（11-15 维护者定：三项挪到一级、金色 S、页面更简洁），定义表里仍在 display 组
+    private static let sgradeTop = ["widescreen", "fps60", "fpsPick"]
+    private func groupOf(_ item: GameSettingItem) -> String { Self.sgradeTop.contains(item.id) ? "sgrade" : item.group }
+
+    /// S 级优化组：最上面满屏 / 帧率解锁两行（金字 + 金色 S）、帧率档位；下面金手指（标题带金色 S）与默认收起的社区补丁明细
     @ViewBuilder private func sgradeRows(_ rows: [GameSettingItem]) -> some View {
         let p = rows.first { $0.type == "patches" }, c = rows.first { $0.type == "cheats" }
+        let top = Self.sgradeTop.compactMap { id in rows.first { $0.id == id } }
+        ForEach(Array(top.enumerated()), id: \.element.id) { i, item in
+            if i > 0 { CardDivider() }
+            if item.id == "fpsPick" { row(item) } else { topRow(item) }
+        }
+        if !top.isEmpty && (p != nil || c != nil) { CardDivider() }
         SGradeSettingsRows(
-            patchesTitle: p?.text(lang) ?? "", patchesNote: p?.detail(lang) ?? "",
+            patchesTitle: t("sgrade.cpatch.detail"), patchesNote: p?.detail(lang) ?? "",
             patches: p == nil ? [] : patches.map { SGradeToggle(id: $0.id, label: $0.label, detail: $0.result.isEmpty ? "" : loc.backend($0.result), on: $0.enabled) },
             cheatsTitle: c?.text(lang) ?? "", cheatsNote: cheats.isEmpty && !cheatsReason.isEmpty ? loc.backend(cheatsReason) : (c?.detail(lang) ?? ""),
             cheats: c == nil ? [] : cheats.map { SGradeToggle(id: $0.id, label: $0.name, detail: cheatDetail($0), on: $0.enabled, enabled: $0.ok) },
             importTitle: t("display.cheats.import"), busy: saving || model.busy,
             onPatch: { id, on in Task { await load(nil, patches: [id: on]) } },
-            onCheat: { id, on in Task { await load(nil, cheats: [id: on]) } },
+            onCheat: { id, on in if confirmShared(id, on) { Task { await load(nil, cheats: [id: on]) } } },
             onImport: { importCheats() },
             summary: { on, all in t("display.cheats.summary").replacingOccurrences(of: "{0}", with: String(on)).replacingOccurrences(of: "{1}", with: String(all)) },
-            searchPrompt: t("display.cheats.search"))
+            searchPrompt: t("display.cheats.search"),
+            patchesSummary: { on, all in t("display.cheats.summary").replacingOccurrences(of: "{0}", with: String(on)).replacingOccurrences(of: "{1}", with: String(all)) },
+            cheatsIcon: SGradeCardView.sGold)
+    }
+
+    /// 金卡最上面的满屏 / 帧率解锁：同一个开关（作业层 widescreen / fps60），副标题写现在用的是什么；自动关给「重新打开」；真用不了置灰
+    @ViewBuilder private func topRow(_ item: GameSettingItem) -> some View {
+        let option = options[item.id], cat = item.id == "widescreen" ? "widescreen" : "fps"
+        let st = sgrade[cat], on = option?.value as? Bool ?? false
+        let note = SGradeStateText.rowNote(cat: cat, st, hasFpsPatch: st?.source == "patch" || (st?.target ?? 0) > 0, fpsOn: on, t: t,
+                                           date: { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(Locale(identifier: lang))) },
+                                           backend: { loc.backend($0) })
+        let reenable = stateLine(item.id)?.reenable
+        SGradeTopRow(cat == "fps" ? t("sgrade.row.fps") : item.text(lang),
+                     note: option?.available == false ? loc.backend(option?.reason ?? "") : note?.text ?? item.detail(lang), dim: note?.disabled == true) {
+            if let reenable {
+                Button(t("sgrade.state.reenable")) { Task { await self.reenable(reenable) } }.buttonStyle(LauncherSecondaryButtonStyle())
+                    .accessibilityIdentifier("launch." + item.id + ".reenable").disabled(saving || model.busy)
+            } else {
+                Toggle("", isOn: Binding(get: { on }, set: { v in Task { await load([item.id: v]) } }))
+                    .toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(item.text(lang))
+                    .accessibilityIdentifier("launch." + item.id)
+                    .disabled(option?.available != true || note?.disabled == true || saving || model.busy)
+            }
+        }
     }
 
     @ViewBuilder private func groupRows(_ rows: [GameSettingItem]) -> some View {
@@ -227,7 +274,7 @@ struct LaunchSettingsSheet: View {
             }
             ForEach(cheats) { ch in
                 CardRow("  " + ch.name, detail: cheatDetail(ch)) {
-                    Toggle("", isOn: Binding(get: { ch.enabled }, set: { on in Task { await load(nil, cheats: [ch.id: on]) } }))
+                    Toggle("", isOn: Binding(get: { ch.enabled }, set: { on in if confirmShared(ch.id, on) { Task { await load(nil, cheats: [ch.id: on]) } } }))
                         .toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(ch.name)
                         .accessibilityIdentifier("launch.cheat." + ch.id)
                         .disabled(!ch.ok || saving || model.busy)
@@ -235,13 +282,15 @@ struct LaunchSettingsSheet: View {
             }
         case "choice":
             let option = options[item.id]
-            CardRow(title, detail: option?.available == false ? loc.backend(option?.reason ?? "") : option?.note[lang] ?? item.detail(lang)) {
+            // 标题下那句：用不了 / 有一档用不了的原因（作业层 reason）→ 作业层写的说明（游戏语言）→ 选中这一档自己的说明（画质提升选锐利放大写代价）→ 这项的说明
+            let picked = item.options.first { $0.value == option?.value as? String }
+            CardRow(title, detail: !(option?.reason ?? "").isEmpty ? loc.backend(option?.reason ?? "") : option?.note[lang] ?? picked?.detail(lang) ?? item.detail(lang)) {
                 Picker("", selection: Binding(get: { option?.value as? String ?? "" }, set: { v in Task { await load([item.id: v]) } })) {
                     // 游戏语言只列这款支持的（作业层 choices）；当前值不在里面（旧版选过、这款没有）也留着，不让选择框空掉
                     ForEach(item.options.filter { o in option?.choices.map { $0.contains(o.value) || o.value == option?.value as? String } ?? true }, id: \.value) { o in
-                        Text(o.label[lang] ?? o.value).tag(o.value) }
+                        Text(o.label[lang] ?? o.value).tag(o.value).modifier(SelectionBlocked(on: option?.blocked.contains(o.value) == true)) }
                 }
-                .labelsHidden().pickerStyle(.menu).frame(width: 150).accessibilityLabel(title)
+                .labelsHidden().pickerStyle(.menu).frame(width: item.id == "quality" ? 220 : 150).accessibilityLabel(title)   // 「锐利放大（MetalFX）」150 放不下
                 .accessibilityIdentifier("launch." + item.id)
                 .disabled(option?.available != true || saving || model.busy)
             }
@@ -287,20 +336,39 @@ struct LaunchSettingsSheet: View {
         return parts.joined(separator: " · ")
     }
 
+    /// 打开玩家分享、未验证的条目前提示一句（可能坏存档），不拦：玩家点「仍然打开」照开
+    private func confirmShared(_ id: String, _ on: Bool) -> Bool {
+        guard on, cheats.first(where: { $0.id == id })?.shared == true else { return true }
+        let a = NSAlert(); a.messageText = t("display.cheats.shared.warn.title"); a.informativeText = t("display.cheats.shared.warn.message")
+        a.addButton(withTitle: t("display.cheats.shared.warn.on")); a.addButton(withTitle: t("action.cancel"))
+        return a.runModal() == .alertFirstButtonReturn
+    }
+
+    /// 缺省勾不勾「分享给其他玩家」（维护者定，改这一行；同 pack/jobs/cheats.py SHARE_DEFAULT、iOS kS2ACheatsShareDefault）。玩家上次的选择记在 App 级
+    static let shareDefault = true
     private func importCheats() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true; panel.canChooseDirectories = false
         panel.allowedContentTypes = [.plainText]
+        // 玩家分享（11-15）：勾了就把这次导入的金手指原文 + 游戏版本传给我们（diag.s2arm.com/v1/cheats），收进补丁库「玩家分享」，别的玩家出包时带上
+        let box = NSButton(checkboxWithTitle: t("display.cheats.share"), target: nil, action: nil)
+        box.state = (UserDefaults.standard.object(forKey: "S2ACheatsShare") as? Bool ?? Self.shareDefault) ? .on : .off
+        box.toolTip = t("display.cheats.share.note"); box.setAccessibilityIdentifier("launch.cheats.share")
+        let note = NSTextField(wrappingLabelWithString: t("display.cheats.share.note")); note.font = .systemFont(ofSize: NSFont.smallSystemFontSize); note.textColor = .secondaryLabelColor
+        let stack = NSStackView(views: [box, note]); stack.orientation = .vertical; stack.alignment = .leading; stack.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        stack.widthAnchor.constraint(equalToConstant: 460).isActive = true
+        panel.accessoryView = stack; panel.isAccessoryViewDisclosed = true
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        let paths = panel.urls.map(\.path)
-        Task { await load(nil, cheatsImport: paths) }
+        let paths = panel.urls.map(\.path), share = box.state == .on
+        UserDefaults.standard.set(share, forKey: "S2ACheatsShare")
+        Task { await load(nil, cheatsImport: paths, cheatsShare: share) }
     }
 
-    private func load(_ change: [String: Any]?, patches change2: [String: Bool]? = nil, cheats change3: [String: Bool]? = nil, cheatsImport: [String]? = nil) async {
+    private func load(_ change: [String: Any]?, patches change2: [String: Bool]? = nil, cheats change3: [String: Bool]? = nil, cheatsImport: [String]? = nil, cheatsShare: Bool? = nil) async {
         saving = true; defer { saving = false }
         do {
             if items.isEmpty { items = try GameSettingsSpec.macItems() }
-            (options, patches, cheats, cheatsReason, sgrade) = try await model.launchSettingsFull(gameID, change: change, patches: change2, cheats: change3, cheatsImport: cheatsImport)
+            (options, patches, cheats, cheatsReason, sgrade) = try await model.launchSettingsFull(gameID, change: change, patches: change2, cheats: change3, cheatsImport: cheatsImport, cheatsShare: cheatsShare)
             failure = nil; loaded = true
         } catch {
             failure = (error as? JobClientError)?.message ?? error.localizedDescription

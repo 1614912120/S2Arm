@@ -153,6 +153,12 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
 #endif
     info.enabledExtensionCount = enabled_count;
     info.ppEnabledExtensionNames = enabled;
+    // nvk 路径也给自定义驱动一个机会：game 构建里 vkCreateInstance 被 --wrap 接管，
+    // 这里先填窄 shim。没选驱动时返回 NULL，系统 loader 路径与改前完全相同。
+    {
+        extern void *s2a_android_vk_custom_driver_prepare(const char *) __attribute__((weak));
+        if (s2a_android_vk_custom_driver_prepare) (void)s2a_android_vk_custom_driver_prepare(NULL);
+    }
     if (vkCreateInstance(&info, NULL, &out->instance) != VK_SUCCESS)
         return fail(why, why_size, "vkCreateInstance failed");
 #if defined(__ANDROID__)
@@ -325,6 +331,20 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
     VkPhysicalDevice4444FormatsFeaturesEXT f4444 = {0};
     f4444.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_4444_FORMATS_FEATURES_EXT;
     const int has_4444 = has_device_extension(out->physical, "VK_EXT_4444_formats");
+    // #1070：placed 映射探针（只查、不启用）。NDK 29 自带的头（275 版）还没有这个扩展：结构与类型号照 Vulkan 头原文补在本地
+#ifndef VK_EXT_map_memory_placed
+    typedef struct { VkStructureType sType; void *pNext; VkBool32 memoryMapPlaced, memoryMapRangePlaced, memoryUnmapReserve; } VkPhysicalDeviceMapMemoryPlacedFeaturesEXT;
+    typedef struct { VkStructureType sType; void *pNext; VkDeviceSize minPlacedMemoryMapAlignment; } VkPhysicalDeviceMapMemoryPlacedPropertiesEXT;
+#define S2A_STYPE_PLACED_FEATURES ((VkStructureType)1000272000)
+#define S2A_STYPE_PLACED_PROPERTIES ((VkStructureType)1000272001)
+#else
+#define S2A_STYPE_PLACED_FEATURES VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAP_MEMORY_PLACED_FEATURES_EXT
+#define S2A_STYPE_PLACED_PROPERTIES VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAP_MEMORY_PLACED_PROPERTIES_EXT
+#endif
+    VkPhysicalDeviceMapMemoryPlacedFeaturesEXT placed = {0};
+    placed.sType = S2A_STYPE_PLACED_FEATURES;
+    out->placed_ext = has_device_extension(out->physical, "VK_EXT_map_memory_placed");
+    out->map_memory2_ext = has_device_extension(out->physical, "VK_KHR_map_memory2");
     // 出包预编库的顶点着色器不改写深度（near = 0 口径）；near = -w 的游戏靠管线把裁剪深度设成 [-1, 1] 得到同一结果
     VkPhysicalDeviceDepthClipControlFeaturesEXT dcc = {0};
     dcc.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEPTH_CLIP_CONTROL_FEATURES_EXT;
@@ -343,6 +363,7 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
             maintenance.pNext = &draw_parameters;
             query.pNext = &maintenance;
         }
+        if (out->placed_ext) { placed.pNext = query.pNext; query.pNext = &placed; }   // 只在列出扩展时挂查询结构（同下）
         if (has_device_extension(out->physical, "VK_EXT_custom_border_color")) {   // 只在 advertise 时挂查询结构
             border.pNext = query.pNext;
             query.pNext = &border;
@@ -353,6 +374,9 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
         out->shader_draw_parameters_enabled = draw_parameters.shaderDrawParameters == VK_TRUE;
         out->formats_4444_enabled = has_4444 && f4444.formatA4B4G4R4 == VK_TRUE;
         out->depth_clip_control_enabled = has_dcc && dcc.depthClipControl == VK_TRUE;
+        out->placed_map = out->placed_ext && placed.memoryMapPlaced == VK_TRUE;
+        out->placed_range = out->placed_ext && placed.memoryMapRangePlaced == VK_TRUE;
+        out->placed_unmap_reserve = out->placed_ext && placed.memoryUnmapReserve == VK_TRUE;
         index_u8.pNext = NULL;   // 查询链拆掉；建设备的链在下面按启用情况重接
     }
     // C2 顶点 SPIR-V 声明 DrawParameters（gl_VertexIndex / gl_InstanceIndex）；没有该特征不能合法消费模块。
@@ -488,6 +512,18 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
         out->p16_fallback_mask = nvn_vk_p16_fallback_pick ? nvn_vk_p16_fallback_pick(ex, fb) : 0;
         if (nvn_vk_format_set_p16_fallback) nvn_vk_format_set_p16_fallback(out->p16_fallback_mask);
         fprintf(stderr, "[s2a] vk packed16 route: 4444=%d fallback=0x%02x\n", out->formats_4444_enabled, out->p16_fallback_mask);
+    {   // #1070 placed 探针：对齐值与单次分配上限（属性链；只读，不改任何启用项）
+        VkPhysicalDeviceMapMemoryPlacedPropertiesEXT pp = {0}; pp.sType = S2A_STYPE_PLACED_PROPERTIES;
+        VkPhysicalDeviceMaintenance3Properties m3 = {0}; m3.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_3_PROPERTIES;
+        if (out->placed_ext) m3.pNext = &pp;
+        VkPhysicalDeviceProperties2 p2 = {0}; p2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2; p2.pNext = &m3;
+        vkGetPhysicalDeviceProperties2(out->physical, &p2);
+        out->placed_align = out->placed_ext ? (uint64_t)pp.minPlacedMemoryMapAlignment : 0;
+        out->max_alloc = (uint64_t)m3.maxMemoryAllocationSize;
+        fprintf(stderr, "[s2a] vk placed map: ext=%d map2=%d placed=%d range=%d unmap_reserve=%d align=%llu max_alloc=%llu（只查未启用）\n",
+                out->placed_ext, out->map_memory2_ext, out->placed_map, out->placed_range, out->placed_unmap_reserve,
+                (unsigned long long)out->placed_align, (unsigned long long)out->max_alloc);
+    }
     }
 
     float priority = 1.0f;

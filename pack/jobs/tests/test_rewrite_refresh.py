@@ -76,7 +76,8 @@ class RewriteRefreshTests(unittest.TestCase):
              patch.object(rr.layout, "update_info", side_effect=lambda c, g, **f: self.info.setdefault(g, {}).update(f)), \
              patch.object(rr, "rewrite_modules", side_effect=rewrite), \
              patch.object(rr, "sgrade_off", return_value=sgrade is None), \
-             patch.object(rr, "sgrade_key", return_value=sgrade or "-"), patch.object(rr, "sgrade_rewrite", side_effect=self.fake_sgrade()):
+             patch.object(rr, "sgrade_key", return_value=sgrade or "-"), patch.object(rr, "sgrade_rewrite", side_effect=self.fake_sgrade()), \
+             patch.object(rr, "_refresh_bf_ios", return_value=[]):   # 补 _bf 一段另有单测（test_sgrade_bf.py）
             return rr.refresh_ios(self.c, games), kits
 
     def test_affected_module_replaced_others_untouched_and_id_recorded(self):
@@ -161,6 +162,23 @@ class RewriteRefreshTests(unittest.TestCase):
             with patch.object(rr, "rewrite_modules", side_effect=AssertionError("同一改写器不该再核")):
                 self.assertFalse(rr.refresh_mac(self.c, "0100A", rt))
 
+    def test_mac_hold_busy_leaves_runtime_untouched(self):
+        # 诊断 D-R8NG：后台补 S 级在锁外改写，换进前 hold() 拿不到锁（玩家点了开始）→ 放弃这款：返回 False，运行版本文件与清单原样
+        import contextlib, json
+        rt = self.tmp / "mac-hold"; (rt / "exefs").mkdir(parents=True)
+        for m in ("main", "sdk"):
+            (rt / "exefs" / m).write_bytes(b"x"); (rt / f"{m}.patched.bin").write_bytes(b"old")
+        man = json.dumps({"schema": 1, "files": {"main.patched.bin": [3, ""], "sdk.patched.bin": [3, ""]}, "gameId": "0100A"})
+        (rt / "manifest.json").write_text(man)
+        binary = fake_rewriter(self.tmp, ["main"])
+        with patch.object(rr, "rewriter_id", return_value="rid-new"), patch.object(rr, "rewriter_bin", return_value=binary), \
+             patch.object(rr, "rewrite_env", return_value=dict(os.environ)), patch.object(rr, "sgrade_off", return_value=True):
+            self.assertFalse(rr.refresh_mac(self.c, "0100A", rt, hold=lambda: contextlib.nullcontext(False)))
+            self.assertEqual(((rt / "main.patched.bin").read_bytes(), (rt / "manifest.json").read_text()), (b"old", man))
+            self.assertTrue(rr.refresh_mac(self.c, "0100A", rt, hold=lambda: contextlib.nullcontext(True)), "拿得到锁：照常换进")
+            self.assertEqual((rt / "main.patched.bin").read_bytes(), b"new-main")
+            self.assertEqual(json.loads((rt / "manifest.json").read_text())["rewriterId"], "rid-new")
+
     # S 级优化补到老游戏（v0.4.0）：补丁记号变了 → 全部模块换成带补丁的产物、补丁表与金手指原文进 kit（旧原文删掉）、记下记号；记号没变不再做
     def test_sgrade_upgrade_replaces_all_modules_and_tables(self):
         self.info["0100A"] = {"ios": {"rewriterId": "rid-new", "sgradeKey": "k-old"}}
@@ -221,7 +239,8 @@ class RewriteRefreshTests(unittest.TestCase):
              patch.object(rr, "sgrade_key", return_value="k"), patch.object(rr.layout, "game_info", return_value={}), \
              patch.object(rr.layout, "update_info", side_effect=lambda c, g, **f: self.info.setdefault(g, {}).update(f)), \
              patch.object(rr.layout, "ios_kit", return_value=self.tmp), patch.object(rr.layout, "nro_kept", return_value=self.tmp / "no-kept"), \
-             patch.object(rr, "check_and_update", side_effect=lambda c, g, *a: "unavailable" if g == "0100A" else "updated"):
+             patch.object(rr, "check_and_update", side_effect=lambda c, g, *a: "unavailable" if g == "0100A" else "updated"), \
+             patch.object(rr, "_refresh_bf_ios", return_value=[]):
             self.assertEqual(rr.refresh_ios(self.c, ["0100A", "0100B"]), ["0100B"])
         self.assertTrue(any("甲游戏" in e and "没补上 S 级优化" in e and "乙游戏" not in e for e in self.events), self.events)
         self.assertEqual(self.info["0100A"]["ios"]["sgradeMissing"], "k", "缺原件补不上：记下这一版记号，「更新 iPhone」不再因它重装（install.sgrade_pending）")
@@ -287,7 +306,7 @@ class KeptNroRefreshTests(unittest.TestCase):
 
     def test_refresh_ios_counts_kept(self):
         with patch.object(rr, "rewriter_id", return_value="rid"), patch.object(rr, "pending_ios", return_value=[]), \
-             patch.object(rr.layout, "ios_kit", return_value=self.base):
+             patch.object(rr.layout, "ios_kit", return_value=self.base), patch.object(rr, "_refresh_bf_ios", return_value=[]):
             self.assertEqual(self.run_add(lambda c, g: rr.refresh_ios(c, [g])), ["0100A"])
         self.assertTrue((self.base / "nro1.patched.bin").is_file())
 

@@ -31,11 +31,11 @@ struct PhoneJobPanel: View {
         return d.isEmpty ? model.installTargetLabel : d
     }
 
-    /// 导出模式（装法「导出，自己签名安装」）：装机 / 更新作业不连手机、出到文件夹。完成后看结果，进行中看当前装法
+    /// 导出自签包（游戏库「导出自签包」、S 级升级页「自签导出」）：装机 / 更新作业不连手机、出到文件夹。完成后看结果，进行中看这次会话
     private var exporting: Bool {
         guard session.kind == .install || session.kind == .installUpdate else { return false }
         if case .finished(.completed) = session.phase { return !(model.phoneOutcome?.exportFolder ?? "").isEmpty }
-        return model.installMode.mode == "export"
+        return model.selfSigning
     }
 
     var body: some View {
@@ -220,7 +220,7 @@ struct PhoneJobPanel: View {
     private var failure: some View {
         VStack(alignment: .leading, spacing: 24) {
             headline(seal: AnyView(StatusSeal(symbol: "exclamationmark", color: LauncherPalette.danger)),
-                     title: t("phone.failed." + session.kind.rawValue, t("phone.failed.install")), subtitle: loc.backend(session.message))
+                     title: exporting ? t("phone.failed.export") : t("phone.failed." + session.kind.rawValue, t("phone.failed.install")), subtitle: loc.backend(session.message))
             if !session.suggestion.isEmpty {
                 PhoneJobFact(label: t("phone.next"), text: loc.backend(session.suggestion))
             }

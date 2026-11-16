@@ -119,8 +119,9 @@ def bundle_prebuilt_libs(tools, source_root=ROOT, env=None):
             (out / "build.txt").write_text("key=%s\nversion=%s\nsource_sha256=%s\nlib_sha256=%s\n" % (key, pin.group(1), pin.group(2), digest(out / lib)))
 
 
-def strip_debug_maps(root, developer_dir):
-    """发布进 App 的二进制去掉调试映射（N_OSO / N_SO 记着出包机 .o 与源码目录的绝对路径）：strip -S 只删调试信息，符号表保留、崩溃栈照样有函数名。
+def strip_debug_maps(root, developer_dir, keep_dir=None):
+    """发布进 App 的二进制去掉调试映射与本地符号（strip -S -x）：调试映射记着出包机 .o 与源码目录的绝对路径；本地符号玩家机器上没有代码读
+    （11-15 瘦身：宿主 121.5 → 48.7 MB，导出符号一个不少，dlsym 照常）。keep_dir 给了就先把未去符号的原件按相对路径存过去（发版存档，离线还原崩溃报告）。
     strip 会让签名失效，所以随后由里到外重签（保留原 entitlements / 标识）。玩家机器上现编的宿主不走这里，照常可调试。"""
     env = dict(os.environ, DEVELOPER_DIR=developer_dir)
     def is_macho(p):
@@ -129,7 +130,11 @@ def strip_debug_maps(root, developer_dir):
     machos = [p for p in sorted(root.rglob("*")) if p.is_file() and not p.is_symlink() and is_macho(p)]
     keep = ["--preserve-metadata=identifier,entitlements,flags,runtime"]
     for p in machos:
-        subprocess.run(["xcrun", "strip", "-S", str(p)], env=env, check=True, capture_output=True)
+        if keep_dir:
+            dst = Path(keep_dir) / p.relative_to(root)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(p, dst)
+        subprocess.run(["xcrun", "strip", "-S", "-x", str(p)], env=env, check=True, capture_output=True)
         subprocess.run(["codesign", "--force", "--sign", "-", *keep, str(p)], env=env, check=True, capture_output=True)
     bundles = sorted((p for p in root.rglob("*") if p.is_dir() and p.suffix in (".app", ".framework")), key=lambda p: -len(p.parts))
     for b in bundles:
@@ -151,13 +156,58 @@ def bundle(destination, developer_dir):
            "DEVELOPER_DIR=" + developer_dir], c.logs / "gal-tools.log")
     c.run(["make", "-C", ROOT / "graphics/dsx", str(ROOT / "build/dsx/libdsx.dylib"),
            "DEVELOPER_DIR=" + developer_dir], c.logs / "dsx.log")
-    c.run(["dotnet", "build", ROOT / "graphics/tools/shbake/S2A.ShBake.csproj", "-c", "Release", "--nologo"],
-          c.logs / "shbake.log")
-    c.run(["dotnet", "build", ROOT / "services/romfs_index/romfs_index.csproj", "-c", "Release", "--nologo",
-           "-o", prepare / "romfs"], c.logs / "romfs.log")
-    # 直连库的 C# 批量进程（translator/dsh_batch.py）随发版编好：玩家首次出包不再现编（11-06 维护者「玩家体验至上」，Spare-host 约 25 秒 CPU）
-    c.run(["dotnet", "build", ROOT / "graphics/tools/direct/dsh/batch/dsh_batch.csproj", "-c", "Release", "--nologo",
-           "-p:UseSharedCompilation=false", "-o", prepare / "dsh_batch"], c.logs / "dsh_batch.log")
+    # 出包用的 C# 工具随发版预编为 NativeAOT 单文件（romfs_index 的 PublishAot 写在工程里：服务层闭包含 netstandard2.0 生成器，-p: 全局属性会波及，同 services/aot/S2A.Aot.csproj）：
+    #   玩家机每游戏构建直接执行，App 不再携带 .NET 运行时（bundle_runtime.py 也不再收）
+    c.run(
+        [
+            "dotnet",
+            "publish",
+            ROOT / "graphics/tools/shbake/S2A.ShBake.csproj",
+            "-c",
+            "Release",
+            "-r",
+            "osx-arm64",
+            "-p:PublishAot=true",
+            "-p:UseSharedCompilation=false",
+            "--nologo",
+            "-o",
+            prepare / "shbake",
+        ],
+        c.logs / "shbake.log",
+    )
+    c.run(
+        [
+            "dotnet",
+            "publish",
+            ROOT / "services/romfs_index/romfs_index.csproj",
+            "-c",
+            "Release",
+            "-r",
+            "osx-arm64",
+            "--nologo",
+            "-o",
+            prepare / "romfs",
+        ],
+        c.logs / "romfs.log",
+    )
+    # 直连库的 C# 批量进程（translator/dsh_batch.py）随发版编好（NativeAOT 单文件）：玩家首次出包不再现编（11-06 维护者「玩家体验至上」，Spare-host 约 25 秒 CPU），也不再要 .NET 运行时
+    c.run(
+        [
+            "dotnet",
+            "publish",
+            ROOT / "graphics/tools/direct/dsh/batch/dsh_batch.csproj",
+            "-c",
+            "Release",
+            "-r",
+            "osx-arm64",
+            "-p:PublishAot=true",
+            "-p:UseSharedCompilation=false",
+            "--nologo",
+            "-o",
+            prepare / "dsh_batch",
+        ],
+        c.logs / "dsh_batch.log",
+    )
     # 推资源包流式写手机（pack/devpush，Rust，只依赖 idevice MIT；11-06 维护者：玩家 Mac / Windows 两端都要）：tools/push_pack.py 见 S2A_PREBUILT_TOOLS/devpush/s2a-devpush 就用，
     #   不在就退回 devicectl copy。--locked：按仓库里的 Cargo.lock 取依赖，发版间不漂
     cargo = shutil.which("cargo") or str(Path.home() / ".cargo/bin/cargo")
@@ -187,24 +237,40 @@ def bundle(destination, developer_dir):
     # maintenance would otherwise invalidate the signed resource seal.
     subprocess.run(["git", "-C", str(destination), "-c", "gc.autoDetach=false", "gc", "--prune=now"], env=env, check=True)
     shutil.copytree(host, destination / "Binaries/S2ArmGame.app")
-    shutil.copytree(toolchain.reader(c).parent, destination / "Binaries/Reader",
-                    ignore=shutil.ignore_patterns("obj", "*.pdb", "ready.json"))
+    # 读取器：NativeAOT 单文件（同 toolchain.prepare 的配方），整个 Reader 目录只有这一个可执行文件
+    (destination / "Binaries/Reader").mkdir(parents=True)
+    shutil.copy2(toolchain.reader(c), destination / "Binaries/Reader/nx_unpack")
     tools = destination / "Binaries/Prepare"
-    shutil.copytree(ROOT / "build/shbake", tools / "shbake", ignore=shutil.ignore_patterns("*.pdb", "obj"))
+    # 预编工具各收自己的单文件（AOT publish 会另出符号文件 / 中间件，不随包）：shbake 的 gpu_arch（clang 编的原生件）同目录
+    (tools / "shbake").mkdir(parents=True)
+    shutil.copy2(prepare / "shbake/S2A.ShBake", tools / "shbake/S2A.ShBake")
     bundle_tzdata(c, tools / "Tzdata")
     shutil.copy2(prepare / "gpu_arch", tools / "shbake/gpu_arch")
-    shutil.copytree(prepare / "romfs", tools / "romfs", ignore=shutil.ignore_patterns("*.pdb"))
+    (tools / "romfs").mkdir(parents=True)
+    shutil.copy2(prepare / "romfs/romfs_index", tools / "romfs/romfs_index")
     bundle_prebuilt_libs(tools, env=c.env())
-    shutil.copytree(prepare / "dsh_batch", tools / "dsh_batch", ignore=shutil.ignore_patterns("*.pdb"))
-    # 摘要按 App 里这份源码算（dsh_batch.py 同一函数）：玩家那边摘要相同才用内置件，不同照旧现编
+    (tools / "dsh_batch").mkdir(parents=True)
+    shutil.copy2(prepare / "dsh_batch/dsh_batch", tools / "dsh_batch/dsh_batch")
+    # 摘要按 App 里这份源码算（dsh_batch.py 同一函数）：玩家那边摘要相同才用内置件，不同（App 装坏了）报重装、不现编
     digest_out = subprocess.run([sys.executable, "-I", str(destination / "translator/dsh_batch.py"), "--src-digest"],
                                 env=c.env(), check=True, capture_output=True, text=True).stdout.strip()
     (tools / "dsh_batch/.src_digest").write_text(digest_out + "\n", encoding="utf-8")
-    # 同一份 App 内源码的翻译器指纹（dmsh_chain.py --xfp 按 DshXfpInput 现算）：玩家机只带 .NET 运行时，展不开清单，direct_lib.sh 出库后核库印章取这份当「本树」值
+    # 同一份 App 内源码的翻译器指纹（dmsh_chain.py --xfp 按 DshXfpInput 现算）：玩家机没有 .NET（SDK 更没有），展不开清单，direct_lib.sh 出库后核库印章取这份当「本树」值
     #   （dmsh_chain.tree_xfp ← dsh_batch.prebuilt_xfp，摘要相同才认）。与内置件自报的编译期 Xfp 不同就是发版件没按这份源码编，当场停
-    xfp_out = subprocess.run([sys.executable, "-I", str(destination / "translator/dmsh_chain.py"), "--xfp"],
-                             env=c.env(), check=True, capture_output=True, text=True).stdout.strip()
-    xfp_bin = subprocess.run(["dotnet", str(tools / "dsh_batch/dsh_batch.dll"), "--xfp"], env=c.env(), check=True, capture_output=True, text=True).stdout.strip()
+    xfp_out = subprocess.run(
+        [sys.executable, "-I", str(destination / "translator/dmsh_chain.py"), "--xfp"],
+        env=c.env(),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    xfp_bin = subprocess.run(
+        [str(tools / "dsh_batch/dsh_batch"), "--xfp"],
+        env=c.env(),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
     if xfp_out != xfp_bin:
         raise RuntimeError(f"Bundled dsh_batch reports translator fingerprint {xfp_bin}, the bundled sources give {xfp_out}")
     (tools / "dsh_batch/.xfp").write_text(xfp_out + "\n", encoding="utf-8")
@@ -221,7 +287,8 @@ def bundle(destination, developer_dir):
     shutil.copy2(ROOT / "build/gal/gal_xc", tools / "gal/gal_xc")
     (tools / "dsx").mkdir()   # 直连翻译库（pack/stage_direct.sh 认 dsx/libdsx.dylib，11-08 从 libnxgal 拆出）
     shutil.copy2(ROOT / "build/dsx/libdsx.dylib", tools / "dsx/libdsx.dylib")
-    strip_debug_maps(destination / "Binaries", developer_dir)
+    sym = os.environ.get("S2A_SYMBOLS_OUT")   # 发版存档未去符号原件（private-tools release/build_mac.sh 给 <产物目录>/symbols）
+    strip_debug_maps(destination / "Binaries", developer_dir, Path(sym) / "Engine/Binaries" if sym else None)
     if source_fingerprint(ROOT) != fingerprint:
         raise RuntimeError("Engine sources changed during packaging; retry with stable inputs")
     precompile(destination, destination.parent / RUNTIME_PYTHON)   # 先于清单：.pyc 和源码一起进 engine.json、一起签

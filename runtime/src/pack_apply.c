@@ -417,18 +417,27 @@ static char g_repair_why[1600], g_repair_skip1[1200]; static unsigned g_repair_u
 const char *s2a_games_repair_detail(void) { return g_repair_why; }
 unsigned s2a_games_repair_owner(void) { return g_repair_uid; }
 unsigned s2a_games_repair_files(void) { return g_repair_files; }
-// 第一个写不进的目录（games 往下三层：games、每款目录、资源包、.incoming）；都写得进返回 0
+// 第一个写不进的目录（games、每款目录、每款目录下的每个子目录、资源包/.incoming）；都写得进返回 0
+//   D-QCTB：只查固定几层时漏了每款下的 cheats/（玩家机上归 root），金手指写 status.txt 被拒、整局崩；每款下的子目录（cheats、S2A 存档、wire……）一律查
+static int unwritable_dir(const char *p, char *bad, size_t n, struct stat *bs) {
+    struct stat st; if (stat(p, &st) || !S_ISDIR(st.st_mode) || !access(p, W_OK)) return 0;
+    snprintf(bad, n, "%s", p); *bs = st; return 1;
+}
 static int games_unwritable(const char *games, char *bad, size_t n, struct stat *bs) {
     struct stat st; if (stat(games, &st) || !S_ISDIR(st.st_mode)) return 0;
-    if (access(games, W_OK)) { snprintf(bad, n, "%s", games); *bs = st; return 1; }
+    if (unwritable_dir(games, bad, n, bs)) return 1;
     DIR *d = opendir(games); if (!d) return 0; struct dirent *e; int hit = 0;
     while (!hit && (e = readdir(d))) {
         if (e->d_name[0] == '.') continue;
-        const char *sub[] = {"", "/资源包", "/资源包/.incoming"};
-        for (int i = 0; i < 3 && !hit; i++) {
-            char p[2400]; snprintf(p, sizeof p, "%s/%s%s", games, e->d_name, sub[i]);
-            if (!stat(p, &st) && S_ISDIR(st.st_mode) && access(p, W_OK)) { snprintf(bad, n, "%s", p); *bs = st; hit = 1; }
+        char g[2400]; snprintf(g, sizeof g, "%s/%s", games, e->d_name);
+        if ((hit = unwritable_dir(g, bad, n, bs))) break;
+        DIR *gd = opendir(g); if (!gd) continue; struct dirent *f;
+        while (!hit && (f = readdir(gd))) {
+            if (f->d_name[0] == '.') continue;
+            char p[2700]; snprintf(p, sizeof p, "%s/%s", g, f->d_name); hit = unwritable_dir(p, bad, n, bs);
         }
+        closedir(gd);
+        if (!hit) { char p[2700]; snprintf(p, sizeof p, "%s/资源包/.incoming", g); hit = unwritable_dir(p, bad, n, bs); }
     }
     closedir(d); return hit;
 }
@@ -439,7 +448,8 @@ static int games_unwritable(const char *games, char *bad, size_t n, struct stat 
 // 存档读不到（审计 P1-180）：本款文档根 S2A/ 下的（存档、账号）不是电脑重装能补回来的——跳过它换上新树，活动目录里就没有这份存档了。
 //   记下第一项，repair_tree 见到就不换树（旧树原样当活动目录，数据都在）；资源包文件读不到照旧跳过、资源包核对会报出来
 static unsigned g_repair_save_skipped; static char g_repair_save1[700];
-static int is_save_path(const char *p) { const char *s = strstr(p, "/S2A"); return s && (s[4] == '/' || !s[4]); }
+// 路径里任一段正好是 S2A（存档根）。逐个找：资源包根本身在 …/S2Arm/games/ 下，只看第一处「/S2A」会撞上 /S2Arm、把下面的存档判成不是（审计 P1-180 兄弟站点）
+static int is_save_path(const char *p) { for (const char *s = p; (s = strstr(s, "/S2A")); s += 4) if (s[4] == '/' || !s[4]) return 1; return 0; }
 static void clone_skip(const char *what, const char *path, int err) {
     if (is_save_path(path) && !g_repair_save_skipped++) snprintf(g_repair_save1, sizeof g_repair_save1, "%s %s：%s", what, path, err ? strerror(err) : "不是普通文件 / 目录 / 链接");
     if (!g_repair_skipped++) snprintf(g_repair_skip1, sizeof g_repair_skip1, "%s %s：%s", what, path, err ? strerror(err) : "不是普通文件 / 目录 / 链接");
@@ -540,7 +550,7 @@ static int repair_pack_base(const char *proc_docs) {
     snprintf(games, sizeof games, "%s/games", main_);
     struct stat ms; unsigned uid = stat(main_, &ms) ? 0 : (unsigned)ms.st_uid;
     LOG("【红】游戏目录：%s App 写不进（%s，属主 uid %u，App 是 uid %u），资源包改放 %s，读得到的搬过去", main_, strerror(e), uid, (unsigned)getuid(), alt);
-    g_repair_uid = uid; g_repair_skipped = 0; g_repair_skip1[0] = 0;
+    g_repair_uid = uid; g_repair_skipped = 0; g_repair_skip1[0] = 0; g_repair_save_skipped = 0; g_repair_save1[0] = 0;
     int ea = mkdir_chain(alt);
     if (ea) { snprintf(g_repair_why, sizeof g_repair_why, "建 %s：%s（%s 也写不进：%s）", alt, strerror(ea), main_, strerror(e)); LOG("【红】游戏目录：迁移没成：%s", g_repair_why); return -1; }
     time_t now = time(NULL); char ts[32]; strftime(ts, sizeof ts, "%Y%m%d-%H%M%S", gmtime(&now));
@@ -548,6 +558,8 @@ static int repair_pack_base(const char *proc_docs) {
     unsigned files = 0; uint64_t bytes = 0; uint64_t t0 = now_ns(); int rc = 0;
     if (!stat(games, &st) && S_ISDIR(st.st_mode)) rc = clone_tree(games, fresh, &files, &bytes, why, sizeof why);
     else if (mkdir(fresh, 0755)) { snprintf(why, sizeof why, "建 %s：%s", fresh, strerror(errno)); rc = -1; }
+    // 同 repair_tree（审计 P1-180 兄弟站点）：存档（S2A/ 下）读不到就不换上这棵新树，旧的照旧在用
+    if (!rc && g_repair_save_skipped) { snprintf(why, sizeof why, "存档读不到（%u 项，第一项 %s），换上新树存档就缺了：没换，旧目录照旧在用", g_repair_save_skipped, g_repair_save1); rc = -4; }
     if (!rc && rename(fresh, altg)) { snprintf(why, sizeof why, "把新目录改名成 %s：%s", altg, strerror(errno)); rc = -3; }
     g_repair_files = files;
     if (rc) { remove_tree(fresh); snprintf(g_repair_why, sizeof g_repair_why, "%s（写不进的是 %s）", why, main_); LOG("【红】游戏目录：迁移没成：%s", g_repair_why); return rc; }
@@ -707,6 +719,26 @@ static void mf_aside(const char *root, int back) {
     for (int i = 0; i < 2; i++) { char a[2400], b[2500]; snprintf(a, sizeof a, "%s/%s", root, nm[i]); snprintf(b, sizeof b, "%s.s2a-prev", a);
         if (back == 1) rename(b, a); else if (back == 2) unlink(b); else { unlink(b); rename(a, b); } }
 }
+// 资源包里一次换件的回滚记录（审计 P1-169 兄弟站点：写 index.tsv / 清单失败时，已经换上的 game.img、派生件、目录表要退回去）：
+//   tx_swap 把 dst 原有的那份改名成 dst.s2a-prev 再把 src 改名进来，记下；失败时 tx_undo 倒序换回（新进来的删掉 / 挪回原处），成功时 tx_done 删掉各份 .s2a-prev。
+//   全是同一目录树里的 rename，不拷贝
+typedef struct { char dst[2400], back[2400]; int had_prev; } tx_ent;
+typedef struct { tx_ent e[64]; int n; } tx_t;
+static int tx_swap(tx_t *t, const char *src, const char *dst, const char *undo_to) {   // undo_to：失败时把新件挪回哪里（NULL = 删掉）
+    if (t->n >= (int)(sizeof t->e / sizeof t->e[0])) { errno = E2BIG; return -1; }   // 记不下就不换（换了退不回去）
+    tx_ent *x = &t->e[t->n]; snprintf(x->dst, sizeof x->dst, "%s", dst); snprintf(x->back, sizeof x->back, "%s", undo_to ? undo_to : "");
+    char prev[2500]; snprintf(prev, sizeof prev, "%s.s2a-prev", dst); unlink(prev);
+    struct stat st; x->had_prev = !lstat(dst, &st) && !S_ISDIR(st.st_mode) && !rename(dst, prev);   // 位置被目录占着：不挪它，下面改名照旧失败（同原来）
+    if (rename(src, dst)) { int e = errno; if (x->had_prev) rename(prev, dst); errno = e; return -1; }
+    t->n++; return 0;
+}
+static void tx_undo(tx_t *t) {
+    for (int i = t->n - 1; i >= 0; i--) { tx_ent *x = &t->e[i]; char prev[2500]; snprintf(prev, sizeof prev, "%s.s2a-prev", x->dst);
+        if (x->back[0]) rename(x->dst, x->back); else unlink(x->dst);
+        if (x->had_prev) rename(prev, x->dst); }
+    t->n = 0;
+}
+static void tx_done(tx_t *t) { for (int i = 0; i < t->n; i++) { char prev[2500]; snprintf(prev, sizeof prev, "%s.s2a-prev", t->e[i].dst); unlink(prev); } t->n = 0; }
 static int img_update(const char *proc_docs, const char *path, const uint8_t *h, uint64_t total) {
     char gid[17], pid[65]; memcpy(gid, h + 16, 16); gid[16] = 0; memcpy(pid, h + 32, 64); pid[64] = 0;
     const char *fn = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
@@ -744,16 +776,24 @@ static int img_update(const char *proc_docs, const char *path, const uint8_t *h,
     for (size_t i = 0; i < un && !rc; i++) { if (!upd_is_extra(ue[i].rel) || strstr(ue[i].rel, "..") || ue[i].rel[0] == '/') continue;
         char dst[2400]; struct stat ds; snprintf(dst, sizeof dst, "%s/%s", root, ue[i].rel);
         if (!lstat(dst, &ds) && S_ISDIR(ds.st_mode)) { rc = -4; snprintf(g_img_err, sizeof g_img_err, "写 %s 失败：那里是一个目录", ue[i].rel); } }
-    int64_t nt = 0;
+    int64_t nt = 0; tx_t *tx = calloc(1, sizeof *tx); if (!tx && !rc) { rc = -4; snprintf(g_img_err, sizeof g_img_err, "内存不够"); }
+    // 本体目录表在副本上整理（APFS 克隆：不占空间、瞬间完成），换名进去时旧本体留作退路；克隆不了（非 APFS）才退回原地整理（失败时本体退不回去）
+    char nb[1600]; snprintf(nb, sizeof nb, "%s.upd.tmp", base); unlink(nb);
+    int cloned = 0;
+#if defined(__APPLE__)
+    if (!rc) cloned = !clonefile(base, nb, 0);
+#endif
     if (!rc) { mf_aside(root, 0);   // 先作废（留退路）：写到一半断了不会判成就绪
-        nt = upd_strip_base(base);
-        if (nt < 0) { mf_aside(root, 1); rc = -4; snprintf(g_img_err, sizeof g_img_err, "整理本体 game.img 的目录表失败：%s", strerror(errno)); } }
+        nt = upd_strip_base(cloned ? nb : base);
+        if (nt < 0) { rc = -4; snprintf(g_img_err, sizeof g_img_err, "整理本体 game.img 的目录表失败：%s", strerror(errno)); }
+        else if (cloned && tx_swap(tx, nb, base, NULL)) { rc = -4; snprintf(g_img_err, sizeof g_img_err, "换上整理过的本体失败：%s", strerror(errno)); } }
+    if (cloned && rc) unlink(nb);
     for (size_t i = 0; i < un; i++) { if (!upd_is_extra(ue[i].rel) || strstr(ue[i].rel, "..") || ue[i].rel[0] == '/') continue;
         char dst[2400], tmp[2500]; snprintf(dst, sizeof dst, "%s/%s", root, ue[i].rel); snprintf(tmp, sizeof tmp, "%s.upd.tmp", dst);
         if (rc) { unlink(tmp); continue; }   // 前面失败：临时件全删
         if (!strcmp(ue[i].rel, "game.imgmap") && ue[i].len >= 16) { int o = open(tmp, O_WRONLY); int64_t t64 = nt;   // 偏移表头里记的是整个 game.img 的长度（RomFsIndex.OpenImg 核它）
             if (o < 0 || pwrite(o, &t64, 8, 8) != 8) rc = -4; if (o >= 0) close(o); }
-        if (!rc && rename(tmp, dst)) rc = -4;
+        if (!rc && tx_swap(tx, tmp, dst, NULL)) rc = -4;
         if (rc) { snprintf(g_img_err, sizeof g_img_err, "写 %s 失败：%s", ue[i].rel, strerror(errno)); unlink(tmp); } }
     if (!rc) {   // index.tsv：game.img 一行（新整长）+ 更新包里的派生件；原有的其余行照留，旧派生件行去掉
         char ip[2400], tp[2500]; snprintf(ip, sizeof ip, "%s/index.tsv", root); snprintf(tp, sizeof tp, "%s.tmp", ip);
@@ -764,16 +804,20 @@ static int img_update(const char *proc_docs, const char *path, const uint8_t *h,
             if (in) { char line[4600]; while (fgets(line, sizeof line, in)) { char rel[4600]; snprintf(rel, sizeof rel, "%s", line); rel[strcspn(rel, "\t\n")] = 0;
                 if (strcmp(rel, "game.img") && !upd_is_extra(rel)) fputs(line, o); } fclose(in); }
             for (size_t i = 0; i < un; i++) if (upd_is_extra(ue[i].rel)) fprintf(o, "%s\t%llu\t-\n", ue[i].rel, (unsigned long long)ue[i].len);
-            if (fclose(o) || rename(tp, ip)) { rc = -4; snprintf(g_img_err, sizeof g_img_err, "写 index.tsv 失败：%s", strerror(errno)); }
+            if (fclose(o) || tx_swap(tx, tp, ip, NULL)) { rc = -4; snprintf(g_img_err, sizeof g_img_err, "写 index.tsv 失败：%s", strerror(errno)); unlink(tp); }
         }
     }
     upd_free(ue, un);
     if (!rc) {
         char mf[600], p[2400], tp[2500]; snprintf(mf, sizeof mf, "{\"version\": 3, \"format\": \"img\", \"imgFile\": \"game.img\", \"index_sha256\": \"%.40s-u%llx\"}\n", pid, (unsigned long long)bytes);
         snprintf(p, sizeof p, "%s/manifest.json", root); snprintf(tp, sizeof tp, "%s.tmp", p);
-        FILE *m = fopen(tp, "w"); if (!m || fputs(mf, m) < 0 || fclose(m) || rename(tp, p)) { rc = -4; snprintf(g_img_err, sizeof g_img_err, "写 manifest.json 失败：%s", strerror(errno)); }
+        FILE *m = fopen(tp, "w"); if (!m || fputs(mf, m) < 0 || fclose(m) || rename(tp, p)) { rc = -4; snprintf(g_img_err, sizeof g_img_err, "写 manifest.json 失败：%s", strerror(errno)); unlink(tp); }
     }
-    if (rc) return rc;
+    if (rc) {   // 写到一半失败：已经换上的本体 / 派生件 / 目录表全部退回，清单改回原名——这款照旧是套更新包之前的样子、照旧能玩
+        if (tx) { tx_undo(tx); free(tx); }
+        if (!cloned && nt > 0) LOG("【红】资源导入：%s 套到一半失败，本体是原地整理的（不是 APFS、克隆不了），目录表退不回去：下次解包按清单核对会重取", fn);
+        mf_aside(root, 1); return rc; }
+    tx_done(tx); free(tx);
     mf_aside(root, 2);
     unlink(path);   // 已套上：导入文件夹里的更新包删掉（派生件已在资源包里）
     LOG("资源导入：着色器更新包 %s 套到 %s（%llu MB 派生件，本体没动）", fn, gid, (unsigned long long)(bytes >> 20));
@@ -795,11 +839,14 @@ static int img_place(const char *proc_docs, const char *path, int pass) {   // 0
     if (!pid[0]) snprintf(pid, sizeof pid, "img-%llx", (unsigned long long)total);   // 没写资源包号的（老工具）：按长度给一个，至少换了文件能触发重新应用
     char root[1400], p[2400], old[2400], gdocs[1200]; snprintf(gdocs, sizeof gdocs, "%s/games/%s", proc_docs, gid); s2a_pack_root(root, sizeof root, gdocs);
     snprintf(p, sizeof p, "%s/game.img", root); if (mkdirs(p)) { snprintf(g_img_err, sizeof g_img_err, "建 %s 失败：%s", root, g_untar_err); return -4; }
-    (void)old; mf_aside(root, 0);   // 先作废（留退路）：挪到一半断了不会判成就绪
-    if (rename(path, p)) { int e = errno; mf_aside(root, 1); snprintf(g_img_err, sizeof g_img_err, "把 %s 挪进资源包失败：%s", path, strerror(e)); return -4; }
+    (void)old; tx_t *tx = calloc(1, sizeof *tx); if (!tx) { snprintf(g_img_err, sizeof g_img_err, "内存不够"); return -4; }
+    mf_aside(root, 0);   // 先作废（留退路）：挪到一半断了不会判成就绪
+    // 旧 game.img 改名留作退路（审计 P1-169 兄弟站点）：后面 index.tsv / 清单写失败时新包挪回导入处、旧包与旧目录表换回，这款照旧能玩
+    if (tx_swap(tx, path, p, path)) { int e = errno; free(tx); mf_aside(root, 1); snprintf(g_img_err, sizeof g_img_err, "把 %s 挪进资源包失败：%s", path, strerror(e)); return -4; }
+#define IMG_PLACE_FAIL() do { int e_ = errno; tx_undo(tx); free(tx); mf_aside(root, 1); errno = e_; return -4; } while (0)
     // index.tsv：game.img 一行 + 原有 index.tsv 里的直连库 / 覆盖层行（着色器库与覆盖层是 App 管的缓存、不进 IMG；电脑推过的那部分不丢）
     char ip[2400], tp[2500]; snprintf(ip, sizeof ip, "%s/index.tsv", root); snprintf(tp, sizeof tp, "%s.tmp", ip);
-    FILE *o = fopen(tp, "w"), *in = fopen(ip, "r"); if (!o) { if (in) fclose(in); snprintf(g_img_err, sizeof g_img_err, "写 index.tsv 失败：%s", strerror(errno)); return -4; }
+    FILE *o = fopen(tp, "w"), *in = fopen(ip, "r"); if (!o) { if (in) fclose(in); snprintf(g_img_err, sizeof g_img_err, "写 index.tsv 失败：%s", strerror(errno)); IMG_PLACE_FAIL(); }
     fprintf(o, "game.img\t%llu\t-\n", (unsigned long long)total);
     int shaders = 0;   // 着色器库从哪来：原有 index.tsv（电脑推过）或 IMG 目录表（导出文件夹里的「<游戏名>.img」带着，pack/img.py export）
     if (in) { char line[4600]; while (fgets(line, sizeof line, in)) if (!strncmp(line, "shaders/", 8) || !strncmp(line, "romfs_overlay/", 14)) { fputs(line, o); shaders |= !strncmp(line, "shaders/", 8); } fclose(in); }
@@ -808,10 +855,12 @@ static int img_place(const char *proc_docs, const char *path, int pass) {   // 0
     if (!shaders) { LOG("【黄】资源导入：%s 里没有着色器库（shaders/）：照样能玩，着色器首次遇到时现编、前几分钟会卡；要不卡就放「S2Arm 自签导出」文件夹里这款的 .img",
                         strrchr(path, '/') ? strrchr(path, '/') + 1 : path);
                     snprintf(g_img_noshaders, sizeof g_img_noshaders, "%s", strrchr(path, '/') ? strrchr(path, '/') + 1 : path); }
-    if (fclose(o) || rename(tp, ip)) { snprintf(g_img_err, sizeof g_img_err, "写 index.tsv 失败：%s", strerror(errno)); return -4; }
+    if (fclose(o) || tx_swap(tx, tp, ip, NULL)) { snprintf(g_img_err, sizeof g_img_err, "写 index.tsv 失败：%s", strerror(errno)); unlink(tp); IMG_PLACE_FAIL(); }
     char mf[600]; snprintf(mf, sizeof mf, "{\"version\": 3, \"format\": \"img\", \"imgFile\": \"game.img\", \"index_sha256\": \"%s\"}\n", pid);
     snprintf(p, sizeof p, "%s/manifest.json", root); snprintf(tp, sizeof tp, "%s.tmp", p);
-    FILE *m = fopen(tp, "w"); if (!m || fputs(mf, m) < 0 || fclose(m) || rename(tp, p)) { snprintf(g_img_err, sizeof g_img_err, "写 manifest.json 失败：%s", strerror(errno)); return -4; }
+    FILE *m = fopen(tp, "w"); if (!m || fputs(mf, m) < 0 || fclose(m) || rename(tp, p)) { snprintf(g_img_err, sizeof g_img_err, "写 manifest.json 失败：%s", strerror(errno)); unlink(tp); IMG_PLACE_FAIL(); }
+#undef IMG_PLACE_FAIL
+    tx_done(tx); free(tx);
     mf_aside(root, 2);
     LOG("资源导入：%s → %s/game.img（%llu MB），等游戏库解开", strrchr(path, '/') ? strrchr(path, '/') + 1 : path, root, (unsigned long long)(total >> 20));
     return 0;

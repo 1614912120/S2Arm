@@ -597,7 +597,8 @@ int main(int argc, char **argv) {
             NSString *caps = [bundle stringByAppendingPathComponent:@"s2a_caps.tsv"], *ctsv = [bundle stringByAppendingPathComponent:@"cpatch.tsv"];
             [plain writeToFile:caps atomically:YES encoding:NSUTF8StringEncoding error:nil];
             setenv("S2A_LAUNCH_GAME_ID", "G9", 1);
-            // 11-15：我方通用满屏缺省不用（runtime/src/widen.c）——k 0 缺省口径：旧键照样转成满屏明确开，但不再强开（VERIFIED / WIDESCREEN 都不设）；k 2 旧口径（S2A_CAPS_OWN=1）照旧强开
+            // 11-15 维护者「没补丁的游戏手动打开满屏就走咱们通用方案」：旧键转成满屏明确开、没有自适应满屏补丁 → 我方通用满屏（VERIFIED / WIDESCREEN 都是 1），
+            //   不再看 S2A_CAPS_OWN（k 0 没设、k 2 设了，结果一样）；k 1 有自适应满屏补丁 → 补丁铺满、S2Arm 让开
             for (int k = 0; k < 3; k++) {
                 [g9 removePersistentDomainForName:@"S2AGame.G9"];
                 if (k == 1) { [tsv writeToFile:ctsv atomically:YES encoding:NSUTF8StringEncoding error:nil]; s2a_ios_set_fullscreen(nil, YES); }
@@ -609,9 +610,9 @@ int main(int argc, char **argv) {
                 const char *v = getenv("S2A_WIDEN_VERIFIED"), *ws = getenv("S2A_WIDESCREEN"), *cpo = getenv("S2A_CPATCH_ON");
                 NSString *(^val)(const char *) = ^(const char *e) { return e ? @(e) : @"未设"; };
                 NSString *got = [NSString stringWithFormat:@"VERIFIED=%@ WIDESCREEN=%@ CPATCH_ON=%@", val(v), val(ws), val(cpo)];
-                NSString *want = k == 1 ? @"VERIFIED=未设 WIDESCREEN=0 CPATCH_ON=wsauto:fam" : k == 2 ? @"VERIFIED=1 WIDESCREEN=1 CPATCH_ON=未设" : @"VERIFIED=未设 WIDESCREEN=未设 CPATCH_ON=未设";
+                NSString *want = k == 1 ? @"VERIFIED=未设 WIDESCREEN=0 CPATCH_ON=wsauto:fam" : k == 2 ? @"VERIFIED=1 WIDESCREEN=1 CPATCH_ON=未设" : @"VERIFIED=1 WIDESCREEN=1 CPATCH_ON=未设";
                 check([got isEqual:want] && (k == 1 || ([g9 boolForKey:@"S2AWidescreen"] && ![g9 objectForKey:@"S2AWidenForce"])),
-                      [NSString stringWithFormat:@"起局满屏%@：期望 %@ → 真结果 %@", k == 1 ? @"（有自适应满屏补丁）" : k == 2 ? @"（旧键宽屏强制启用，旧口径）" : @"（旧键宽屏强制启用，缺省口径不强开）", want, got]);
+                      [NSString stringWithFormat:@"起局满屏%@：期望 %@ → 真结果 %@", k == 1 ? @"（有自适应满屏补丁）" : k == 2 ? @"（旧键宽屏强制启用，旧口径）" : @"（旧键宽屏强制启用，没设旧口径径不强开）", want, got]);
             }
             [g9 removePersistentDomainForName:@"S2AGame.G9"]; unsetenv("S2A_LAUNCH_GAME_ID"); unsetenv("S2A_WIDEN_VERIFIED"); unsetenv("S2A_WIDEN_CAPS");
             [NSFileManager.defaultManager removeItemAtPath:caps error:nil]; [NSFileManager.defaultManager removeItemAtPath:ctsv error:nil];

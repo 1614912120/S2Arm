@@ -203,7 +203,14 @@ void s2a_ios_set_fps60_for(NSString *gid, BOOL on) {
 }
 BOOL s2a_ios_fps60_on(void) { return s2a_ios_fps60_on_for(current_gid()); }
 // 补帧开关（按游戏存，S2AFrameInterp；没设过 = 开）：有社区帧率补丁时补帧自己让路（runtime/src/fps.c s2a_fps_source），开关不用管
-BOOL s2a_ios_fi_on(void) { id v = [s2a_ios_settings_defaults() objectForKey:@"S2AFrameInterp"]; return v ? [v boolValue] : YES; }
+// 补帧开不开（11-15 维护者：帧率解锁一个开关——有社区帧率补丁用补丁，没有就用补帧）：帧率解锁明确关（S2AFps60 = NO）= 回游戏原帧率，补帧也关；
+//   没选过 / 开着 = 补帧照今天缺省开（补丁开着时补帧每帧让路，nvn_present_fi.inc fi_wanted）。旧的单独「补帧」开关（S2AFrameInterp）关过的照旧关
+BOOL s2a_ios_fi_on(void) {
+    NSUserDefaults *d = s2a_ios_settings_defaults();
+    id fps = [d objectForKey:@"S2AFps60"], fi = [d objectForKey:@"S2AFrameInterp"];
+    if (fps) return [fps boolValue];   // 帧率解锁明确选过：开 = 补帧开（盖过旧的单独补帧开关），关 = 补帧关
+    return fi ? [fi boolValue] : YES;
+}
 void s2a_ios_set_fi(BOOL on) { [s2a_ios_settings_defaults() setBool:on forKey:@"S2AFrameInterp"]; }
 // 停帧救场记住关（runtime/src/cpatch.c s2a_cpatch_stall_rescue 的强定义）：这款「帧率」写关，下次启动不再开帧率补丁，设置页同步显示关
 void s2a_cpatch_persist_fps_off(void) {   // 停帧救场：关「帧率」并记进自动关（原因 stall，S 级状态 off_auto；game_options.m s2a_ios_sgrade_state 读）
@@ -248,6 +255,15 @@ void s2a_ios_set_fullscreen(NSString *gid, BOOL on) {
     for (S2ACPatchItem *it in adaptive_items(s2a_ios_game_dir(gid), &groups)) S2ACPatchSetEnabled(groups, s2a_ios_settings_defaults_for(gid), it.ident, on);
 }
 
+// 画质提升「锐利放大（MetalFX）」这款用得了吗：要走直连渲染（能力清单 direct 1「直连可用」；通用渲染路径按双线性，services GraphicsSettings.cs）。
+//   同 Mac（pack/jobs/community.py mac_settings）：读得到清单、direct 不是 1（含没这一行）= 用不了；读不到清单不挡（拿不准不停）。
+//   设备不支持、画面不比屏小等只能运行时知道，回退双线性、不提前提示
+BOOL s2a_ios_metalfx_blocked(NSString *gid) {
+    NSString *dir = s2a_ios_game_dir(gid ?: current_gid());
+    if (![NSFileManager.defaultManager fileExistsAtPath:[dir stringByAppendingPathComponent:@"s2a_caps.tsv"]]) return NO;
+    return caps_value_in(dir, "direct") != 1;
+}
+
 NSArray<NSDictionary *> *s2a_ios_graphics_options(void) {
     return @[
         @{@"key": @"S2AResolutionScale", @"title": S2AL(@"gfx.resolution"), @"initial": @"1",
@@ -255,7 +271,7 @@ NSArray<NSDictionary *> *s2a_ios_graphics_options(void) {
         @{@"key": @"S2AAntiAliasing", @"title": S2AL(@"gfx.antiAliasing"), @"initial": @"None",
           @"values": @[@"None", @"SmaaMedium", @"SmaaHigh"], @"labels": @[S2AL(@"gfx.antiAliasing.off"), S2AL(@"gfx.antiAliasing.medium"), S2AL(@"gfx.antiAliasing.high")]},
         @{@"key": @"S2AScalingFilter", @"title": S2AL(@"gfx.filter"), @"initial": @"Bilinear",
-          @"values": @[@"Bilinear", @"Nearest"], @"labels": @[S2AL(@"gfx.filter.bilinear"), S2AL(@"gfx.filter.nearest")]},
+          @"values": @[@"Bilinear", @"Nearest", @"MetalFX"], @"labels": @[S2AL(@"gfx.filter.bilinear"), S2AL(@"gfx.filter.nearest"), S2AL(@"gfx.filter.metalfx")]},
         @{@"key": @"S2AFrameRateLimit", @"title": S2AL(@"gfx.fpsLimit"), @"initial": @"0",
           @"values": @[@"30", @"60", @"120", @"0"], @"labels": @[@"30", @"60", @"120", S2AL(@"gfx.fpsLimit.none")]}
     ];
@@ -291,7 +307,7 @@ void s2a_ios_apply_graphics_settings(NSUserDefaults *defaults) {
     } options[] = {
         {@"S2AResolutionScale", "S2A_RES_SCALE", @"1", @[@"0.5", @"0.75", @"1", @"1.5", @"2"]},
         {@"S2AAntiAliasing", "S2A_ANTI_ALIASING", @"None", @[@"None", @"SmaaMedium", @"SmaaHigh"]},   // 不带 FXAA（10-30：NVIDIA FXAA 3.11 没有授权条款）；存过的 Fxaa 按无效值清除
-        {@"S2AScalingFilter", "S2A_SCALING_FILTER", @"Bilinear", @[@"Bilinear", @"Nearest"]},
+        {@"S2AScalingFilter", "S2A_SCALING_FILTER", @"Bilinear", @[@"Bilinear", @"Nearest", @"MetalFX"]},   // 画质提升：标准 / 2D 游戏专用 / 锐利放大（MetalFX 空间放大，graphics/nvn/gfx/nvn/nvn_present_fx.inc）
         {@"S2AFrameRateLimit", "S2A_FPS", @"0", @[@"30", @"60", @"120", @"0"]},
     };
 
@@ -352,9 +368,9 @@ void s2a_ios_apply_graphics_settings(NSUserDefaults *defaults) {
         [game removeObjectForKey:@"S2AWidenForce"];
         BOOL fs = NO;
         // 有自适应满屏补丁的款由补丁铺满（下面社区补丁那段让 S2Arm 满屏让开），这里不强开 S2Arm 满屏，免得拉宽两次
-        // 11-15：我方通用满屏缺省不用（runtime/src/widen.c）——玩家以前存下的「满屏明确开」也只在旧口径（S2A_CAPS_OWN=1）转成 S2A_WIDEN_VERIFIED，否则老设置会绕过闸
-        const char *own = getenv("S2A_CAPS_OWN");
-        if (own && !strcmp(own, "1") && [game objectForKey:@"S2AWidescreen"] && [game boolForKey:@"S2AWidescreen"] && s2a_ios_fullscreen_state(@(gid), &fs) == 0 && fs && !adaptive_items(s2a_ios_game_dir(@(gid)), NULL).count) {
+        // 11-15 维护者「没补丁的游戏手动打开满屏就走咱们通用方案」：玩家明确开满屏、没有自适应满屏补丁 → 我方通用满屏（第三层整套放宽，不看已验证名单）。
+        //   原先还要 S2A_CAPS_OWN=1（v0.4.0 撤通用满屏时加的），手动开也不生效；没选过照旧不开（宿主缺省关，runtime/src/widen.c）
+        if ([game objectForKey:@"S2AWidescreen"] && [game boolForKey:@"S2AWidescreen"] && s2a_ios_fullscreen_state(@(gid), &fs) == 0 && fs && !adaptive_items(s2a_ios_game_dir(@(gid)), NULL).count) {
             if (!getenv("S2A_WIDEN_VERIFIED")) apply_environment("S2A_WIDEN_VERIFIED", @"1");
             if (!getenv("S2A_WIDESCREEN")) apply_environment("S2A_WIDESCREEN", @"1");
             fprintf(stderr, "[S2A 画面设置] 满屏：这款明确开（没进已验证名单也铺满，自检兜底）\n");
