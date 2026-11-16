@@ -10,6 +10,7 @@ import errno
 import filelock
 from space_rule import pack_direct_bytes, pack_input_bytes, pack_need_bytes, selected_packages   # 出包空间规则的唯一定义（剃刀 H11）
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import uuid
@@ -158,6 +160,8 @@ DIAGNOSTIC_JOB_LIMIT = 4 << 20
 PHONE_TEXT = (".log", ".txt", ".tsv", ".json", ".ips", ".csv")   # 拉回的手机诊断里按文本脱敏收的类型（host.log、logs/、frames.tsv、threads.txt、diag/*.json、metrickit 等）
 DIAG_RUN_FILE_LIMIT = 4 << 20    # 诊断局 PNG：单张上限
 DIAG_PSO_FILE_LIMIT = 4 << 20   # 本机管线记录 pso_user.tsv 单份上限（实测约 1 MB；收件单个成员上限 16 MB）
+DIAG_SALVAGE_GAME_LIMIT = (8 << 20) + (1 << 20)   # 着色器补料每款上限（运行时 S2A_SHADER_SALVAGE_MB 缺省 8 MB 的字节 + index.tsv 余量）
+DIAG_SALVAGE_TOTAL_LIMIT = 16 << 20   # 着色器补料整包上限（诊断包压缩后 ≤ 30 MB，给日志 / 截图留地方）
 DIAG_RUN_TOTAL_LIMIT = 40 << 20  # 诊断局 PNG：总量上限（#438 定）
 # 本机（Mac）崩溃报告（11-14 诊断#43f7d3：宿主起局 1 秒内 SIGTRAP，没走到写日志，诊断包里一份现场都没有）：系统写在 ~/Library/Logs/DiagnosticReports，
 #   只收我们自己的进程（宿主 s2arm-host、启动器 S2Arm*）近 7 天的 .ips，最新的至多 10 份、单份至多 4 MB，按文本脱敏
@@ -3134,6 +3138,39 @@ def diagnostics(c):
                     if f.is_symlink() or not f.is_file() or not 0 < f.stat().st_size <= DIAG_PSO_FILE_LIMIT:
                         continue
                     archive.writestr(f"pso/{gid}.tsv", f.read_bytes())
+                # 着色器补料（graphics/nvn/host/dsh_salvage.inc）：各款 temp/<号>/wire/<号>/shader_miss/ 里库里没有 / 现编失败的着色器（<键>.ctl / .code + index.tsv），
+                #   每款打成一个 tar 放 shader_miss/<号>.tar（诊断包成员数有上限：tools/diagnostic_report.py MAX_FILES 1000，一款就可能上千个文件）；
+                #   取件按程序号归档进管线种子目录 rt_shaders/，出包编进那款的直连库。只有游戏着色器字节与键，不含个人信息、不过脱敏（index.tsv 的失败原文是翻译器 rc，不含路径）。
+                #   每款至多 DIAG_SALVAGE_GAME_LIMIT（运行时同上限）、整包至多 DIAG_SALVAGE_TOTAL_LIMIT；索引先放，每键两份成对放（放不下整对不放）；链接不跟
+                step = "读着色器补料"  # 非玩家句
+                salvage_used = 0
+                for g in sorted(c.catalog().get("games", []), key=lambda g: g.get("id", "")) if c.library.is_dir() else []:
+                    c.check()
+                    gid = (g.get("id") or "").upper()
+                    if not re.fullmatch(r"[0-9A-F]{16}", gid):
+                        continue
+                    d = c.library / "temp" / gid / "wire" / gid / "shader_miss"
+                    if d.is_symlink() or not d.is_dir():
+                        continue
+                    picked, game_used = [], 0
+                    keys = sorted({f.name[:16] for f in d.iterdir() if re.fullmatch(r"[0-9a-f]{16}\.ctl", f.name)})
+                    for names in [("index.tsv",)] + [(f"{k}.ctl", f"{k}.code") for k in keys]:
+                        fs = [d / x for x in names]
+                        if any(f.is_symlink() or not f.is_file() for f in fs):
+                            continue
+                        n = sum(f.stat().st_size for f in fs)
+                        if not n or game_used + n > DIAG_SALVAGE_GAME_LIMIT or salvage_used + game_used + n > DIAG_SALVAGE_TOTAL_LIMIT:
+                            continue
+                        picked += fs; game_used += n
+                    if not picked:
+                        continue
+                    buf = io.BytesIO()
+                    with tarfile.open(fileobj=buf, mode="w", format=tarfile.USTAR_FORMAT) as t:
+                        for f in picked:
+                            data = f.read_bytes(); ti = tarfile.TarInfo(f.name); ti.size = len(data); ti.mtime = 0; ti.mode = 0o644
+                            t.addfile(ti, io.BytesIO(data))
+                    archive.writestr(f"shader_miss/{gid}.tar", buf.getvalue())
+                    salvage_used += game_used
                 manifest = dict(schema=1,   # 诊断上传服务收件要它（维护方方案「上传协议」：没有 schema 判 not_diag 拒收）；iOS ios/diag.m 同字段
                                 launcher_version=launcher_version(),
                                 macos_version=platform.mac_ver()[0] or {"error": "macOS 版本不可用"},  # 非玩家句

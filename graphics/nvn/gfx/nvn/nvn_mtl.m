@@ -7201,6 +7201,8 @@ static __unsafe_unretained NvProg *prog_get(const prog_t *cp) {   // Called only
             if (b) { o->sh[5] = b; o->smask |= 1u << 5; continue; }
             o->unres = 1;
             MLOG("【红】 shader %s is not in the shader map (DM_NVN_SHDUMP=directory saves its control section and code area)", k.UTF8String);
+            dm_shader_salvage(k.UTF8String, 1, 0, NULL, NULL);   // 着色器补料（dsh_salvage.inc）：这里只记索引（键、次数）。字节在 SetShaders / 首用取键时由 dm_shader_miss 存（那时控制段有效）；
+            //   这里的控制段可能是帧回放放回的录时宿主指针（已失效，见 dm_shader_miss_late），不读
             // DM_NVN_SHDUMP=directory: shaders missing from the map are saved as <key>.ctl (0x880-byte control section) and <key>.code (code area, length from control +0x704), to trace their source / add them to the map offline
             static const char *shd; static int shd_init; if (!shd_init) { shd = getenv("DM_NVN_SHDUMP"); shd_init = 1; }
             if (shd) { char path[1024]; FILE *f; uint32_t ncode; memcpy(&ncode, (const uint8_t *)p->sd[i].control + (nvn2_on() && nvn2_ctl(p->sd[i].control) ? 0x44 : 0x704), 4);   /* NVN2's code length at +0x44 (nvn2.h) */   // with SHDUMP set the control section is the host's copy
