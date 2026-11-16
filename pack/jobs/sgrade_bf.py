@@ -104,12 +104,17 @@ def upgrade_mac(c, gid, runtime, hold=None):
                 os.replace(old, runtime / "shaders/direct")   # 换不上：旧库原样回位
                 raise
             files = {k: v for k, v in manifest["files"].items() if not k.startswith("shaders/direct/")}
-            for p in sorted((runtime / "shaders/direct").rglob("*")):
-                if p.is_file():
-                    files[p.relative_to(runtime).as_posix()] = [p.stat().st_size, ""]   # 同 build.snapshot：只记大小
+            for rel, size in _lib_files(runtime):
+                files[rel] = [size, ""]   # 同 build.snapshot：只记大小
             atomic(runtime / "manifest.json", dict(manifest, files=files, bfGen=BF_GEN))
         shutil.rmtree(old, ignore_errors=True)
     return True
+
+
+def _lib_files(runtime):
+    """运行版本里直连库目录的文件 → [(相对运行版本的路径, 字节)]（单列一个函数，只看库目录）"""
+    base = Path(runtime)
+    return [(p.relative_to(base).as_posix(), p.stat().st_size) for p in sorted((base / "shaders/direct").rglob("*")) if p.is_file()]
 
 
 def _clone_file(src, dst):
