@@ -209,6 +209,36 @@ import XCTest
         XCTAssertEqual(auto.units, [.pair(left: "L1", right: "R1"), .system(name: "DualSense", index: 0)], "另一只接回来：原位并成一对")
         auto.reconcile(devices: devs, mergedPair: true, system: [])
         XCTAssertEqual(auto.units, [.pair(left: "L1", right: "R1")], "蓝牙手柄断开：让出玩家位")
+        // 已按 SL + SR 登记成横握单只：同组另一侧之后接上不自动拼成一对，新来的自己一位、两只拆开（不用再按一次 SL + SR）
+        var side = PlayerAssignment()
+        side.reconcile(devices: [devs[0]], mergedPair: false, system: [])
+        side.ns2(id: "L1", kind: 2, gesture: 2, at: 0)   // 已有位的那只按 SL + SR（不重复登记，但记成横握）
+        XCTAssertEqual(side.units, [.single(id: "L1", kind: 2)])
+        XCTAssertEqual(side.sideways, ["L1"])
+        side.reconcile(devices: devs, mergedPair: true, system: [])
+        XCTAssertEqual(side.units, [.single(id: "L1", kind: 2), .single(id: "R1", kind: 3)], "先自动排进来、之后按了 SL + SR 的单只也算横握")
+        var sideFresh = PlayerAssignment()
+        sideFresh.ns2(id: "L1", kind: 2, gesture: 2, at: 0)   // 分配中按 SL + SR 登记
+        sideFresh.reconcile(devices: devs, mergedPair: true, system: [])
+        XCTAssertEqual(sideFresh.units, [.single(id: "L1", kind: 2), .single(id: "R1", kind: 3)], "SL + SR 登记过的单只：另一侧接上自己一位，不并成一对")
+        XCTAssertTrue(sideFresh.wantsSplit(devices: devs), "传输层缺省拼成一对时要照分配拆开")
+        XCTAssertEqual(sideFresh.helperPlan(devices: devs)["split"] as? Bool, true)
+        // 拔掉再接：横握标记跟着清掉，没再按 SL + SR 就照旧自动拼
+        sideFresh.reconcile(devices: [], mergedPair: false, system: [])
+        sideFresh.reconcile(devices: [devs[0]], mergedPair: false, system: [])
+        sideFresh.reconcile(devices: devs, mergedPair: true, system: [])
+        XCTAssertEqual(sideFresh.units, [.pair(left: "L1", right: "R1")], "没按 SL + SR 的单只：另一侧接上照旧自动拼成一对")
+        // 同侧两只（L + L / R + R）永远不拼：第二只左只自己一位
+        var sameSide = PlayerAssignment()
+        sameSide.reconcile(devices: [devs[0]], mergedPair: false, system: [])
+        let twoLeft = [devs[0], PlayerAssignment.Device(id: "L2", kind: 2)]
+        sameSide.reconcile(devices: twoLeft, mergedPair: true, system: [])
+        XCTAssertEqual(sameSide.units, [.single(id: "L1", kind: 2), .single(id: "L2", kind: 2)], "两只左只不会拼成一对")
+        // 横握标记存进偏好
+        var savedSide = PlayerAssignment()
+        savedSide.ns2(id: "R1", kind: 3, gesture: 2, at: 0)
+        let decoded = try JSONDecoder().decode(PlayerAssignment.self, from: JSONEncoder().encode(savedSide))
+        XCTAssertEqual(decoded.sideways, ["R1"])
         // ×：平时清掉一位 = 连着但没有玩家位、不自动排回来；分配中再按键登记就回来
         var x = PlayerAssignment()
         x.reconcile(devices: devs, mergedPair: true, system: [.init(name: "DualSense", index: 0)])
