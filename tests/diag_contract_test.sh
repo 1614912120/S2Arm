@@ -97,6 +97,8 @@ for rel in ("host.log", "logs/host-20261116-120000.log", "logs/host-20261115-090
             f"games/{A}/wire/{A}/shader_miss/index.tsv", f"games/{A}/wire/{A}/shader_miss/0123456789abcdef.ctl", f"games/{A}/wire/{A}/shader_miss/0123456789abcdef.code",
             f"wire/{B}/shader_miss/index.tsv", f"wire/{B}/shader_miss/fedcba9876543210.ctl", f"wire/{B}/shader_miss/fedcba9876543210.code"):
     put(rel)
+# 超长慢管线源：真经 diagcollect.m 截到 4 MB 并插截断标记，成品略超 4 MB（v0.4.3 起客户端实发，11-16 曾被收件整包拒）
+put(f"games/{A}/wire/{A}/shaders/cccccccccccccccc_b.slow.metal", ("// msl line\n" * 500000).encode())
 ios_want = ["manifest.json", "logs/host.log", "logs/host-20261116-120000.log", "logs/host-20261115-090000.log", "logs/frames.tsv", "logs/threads.txt",
             "logs/unpack.log", "logs/far_sites.tsv", f"logs/unpack_{A}.log", "metrickit/crash-1.json", "metrickit/hang-2.json", "metrickit/x-exit.json",
             f"shaders/{A}_aaaaaaaaaaaaaaaa.inflight.ctl", f"shaders/{A}_aaaaaaaaaaaaaaaa.inflight.code", f"shaders/{A}_bbbbbbbbbbbbbbbb.fail.ctl",
