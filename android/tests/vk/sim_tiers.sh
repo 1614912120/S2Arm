@@ -27,6 +27,8 @@ for t in "${want[@]}"; do
     case " ${all[*]} " in *" $t "*) ;; *) echo "未知档：${t}（可用：${all[*]}）" >&2; exit 64 ;; esac
 done
 run_baseline=1
+# 一轮十几次 run.sh 共用一份 TBUF 编译链产物（第一次缺了就出，之后复用；run.sh 只在这个变量下复用）
+export S2A_TBUF_REUSE=1
 if [ -n "${S2A_SIM_SHARD:-}" ]; then
     shard_k=${S2A_SIM_SHARD%/*}; shard_n=${S2A_SIM_SHARD#*/}
     if ! [[ "$shard_k" =~ ^[0-9]+$ && "$shard_n" =~ ^[1-9][0-9]*$ ]] || [ "$shard_k" -ge "$shard_n" ]; then
