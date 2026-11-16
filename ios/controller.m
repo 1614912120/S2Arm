@@ -582,6 +582,12 @@ static void pad_face_sync(void) {
     uint32_t buttons = 0; int32_t axes[4] = {0};
     GCExtendedGamepad *pad = _slotOwner[slot].extendedGamepad;
     if (pad && atomic_load(&g_slots_active)) { sample_extended(pad, &buttons, axes); buttons &= 0xffffu; }   // Home 扩展位只给玩家 1 开菜单用
+    {   // #1224 取证：玩家 2–4 每槽第一次采到按键记一行（分槽了却按不动：看是回调没来、前台标记关着，还是服务层没读）
+        static _Atomic uint32_t said; uint32_t bit = 1u << slot;
+        if (buttons && !(atomic_fetch_or(&said, bit) & bit)) LOG("系统手柄：玩家 %d（%s）第一次采到按键 0x%x", slot + 1, _slotOwner[slot].vendorName.UTF8String ?: "GameController", buttons);
+        else if (!pad || !atomic_load(&g_slots_active)) { static _Atomic uint32_t idle; uint32_t ib = 1u << slot;
+            if (_slotOwner[slot] && !(atomic_fetch_or(&idle, ib) & ib)) LOG("系统手柄：玩家 %d 的回调来了但没采样（%s）", slot + 1, !pad ? "手柄没有扩展手柄档" : "前台标记关着"); }
+    }
     for (int i = 0; i < 4; i++) atomic_store(&g_slot_sticks[slot][i], axes[i]);
     atomic_store(&g_slot_buttons[slot], buttons);
 }
@@ -929,6 +935,8 @@ __attribute__((visibility("default"), used)) uint32_t s2a_vpad_read_pad(int inde
     if (index < 1 || index >= S2A_IOS_MAX_PADS) { for (int i = 0; i < 4; i++) sticks[i] = 0; return 0; }
     uint32_t buttons = atomic_load(&g_slot_buttons[index]);
     for (int i = 0; i < 4; i++) sticks[i] = atomic_load(&g_slot_sticks[index][i]);
+    { static _Atomic uint32_t said; uint32_t bit = 1u << index;   // #1224 取证：服务层第一次从这个槽读到非零按键
+      if (buttons && !(atomic_fetch_or(&said, bit) & bit)) LOG("系统手柄：服务层第一次从玩家 %d 读到按键 0x%x", index + 1, buttons); }
     return buttons;
 }
 
