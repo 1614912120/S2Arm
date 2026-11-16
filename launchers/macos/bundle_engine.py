@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -360,13 +361,24 @@ def reader_values(destination):
     return out
 
 
+def _rmtree_writable(path):
+    """删整棵目录；删不动的先加写权限再删一次（Windows 上 git 的对象文件、commit-graph 是只读的，rmtree 报 WinError 5 拒绝访问）"""
+    def retry(fn, p, _):
+        os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+        fn(p)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=retry)
+    else:
+        shutil.rmtree(path, onerror=retry)
+
+
 def seal_snapshot(destination, fingerprint):
     """快照库已 commit + gc、引擎目录里的文件都放齐之后调：git 算快照字段写进 engine.json → 删 .git → 各读方新旧两种读法逐项比对，不一致就停、不出包"""
     destination = Path(destination)
     write_manifest(destination, fingerprint, snap={})   # engine.json / prepare.json 先落盘：玩家副本里 git ls-files 会列出它们，listed 要算进去
     before = reader_values(destination)                 # 旧读法（git）
     fields = snapshot_fields(destination)
-    shutil.rmtree(destination / ".git")
+    _rmtree_writable(destination / ".git")
     write_manifest(destination, fingerprint, snap=fields)
     after = reader_values(destination)                  # 新读法（engine.json）
     failed = [k for k, v in before.items() if k.startswith("sh_") and v[0]]
