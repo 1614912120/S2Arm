@@ -433,6 +433,15 @@ def ratio_text(a):
     return f"{a:.2f}:1"
 
 
+def choice(chosen, uid):
+    """玩家对这条补丁的明确选择（启动设置只存玩家点过的那一项：没有记录 = 没选过，按缺省）。11-15 分类改正后，原先误判成画面的补丁编号
+    从 gfx:<哈希> 变成 other:<哈希>（哈希不变）：玩家在旧编号上手动开 / 关过的照旧算数（jhz「玩家自行选择优先」），只有没选过的按新缺省（other 默认关）"""
+    v = chosen.get(uid)
+    if v is None and uid.startswith("other:"):
+        v = chosen.get("gfx:" + uid[len("other:"):])
+    return v
+
+
 def packed_patches(c, gid):
     """这款 Mac 包里编进去的社区补丁（产物 cpatch.tsv；11-12 出包时自动查库，pack/jobs/patches.py）：全部列出、11-13 起缺省开、玩家可逐条关（下次启动生效，
     launch_env 转 S2A_CPATCH_ON）。帧率类（编号 fps:）跟「60 帧」开关走、金手指（cheat:）在金手指一栏，都不在这里列。每条带来源库与许可"""
@@ -479,7 +488,7 @@ def describe_game(c, game):
         a[key]["enabled"] = a[key]["available"] and s[key]
     for it in a["graphics"]:
         # 11-13：没选过 = 默认开（S 级优化命中的打入并默认开）；other（声音 / 玩法等，11-15）没选过 = 关
-        it["enabled"] = s["enabled"].get(it["id"]) is True if it["id"].startswith("other:") else s["enabled"].get(it["id"]) is not False
+        it["enabled"] = choice(s["enabled"], it["id"]) is True if it["id"].startswith("other:") else choice(s["enabled"], it["id"]) is not False
     import cheats   # 金手指（11-12）：同一页「游戏设置 → 金手指」列出与开关
     import sgrade   # S 级按类状态（满屏来源 / 是否生效 / 自动关 / 版本，pack/jobs/sgrade.py state）
     return dict(gameId=game["id"], version=_version(game), mac=mac_settings(c, game["id"]), cheats=cheats.listing(c, game),
@@ -590,7 +599,7 @@ def launch_env(c, gid):
     if packed or fams:
         chosen_p = load_launch(c, gid)["patches"]
         # 没选过 = 开（11-13）；玩家关过的不开。other（认不出是画面的：声音 / 玩法等，11-15）反过来：玩家明确开了才开
-        on = sorted([k for k in packed if (chosen_p.get(k) is True if k.startswith("other:") else chosen_p.get(k) is not False)] + (fams if full else []))
+        on = sorted([k for k in packed if (choice(chosen_p, k) is True if k.startswith("other:") else choice(chosen_p, k) is not False)] + (fams if full else []))
         env["S2A_CPATCH_ON"] = ",".join(on) or "none"
         if any(k.startswith(("widescreen:", "wsauto:")) for k in on):
             env["S2A_WIDESCREEN"] = "0"   # 开着社区宽屏 / 画幅补丁：游戏自己画宽画面，S2Arm 的满屏（图形层加宽渲染目标）让开，不拉宽两次；关掉补丁恢复
