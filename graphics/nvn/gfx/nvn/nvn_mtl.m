@@ -5026,6 +5026,37 @@ static void sparse_view(NvPkg *pk, const tex_t *t) {
     pk->vbase = (int)r;
 }
 static uint64_t g_texinfo_ser[8]; static int g_texinfo_n;
+// The usage of a buffer texture's view: read, format views and writes whatever its IMAGE flag (upstream reference implementation, MIT, 0929dd69). A view on its pool's buffer has
+//   no lossless compression for the write and format-view usages to cost, and texture objects over the same range share one view (tex_mtl_): made with read usage alone, the first image
+//   write or format view through a view another object made first would rebuild it (tex_upgrade). Metal makes no writable BGRA8Unorm texture buffer. Atomics stay declared only on
+//   a binding with native atomic calls (img_atomic_prepare upgrades the shared view once, in the sharing table too)
+static MTLTextureUsage tbuf_usage(MTLPixelFormat pf) {
+    MTLTextureUsage u = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
+    if (pf != MTLPixelFormatBGRA8Unorm) u |= MTLTextureUsageShaderWrite;
+    return u;
+}
+// Buffer texture (TARGET_BUFFER): a texture-buffer view directly on the memory pool buffer (zero copy; the GPU reads the pool's current content at execution time, same as NVN semantics).
+//   Not made resident here: tex_mtl_ does that when it enters the sharing table
+static id<MTLTexture> tex_buffer(const tex_t *t) {
+    uint32_t pf = 0; uint8_t swz[4]; int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
+    void *mb; uint64_t mo;
+    if (nvn_fmt_expanded((uint32_t)t->d.format, NULL, NULL)) return nil;   // a format the host expands (RGB32F / UI / I and the rest): no such texture buffer format, the binding expands it (tbuf_expand)
+    if (!nvn_fmt_to_mtl(t->d.format, &pf, swz) || !pf || !bpb) { RED_ONCE(36, "buffer texture format %#x not mapped", t->d.format); return nil; }
+    if (!t->mem || !nvn_be_addr((uint64_t)t->mem, (uint64_t)t->d.width * bpb, &mb, &mo)) { RED_ONCE(37, "buffer texture storage is not in a memory pool"); return nil; }
+    id<MTLBuffer> b = (__bridge id<MTLBuffer>)mb;
+    NSUInteger al = [g_dev minimumLinearTextureAlignmentForPixelFormat:(MTLPixelFormat)pf];
+    // Below Metal's linear-texture alignment (16 bytes on a Mac, 64 on an iPhone) a view reads from its offset rounded down: an R32Float view at offset 4 / 8 / 12 reads every element
+    //   1 / 2 / 3 places late (#798, measured on an M5 Max in the compute and vertex stages, 64 to 300 000 elements). Unreal puts buffer textures at 8-byte offsets in its pools
+    //   (one game's at 0x168; another's per-frame particle data, so only the frames whose allocation was misaligned drew stretched sprites). The view is still made here:
+    //   it names the bytes, and the binding reads them through an aligned copy made on the GPU before the draw (tba_copy / tbuf_bind_aligned). Below the element size it stays a dummy
+    if (mo % al && mo % (uint64_t)bpb) { RED_ONCE(38, "buffer texture offset %#llx not aligned to its %d-byte elements", (unsigned long long)mo, bpb); return nil; }
+    MTLTextureDescriptor *d = [MTLTextureDescriptor textureBufferDescriptorWithPixelFormat:(MTLPixelFormat)pf width:t->d.width resourceOptions:b.resourceOptions
+                                                                                     usage:tbuf_usage((MTLPixelFormat)pf)];
+    size_t row = ((size_t)t->d.width * bpb + al - 1) / al * al;
+    id<MTLTexture> mt = [b newTextureWithDescriptor:d offset:mo bytesPerRow:row];
+    if (!mt) { RED_ONCE(39, "cannot create buffer texture ser=%llu: %u elements format %#x", (unsigned long long)t->serial, t->d.width, t->d.format); return nil; }
+    return mt;
+}
 static id<MTLTexture> tex_mtl_(const tex_t *ct) {
     tex_t *t = (tex_t *)ct;
     if (!t || !t->serial) return nil;
@@ -5159,28 +5190,6 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
             serial_del(t->serial); have = nil; }
     }
     if (have) return have;
-    if (t->d.target == 10) {   // Buffer texture (TARGET_BUFFER): create the texture-buffer view directly on the memory pool buffer (zero copy; the GPU reads the pool's current content at execution time, same as NVN semantics)
-        uint32_t pf = 0; uint8_t swz[4]; int bw, bh, bpb = nvn_fmt_bpb(t->d.format, &bw, &bh);
-        void *mb; uint64_t mo;
-        if (nvn_fmt_expanded((uint32_t)t->d.format, NULL, NULL)) return nil;   // a format the host expands (RGB32F / UI / I and the rest): no such texture buffer format, the binding expands it (tbuf_expand)
-        if (!nvn_fmt_to_mtl(t->d.format, &pf, swz) || !pf || !bpb) { RED_ONCE(36, "buffer texture format %#x not mapped", t->d.format); return nil; }
-        if (!t->mem || !nvn_be_addr((uint64_t)t->mem, (uint64_t)t->d.width * bpb, &mb, &mo)) { RED_ONCE(37, "buffer texture storage is not in a memory pool"); return nil; }
-        id<MTLBuffer> b = (__bridge id<MTLBuffer>)mb;
-        NSUInteger al = [g_dev minimumLinearTextureAlignmentForPixelFormat:(MTLPixelFormat)pf];
-        // Below Metal's linear-texture alignment (16 bytes on a Mac, 64 on an iPhone) a view reads from its offset rounded down: an R32Float view at offset 4 / 8 / 12 reads every element
-        //   1 / 2 / 3 places late (#798, measured on an M5 Max in the compute and vertex stages, 64 to 300 000 elements). Unreal puts buffer textures at 8-byte offsets in its pools
-        //   (one game's at 0x168; another's per-frame particle data, so only the frames whose allocation was misaligned drew stretched sprites). The view is still made here:
-        //   it names the bytes, and the binding reads them through an aligned copy made on the GPU before the draw (tba_copy / tbuf_bind_aligned). Below the element size it stays a dummy
-        if (mo % al && mo % (uint64_t)bpb) { RED_ONCE(38, "buffer texture offset %#llx not aligned to its %d-byte elements", (unsigned long long)mo, bpb); return nil; }
-        MTLTextureDescriptor *d = [MTLTextureDescriptor textureBufferDescriptorWithPixelFormat:(MTLPixelFormat)pf width:t->d.width resourceOptions:b.resourceOptions
-                                                                                         usage:MTLTextureUsageShaderRead | (t->d.flags & NVN_TEXTURE_FLAGS_IMAGE ? MTLTextureUsageShaderWrite : 0)];
-        size_t row = ((size_t)t->d.width * bpb + al - 1) / al * al;
-        id<MTLTexture> mt = [b newTextureWithDescriptor:d offset:mo bytesPerRow:row];
-        if (!mt) { RED_ONCE(39, "cannot create buffer texture ser=%llu: %u elements format %#x", (unsigned long long)t->serial, t->d.width, t->d.format); return nil; }
-        res_add(mt);
-        tex_put(t->serial, mt);
-        return mt;
-    }
     alias_key ak; alias_key_of(&ak, t);
     // A finalized serial over storage the sharing table holds resolves to that texture with no ghost entry (S2Arm 11-05, after upstream PR #1299 commit 3, MIT, seedds/upstream ee9b7765):
     //   the game finalizes texture objects and keeps their descriptors registered over live storage, and each resolution went through the ring (an entry evicted, g_ser_gen moved, so
@@ -5193,8 +5202,23 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
             return shared;   // 前瞻（g_tex_peek）：升级不改格式与采样数，不登记、不升级
         tex_put(t->serial, shared);
         id<MTLTexture> st = shared;   // an image object over a shared texture made without shader writes: add the use in place (not on depth / stencil formats, which take no image stores)
-        if ((t->d.flags & NVN_TEXTURE_FLAGS_IMAGE) && !(st.usage & MTLTextureUsageShaderWrite) && !mtl_fmt_depth(st.pixelFormat)) return tex_upgrade(t, st, MTLTextureUsageShaderWrite, st.pixelFormat);
+        if ((t->d.flags & NVN_TEXTURE_FLAGS_IMAGE) && !(st.usage & MTLTextureUsageShaderWrite) && !mtl_fmt_depth(st.pixelFormat) && st.textureType != MTLTextureTypeTextureBuffer) return tex_upgrade(t, st, MTLTextureUsageShaderWrite, st.pixelFormat);
         return shared;
+    }
+    // A buffer texture's view is shared by storage as every other texture is (upstream reference implementation, MIT, 0929dd69): NVN texture objects over the same range with the same
+    //   description are one view, kept by the sharing table. Made per object, Unreal's transient buffer textures, built again every frame over the same ranges, added a view to the
+    //   residency set each time (upstream: 72,541 residency commits on one route, 293 ms of the submit thread). It has no sRGB / linear twin and nothing to fill
+    if (t->d.target == NVN_TEXTURE_TARGET_BUFFER) {
+        id<MTLTexture> mt = tex_buffer(t);
+        if (!mt) return nil;
+        res_add(mt);
+        pthread_mutex_lock(&g_smu);
+        if (!g_alias_set) g_alias_set = CFSetCreateMutable(NULL, 0, NULL);
+        alias_take_over(&ak);
+        hm_put_id(&g_alias, &ak, mt); CFSetAddValue(g_alias_set, (__bridge const void *)mt); nvn_hm_put(&g_alias_seen, &ak, (void *)(uintptr_t)(g_fence + 1));
+        pthread_mutex_unlock(&g_smu);
+        tex_put(t->serial, mt);
+        return mt;
     }
     {   // NVN textures over the same storage share its bytes. One that differs from a shared texture only by the other format of an sRGB / linear pair is a view of it (upstream reference
         //   implementation, MIT, 92f223a7): as its own Metal texture, Mario Kart World's Grand Prix movie (an RGBA8 render target the YUV pass writes, sampled by the composite through an

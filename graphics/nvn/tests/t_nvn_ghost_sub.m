@@ -1,7 +1,7 @@
 // 已销毁纹理在一次提交里的去留（缺口 #3，11-05 时之笛 3D 场景预研；参照 上游参考实现 PR #1299 commit 2 / 3，MIT）。生产 nvn_mtl.m（包含）+ 真 Metal 设备。
 // NVN 语义（与被测实现无关）：池里登记的描述符只指存储和布局，贴图对象 Finalize 之后描述符照样能用；同一份描述符在同一次提交里解析两次，GPU 读的是同一块存储。
 // 期望（手算）：
-//   ① 一次提交里先后解析 N = NGHOST + 16 = 528 个已销毁的缓冲纹理（各自独占一段池存储，不进共享表，只能落幽灵环），再按原顺序解析一遍：
+//   ① 一次提交里先后解析 N = NGHOST + 16 = 528 个已销毁的 CPU 写过的 4x4 贴图（各自独占一段池存储，按打包贴图上传、不进共享表，只能落幽灵环），再按原顺序解析一遍：
 //      两遍 528/528 是同一个 Metal 对象（同一次提交里不重建）。改前：环只有 512 格，第一遍末尾已挤掉前 16 个，第二遍连锁重建 → 同一对象远少于 528
 //   ② 提交结束（围栏过后）：幽灵环留 512 个（序号 16..527），本次提交暂留表清空；环外的 528 − 512 = 16 个（序号 0..15）在围栏后出驻留集，环里的 512 个仍驻留
 //   ③ 512 个已销毁的贴图对象各自建在同一块存储、同一描述上（共享表持有那张贴图），在一次提交里逐个解析：每个都解析到共享表那张贴图；
@@ -29,7 +29,8 @@ int main(void) { @autoreleasepool {
     nvn_be_pool_add(mem, POOL_SIZE);
     {   // ① ②
         tex_t *snap = calloc(N, sizeof *snap); REQUIRE(snap);
-        for (int i = 0; i < N; i++) { tex_t t = make((nvn_texdesc){.target = NVN_TEXTURE_TARGET_BUFFER, .format = NVN_FORMAT_R32F, .width = 16, .height = 1, .depth = 1, .levels = 1}, (int64_t)i * STRIDE);
+        for (int i = 0; i < N; i++) { tex_t t = make((nvn_texdesc){.target = NVN_TEXTURE_TARGET_2D, .format = NVN_FORMAT_RGBA8, .width = 4, .height = 4, .depth = 1, .levels = 1}, (int64_t)i * STRIDE);
+            nvn_be_tex_cpu_written(&t);   // CPU 写过的贴图按打包贴图上传：不进共享表（缓冲纹理按存储共用视图、进共享表之后不再能当这里的载体）
             snap[i] = t; nvn_be_tex_release(&t); }
         nvn_be_sub_begin();
         NSMutableArray *first = [NSMutableArray arrayWithCapacity:N];
