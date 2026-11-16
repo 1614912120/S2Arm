@@ -18,6 +18,7 @@ API_AVAILABLE(macos(26.0), ios(26.0))
     id<MTLFXFrameInterpolator> mfx; id<MTLCommandQueue> mq;   // MetalFX 帧插值在自己的 Metal 命令队列上编码
     id<MTLRenderPipelineState> psoCopy;
     id<MTLComputePipelineState> mvDown, mvMatch, mvSpread; id<MTLTexture> lumaCur, lumaPrev; id<MTLBuffer> mvBlocks; int qw, qh, bw, bh;   // 自算运动矢量（DM_PRESENT_FI_MV）
+    id<MTLComputePipelineState> keepStatic; id<MTLTexture> mid_keep;   // 静止像素取真帧（DM_PRESENT_FI_STATIC）：补出的帧过一遍写进 mid_keep，上屏用它
     id<MTLBuffer> uv[4]; id tab[4];   // 命令槽 0 写输入（出图线程）、1 上补出的帧、2 上真帧（补帧队列）
     id alloc[3], cb[3];   // Metal 4 分配器 / 命令缓冲（MTL4 棘轮：用 id，经 nvn_mtl.m 的 m4_* 包装）
     dispatch_semaphore_t slot_free[3];
@@ -147,6 +148,36 @@ static void fi_mv_encode(NvPresentFI *f, id<MTLCommandBuffer> c, id<MTLTexture> 
     [en setTexture:f->motion atIndex:0]; [en setTexture:cur atIndex:1]; [en setTexture:prev atIndex:2]; [en dispatchThreads:MTLSizeMake(f->motion.width, f->motion.height, 1) threadsPerThreadgroup:tg];
     [en endEncoding];
 }
+// 静止像素取真帧（DM_PRESENT_FI_STATIC，缺省 0 = 关）：前后两帧这个像素（及其 3×3 邻域）每通道差都 ≤ 2/255 → 补出帧这里直接用这一帧的真像素，不用插值结果。
+//   界面层（血条、图标、文字）和静止物体在 MetalFX 里会被周围运动带着挪 / 糊，静止判定由输入逐像素算，不靠运动矢量（同 MetalGoose「两帧没变的区域从原图混回」思路，GPL 只借思路，代码自写）。
+//   1 = 只看本像素；2 = 3×3 邻域全静止才取（界面边缘半透明像素随背景变，单看本像素会在边上留一圈插值像素）
+static int fi_static_mode(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_PRESENT_FI_STATIC"); v = e ? atoi(e) : 0; if (v) MLOG("present frame interpolation: static pixels taken from the real frame (DM_PRESENT_FI_STATIC=%d)", v); } return v; }
+API_AVAILABLE(macos(26.0), ios(26.0))
+static int fi_static_setup(NvPresentFI *f) {
+    static const char *msl =
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "kernel void keep(texture2d<float, access::read> mid [[texture(0)]], texture2d<float, access::read> cur [[texture(1)]], texture2d<float, access::read> prev [[texture(2)]],\n"
+        "                 texture2d<float, access::write> out [[texture(3)]], constant int& r [[buffer(0)]], uint2 g [[thread_position_in_grid]]) {\n"
+        "  int W = out.get_width(), H = out.get_height(); if (int(g.x) >= W || int(g.y) >= H) return;\n"
+        "  bool still = true;\n"
+        "  for (int dy = -r; dy <= r && still; dy++) for (int dx = -r; dx <= r; dx++) { uint2 q = uint2(clamp(int2(g) + int2(dx, dy), int2(0), int2(W - 1, H - 1)));\n"
+        "    if (any(abs(cur.read(q).rgb - prev.read(q).rgb) > 2.5 / 255)) { still = false; break; } }\n"
+        "  out.write(still ? cur.read(g) : mid.read(g), g); }\n";
+    NSError *e = nil; id<MTLLibrary> lib = [g_dev newLibraryWithSource:@(msl) options:nil error:&e];
+    f->keepStatic = lib ? [g_dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"keep"] error:&e] : nil;
+    f->mid_keep = fi_tex(MTLPixelFormatBGRA8Unorm, f->w, f->h, MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite);
+    if (!f->keepStatic || !f->mid_keep) { MLOG("【红】 frame interpolation static-pixel pass: %s", e.localizedDescription.UTF8String ?: "resources"); return 0; }
+    return 1;
+}
+API_AVAILABLE(macos(26.0), ios(26.0))
+static void fi_static_encode(NvPresentFI *f, id<MTLCommandBuffer> c, id<MTLTexture> cur, id<MTLTexture> prev) {
+    id<MTLComputeCommandEncoder> en = [c computeCommandEncoder]; int r = fi_static_mode() >= 2 ? 1 : 0;
+    [en setComputePipelineState:f->keepStatic]; [en setTexture:f->mid_tex atIndex:0]; [en setTexture:cur atIndex:1]; [en setTexture:prev atIndex:2]; [en setTexture:f->mid_keep atIndex:3]; [en setBytes:&r length:sizeof r atIndex:0];
+    [en dispatchThreads:MTLSizeMake((NSUInteger)f->w, (NSUInteger)f->h, 1) threadsPerThreadgroup:MTLSizeMake(16, 16, 1)]; [en endEncoding];
+}
+// 上屏用的补出帧（评测工具 graphics/nvn/tests/fi_eval.m 读同一张）
+API_AVAILABLE(macos(26.0), ios(26.0))
+static id<MTLTexture> fi_mid_shown(NvPresentFI *f) { return f->mid_keep ?: f->mid_tex; }
 API_AVAILABLE(macos(26.0), ios(26.0))
 static int fi_copy_setup(NvPresentFI *f) {
     static const char *msl =
@@ -207,6 +238,7 @@ static NvPresentFI *fi_get(CAMetalLayer *layer, NSUInteger cw, NSUInteger ch) {
         f->q = dispatch_queue_create("dm.nvn.present-fi", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0)); f->last_seq = UINT64_MAX;
         if (!fi_copy_setup(f)) { fi_off("cannot create the copy pipeline"); return nil; }
         if (fi_mv_mode() && !fi_mv_setup(f)) { fi_off("cannot create the motion-vector pipelines"); return nil; }
+        if (fi_static_mode() && !fi_static_setup(f)) { fi_off("cannot create the static-pixel pass"); return nil; }
         res_commit();
         MLOG("present frame interpolation: MetalFX, input %dx%d (game picture %lux%lu), constant depth, zero motion", f->w, f->h, (unsigned long)cw, (unsigned long)ch);
     }
@@ -275,7 +307,7 @@ static void fi_ticket_done(uint64_t ticket) { pthread_mutex_lock(&g_pq_mu); if (
 // 补帧队列：这一帧的输入图已经在 GPU 上写好（in_tex[k]；上一帧在 in_tex[(k + 2) % 3]）
 API_AVAILABLE(macos(26.0), ios(26.0))
 static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_crop cr, BOOL flip, int k, uint64_t seq, double period, uint64_t ticket, int good, int allow) { @autoreleasepool {
-    const int *crop = cr.has ? cr.c : NULL; int have_mid = 0; uint64_t t0 = now_ns(); id<MTLTexture> mid = f->mid_tex;
+    const int *crop = cr.has ? cr.c : NULL; int have_mid = 0; uint64_t t0 = now_ns(); id<MTLTexture> mid = fi_mid_shown(f);
     static int novt = -1; if (novt < 0) novt = getenv("DM_PRESENT_FI_NOVT") != NULL;   // 拆账用：不调 MetalFX，中间那一帧直接用上一帧
     int dup = fi_dup();
     if (good && dup && allow) have_mid = 1;
@@ -292,6 +324,7 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
             id<MTLCommandBuffer> c = [f->mq commandBuffer]; c.label = @"present frame interpolation (MetalFX)";
             if (fi_mv_mode()) fi_mv_encode(f, c, f->in_tex[k], f->in_tex[(k + 2) % 3], fi_mv_mode() < 0 ? -1.f : 1.f);
             [fx encodeToCommandBuffer:c]; fx.outputTexture = fx.prevColorTexture = fx.colorTexture = nil;
+            if (f->mid_keep) fi_static_encode(f, c, f->in_tex[k], f->in_tex[(k + 2) % 3]);
             dispatch_semaphore_t done = dispatch_semaphore_create(0); __block int ok = 0; __block double gms = 0, gstart = 0, gend = 0, cbt = 0;
             double tcommit = CACurrentMediaTime(), tenc = (now_ns() - t0) / 1e6;
             int kp = (k + 2) % 3; pthread_mutex_lock(&g_pq_mu); f->in_busy[k]++; f->in_busy[kp]++; pthread_mutex_unlock(&g_pq_mu);   // 这两张输入图被这次插值读着
