@@ -227,10 +227,10 @@ static id<MTLTexture> tensor_write_view(id<MTLTexture> v) {
 // 派发一个带 HMMA 的计算程序时调（dispatch）：不派发它；它写图就把读到的低分辨率画面放大进去
 static void tensor_standin(NvShader *cs) {
     if (!tensor_standin_enabled()) { g_tensor_off++; return; }   // 诊断关（见 g_tensor_standin_on）
-    pthread_mutex_lock(&g_rmu);
+    os_unfair_lock_lock(&g_rmu);
     int otid = -1;
     for (int i = 0; i < cs->rf.nb && otid < 0; i++) { const nvn_rbind *b = &cs->rf.b[i]; if (b->kind == NVN_RB_IMG && b->reg < 32) { int tid = (int)(S.img[5][b->reg] & 0xfffff); if (tid > 0 && tid < g_ntreg && g_treg[tid].ok) otid = tid; } }
-    if (otid < 0) { pthread_mutex_unlock(&g_rmu); g_tensor_skip++; return; }   // 只写缓冲区的一层（网络入口 / 中间层）
+    if (otid < 0) { os_unfair_lock_unlock(&g_rmu); g_tensor_skip++; return; }   // 只写缓冲区的一层（网络入口 / 中间层）
     // 两张图的贴图对象在锁里拷成值再用：g_treg 是登记表本身，别的线程登记新编号时在 g_rmu 里 realloc 扩表、旧表释放，出锁后再经 &g_treg[i].t 读就悬空
     //   （11-05 时之笛 Switch 2 版测试设备2：tex_upgrade 读 t->serial 段错误，单测 t_nvn_tensor_treg）。拷贝同录制时的快照（tex_snap），后面只读它的字段
     tex_t to_v = g_treg[otid].t, tc_v; const tex_t *to = &to_v; void *ov = NULL; (void)tex_fast_rid(otid, &ov); id<MTLTexture> o = (__bridge id<MTLTexture>)ov;
@@ -248,7 +248,7 @@ static void tensor_standin(NvShader *cs) {
         if (s < 1.0 - 1e-6 || s > 4.0 + 1e-6 || fabs(a - ar) / ar > 0.02) continue;
         if (!c || t.width * t.height > c.width * c.height) { c = t; tc_v = g_treg[tid].t; tc = &tc_v; }
     }
-    pthread_mutex_unlock(&g_rmu);
+    os_unfair_lock_unlock(&g_rmu);
     if (o) o = tensor_write_view(o);   // 写目标：不带通道重排（tensor_write_view）
     // 分屏规则（tensor_rect_io）：推常量给出的输入 / 输出区域成立、而且输出只占一块（或按整张输出图挑不出输入）才用；单人整屏照旧，零变化
     NSUInteger rio[8]; int io = 0;
