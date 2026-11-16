@@ -869,6 +869,7 @@ static uintptr_t pool_host(uintptr_t a, uintptr_t b, int *view) {
     { static int n; if (n++ < 8) MLOG("memory pool %#lx..%#lx: its far shadow is not contiguous (first break at %#lx); one view of its %u shadow pieces made at %#lx", (unsigned long)a, (unsigned long)b, (unsigned long)gap, pieces, (unsigned long)v); }
     *view = 1; return (uintptr_t)v;
 }
+static int g_pool_refuse = -1;   // S2A_POOL_NOCOPY_REFUSE（见 nvn_be_pool_add_body）；单测直接设
 static void nvn_be_pool_add_body(const void *mem, uint64_t size);
 void nvn_be_pool_add(const void *mem, uint64_t size) { @autoreleasepool { nvn_be_pool_add_body(mem, size); } }
 static void nvn_be_pool_add_body(const void *mem, uint64_t size) {
@@ -894,10 +895,13 @@ static void nvn_be_pool_add_body(const void *mem, uint64_t size) {
                          mem, (unsigned long long)size, (unsigned long long)(lim >> 20), nchunk, (unsigned long long)(L >> 20), (unsigned long long)(stride >> 20));
     for (int ck = 0; ck < nchunk; ck++) {
     uint64_t off = (uint64_t)ck * stride, cl = total - off < L ? total - off : L; uintptr_t ca = a + (uintptr_t)off, cha = ha + (uintptr_t)off;
-    id<MTLBuffer> buf = [g_dev newBufferWithBytesNoCopy:(void *)cha length:cl options:MTLResourceStorageModeShared deallocator:unview];
+    // S2A_POOL_NOCOPY_REFUSE（单测 / 复现）：1 = 当作直接建零拷贝失败（走下面的重映射视图），2 = 视图也失败（走不登记）
+    if (g_pool_refuse < 0) { const char *e = getenv("S2A_POOL_NOCOPY_REFUSE"); g_pool_refuse = e && *e ? atoi(e) : 0; }
+    int refuse = g_pool_refuse;
+    id<MTLBuffer> buf = refuse ? nil : [g_dev newBufferWithBytesNoCopy:(void *)cha length:cl options:MTLResourceStorageModeShared deallocator:unview];
     // Pokémon Legends: Z-A: twice on the Mac a small pool's buffer was refused although its pages were one read-write VM region, both times while another heavy job (a shader compile,
     // a second game instance) took the machine's memory; every run on an idle machine created all of them. Wiring the pages may fail under memory pressure: retry for up to about 2 s
-    for (int t = 0; !buf && t < 12; t++) {
+    for (int t = 0; !buf && !refuse && t < 12; t++) {
         usleep(10000u << (t < 4 ? t : 4));
         buf = [g_dev newBufferWithBytesNoCopy:(void *)cha length:cl options:MTLResourceStorageModeShared deallocator:unview];
         if (buf) MLOG("【红】 memory pool %p+%#llx: the zero-copy buffer was refused, created at retry %d", mem, (unsigned long long)size, t + 1);
@@ -916,7 +920,27 @@ static void nvn_be_pool_add_body(const void *mem, uint64_t size) {
           MLOG("【红】 memory pool %p+%#llx: device max buffer length %llu MB, recommended working set %llu MB, physical memory %llu MB; this pool %llu MB, guest-file backed %d → %s",
                mem, (unsigned long long)size, (unsigned long long)(maxlen >> 20), (unsigned long long)(ws >> 20), (unsigned long long)(phys >> 20), (unsigned long long)(len >> 20), file,
                len > maxlen ? "longer than one Metal buffer may be on this device" : "within the buffer limit: its pages could not be wired (memory)"); }
-        MDIE("memory pool %p+%#llx: failed to create the zero-copy buffer over %#lx..%#lx", mem, (unsigned long long)size, (unsigned long)cha, (unsigned long)(cha + cl));
+        // 11-16 诊断#36fc20（一款 Switch 1 游戏 0100BDE00862A000，Mac M2 Max 32 GB 与 iPad 7.5 GB 同一处）/ #1196：340 MB 的池跨 4 段读写内存区、远没到上限，
+        //   重试 12 次仍建不出；原先到这里就中止整局。本机用 4 段匿名 / 共享 / 命名内存对象拼的同样布局都建得出，原因未定。物理上还做得下去：
+        //   ① 把这段页重映射成一段新的连续地址（vm_remap 不拷贝：同一批物理页，CPU、GPU 看到的还是同一份内存），在视图上再建零拷贝；
+        //   限制：视图跟的是此刻的页；池存活期间若宿主把这段换成新映射（MAP_FIXED 换页），视图看不到新页——池的内存在注销前不换，目前没有这样的路径
+        //   ② 还不行就不登记这一块：打红行，用到它的绘制按「不在池里」跳过，游戏照跑（不中止）
+        vm_address_t v = 0; vm_prot_t cur, max;
+        kern_return_t kr = vm_remap(mach_task_self(), &v, (vm_size_t)cl, 0, VM_FLAGS_ANYWHERE, mach_task_self(), (vm_address_t)cha, FALSE, &cur, &max, VM_INHERIT_NONE);
+        if (kr == KERN_SUCCESS && refuse < 2) {
+            void (^orig)(void *, NSUInteger) = unview; uintptr_t ocha = cha; uint64_t ocl = cl;
+            buf = [g_dev newBufferWithBytesNoCopy:(void *)v length:(NSUInteger)cl options:MTLResourceStorageModeShared
+                                      deallocator:^(void *q, NSUInteger n) { vm_deallocate(mach_task_self(), (vm_address_t)q, n); if (orig) orig((void *)ocha, (NSUInteger)ocl); }];
+        }
+        if (buf) MLOG("【红】 memory pool %p+%#llx: the zero-copy buffer over %#lx..%#lx was refused; made over one remapped view of the same pages at %#lx",
+                      mem, (unsigned long long)size, (unsigned long)cha, (unsigned long)(cha + cl), (unsigned long)v);
+        else {
+            if (kr == KERN_SUCCESS) vm_deallocate(mach_task_self(), v, (vm_size_t)cl);
+            MLOG("【红】 memory pool %p+%#llx: no zero-copy buffer over %#lx..%#lx, not even over a remapped view (vm_remap %d): this part is not registered, draws using it are skipped",
+                 mem, (unsigned long long)size, (unsigned long)cha, (unsigned long)(cha + cl), kr);
+            if (unview) unview((void *)cha, (NSUInteger)cl);   // 远端影子视图的这一份照常放（没有 buffer 替它放）
+            continue;
+        }
     }
     pthread_mutex_lock(&g_mu);
     if (g_npool == g_cap) { int c = g_cap ? g_cap * 2 : 64;
