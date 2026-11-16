@@ -25,6 +25,7 @@ struct UpdatePopupView: View {
     private var version: String { popup["version"] as? String ?? "" }
     private var notes: [String: Any] { popup["notes"] as? [String: Any] ?? [:] }
     private var after: Bool { popup["kind"] as? String == "afterUpdate" }
+    private var updateBusy: Bool { if case .working = model.updateState { return true } else { return false } }   // 只在下载 / 安装中禁用「现在更新」（#1283：没下也能点，点了才下）
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -80,9 +81,9 @@ struct UpdatePopupView: View {
                 Spacer()
                 Button(t("update.popup.later")) { model.closeUpdatePopup() }.buttonStyle(LauncherSecondaryButtonStyle())
                     .keyboardShortcut(.cancelAction).accessibilityIdentifier("update.popup.later")
-                Button { model.restartToUpdate() } label: { Text(t("update.popup.now")).font(.manrope(14, .bold)).foregroundStyle(.black)
+                Button { model.restartToUpdate() } label: { Text(t("update.popup.now")).font(.manrope(14, .bold)).foregroundStyle(.black)   // 没下就先下、下好接着换（玩家点了才下，#1283）
                     .padding(.horizontal, 20).frame(height: 40).background(LauncherPalette.cream, in: Capsule()) }
-                    .buttonStyle(.plain).disabled(model.updateState != .ready).opacity(model.updateState == .ready ? 1 : 0.5)
+                    .buttonStyle(.plain).disabled(updateBusy).opacity(updateBusy ? 0.5 : 1)
                     .accessibilityIdentifier("update.popup.now")
             }
         }

@@ -315,7 +315,7 @@ struct LauncherView: View {
         }
     }
 
-    /// 有新版：后台下载时一行小字，下好后一颗「更新并重启」，都在顶栏，不打断玩家。
+    /// 有新版：顶栏一颗「有新版 vX」（点开更新弹窗，玩家点「现在更新」才下）；下载时一行小字。都在顶栏，不打断玩家。
     @ViewBuilder private var updateButton: some View {
         switch model.updateState {
         case .working(let id, let percent):
@@ -323,7 +323,7 @@ struct LauncherView: View {
                 ProgressView().controlSize(.mini)
                 Text(txt(id).replacingOccurrences(of: "{0}", with: "\(percent ?? 0)")).font(.manrope(12)).monospacedDigit().foregroundStyle(.secondary)
             }
-        case .ready:
+        case .ready, .idle where model.availableUpdate != nil:
             // 草图：「以后再说」之后顶栏留「有新版 vX」，点开回到更新弹窗①（「现在更新并重启」在弹窗里；有局在跑时那里先拦下说明）
             Button { model.showUpdatePopup() } label: {
                 Label(txt("update.top.available").replacingOccurrences(of: "{0}", with: model.availableUpdate?["version"] as? String ?? ""), systemImage: "arrow.down.circle")
