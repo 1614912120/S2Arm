@@ -28,7 +28,7 @@ public struct S2ArmShellHostView: View {
             // 库顶上的提示：这次安装丢了「提高内存上限」权限（可关，关了这次安装内不再出）；删除游戏的进度与结果（点一下收起结果）
             .overlay(alignment: .top) {
                 VStack(spacing: 10) {
-                    if let iml = model.imlNotice {
+                    if let iml = model.imlNotice, !model.guideOpen {   // 首次引导开着时先不出（引导盖在上面、点不到关闭），引导关了再出
                         IMLNoticeBar(notice: iml, close: { model.closeIMLNotice() })
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
@@ -37,7 +37,7 @@ public struct S2ArmShellHostView: View {
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                 }
-                .padding(.top, 12).padding(.horizontal, 16)
+                .padding(.top, 56).padding(.horizontal, 16)   // 让开游戏库顶栏（LibraryView：安全区下 6 pt + 高 44 pt），不挡玩家 / 手柄 / 设置按钮
             }
             .animation(.smooth(duration: 0.25), value: model.deleteNotice)
             .animation(.smooth(duration: 0.25), value: model.imlNotice)
