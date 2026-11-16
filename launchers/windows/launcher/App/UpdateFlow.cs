@@ -150,7 +150,10 @@ public sealed partial class EnvironmentWindow
         else
         {
             buttons.Children.Add(Action("update.popup.later", CloseUpdatePopup));
-            buttons.Children.Add(Action("update.popup.now", RestartToUpdate, updateReady is not null));
+            // 装过 iPhone、自动更新开着：写「更新启动器和 iPhone App」，新版启动后自动把 iPhone App 也更新（PhoneAutoUpdate.cs）；自动化 id 照旧
+            var now = Action(UpdateAlsoPhone ? "update.launcher_and_phone" : "update.popup.now", RestartToUpdate, updateReady is not null);
+            Avalonia.Automation.AutomationProperties.SetAutomationId(now, "update.popup.now");
+            buttons.Children.Add(now);
         }
         panel.Children.Add(buttons);
         body.Children.Add(Card(panel, 32));

@@ -56,7 +56,7 @@ static class RomfsExtraction {
         }
     }
 
-    // 镜像形态（S2A_ROMFS_IMAGE=1）：合并后的 RomFS 不拆成散文件，直接写一份标准 RomFS 镜像 <产物根>/romfs.std。
+    // 镜像形态（缺省，S2A_ROMFS_IMAGE=0 关）：合并后的 RomFS 不拆成散文件，直接写一份标准 RomFS 镜像 <产物根>/romfs.std。
     //   与「先解成 romfs/ 再 services/romfs_index.sh --std 建镜像」逐字节相同：同一个 LibHac RomFsBuilder、同样按相对路径 Ordinal 排序加文件、
     //   同样跳过宿主垃圾名（IsHostJunk，同 services RomFsIndex.IsHostJunk）。完整性降级、只差大小写报红、不覆盖已有输出都与目录形态同一口径。
     //   open == null：程序没有资源分区，写一份空 RomFS（对应目录形态的空 romfs/）。

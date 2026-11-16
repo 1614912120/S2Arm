@@ -69,7 +69,7 @@ public sealed partial class EnvironmentWindow : Window
         Closed += (_, _) => { CancelJob(JobKind.Environment); ClearCovers(); DisposeRetiredCovers(all: true); CloseControl(); };
         Opened += (_, _) =>
         {
-            StartControl(); FinishPendingUpdate(); SyncInstalledVersion(); _ = LoadInboxAsync();
+            StartControl(); FinishPendingUpdate(); SyncInstalledVersion(); _ = LoadInboxAsync(); StartPhoneAutoUpdate();
             _ = RecoverBatchAsync();   // 上次没出完的批量出包读回来（BatchPage.cs）
             // 已有游戏库（存过位置，或默认位置建好过）就一启动连上，同 Mac：原先只有控制口开着才连，玩家默认不开，
             //   开机 catalog 为空、点「游戏库」一直是欢迎页（社区贡献者补丁 #1）。全新玩家照旧走欢迎页，不替他建库
@@ -310,6 +310,7 @@ public sealed partial class EnvironmentWindow : Window
         Grid.SetColumn(rightBar, 1); header.Children.Add(rightBar);
         body.Children.Add(header);
         AddNoticeBar(body);
+        AddPhoneUpdateBar(body);
         if (unexpectedError.Length > 0)
         {
             // 全局兜底接住的意外错误（Program.cs）：启动器不退出，在顶部说清楚、给日志位置，玩家可以关掉提示继续用
@@ -389,8 +390,13 @@ public sealed partial class EnvironmentWindow : Window
     }
 
     /// <summary>设置页（入口整理）：界面语言 → 存放位置（游戏库 / iPhone 包 / 磁盘空间）→ 密钥 → 装机方式 → AI 操作 → 出包环境检查 → 运行路径（开发用）</summary>
+    private string settingsFrom = "library";
     private void RenderSettings(StackPanel body)
     {
+        var back = Action("nav.back", () => Navigate(settingsFrom == "settings" ? "library" : settingsFrom));   // 返回进来前那一页（11-16：原先只能再点一次顶栏设置图标、回不到出包页）
+        back.HorizontalAlignment = HorizontalAlignment.Left;
+        AutomationId(back, "settings.back");
+        body.Children.Add(back);
         body.Children.Add(Label(T("nav.settings"), 23));
 
         // 界面语言（原在顶栏）

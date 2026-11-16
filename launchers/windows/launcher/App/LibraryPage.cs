@@ -35,6 +35,7 @@ public sealed partial class EnvironmentWindow
         sgradeOpen = false;     // 也离开「S 级优化升级」页
         cheatsFor = null;       // 和「金手指」页
         modsFor = null;         // 和「Mod」页
+        if (destination == "settings" && page != "settings") settingsFrom = page;   // 设置页左上「返回」回到这里（出包页点「更改」进来就回出包页）
         page = destination;
         if (destination != "library") welcomeHome = false;   // 品牌名带去的欢迎页只管这一次回首页，去了别的页就回到平常
         // 环境检查页每次打开读一次装到 iPhone 的方式和开发者证书（InstallModePage.cs / DevCertPage.cs）
@@ -812,6 +813,7 @@ public sealed partial class EnvironmentWindow
             catalog = LibraryCatalog.Parse(listing.Report.Result); ClearCovers();
             if (!catalog.Games.Any(g => g.Id == selectedGame && !g.Hidden)) selectedGame = null;
             librarySummary = "library.completed";
+            _ = PreparePhoneUpdateAsync();   // 新版启动器头一次读到要更新的手机：后台准备 iPhone App 更新（PhoneAutoUpdate.cs）
         }
         catch (LibraryProtocolException error)
         { librarySummary = "library.invalid_result"; libraryDiagnostics += "\n" + error.Message; }

@@ -614,7 +614,7 @@ def classify(text, default="signing_failed"):
 
 def ios_pack(c, gid):
     """这款的资源包（image/ios/.pack）；还没出 iPhone 版 / 没有资源包就不装、不报成功（审计 18:00 P1-58：原先照装、启动器写死「资源包也拷好了」，打开游戏才进缺资源页）"""
-    if not (layout.ios_kit(c, gid) / "main.npdm").is_file():
+    if not layout.has_ios_kit(c, gid):
         raise Failure("这款游戏还没出 iPhone 包：先点「打 iPhone 包」。", code="job_failed")
     pack = layout.ios_pack(c, gid)
     if not (pack / "manifest.json").is_file():
@@ -1307,7 +1307,7 @@ def export_phone(c, gid=None):
         if g == gid or g in hidden:
             continue
         pack = layout.ios_pack(c, g)
-        if not (layout.ios_kit(c, g) / "main.npdm").is_file() or not (pack / "manifest.json").is_file():
+        if not layout.has_ios_kit(c, g) or not (pack / "manifest.json").is_file():
             continue   # 没出过 iPhone 版：本来就不在手机上，不算跳过
         if packer.usable_kit(c, g, sid) is None or not img_pack(pack):
             skipped.append(names[g])
@@ -1861,8 +1861,20 @@ class WinPhone:
     def pull_kept(self, games):   # 留下的 NRO（#8be819）：Windows 没有 devicectl，先不收（后续项：经 s2a-devpush 列 / 拉 Documents 文件）
         return 0
 
-    def app_running(self):   # 查不清（Windows 没有 devicectl）：自动推送不发起
+    def app_running(self):   # 查不了进程（Windows 没有 devicectl）：调用方改用 playing（游玩时间心跳）
         return None
+
+    def playing(self, games):
+        """按游玩时间心跳判手机上是不是正在玩（playing_by_heartbeat）：True 在玩 / False 没在玩 / None 查不清"""
+        if not self.bid:
+            return None
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="s2a-hb-") as work:
+            try:
+                client = self.client(work)
+            except Failure:
+                return None
+            return playing_by_heartbeat(client, games, work)
 
     def client(self, work):
         return devpush_client(self.c, self.udid, self.bid, work)
@@ -2303,20 +2315,62 @@ def phone_updates(c):
     return out
 
 
+PLAYING_WINDOW_S = 45   # 游玩时间心跳：游戏在前台时每 10 秒写一次 playtime.json（runtime/src/playtime.c，平台壳 10 秒定时器）；最近 45 秒内写过 = 正在玩
+
+
+def playing_by_heartbeat(client, games, work, now=None):
+    """手机上各款的游玩时间心跳（<容器>/Documents/games/<程序号>/playtime.json 的 lastPlayed，手机写入时的时刻）：
+    任一款在 PLAYING_WINDOW_S 秒内写过 → True（正在玩，装 App 会杀掉这局）；都没有 / 文件不在（没玩过）→ False；
+    一个都读不了（锁屏、断开）→ None（查不清）。Windows 没有 devicectl 查进程，靠它判（11-16 定的判据）"""
+    import time as _t
+    now = _t.time() if now is None else now
+    got_any, stale = False, True
+    for g in games:
+        dst = Path(work) / f"playtime-{g}.json"
+        try:
+            ok = client.get(f"{game_docs(g)}/playtime.json", str(dst), 20)
+        except Exception as e:   # 进不了容器（锁屏 / 断开 / 没装）：这一款查不清
+            print(f"[s2a] 读 {g} 的游玩心跳失败：{e}", file=sys.stderr)
+            continue
+        got_any = True
+        if not ok:
+            continue   # 文件不在：这款没玩过，不算在玩
+        try:
+            last = int(json.loads(dst.read_text(encoding="utf-8")).get("lastPlayed") or 0)
+        except (OSError, ValueError, TypeError):
+            continue
+        if now - last < PLAYING_WINDOW_S:
+            return True
+    return False if got_any or not games else None
+
+
 def phone_kept_pull(c):
     """「手机插着、启动器开着」时启动器隔一阵调一次（phoneKeptPull 作业）：连着的那台手机上，宿主留下的 NRO（#8be819）拉回游戏库。
-    → {device, new: 新收的个数, kept: 还没补进 iPhone 件的款, running: 手机上 S2Arm 正在跑或查不清}；有 kept 且 running 为假时启动器自动发起「更新 iPhone」
+    → {device, new: 新收的个数, kept: 还没补进 iPhone 件的款, shellUpdate: 壳比本版旧且不用问玩家, stale: 壳旧了但要重出包的款,
+       running: 手机上 S2Arm 正在跑或查不清（有要更新的才查）}；(kept 或 shellUpdate) 且 running 为假时启动器自动发起「更新 iPhone」
     只推程序（正在玩就不推：装 App 会杀掉这局，等它退了下一轮再推）。没连手机 / 没装过 = new 0、不报错"""
     try:
         ph = phone_for(c)
     except Failure:
-        return dict(device="", new=0, kept=[], running=False)
+        return dict(device="", new=0, kept=[], shellUpdate=False, stale=[], running=False)
     rec = layout.load_device(c, ph.key)
     games = [g for g in rec.get("games") or [] if isinstance(g, str)]
     new = ph.pull_kept(games)
     import rewrite_refresh
     kept = [g for g in games if rewrite_refresh.kept_todo(c, g, layout.ios_kit(c, g))]   # 没补进的款（手动按钮兜底同 phone_updates）
-    return dict(device=ph.key, new=new, kept=kept, running=bool(kept) and ph.app_running() is not False)
+    # 这台手机上的 S2Arm 壳比本版旧（启动器升级了）：shellUpdate = 可以不问玩家直接更新（没有要按新版重新出包的款）；
+    #   有要重出的款 → shellUpdate 为假、stale 列出来，留给游戏库顶栏「更新 iPhone」按钮问（11-16 启动器升级顺带更新 iPhone App）
+    import ipa as packer
+    st = shell_outdated(c, rec, packer.current_shell_id(c))
+    stale = [s["gameId"] for s in (st or {}).get("stale", [])]
+    shell_update = bool(st) and not stale
+    running = False
+    if kept or shell_update:
+        running = ph.app_running()
+        if running is None and hasattr(ph, "playing"):   # 查不了进程（Windows）：按游玩时间心跳判
+            running = ph.playing(games)
+        running = running is not False
+    return dict(device=ph.key, new=new, kept=kept, shellUpdate=shell_update, stale=stale, running=running)
 
 
 def online_devices(c):

@@ -316,12 +316,15 @@ class WinInstall(unittest.TestCase):
         self.m = install
         self.t = Path(tempfile.mkdtemp()); self.addCleanup(lambda: __import__("shutil").rmtree(self.t, ignore_errors=True))
         p = patch.object(install, "phone_games", lambda c, ph: set()); p.start(); self.addCleanup(p.stop)   # 读手机游戏清单另有用例
+        # 读手机账本另有用例（test_install）：不打桩时它走 devpush_client 调 c.env()，本替身没有 env——单跑时推送工具导入失败被当「读不到账本」，
+        #   全量跑时前面的用例已导入过 push_pack（模块缓存），这里就撞上 AttributeError（11 个 WinInstall 用例只在全量 discover 时红）
+        p = patch.object(install, "phone_removed", lambda c, ph: None); p.start(); self.addCleanup(p.stop)
         p = patch.object(install, "pick_pack_root", lambda c, ph, g: f"Library/Application Support/S2Arm/games/{g}/资源包"); p.start(); self.addCleanup(p.stop)   # 选哪处另有用例（test_install）
         (self.t / "lib").mkdir(); (self.t / "logs").mkdir()
         self.gid = "0100000000000047"
         self.progress_events = []   # 作业计数事件 (done, total, unit)
         emit = lambda *a, **k: self.progress_events.append((k.get("done"), k.get("total"), k.get("unit"))) if k.get("unit") else None
-        self.c = types.SimpleNamespace(r={"gameId": self.gid}, library=self.t / "lib", private=self.t, logs=self.t / "logs", task="k", engine=self.t, emit=emit,
+        self.c = types.SimpleNamespace(r={"gameId": self.gid}, library=self.t / "lib", work_root=self.t / "work", private=self.t, logs=self.t / "logs", task="k", engine=self.t, emit=emit,
                                        begin=lambda *a, **k: None, last_log=None, catalog=lambda: {"schema": 1, "games": []},
                                        lock=lambda *a, **k: contextlib.nullcontext())   # 装机类作业的手机锁 / 程序锁（ipa.phone_lock / program_locks）
         ios_fixture(self.c, self.gid)   # 出好的 iPhone 版：image/ios/kit + image/ios/pack

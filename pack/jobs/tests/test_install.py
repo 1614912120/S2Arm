@@ -367,7 +367,7 @@ class FlowTests(unittest.TestCase):
     def test_container_missing_pack_refuses_before_install(self):
         gid = "0100000000010000"
         # 有容器件但没有资源包（image/ios/pack）：ios_pack 拒绝，不走到找设备 / 组装
-        kit = layout.image_ios(self.c, gid) / "kit"; kit.mkdir(parents=True); (kit / "main.npdm").write_bytes(b"META")
+        kit = layout.image_ios(self.c, gid) / "kit"; kit.mkdir(parents=True); (kit / "main.npdm").write_bytes(b"META"); (kit / "main.fixups.tsv").write_text("")
         self.c.r.update(gameId=gid)
         with um.patch.object(install, "phone_for", side_effect=AssertionError("不该走到找设备")):
             with self.assertRaises(Failure) as e: install.install(self.c)
@@ -1427,7 +1427,63 @@ class AssembleTests(unittest.TestCase):
                 self.assertEqual(install.phone_kept_pull(self.c)["running"], want)
         def none(c): raise Failure("没连手机", code="device_not_connected")
         with um.patch.object(install, "phone_for", side_effect=none):
-            self.assertEqual(install.phone_kept_pull(self.c), dict(device="", new=0, kept=[], running=False))
+            self.assertEqual(install.phone_kept_pull(self.c), dict(device="", new=0, kept=[], shellUpdate=False, stale=[], running=False))
+
+    def test_phone_kept_pull_shell_update(self):
+        """启动器升级顺带更新 iPhone App（11-16）：连着的手机壳比本版旧、没有要重出包的款 → shellUpdate 真（没在玩时启动器自动更新）；
+        有要重出的款 → shellUpdate 假、stale 列出（留给顶栏按钮问）；壳是本版 → shellUpdate 假；正在玩 / 查不清 → running 真"""
+        A = self.A
+        self._update()
+        ph = types.SimpleNamespace(key="dev1", pull_kept=lambda games: 0, app_running=lambda: False)
+        import ipa as packer, rewrite_refresh
+        def run(sid, usable=True, running=False):
+            ph.app_running = lambda: running
+            with um.patch.object(install, "phone_for", return_value=ph), um.patch.object(packer, "current_shell_id", return_value=sid), \
+                 um.patch.object(packer, "usable_kit", return_value=("kit" if usable else None)), \
+                 um.patch.object(rewrite_refresh, "kept_todo", return_value=[]):
+                r = install.phone_kept_pull(self.c)
+            return (r["shellUpdate"], r["stale"], r["running"])
+        self.assertEqual(run("NEWSHELL"), (True, [], False))
+        games = sorted(install.layout.load_device(self.c, "dev1")["games"])   # 夹具这台装了两款
+        self.assertEqual(len(games), 2)
+        self.assertEqual(run("NEWSHELL", usable=False), (False, games, False))
+        self.assertEqual(run("NEWSHELL", running=True), (True, [], True))
+        self.assertEqual(run("NEWSHELL", running=None), (True, [], True))
+        cur = install.layout.load_device(self.c, "dev1").get("shellId")
+        self.assertEqual(run(cur), (False, [], False))
+
+    def test_playing_by_heartbeat(self):
+        """Windows 判正在玩（11-16）：读各款 Documents/games/<程序号>/playtime.json 的 lastPlayed；45 秒内 → 在玩；
+        更早 / 没这个文件 → 没在玩；全都读不了 → 查不清（None）；没有款 → 没在玩"""
+        import tempfile as tf
+        work = Path(tf.mkdtemp()); self.addCleanup(lambda: shutil.rmtree(work, ignore_errors=True))
+        class Fake:
+            def __init__(self, files, boom=False): self.files, self.boom, self.asked = files, boom, []
+            def get(self, rel, dst, t=None):
+                self.asked.append(rel)
+                if self.boom: raise OSError("device locked")
+                if rel not in self.files: return False
+                Path(dst).write_text(json.dumps(dict(schema=1, seconds=100, lastPlayed=self.files[rel]))); return True
+        now = 1_000_000
+        A, B = "0100000000010000", "0100000000020000"
+        f = Fake({f"Documents/games/{A}/playtime.json": now - 10})
+        self.assertIs(install.playing_by_heartbeat(f, [A, B], work, now), True)
+        self.assertEqual(f.asked[0], f"Documents/games/{A}/playtime.json")
+        self.assertIs(install.playing_by_heartbeat(Fake({f"Documents/games/{A}/playtime.json": now - 600}), [A, B], work, now), False)
+        self.assertIs(install.playing_by_heartbeat(Fake({}), [A], work, now), False, "没玩过：文件不在")
+        self.assertIsNone(install.playing_by_heartbeat(Fake({}, boom=True), [A, B], work, now), "进不了容器：查不清")
+        self.assertIs(install.playing_by_heartbeat(Fake({}), [], work, now), False)
+
+    def test_phone_kept_pull_uses_heartbeat_when_process_unknown(self):
+        """查不了进程（app_running None，Windows）：改按 playing（心跳）判；playing 也查不清 → 当在玩（不装）"""
+        self._update()
+        ph = types.SimpleNamespace(key="dev1", pull_kept=lambda games: 0, app_running=lambda: None)
+        import ipa as packer, rewrite_refresh
+        for heartbeat, want in ((False, False), (True, True), (None, True)):
+            ph.playing = lambda games, h=heartbeat: h
+            with um.patch.object(install, "phone_for", return_value=ph), um.patch.object(packer, "current_shell_id", return_value="NEWSHELL"), \
+                 um.patch.object(packer, "usable_kit", return_value="kit"), um.patch.object(rewrite_refresh, "kept_todo", return_value=[]):
+                self.assertEqual(install.phone_kept_pull(self.c)["running"], want, heartbeat)
 
     def test_app_running(self):
         """自动推送前查手机上 S2Arm 是否在跑（#8be819）：进程在它安装目录下 = True；没有 = False；没装 = False；devicectl 查不了 = None"""

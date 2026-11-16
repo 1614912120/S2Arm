@@ -224,7 +224,8 @@ def scan(index_dirs, exefs, log=None):
                 if not ms: mod_miss([bid]); continue
                 w = parse_ips(open(full, 'rb').read())
                 if w is None: skipped['IPS 格式不对'] = skipped.get('IPS 格式不对', 0) + 1; continue
-                if w: out.append({'module': ms[0], 'cat': cat, 'name': os.path.basename(os.path.dirname(path)), 'writes': w, 'license': r.get('license') or '', 'path': path, 'base': base, 'id': uid, 'meta': meta})
+                if w: out.append({'module': ms[0], 'cat': cat, 'name': os.path.basename(os.path.dirname(path)), 'writes': w, 'license': r.get('license') or '', 'path': path, 'base': base, 'id': uid, 'meta': meta,
+                                  'origin': r.get('origin') or path})   # 上游原路径：fps_group 按它分组（审计 P1-193 余项：IPS 这一支原先不带，退回缓存路径 files/<哈希>/…，同包 main / sdk 拆成两组）
     for k, v in sorted(skipped.items()): print(f'跳过 {v} 段：{k}', file=sys.stderr)
     # 跨版本移植（11-13 维护者：画幅补丁扩大泛化性，帧率 / 金手指不做）：主程序没有任何版本对得上的宽屏补丁时，同款别的版本的宽屏补丁逐段
     #   按「这一处原来是什么」移植到这份主程序（port_writes），移植成的照常进自适应合成。移植不了的（画幅值在新版里找不到）不收
@@ -1056,13 +1057,16 @@ def scan_cheats(dirs, exefs, log, ship=None):
             if not f.lower().endswith('.txt') or f in ('enabled.txt', 'status.txt'): continue
             fp = os.path.join(d, f)
             try: raw = open(fp, 'rb').read()
-            except OSError: continue
+            except OSError as e:   # 读不了：整份不收、写原因（结果页逐份列出，同「没写构建号」）；原先静默跳过，金手指悄悄少一份
+                log.append(f'不收\tcheat:{f[:40]}\tmain\t{f[:40]}\t读不了：{type(e).__name__}：{" ".join(str(e).split())[:200]}'); continue
             if len(raw) > 4 << 20: log.append(f'不收\tcheat\tmain\t{f[:40]}\t文件超过 4 MB'); continue
             fbid, entries = parse_cheats(raw.decode('utf-8', 'replace'))
             stem = os.path.splitext(f)[0]
             want = fbid or (stem if re.fullmatch(r'[0-9A-Fa-f]{16}', stem) else '')
-            if not want or not bid_match(bid, want):
-                log.append(f'不收\tcheat\tmain\t{f[:40]}\t版本不对：金手指是 {want or "（没写构建号）"}，这份游戏的主程序是 {bid[:16]}'); continue
+            if not want:   # #1321：文件名不是 16 位构建号、首行也没有 BID=：核不了版本，不编进包（写错版本的内存会坏存档）；单独写原因，结果页逐份列出（原先混在「版本不对」里被当成库里别的版本静默略过）
+                log.append(f'不收\tcheat:{f[:40]}\tmain\t{f[:40]}\t没写构建号：文件名不是 16 位构建号、首行也没有 BID=，核不了版本'); continue
+            if not bid_match(bid, want):
+                log.append(f'不收\tcheat\tmain\t{f[:40]}\t版本不对：金手指是 {want}，这份游戏的主程序是 {bid[:16]}'); continue
             if ship is not None and f not in {n for n, _ in ship}: ship.append((f, raw))
             sha = hashlib.sha256(raw).hexdigest()[:16]; picked = []
             for i, e in enumerate(entries):

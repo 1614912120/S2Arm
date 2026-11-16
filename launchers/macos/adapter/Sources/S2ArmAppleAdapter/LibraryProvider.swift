@@ -168,17 +168,21 @@ public final class LibraryProvider {
     private let lock = NSLock()
     private var keys: Bool?
     private var updates: [PhoneUpdate] = []
+    private var devices = 0
     /// 上次读游戏库时 prod.keys 齐没齐（catalog 的 keys.ready）；还没读过为 nil。
     public var keysReady: Bool? { lock.withLock { keys } }
     /// 上次读游戏库时，壳比本版旧的手机（catalog 的 phoneUpdates，只按本机设备记录判）：游戏库右上角「更新 iPhone 上的 S2Arm」
     public var phoneUpdates: [PhoneUpdate] { lock.withLock { updates } }
+    /// 上次读游戏库时，这台电脑往几台手机装过游戏（catalog 的 phoneDevices）：启动器更新弹窗据此写「更新启动器和 iPhone App」
+    public var phoneDevices: Int { lock.withLock { devices } }
 
     public init(client: JobClient) { self.client = client }
 
     private func remember(_ result: [String: Any]) {
         let ready = (result["keys"] as? [String: Any])?["ready"] as? Bool
         let phones = (result["phoneUpdates"] as? [[String: Any]] ?? []).map(PhoneUpdate.init(catalog:))
-        lock.withLock { keys = ready; updates = phones }
+        let count = (result["phoneDevices"] as? NSNumber)?.intValue ?? 0
+        lock.withLock { keys = ready; updates = phones; devices = count }
     }
 
     private var snapshotFile: URL { client.environment.privateRoot.appendingPathComponent("library-snapshot.json") }

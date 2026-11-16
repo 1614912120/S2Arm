@@ -226,6 +226,24 @@ class BudgetTests(unittest.TestCase):
         self.assertEqual((result['removedEntries'], result['pressureRemaining']), (1, False))
         self.assertEqual(self.trim(free=1)['removedEntries'], 0)
 
+    def test_skip_scan_when_free_leaves_everything_and_refreshes_current_title(self):
+        # 期望手写（11-16 出包收尾不全量扫）：盘余量 5 ≥ 底线 1 → 不扫（scanned False、字节统计 None）、一个文件都不动、
+        #   本款直连仓 store 的修改时间刷成 NOW；盘余量 0 < 底线 → 照旧扫描并删最旧的（同上一条用例）
+        gid = '0100000000010000'
+        air = self.put('cache/air/ios/aa/' + 'a' * 64 + '.air', age=9000)
+        store = self.private / 'run/s2arm/cache/direct' / gid / 'store'
+        store.mkdir(parents=True)
+        os.utime(store, (self.NOW - 50000, self.NOW - 50000))
+        result = self.trim(free=5, current_gid=gid, skip_scan_when_free=True)
+        self.assertEqual((result['scanned'], result['observedBytes'], result['retainedBytes'], result['removedEntries']), (False, None, None, 0))
+        self.assertEqual((result['accountingComplete'], result['pressureRemaining'], result['freeBytes']), (True, False, 5))
+        self.assertTrue(air.exists())
+        self.assertEqual(int(store.stat().st_mtime), int(self.NOW))
+        low = self.trim(readings=[0, 0, 1], current_gid=gid, skip_scan_when_free=True)   # 快路径先读一次盘余量（0，不够）
+        self.assertTrue(low['scanned'])
+        self.assertFalse(air.exists())
+        self.assertEqual(low['removedEntries'], 1)
+
     def test_hot_future_temporary_and_unknown_are_retained_above_budget(self):
         files = [self.put('cache/air/ios/aa/' + 'a' * 64 + '.air', age=3599),
                  self.put('cache/pso/bb/' + 'b' * 64 + '.bin', age=-1),

@@ -83,7 +83,7 @@ def upgrade_mac(c, gid, runtime, hold=None):
     manifest = read(runtime / "manifest.json", {})
     if not isinstance(manifest.get("files"), dict) or not stale(manifest.get("bfGen")):
         return False
-    if not (runtime / "shaders/direct/keys.tsv").is_file() or not (runtime / "romfs").is_dir():
+    if not (runtime / "shaders/direct/keys.tsv").is_file() or not _has_romfs(runtime):
         return False   # 不是直连包 / 没有 RomFS：没有可补的
     c.emit("message", "正在给这款重出着色器库（补上片上读取用的着色器，资源不动；首次要几分钟到几十分钟）")
     with tempfile.TemporaryDirectory(dir=c.private) as tmp:
@@ -140,8 +140,13 @@ def ios_inputs(c, gid, work):
     if gimg.is_file() and exefs is not None:
         root = Path(work) / "src"
         h = img.header(str(gimg))
-        _unpack_romfs(img, str(gimg), h["romfs"][0], root / "romfs") if h["romfs"][1] else (root / "romfs").mkdir(parents=True)
+        root.mkdir(parents=True)
         with open(gimg, "rb") as f:
+            # 标准 RomFS 段原样拷成产物根的镜像 romfs.std（段内偏移相对段首，拷出来就是独立的标准 RomFS），不再展开成几十万个散文件
+            if h["romfs"][1]:
+                _copy_range(f, h["romfs"][0], h["romfs"][1], root / "romfs.std")
+            else:
+                (root / "romfs").mkdir()
             for rel, off, size in img.entries(str(gimg)):   # 追加内容等其余条目（aoc/… 与 aoc.tsv）原样放回产物根
                 if rel.startswith("aoc/") or rel == "aoc.tsv":
                     _copy_range(f, off, size, root / rel)
@@ -155,7 +160,7 @@ def ios_inputs(c, gid, work):
         if (kit / "direct-profile").is_dir():
             shutil.copytree(kit / "direct-profile", root / "direct-profile")
         return root, "game.img"
-    if (mac / "romfs").is_dir() and (mac / "exefs/main").is_file():
+    if _has_romfs(mac) and (mac / "exefs/main").is_file():
         return mac, "mac"
     return None, "none"
 
@@ -180,12 +185,9 @@ def _img(c):
     return m
 
 
-def _unpack_romfs(img, path, base, out):
-    """game.img 标准 RomFS 段整份展开（img.std_files 只读元数据，这里按偏移拷数据）"""
-    out.mkdir(parents=True)
-    with open(path, "rb") as f:
-        for rel, (off, size) in img.std_files(path, base).items():
-            _copy_range(f, off, size, out / rel)
+def _has_romfs(root):
+    """产物根形态的目录有 RomFS：散文件目录 romfs/，或镜像 romfs.std（标准 RomFS，与 romfs/ 同级）"""
+    return (Path(root) / "romfs").is_dir() or (Path(root) / "romfs.std").is_file()
 
 
 def overlay(c, old_lib, new_lib, out):

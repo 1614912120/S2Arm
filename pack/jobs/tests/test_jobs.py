@@ -292,8 +292,9 @@ class JobsTests(unittest.TestCase):
         logs = self.root / "logs"; logs.mkdir()
         ms.plan(self.c, 1, "build_dual")
         self.assertFalse(self.c.keys.exists())
+        # 读取器是桩（reader.dll 不在）：RomFS 镜像形态（缺省）要真 nx_unpack 建 romfs.std，这里按目录形态（S2A_ROMFS_IMAGE=0）核分流与产物形状
         with um.patch.object(toolchain, "reader", return_value=self.root / "reader.dll"), um.patch.object(self.c, "run", run):
-            x = build.ensure_extract(self.c, game, build.selected_packages(game), {}, logs)
+            x = build.ensure_extract(self.c, game, build.selected_packages(game), {"S2A_ROMFS_IMAGE": "0"}, logs)
         self.assertEqual([c[4:6] for c in calls if "--npdm-isa" not in c], [["--to-extract", str(src)]])
         self.assertTrue(calls[0][3].endswith("pack/ns2_nup.py") and calls[0][6] == str(x), calls[0])
         self.assertFalse(any(str(self.c.keys) in c for c in calls), "NUP 不调读取器解密")
@@ -1189,7 +1190,7 @@ class JobsTests(unittest.TestCase):
         du = collections.namedtuple("du", "total used free")
         d = self.root / "dc"; root, cache, out = d / "root", d / "cache", d / "out"
         for x in (root / "romfs", root / "exefs", root / "aoc", cache, out): x.mkdir(parents=True)
-        sizes = {str(root / "romfs"): int(2.5e9), str(root / "exefs"): int(0.4e9), str(root / "aoc"): int(0.2e9), str(cache): 0}   # 内容 3.1e9 → 大档
+        sizes = {str(root / "romfs"): int(2.5e9), str(root / "romfs.std"): 0, str(root / "exefs"): int(0.4e9), str(root / "aoc"): int(0.2e9), str(cache): 0}   # 内容 3.1e9 → 大档（romfs.std：镜像形态的 RomFS，这里是目录形态 = 0）
         with unittest.mock.patch("space_rule.tree_bytes", side_effect=lambda p: sizes[str(p)]):
             self.assertIsNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(15e9))))
             why = space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(15e9) - 1))
@@ -1222,7 +1223,7 @@ class JobsTests(unittest.TestCase):
             (root / "extract" / "split" / "shader_map.tsv").write_text("\n".join(rows) + "\n", encoding="utf-8")
             return root, cache, out
         root, cache, out = make("sb_big", 99084, 3)
-        sizes = {str(root / "romfs"): int(6.0e9), str(root / "exefs"): int(0.5e9), str(root / "aoc"): int(0.2e9), str(cache): 0}
+        sizes = {str(root / "romfs"): int(6.0e9), str(root / "romfs.std"): 0, str(root / "exefs"): int(0.5e9), str(root / "aoc"): int(0.2e9), str(cache): 0}
         self.assertEqual(space_rule.shader_count(root), 99084)
         with unittest.mock.patch("space_rule.tree_bytes", side_effect=lambda p: sizes[str(p)]):
             self.assertIsNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, 51948552192)))
@@ -1230,7 +1231,7 @@ class JobsTests(unittest.TestCase):
             self.assertIn("磁盘空间不足", why); self.assertIn("着色器 99084 个", why)
             self.assertIsNotNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(15e9))))   # 修前按原件那一档 15e9 就放行了
         root, cache, out = make("sb_small", 1000, 0)
-        sizes = {str(root / "romfs"): int(0.3e9), str(root / "exefs"): int(0.1e9), str(root / "aoc"): 0, str(cache): 0}
+        sizes = {str(root / "romfs"): int(0.3e9), str(root / "romfs.std"): 0, str(root / "exefs"): int(0.1e9), str(root / "aoc"): 0, str(cache): 0}
         with unittest.mock.patch("space_rule.tree_bytes", side_effect=lambda p: sizes[str(p)]):
             self.assertIsNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(5e9))))
             self.assertIsNotNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(5e9) - 1)))
@@ -1454,6 +1455,15 @@ class JobsTests(unittest.TestCase):
         layout.save_device(self.c, "dev1", dict(games={on["id"].lower(): dict(pack="p")}))   # 记录里的游戏号大小写不一也认
         got = {g["id"]: g["onPhone"] for g in library.catalog(self.c)["games"]}
         self.assertEqual(got, {on["id"]: True, off["id"]: False})
+
+    def test_catalog_counts_phone_devices(self):
+        # 启动器更新弹窗按 phoneDevices 写成「更新启动器和 iPhone App」：设备记录里有款的才算；没装过 → 0，空记录 → 不算
+        g = self.game(tid="0100000000AA0000", packages=[self.package(tid="0100000000AA0000")])
+        self.catalogue([g])
+        self.assertEqual(library.catalog(self.c)["phoneDevices"], 0)
+        layout.save_device(self.c, "dev1", dict(games={g["id"]: dict(pack="p")}))
+        layout.save_device(self.c, "dev2", dict(games={}))
+        self.assertEqual(library.catalog(self.c)["phoneDevices"], 1)
 
     def test_catalogue_keeps_unsupported_and_unverified_distinct(self):
         game = self.game(packages=[self.package()])
@@ -1937,8 +1947,10 @@ class JobsTests(unittest.TestCase):
         library.prune_build(self.c, game["id"])
         self.assertEqual([f for f in keep + other if not f.exists()], [])
         self.assertEqual([f for f in gone if f.exists()], [])
-        # 有了容器件（游戏程序专用文件夹 .programs/<程序号>/kit）：现行产物根也不用留，build/ 只剩出包日志 build/ios/logs
-        kit = layout.program_store(self.c, game["id"], create=True) / "kit" / "main.npdm"; kit.parent.mkdir(parents=True); kit.write_bytes(b"META")
+        # 有了容器件（程序缓存 cache/programs/<程序号>/kit，pack/jobs/programs.py）：现行产物根也不用留，build/ 只剩出包日志 build/ios/logs
+        import programs
+        kit = programs.cache(self.c, game["id"]) / "kit" / "main.npdm"; kit.parent.mkdir(parents=True); kit.write_bytes(b"META")
+        (kit.parent / "main.fixups.tsv").write_text("")
         library.prune_build(self.c, game["id"])
         build = layout.build_dir(self.c, game["id"], create=False)
         self.assertEqual(sorted(str(q.relative_to(build)) for q in build.rglob("*")), ["ios", "ios/logs", "ios/logs/a.log"])
@@ -2755,7 +2767,7 @@ class JobsTests(unittest.TestCase):
         (out / "logs").mkdir(); (out / "logs" / "oneclick.log").write_text("出包日志")
         image = layout.image_ios(self.c, gid)   # 上一次成功出包的交付件
         if ipa: (image / ".pack").mkdir(parents=True); (image / ".pack" / "manifest.json").write_text('{"index_sha256": "p"}')
-        if kit: (image / "kit").mkdir(parents=True); (image / "kit" / "main.npdm").write_bytes(b"old")
+        if kit: (image / "kit").mkdir(parents=True); (image / "kit" / "main.npdm").write_bytes(b"old"); (image / "kit" / "main.fixups.tsv").write_text("")
         image = layout.path(self.c, gid, "image"); (image / "mac").mkdir(parents=True); (image / "mac.partial").mkdir()   # 出了一半的新镜像
         save = layout.path(self.c, gid, "saves") / "s.bin"; save.parent.mkdir(parents=True); save.write_bytes(b"save")
         return gid, out, save
@@ -2768,11 +2780,10 @@ class JobsTests(unittest.TestCase):
         c = self.stop_context(gid)
         library.clean_after_stop(c)
         image = layout.image_ios(self.c, gid)
-        self.assertEqual(sorted(p.name for p in image.iterdir()), [".pack"])
-        self.assertTrue((layout.ios_kit(self.c, gid) / "main.npdm").is_file())   # 程序件在专用文件夹，照样留着
+        self.assertEqual(sorted(p.name for p in image.iterdir()), [".pack", "kit"])   # 旧位置的程序件：清理不碰，真用到时才搬进程序常驻（pack/jobs/programs.py adopt）
         self.assertEqual(sorted(p.name for p in layout.build_dir(self.c, gid).iterdir()), ["ios"])   # 只剩出包日志
         self.assertEqual(sorted(p.name for p in out.iterdir()), ["logs"])
-        self.assertEqual((layout.ios_kit(self.c, gid) / "main.npdm").read_bytes(), b"old")   # 旧位置的程序件已搬进专用文件夹，内容不变
+        self.assertEqual((image / "kit" / "main.npdm").read_bytes(), b"old")
         self.assertEqual(save.read_bytes(), b"save")
         self.assertEqual((c.logs / (c.task + "-stages") / "stage.log").read_text(), "阶段日志")
 
