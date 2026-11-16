@@ -685,22 +685,39 @@ def zstd_dec(data):
     buf = ctypes.create_string_buffer(n); r = _zdecompress(buf, n, data, len(data))
     if _zstd.ZSTD_isError(r) or r != n: raise ValueError('zstd 解压失败')
     return buf.raw
-def zstd_frame(data, i):   # data[i:] 起一个 zstd 帧：返回 (解压内容, 压缩长度)；帧头没写原长、过大、解不开都返回 None
+class _PyBuf(__import__('ctypes').Structure):   # CPython 缓冲区协议的 Py_buffer（zstd_frame 取 bytes / 只读 mmap 的内部地址，不复制）
+    import ctypes as _c
+    _fields_ = [('buf', _c.c_void_p), ('obj', _c.c_void_p), ('len', _c.c_ssize_t), ('itemsize', _c.c_ssize_t), ('readonly', _c.c_int), ('ndim', _c.c_int),
+                ('format', _c.c_char_p), ('shape', _c.c_void_p), ('strides', _c.c_void_p), ('suboffsets', _c.c_void_p), ('internal', _c.c_void_p)]
+def _buf_api():
     import ctypes
-    z = _zstd_lib()
-    for w in (1 << 20, 64 << 20):   # 先取 1 MB 窗口找帧尾，帧更长才取 64 MB（Trine 5 主程序 4795 个小帧，每个都复制 64 MB 要几百 GB 内存拷贝）；窗口盖住整帧时两者结果相同
-        b = bytes(data[i:i + w]); cs = z.ZSTD_findFrameCompressedSize(b, len(b))
-        if not z.ZSTD_isError(cs) or i + w >= len(data): break
-    n = z.ZSTD_getFrameContentSize(b, len(b))
-    if z.ZSTD_isError(cs) or n == (1 << 64) - 2 or (n < 1 << 62 and n > 256 << 20): return None
-    if n == (1 << 64) - 1:   # 帧头没写原长（大乱斗 data.arc：原长记在归档自己的表里）：容量从小往大试，解到帧尾为止
-        for cap in (1 << 20, 16 << 20, 256 << 20):
-            buf = ctypes.create_string_buffer(cap); r = _zdecompress(buf, cap, b, cs)
-            if not z.ZSTD_isError(r): return buf.raw[:r], cs
-        return None
-    buf = ctypes.create_string_buffer(n); r = _zdecompress(buf, n, b, cs)
-    if z.ZSTD_isError(r) or r != n: return None
-    return buf.raw, cs
+    g, r = ctypes.pythonapi.PyObject_GetBuffer, ctypes.pythonapi.PyBuffer_Release
+    g.argtypes = [ctypes.py_object, ctypes.POINTER(_PyBuf), ctypes.c_int]; g.restype = ctypes.c_int
+    r.argtypes = [ctypes.POINTER(_PyBuf)]; r.restype = None
+    return g, r
+def zstd_frame(data, i):   # data[i:] 起一个 zstd 帧：返回 (解压内容, 压缩长度)；帧头没写原长、过大、解不开都返回 None
+    """找帧尾与解压都直接用 data 的内部地址 + 偏移（bytes / 只读 mmap / memoryview 经缓冲区协议取，不复制）。
+    原先每遇到一个魔数先 bytes(data[i:i + 1 MB]) 复制 1 MB 再判帧长：每帧约 37 µs，一款 657 万个帧（大文件逐段盲扫）光复制就 245 秒；直接取地址每帧约 0.7 µs。
+    可见长度仍封顶 64 MB，与原先「先 1 MB、不够再 64 MB」两档窗口结果相同（帧在 1 MB 内两档一样；超过 64 MB 的帧两者都判不出帧尾）"""
+    import ctypes
+    z = _zstd_lib(); get, rel = _buf_api(); v = _PyBuf()
+    if get(data, ctypes.byref(v), 0) != 0: return None
+    try:
+        avail = min(v.len - i, 64 << 20)
+        if avail <= 0: return None
+        b = ctypes.cast(v.buf + i, ctypes.c_char_p)
+        cs = z.ZSTD_findFrameCompressedSize(b, avail)
+        n = z.ZSTD_getFrameContentSize(b, avail)
+        if z.ZSTD_isError(cs) or n == (1 << 64) - 2 or (n < 1 << 62 and n > 256 << 20): return None
+        if n == (1 << 64) - 1:   # 帧头没写原长（大乱斗 data.arc：原长记在归档自己的表里）：容量从小往大试，解到帧尾为止
+            for cap in (1 << 20, 16 << 20, 256 << 20):
+                buf = ctypes.create_string_buffer(cap); r = _zdecompress(buf, cap, b, cs)
+                if not z.ZSTD_isError(r): return buf.raw[:r], cs
+            return None
+        buf = ctypes.create_string_buffer(n); r = _zdecompress(buf, n, b, cs)
+        if z.ZSTD_isError(r) or r != n: return None
+        return buf.raw, cs
+    finally: rel(ctypes.byref(v))
 def scan_zstd_frames(path, data, rows, blobs, stat, lo=0, hi=None):
     """顶层打包文件里逐条 zstd 压缩的条目（怪猎崛起 RE 引擎 re_chunk_*.pak：着色器在 SDF 文件里，7 万多个 zstd 帧，10-17 前一个都没抽到）：
     找起点在 [lo, hi) 的帧魔数，按帧头解开，每段照普通文件再走一遍 visit（里面还可能是 SARC / Yaz0）。解不开的跳过（魔数也可能出现在别的压缩数据里）
