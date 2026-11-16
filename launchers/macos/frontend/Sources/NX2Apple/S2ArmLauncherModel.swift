@@ -285,6 +285,8 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published var welcomeHome = false
     /// 设置页「磁盘空间」：关掉设置、给这款打开磁盘空间面板（LauncherView 收到就开）
     @Published var spaceRequest: String?
+    /// 控制口 /show page = launchSettings：打开这款的启动设置（同点游戏库齿轮），LauncherView 接住后清掉
+    @Published var displayRequest: String?
     var welcomeGame: GameSummary? { games.first { $0.id == welcomeGameID } }
     // 装到 iPhone 前的清单
     @Published private(set) var installReadiness: InstallReadiness?

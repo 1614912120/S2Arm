@@ -66,6 +66,20 @@ import NXLauncher
         XCTAssertTrue(state.enabled, "复选框只由确认键切换，方向键留给导航")
     }
 
+    func testDropdownKeepsBlockedChoicesOutOfControllerActions() async throws {
+        let state = ControlsState()
+        let navigation = LauncherPadNavigation()
+        let window = host(ControlsFixture(state: state, disabledOptions: ["three"]), navigation: navigation)
+        defer { navigation.detach(); window.close() }
+        try await Task.sleep(for: .milliseconds(100))
+        navigation.focus("choice"); navigation.handle(.confirm)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(Set(navigation.controlTargets(in: window).map(\.id)), ["dropdown.one", "dropdown.two"],
+                       "主线返回的 blocked 选项仍展示，但不能被手柄激活")
+        navigation.focus("dropdown.three"); navigation.handle(.confirm)
+        XCTAssertEqual(state.choice, "two", "禁用档位不能覆盖当前选择")
+    }
+
     private func host<V: View>(_ content: V, navigation: LauncherPadNavigation) -> NSWindow {
         _ = NSApplication.shared
         let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 500, height: 400), styleMask: [.borderless], backing: .buffered, defer: false)
@@ -85,10 +99,12 @@ import NXLauncher
 }
 private struct ControlsFixture: View {
     @ObservedObject var state: ControlsState
+    var disabledOptions: Set<String> = []
     var body: some View {
         VStack(spacing: 24) {
             Button("Disabled") {}.controllerButtonStyle(.plain).controllerID("disabled").disabled(true)
-            LauncherDropdown(options: [("one", "One"), ("two", "Two"), ("three", "Three")], selection: state.choice) { state.choice = $0 }
+            LauncherDropdown(options: [("one", "One"), ("two", "Two"), ("three", "Three")], selection: state.choice,
+                             disabledOptions: disabledOptions) { state.choice = $0 }
                 .controllerID("choice")
             LauncherSlider(value: state.value, range: 0...1, step: 0.1) { state.value = $0 }.controllerID("slider")
             Toggle("Enabled", isOn: $state.enabled).toggleStyle(PadToggleStyle(.switch)).controllerID("toggle")

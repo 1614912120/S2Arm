@@ -49,15 +49,16 @@ package enum LauncherDropdownLayout {
 /// One dropdown being open: what its list shows and what a pick does.
 package struct LauncherDropdownRequest {
     package init(id: UUID, options: [(value: String, label: String)], selection: String, label: String,
-                 artwork: ((String) -> AnyView)? = nil, choose: @escaping (String) -> Void) {
+                 artwork: ((String) -> AnyView)? = nil, disabledOptions: Set<String> = [], choose: @escaping (String) -> Void) {
         self.id = id; self.options = options; self.selection = selection; self.label = label; self.choose = choose
-        self.artwork = artwork
+        self.artwork = artwork; self.disabledOptions = disabledOptions
     }
     package let id: UUID
     package let options: [(value: String, label: String)]
     package let selection: String
     package let label: String
     package let artwork: ((String) -> AnyView)?
+    package let disabledOptions: Set<String>
     package let choose: (String) -> Void
 }
 
@@ -124,7 +125,7 @@ private struct LauncherDropdownLayer: View {
                     Color.black.opacity(0.001).contentShape(Rectangle())
                         .onTapGesture { state.close() }
                         .accessibilityHidden(true)
-                    LauncherDropdownList(options: request.options, selection: request.selection, label: request.label, artwork: request.artwork,
+                    LauncherDropdownList(options: request.options, selection: request.selection, label: request.label, artwork: request.artwork, disabledOptions: request.disabledOptions,
                                          choose: { value in request.choose(value); state.close() }, close: { state.close() })
                         .frame(width: spot.size.width, height: spot.size.height)
                         .launcherDropdownSurface()
@@ -139,15 +140,16 @@ private struct LauncherDropdownLayer: View {
 /// The rows of an open dropdown: the chosen one with a checkmark, the one under the pointer or the arrow keys lit.
 /// Arrow keys move, Return or Space pick, Esc closes (a local key monitor while it is open, as in the Manage menu).
 package struct LauncherDropdownList: View {
-    package init(options: [(value: String, label: String)], selection: String, label: String, artwork: ((String) -> AnyView)? = nil,
+    package init(options: [(value: String, label: String)], selection: String, label: String, artwork: ((String) -> AnyView)? = nil, disabledOptions: Set<String> = [],
                  choose: @escaping (String) -> Void, close: @escaping () -> Void) {
         self.options = options; self.selection = selection; self.label = label; self.choose = choose; self.close = close
-        self.artwork = artwork
+        self.artwork = artwork; self.disabledOptions = disabledOptions
     }
     package let options: [(value: String, label: String)]
     package let selection: String
     package let label: String
     package let artwork: ((String) -> AnyView)?
+    package let disabledOptions: Set<String>
     package let choose: (String) -> Void
     package let close: () -> Void
     @State private var highlighted: Int?
@@ -197,6 +199,8 @@ package struct LauncherDropdownList: View {
             .contentShape(RoundedRectangle(cornerRadius: 8))
         }
         .controllerButtonStyle(.plain)
+        .disabled(disabledOptions.contains(option.value))
+        .opacity(disabledOptions.contains(option.value) ? 0.45 : 1)
         .onHover { inside in
             if inside { highlighted = index } else if highlighted == index { highlighted = nil }
         }
@@ -213,7 +217,7 @@ package struct LauncherDropdownList: View {
             switch event.keyCode {
             case 125: highlighted = LauncherDropdownLayout.step(from: highlighted, by: 1, count: options.count)
             case 126: highlighted = LauncherDropdownLayout.step(from: highlighted, by: -1, count: options.count)
-            case 36, 76, 49: if let i = highlighted, options.indices.contains(i) { choose(options[i].value) }
+            case 36, 76, 49: if let i = highlighted, options.indices.contains(i), !disabledOptions.contains(options[i].value) { choose(options[i].value) }
             case 53: close()
             case 48: close(); return event
             default: return event
@@ -235,9 +239,9 @@ package struct LauncherDropdownList: View {
 /// `label` names the setting for VoiceOver, which then reads the choice as the value.
 package struct LauncherDropdown: View {
     package init(options: [(value: String, label: String)], selection: String, label: String = "",
-                  fill: Bool = false, artwork: ((String) -> AnyView)? = nil, choose: @escaping (String) -> Void) {
+                  fill: Bool = false, artwork: ((String) -> AnyView)? = nil, disabledOptions: Set<String> = [], choose: @escaping (String) -> Void) {
         self.options = options; self.selection = selection; self.label = label; self.fill = fill
-        self.artwork = artwork
+        self.artwork = artwork; self.disabledOptions = disabledOptions
         self.choose = choose
     }
     package let options: [(value: String, label: String)]
@@ -245,6 +249,7 @@ package struct LauncherDropdown: View {
     package var label = ""
     package var fill = false
     package let artwork: ((String) -> AnyView)?
+    package let disabledOptions: Set<String>
     package let choose: (String) -> Void
     @Environment(\.launcherDropdownHost) private var host
     @State private var id = UUID()
@@ -301,7 +306,7 @@ package struct LauncherDropdown: View {
                 Button {
                     withAnimation(.easeOut(duration: 0.12)) {
                         host.request = open ? nil : LauncherDropdownRequest(id: dropdown.id, options: dropdown.options, selection: dropdown.selection,
-                                                                            label: dropdown.label, artwork: dropdown.artwork, choose: dropdown.choose)
+                                                                            label: dropdown.label, artwork: dropdown.artwork, disabledOptions: dropdown.disabledOptions, choose: dropdown.choose)
                     }
                 } label: { dropdown.face(open: open, rowWidth: rowWidth) }
                 .controllerButtonStyle(.plain)
@@ -323,7 +328,7 @@ package struct LauncherDropdown: View {
                     .controllerButtonStyle(.plain)
                     .opacity(enabled ? 1 : 0.55)
                     .popover(isPresented: $open, arrowEdge: .bottom) {
-                        LauncherDropdownList(options: dropdown.options, selection: dropdown.selection, label: dropdown.label, artwork: dropdown.artwork,
+                        LauncherDropdownList(options: dropdown.options, selection: dropdown.selection, label: dropdown.label, artwork: dropdown.artwork, disabledOptions: dropdown.disabledOptions,
                                              choose: { dropdown.choose($0); open = false }, close: { open = false })
                             .frame(width: LauncherDropdownLayout.width(labels: dropdown.options.map(\.label), button: 0),
                                    height: min(LauncherDropdownLayout.contentHeight(rows: dropdown.options.count), LauncherDropdownLayout.maxHeight))

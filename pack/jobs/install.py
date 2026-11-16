@@ -277,7 +277,10 @@ def sgrade_pending(c, games):
         return True
     pend = rewrite_refresh.pending_ios(c, [g for g in games if g], rid)
     # 这一版记号下已经试过、缺原件补不上的不算（不然每次「更新 iPhone」都白重装一遍）
-    return any((layout.game_info(c, g).get("ios") or {}).get("sgradeMissing") != (rewrite_refresh.ios_key(c, g, rid) or "") for g in pend)
+    if any((layout.game_info(c, g).get("ios") or {}).get("sgradeMissing") != (rewrite_refresh.ios_key(c, g, rid) or "") for g in pend):
+        return True
+    import sgrade_bf   # 老包直连库缺可读瓦片版着色器（_bf）：取不到原料、这一代已试过的不算
+    return any(sgrade_bf.due(c, g) for g in games if g)
 
 def patches_results(c):
     import patches

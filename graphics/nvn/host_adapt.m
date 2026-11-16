@@ -179,6 +179,7 @@ UIView *s2a_ios_root_view(void) __attribute__((weak_import));
 UIView *s2a_ios_present_view(void) __attribute__((weak_import));
 static UIView *present_view(void) { return s2a_ios_present_view ? s2a_ios_present_view() : s2a_ios_root_view ? s2a_ios_root_view() : nil; }
 CGRect s2a_ios_game_area(void) __attribute__((weak_import));
+int s2a_ios_game_top(void) __attribute__((weak_import));
 // 出图层摆放的范围（#300 统一游戏区域）：挂在手机根视图上时取 App 壳给的游戏区域（分屏等），挂在外接屏窗口的视图上或壳没这个符号 / 区域为空时取视图自身
 static CGRect game_rect(UIView *v) {
     if (s2a_ios_game_area && s2a_ios_root_view && v == s2a_ios_root_view()) { CGRect r = s2a_ios_game_area(); if (!CGRectIsEmpty(r)) return r; }
@@ -217,6 +218,8 @@ static void layout_layer(UIView *v, CAMetalLayer *l) {
     // 等比居中；出图比例与视图比例差 < 1% 时铺满视图（10-29：宽屏开着时出图比例来自取整后的屏幕宽，如 2346 / 1080 = 2.1722 对屏幕 2.1727，
     //   旧写法层比视图窄零点几个点，右侧露一条 ≤ 1 像素的黑缝；同 the reference port present_viewport 的 1% 容差）
     pf_vp f = pf_viewport(b.size.width, b.size.height, a, 1); CGFloat w = f.w, h = f.h;
+    // 分屏放宽到整屏宽的上区（iPhone Duo 外屏竖屏，ios/play_layout.m S2APlayLayoutMake 的 top）：画面贴顶，空余留在画面与手柄之间
+    if (s2a_ios_game_top && s2a_ios_root_view && v == s2a_ios_root_view() && s2a_ios_game_top()) f.y = 0;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     l.frame = CGRectMake(b.origin.x + f.x, b.origin.y + f.y, w, h);
     // 出图层像素倍数（S2A_OUT_SCALE，缺省 1 = 屏幕原生；帧率能耗线 10-26 维护者要量）：最后上屏这一层按原生全分辨率画，每帧多一次整屏读写；
