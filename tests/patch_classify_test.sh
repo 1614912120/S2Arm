@@ -53,6 +53,9 @@ for name, got, want in [
  ('⑫o 游戏名里的词不算（文件头游戏名带 4K、变体是关泛光）→ load', D('Disable Bloom', '# 4K Racing [0100000000010000] v1.3.0 - Disable Bloom\n'), 'load'),
  ('⑫p 版本号 1.0.720 不当 720p；只写 LOD → 认不出', P.gfx_dir('Game/LOD/exefs/1.0.720.pchtxt'), ''),
  ('⑫q 4:3 画幅 + 960x720 掌机 → 认不出', D('1440x1080', '// 4:3 Standard\n// 1440x1080 Docked 960x720 Handheld\n'), ''),
+ ('⑫r 否定词写在后面「Force FXAA Off」→ load', D('Force FXAA Off'), 'load'),
+ ('⑫s 「DOF Off」→ load', D('Blur Removal', '# Game [0100000000010000] v1.3.0 - DOF\n// DOF off\n'), 'load'),
+ ('⑫t 「Force FXAA On」（开 FXAA）→ 不算降负载', D('Force FXAA On'), ''),
 ]: ck(name, got, want)
 sys.exit(1 if bad else 0)
 PY

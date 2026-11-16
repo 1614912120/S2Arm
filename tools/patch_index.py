@@ -72,6 +72,7 @@ def classify(path, text='', repo=''):
 _OFF = r'(?:disabl\w*|remov\w*|no|off|turn[ _-]*off|without|kill\w*|delet\w*)'
 LOAD = re.compile(_OFF + r'[ _-]*(?:the[ _-]*)?(?:fxaa|taa|smaa|aa\b|anti[ _-]*alias\w*|motion[ _-]*blur|camera[ _-]*blur|radial[ _-]*blur|blur|dof\b|depth[ _-]*of[ _-]*field|bloom|'
                   r'shadows?|ambient[ _-]*occlusion|ssao|ao\b|fog|volumetric\w*|particles?|post[ _-]*process\w*|god[ _-]*rays?|light[ _-]*shafts?|reflections?|ssr\b|grass|foliage|lens[ _-]*flare)'
+                  r'|\b(?:fxaa|taa|smaa|anti[ _-]*alias\w*|motion[ _-]*blur|camera[ _-]*blur|dof|depth[ _-]*of[ _-]*field|bloom|ssao|ambient[ _-]*occlusion|fog|volumetric\w*|god[ _-]*rays?|lens[ _-]*flare|post[ _-]*process\w*)[ _-]*(?:off|disabled?|removed?)\b'   # 否定词写在后面：「Force FXAA Off」「Bloom Disabled」
                   r'|(?:lower\w*|reduc\w*|decreas\w*|half)[ _-]*(?:the[ _-]*)?(?:render(?:ing)?[ _-]*)?(?:res\b|resolution|lod|shadows?|draw[ _-]*distance|particles?|grass|foliage)'
                   r'|\b(?:360|480|504|540|576|600|648|720)p\b|\b(?:640|854|960|1024|1152|1280)[ _]*x[ _]*(?:360|480|540|576|648|720)\b'
                   r'|performance[ _-]*mode|force[ _-]*handheld|handheld[ _-]*(?:mode|res\w*|profile|settings)|half[ _-]*res\w*|low[ _-]*(?:quality|settings|graphics|preset)'
