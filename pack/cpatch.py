@@ -1061,8 +1061,10 @@ def scan_cheats(dirs, exefs, log, ship=None):
             fbid, entries = parse_cheats(raw.decode('utf-8', 'replace'))
             stem = os.path.splitext(f)[0]
             want = fbid or (stem if re.fullmatch(r'[0-9A-Fa-f]{16}', stem) else '')
-            if not want or not bid_match(bid, want):
-                log.append(f'不收\tcheat\tmain\t{f[:40]}\t版本不对：金手指是 {want or "（没写构建号）"}，这份游戏的主程序是 {bid[:16]}'); continue
+            if not want:   # #1321：文件名不是 16 位构建号、首行也没有 BID=：核不了版本，不编进包（写错版本的内存会坏存档）；单独写原因，结果页逐份列出（原先混在「版本不对」里被当成库里别的版本静默略过）
+                log.append(f'不收\tcheat:{f[:40]}\tmain\t{f[:40]}\t没写构建号：文件名不是 16 位构建号、首行也没有 BID=，核不了版本'); continue
+            if not bid_match(bid, want):
+                log.append(f'不收\tcheat\tmain\t{f[:40]}\t版本不对：金手指是 {want}，这份游戏的主程序是 {bid[:16]}'); continue
             if ship is not None and f not in {n for n, _ in ship}: ship.append((f, raw))
             sha = hashlib.sha256(raw).hexdigest()[:16]; picked = []
             for i, e in enumerate(entries):
