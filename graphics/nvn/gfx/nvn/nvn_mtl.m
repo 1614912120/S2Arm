@@ -1443,9 +1443,23 @@ static void gp_end(id e);
 // the one before it, across command buffers too. The resources are tracked, but what shaders reach through argument buffers or GPU addresses is not, so tracking alone does not order them.
 // Encoders of the old queue g_q (readbacks, diagnostics) end with a plain endEncoding: a fence orders only the encoders of one queue. relaxed: a draw pass begun without the consumer
 // barrier (DM_NVN_BARRIER=game) waits before its fragment stage only, as on Metal 4 its vertex work may overlap the previous pass's fragments
+// Metal 3 稀疏贴图（nvn_sparse_tex.inc，老式稀疏堆）：驻留集收不了这种堆（AGX 驱动 commit 崩），渲染 / 计算编码器要逐个 useHeap 才看得到（不然 GPU 缺页）。
+//   活着的稀疏堆记在这里（弱引用，贴图一放堆就没），每个 Metal 3 编码器开头（m3_wait）声明一遍；blit 编码器没有 useHeap，也不需要
+static NSHashTable<id<MTLHeap>> *g_sp_live_heaps; static pthread_mutex_t g_sp_live_mu = PTHREAD_MUTEX_INITIALIZER; static _Atomic int g_sp_live_any;
+static void m3_use_sparse_heaps(id e, int render) {
+    if (!atomic_load_explicit(&g_sp_live_any, memory_order_relaxed)) return;
+    pthread_mutex_lock(&g_sp_live_mu);
+    NSArray<id<MTLHeap>> *hs = g_sp_live_heaps.allObjects;
+    pthread_mutex_unlock(&g_sp_live_mu);
+    NSUInteger n = MIN(hs.count, (NSUInteger)64); if (!n) return;
+    __unsafe_unretained id<MTLHeap> arr[64]; for (NSUInteger i = 0; i < n; i++) arr[i] = hs[i];   // hs 持着引用到本函数结束
+    if (render) [(id<MTLRenderCommandEncoder>)e useHeaps:arr count:n stages:MTLRenderStageVertex | MTLRenderStageFragment];
+    else if ([e respondsToSelector:@selector(useHeaps:count:)]) [(id<MTLComputeCommandEncoder>)e useHeaps:arr count:n];
+}
 static inline void m3_wait(id e, int render, int relaxed) {
     if (render) [(id<MTLRenderCommandEncoder>)e waitForFence:g_fence3 beforeStages:relaxed ? MTLRenderStageFragment : MTLRenderStageVertex];
     else [(id<MTLBlitCommandEncoder>)e waitForFence:g_fence3];   // the compute encoder's selector is the same
+    m3_use_sparse_heaps(e, render);
 }
 // Queue barriers without the main replay's profiling/fence state. Present
 // encoders run on their own thread and must not change that state.

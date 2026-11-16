@@ -6,7 +6,7 @@
 //   层起点 + 级起点 + (页行 × 每行页数 + 页列) × 64 KB（tests：t_nvn_sparse_tex 逐页对整级去混排逐字节核过）。Metal 块 16 KB，NVN 页正好是它的整数倍。
 //   尾级：NVN 按页铺的级之后、或 Metal firstMipmapInTail 之后的级都小，整级映射、整级上传（Metal 尾每层一块）。
 //   映射变了（vgen）照旧整张重传：按新的已映射页重建堆与贴图（只花已映射的那些页）；增量映射以后再做。
-//   不走这里（照旧全尺寸）：Metal 3 后端（g_m3）、设备没有稀疏贴图、不是 2D / 2D 数组、多重采样、要 CPU 改格式（fmt_unpack）、NVN 页不是 Metal 块的整数倍、
+//   不走这里（照旧全尺寸）：设备没有稀疏贴图、不是 2D / 2D 数组、多重采样、要 CPU 改格式（fmt_unpack）、NVN 页不是 Metal 块的整数倍、
 //   标称不到 DM_NVN_SPARSE_METAL_MB（缺省 64 MB），或 DM_NVN_SPARSE_METAL=0
 uint64_t nvn_sparse_map_bits(const void *pool, uint64_t a, uint64_t n, uint8_t *bits);
 static id<MTLCommandQueue> g_sp_q; static int g_sp_res; static id<MTLSharedEvent> g_sp_ev; static uint64_t g_sp_v;   // 映射与上传用的独立队列，同步等完（只在首传 / 映射变了的重传时走，按已映射页计）
@@ -24,9 +24,8 @@ static MTLSize sp_tile(MTLTextureType type, MTLPixelFormat pf, uint64_t *bytes) 
 static int sp_eligible(const tex_t *t, MTLTextureDescriptor *d) {
     static int on = -1; static uint64_t min_bytes;
     if (on < 0) { const char *e = getenv("DM_NVN_SPARSE_METAL"), *m = getenv("DM_NVN_SPARSE_METAL_MB");
-        // 只在 Metal 4 队列上开：Metal 3（g_m3，iOS / macOS 26 以下）的渲染编码器看不到老式稀疏堆（本机 NXGAL_BE=mtl3 实测 GPU 缺页；
-        //   堆进驻留集又会让 AGX 驱动 commit 崩），要逐编码器 useHeap，后续再做；那里照旧全尺寸
-        on = !(e && *e == '0') && sp_m4() && ([g_dev supportsFamily:MTLGPUFamilyApple6] || [g_dev supportsFamily:MTLGPUFamilyMac2]);
+        // Metal 3（g_m3）走老式稀疏堆：堆不进驻留集（进了 AGX 驱动 commit 崩），由 nvn_mtl.m m3_wait 在每个渲染 / 计算编码器上 useHeaps（不声明就 GPU 缺页，本机 NXGAL_BE=mtl3 实测）
+        on = !(e && *e == '0') && ([g_dev supportsFamily:MTLGPUFamilyApple6] || [g_dev supportsFamily:MTLGPUFamilyMac2]);
         min_bytes = (uint64_t)(m ? strtoull(m, NULL, 10) : 64) << 20;
         MLOG("Metal sparse textures for NVN sparse textures: %s (from %llu MB nominal; DM_NVN_SPARSE_METAL / DM_NVN_SPARSE_METAL_MB)", on ? "on" : "off", (unsigned long long)(min_bytes >> 20)); }
     if (!on || !(t->d.flags & NVN_TEXTURE_FLAGS_SPARSE) || t->L.size < min_bytes || d.sampleCount > 1) return 0;
@@ -92,6 +91,7 @@ static id<MTLTexture> sp_upload(const tex_t *t, MTLTextureDescriptor *d0) {
     if (!mt) { free(jobs); RED_ONCE(198, "Metal sparse texture: heap of %llu tiles or texture not made (ser=%llu %ux%ux%u format %#x); falling back to a full-size texture",
                                    (unsigned long long)tiles, (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format); return nil; }
     objc_setAssociatedObject(mt, &g_sp_heap_key, heap, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (!m4) { pthread_mutex_lock(&g_sp_live_mu); if (!g_sp_live_heaps) g_sp_live_heaps = [NSHashTable weakObjectsHashTable]; [g_sp_live_heaps addObject:heap]; pthread_mutex_unlock(&g_sp_live_mu); atomic_store(&g_sp_live_any, 1); }   // Metal 3：编码器逐个 useHeaps（m3_use_sparse_heaps）
     // 映射
     if (!g_sp_res) { [g_sp_q addResidencySet:g_res]; g_sp_res = 1; }   // 上传队列也要看到堆（驻留集收的是堆）
     id<MTLCommandBuffer> cb = [g_sp_q commandBuffer];
