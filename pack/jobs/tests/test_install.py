@@ -966,6 +966,32 @@ class KeptNroTests(unittest.TestCase):
         ph.bid = None
         self.assertEqual(ph.pull_kept([self.G]), 0)
 
+    def test_clear_kept_after_install_only_what_is_in_the_pack(self):
+        # 装好后（put_game 末尾 clear_kept）：期望手写——收回过的 A、B 里只有 A 已进程序件（nro_modules.tsv 有它的摘要）→ 只删手机上的 A；
+        #   B 还没补进包，留在手机上（「手机上还有 .nro = 没补好」的提示照旧）；手机类没有 drop_kept 不报错；删失败记一行不挡
+        kept = install.layout.nro_kept(self.c, self.G, create=True); kept.mkdir(parents=True, exist_ok=True)
+        a, b = "a" * 64, "b" * 64
+        for n in (a, b):
+            (kept / f"{n}.nro").write_bytes(b"x")
+        kit = Path(self.c.private) / "kit"; kit.mkdir(parents=True)
+        (kit / "nro_modules.tsv").write_text(f"nro0\t{a}\tx\ty\tz\n")
+        dropped, noted = [], []
+        um.patch.object(install.layout, "ios_kit", lambda c, g: kit).start()
+        um.patch.object(install, "note", lambda c, text: noted.append(text)).start(); self.addCleanup(um.patch.stopall)
+        install.clear_kept(self.c, types.SimpleNamespace(drop_kept=lambda g, names: dropped.append((g, names))), [self.G])
+        self.assertEqual(dropped, [(self.G, [f"{a}.nro"])])
+        install.clear_kept(self.c, types.SimpleNamespace(), [self.G])   # 没有 drop_kept 的手机类：跳过
+        def boom(g, names): raise install.Failure("断开", code="device_not_ready")
+        install.clear_kept(self.c, types.SimpleNamespace(drop_kept=boom), [self.G])
+        self.assertEqual(len(noted), 1)
+        # Windows：经 s2a-devpush rm 机上 <文档根>/wire/<号>/nro/<名>
+        rms = []
+        class Dp:
+            def rm(_, rel): rms.append(rel); return True, ""
+        ph = object.__new__(install.WinPhone); ph.c, ph.bid = self.c, "s2arm.z"; ph.client = lambda work: Dp()
+        ph.drop_kept(self.G, [f"{a}.nro"])
+        self.assertEqual(rms, [f"{install.game_docs(self.G)}/wire/{self.G.upper()}/nro/{a}.nro"])
+
 class PullSeenTests(unittest.TestCase):
     setUp = tj.JobsTests.setUp; tearDown = tj.JobsTests.tearDown
 
