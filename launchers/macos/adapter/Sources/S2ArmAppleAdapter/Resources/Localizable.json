@@ -9708,46 +9708,6 @@
   "en": "This game doesn't use direct rendering, so sharp upscaling (MetalFX) isn't available."
  },
  {
-  "source": "mod 导入 / 删除格式不对。",
-  "en": "Invalid mod import / remove request."
- },
- {
-  "source": "正在把 mod「{0}」推进 iPhone（{0} 个文件）",
-  "en": "Sending mod \"{0}\" to iPhone ({0} files)"
- },
- {
-  "source": "里面的代码补丁（exefs 的 pchtxt / IPS）这里不收：只导入资源替换（romfs）",
-  "en": "Code patches inside (exefs pchtxt / IPS) aren't imported here: only asset replacements (romfs)"
- },
- {
-  "source": "mod 要选 zip 压缩包或文件夹（7z / rar 先解压成文件夹再导入）：{0}",
-  "en": "Choose a zip file or a folder for mods (extract 7z / rar into a folder first): {0}"
- },
- {
-  "source": "这个压缩包文件太多（超过 {0} 个）：{0}",
-  "en": "This archive has too many files (more than {0}): {0}"
- },
- {
-  "source": "「{0}」是给另一款游戏（{0}）的，没收",
-  "en": "\"{0}\" is for another game ({0}), skipped"
- },
- {
-  "source": "没有这个 mod：{0}。",
-  "en": "No such mod: {0}."
- },
- {
-  "source": "这个压缩包解开超过 16 GB：{0}",
-  "en": "This archive is larger than 16 GB when extracted: {0}"
- },
- {
-  "source": "「{0}」里没找到 romfs 文件夹：资源替换 mod 要带 romfs/（如 atmosphere/contents/{0}/romfs）。",
-  "en": "No romfs folder found in \"{0}\": asset mods need a romfs/ folder (for example atmosphere/contents/{0}/romfs)."
- },
- {
-  "source": "「{0}」的 romfs 是空的，没收",
-  "en": "The romfs in \"{0}\" is empty, skipped"
- },
- {
   "source": "NUP 程序号 {0} 与游戏库 {0} 不一致",
   "en": "The NUP's title ID {0} doesn't match the library's {0}"
  }

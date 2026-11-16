@@ -34,7 +34,6 @@ public sealed partial class EnvironmentWindow
         messagesOpen = false;   // 顶栏导航离开「消息」页
         sgradeOpen = false;     // 也离开「S 级优化升级」页
         cheatsFor = null;       // 和「金手指」页
-        modsFor = null;         // 和「Mod」页
         page = destination;
         if (destination != "library") welcomeHome = false;   // 品牌名带去的欢迎页只管这一次回首页，去了别的页就回到平常
         // 环境检查页每次打开读一次装到 iPhone 的方式和开发者证书（InstallModePage.cs / DevCertPage.cs）
@@ -390,8 +389,7 @@ public sealed partial class EnvironmentWindow
             menu.Items.Add(item);
         }
         Add(T("nav.build"), "export", () => { libraryFolder = libraryFolderBox.Text ?? ""; selectedGame = game.Id; OpenBuild(); }, idle && game.Reachable);
-        Add(T("cheats.page.menu"), "cheats", () => OpenCheats(game), idle);
-        Add(T("mods.page.menu"), "mods", () => OpenMods(game), idle);   // 资源替换 mod：看 / 导入 / 删除（ModsPage.cs，同 Mac 启动设置里的「资源 Mod」）   // 金手指：看 / 导入（CheatsPage.cs，同 Mac 启动设置里的金手指）
+        Add(T("cheats.page.menu"), "cheats", () => OpenCheats(game), idle);   // 金手指：看 / 导入（CheatsPage.cs，同 Mac 启动设置里的金手指）
         menu.Items.Add(new Separator());
         Add(T("library.menu.revealWindows"), "reveal", () => RevealGame(game), (game.Location?.Path ?? "").Length > 0 && game.LocationState != "offline");
         Add(T("library.menu.move"), "move", () => BeginPicker(() => MoveGameAsync(game)), idle && game.Reachable && game.LocationState != "none");

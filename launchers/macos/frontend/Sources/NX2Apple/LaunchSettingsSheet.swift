@@ -77,24 +77,6 @@ struct LaunchCheat: Identifiable {
     }
 }
 
-/// 资源替换类 mod 一份（community 结果的 mods；pack/jobs/mods.py listing）：游戏文件夹 mods/<名字>/romfs，起局按名字升序叠上
-struct LaunchMod: Identifiable, Equatable {
-    let id: String   // = 名字
-    let files: Int
-    let bytes: Int64
-    init?(_ raw: [String: Any]) {
-        guard let name = raw["name"] as? String else { return nil }
-        id = name; files = raw["files"] as? Int ?? 0; bytes = (raw["bytes"] as? NSNumber)?.int64Value ?? 0
-    }
-}
-
-/// 导入 / 删除 mod（作业层 communitySave modsImport / modsRemove）后的这款 mod 列表与导入说明（modsImported.notes）
-struct LaunchMods: Equatable {
-    var items: [LaunchMod] = []
-    var imported: [String] = []
-    var notes: [String] = []
-}
-
 extension S2ArmLauncherModel {
     /// 读（change 为空）或改这款的启动设置；change 的键是定义表 id，值 Bool / String，NSNull = 回缺省。
     func launchSettings(_ gameID: String, change: [String: Any]? = nil, patches: [String: Bool]? = nil) async throws -> ([String: LaunchOption], [LaunchPatch]) {
@@ -111,16 +93,13 @@ extension S2ArmLauncherModel {
 
     /// 同上，另带 S 级每类状态（作业层 sgradeState：widescreen / fps / gfx，作业层；没出这个字段 = 空，界面不画状态句）
     func launchSettingsFull(_ gameID: String, change: [String: Any]? = nil, patches: [String: Bool]? = nil, cheats: [String: Bool]? = nil,
-                            cheatsImport: [String]? = nil, cheatsShare: Bool? = nil,
-                            modsImport: [String]? = nil, modsRemove: [String]? = nil) async throws -> ([String: LaunchOption], [LaunchPatch], [LaunchCheat], String, [String: SGradeCategoryState], LaunchMods) {
+                            cheatsImport: [String]? = nil, cheatsShare: Bool? = nil) async throws -> ([String: LaunchOption], [LaunchPatch], [LaunchCheat], String, [String: SGradeCategoryState]) {
         var extra: [String: Any] = [:]
         if let change { extra["settings"] = change }
         if let patches { extra["graphics"] = patches }
         if let cheats { extra["cheats"] = cheats }
         if let cheatsImport { extra["cheatsImport"] = cheatsImport }
         if let cheatsShare { extra["cheatsShare"] = cheatsShare }
-        if let modsImport { extra["modsImport"] = modsImport }
-        if let modsRemove { extra["modsRemove"] = modsRemove }
         let result = try await saveJob(extra.isEmpty ? "community" : "communitySave", gameID: gameID, extra: extra)
         let mac = (result["mac"] as? [String: Any] ?? [:]).mapValues(LaunchOption.init)
         let gfx = (result["graphics"] as? [[String: Any]] ?? []).compactMap { g -> LaunchPatch? in
@@ -129,10 +108,7 @@ extension S2ArmLauncherModel {
         }
         let ch = result["cheats"] as? [String: Any] ?? [:]
         let sg = (result["sgradeState"] as? [String: Any] ?? [:]).compactMapValues { ($0 as? [String: Any]).map(SGradeCategoryState.init) }
-        let done = result["modsImported"] as? [String: Any] ?? [:]
-        let mods = LaunchMods(items: (result["mods"] as? [[String: Any]] ?? []).compactMap(LaunchMod.init),
-                              imported: done["imported"] as? [String] ?? [], notes: done["notes"] as? [String] ?? [])
-        return (mac, gfx, (ch["items"] as? [[String: Any]] ?? []).compactMap(LaunchCheat.init), ch["reason"] as? String ?? "", sg, mods)
+        return (mac, gfx, (ch["items"] as? [[String: Any]] ?? []).compactMap(LaunchCheat.init), ch["reason"] as? String ?? "", sg)
     }
 
     /// 一键重开（作业 sgradeReenable）：key = fullscreen / fps / 补丁编号 / 金手指键；清掉自动关记录、开关设回开
@@ -153,7 +129,6 @@ struct LaunchSettingsSheet: View {
     @State private var patches: [LaunchPatch] = []
     @State private var cheats: [LaunchCheat] = []
     @State private var cheatsReason = ""
-    @State private var mods = LaunchMods()
     /// S 级每类状态（作业层 sgradeState）；满屏 / 60 帧两行按它写状态句、没补丁时也照样出一行灰字说为什么（定稿表）
     @State private var sgrade: [String: SGradeCategoryState] = [:]
     @State private var failure: String?
@@ -270,7 +245,7 @@ struct LaunchSettingsSheet: View {
     private func visible(_ item: GameSettingItem) -> Bool {
         switch item.type {
         case "patches": return !patches.isEmpty
-        case "page", "cheats", "mods": return true
+        case "page", "cheats": return true
         // 满屏 / 60 帧：没补丁原先整行藏起来；有状态句（没有补丁 / 版本不同 / 没打入…）就照样出一行灰字说为什么（维护者 11-15：不隐藏）
         default: return options[item.id].map { !$0.hidden || stateLine(item.id) != nil } ?? false
         }
@@ -303,18 +278,6 @@ struct LaunchSettingsSheet: View {
                         .toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(ch.name)
                         .accessibilityIdentifier("launch.cheat." + ch.id)
                         .disabled(!ch.ok || saving || model.busy)
-                }
-            }
-        case "mods":
-            CardRow(title, detail: modsNote(item)) {
-                Button(t("display.mods.import")) { importMods() }.buttonStyle(LauncherSecondaryButtonStyle())
-                    .accessibilityIdentifier("launch.mods.import").disabled(saving || model.busy)
-            }
-            ForEach(mods.items) { m in
-                CardRow("  " + m.id, detail: t("display.mods.files").replacingOccurrences(of: "{0}", with: String(m.files))
-                            .replacingOccurrences(of: "{1}", with: ByteCountFormatter.string(fromByteCount: m.bytes, countStyle: .file))) {
-                    Button(t("display.mods.remove")) { Task { await load(nil, modsRemove: [m.id]) } }.buttonStyle(LauncherSecondaryButtonStyle())
-                        .accessibilityIdentifier("launch.mods.remove." + m.id).disabled(saving || model.busy)
                 }
             }
         case "choice":
@@ -381,22 +344,6 @@ struct LaunchSettingsSheet: View {
         return a.runModal() == .alertFirstButtonReturn
     }
 
-    /// 刚导入的说明（导入了哪几份、哪些没收及原因，作业层 mods.import_paths notes）优先，否则定义表的说明
-    private func modsNote(_ item: GameSettingItem) -> String {
-        let said = (mods.imported.isEmpty ? [] : [t("display.mods.imported").replacingOccurrences(of: "{0}", with: mods.imported.joined(separator: loc.t("s2arm.punct.list")))])
-            + mods.notes.map { loc.backend($0) }
-        return said.isEmpty ? item.detail(lang) : said.joined(separator: "\n")
-    }
-
-    /// 选 zip 或文件夹（可多选），交作业层找 romfs、存进这款游戏文件夹的 mods/
-    private func importMods() {
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true; panel.canChooseDirectories = true; panel.canChooseFiles = true
-        panel.allowedContentTypes = [.zip, .folder]
-        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        Task { await load(nil, modsImport: panel.urls.map(\.path)) }
-    }
-
     /// 缺省勾不勾「分享给其他玩家」（维护者定，改这一行；同 pack/jobs/cheats.py SHARE_DEFAULT、iOS kS2ACheatsShareDefault）。玩家上次的选择记在 App 级
     static let shareDefault = false   // 11-15 维护者「金手指分享缺省不勾」
     private func importCheats() {
@@ -417,13 +364,11 @@ struct LaunchSettingsSheet: View {
         Task { await load(nil, cheatsImport: paths, cheatsShare: share) }
     }
 
-    private func load(_ change: [String: Any]?, patches change2: [String: Bool]? = nil, cheats change3: [String: Bool]? = nil, cheatsImport: [String]? = nil, cheatsShare: Bool? = nil,
-                      modsImport: [String]? = nil, modsRemove: [String]? = nil) async {
+    private func load(_ change: [String: Any]?, patches change2: [String: Bool]? = nil, cheats change3: [String: Bool]? = nil, cheatsImport: [String]? = nil, cheatsShare: Bool? = nil) async {
         saving = true; defer { saving = false }
         do {
             if items.isEmpty { items = try GameSettingsSpec.macItems() }
-            (options, patches, cheats, cheatsReason, sgrade, mods) = try await model.launchSettingsFull(gameID, change: change, patches: change2, cheats: change3, cheatsImport: cheatsImport, cheatsShare: cheatsShare,
-                                                                                                       modsImport: modsImport, modsRemove: modsRemove)
+            (options, patches, cheats, cheatsReason, sgrade) = try await model.launchSettingsFull(gameID, change: change, patches: change2, cheats: change3, cheatsImport: cheatsImport, cheatsShare: cheatsShare)
             failure = nil; loaded = true
         } catch {
             failure = (error as? JobClientError)?.message ?? error.localizedDescription

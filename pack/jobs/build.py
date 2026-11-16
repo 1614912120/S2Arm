@@ -154,9 +154,7 @@ def runtime_env(c, game, runtime, input_ok=True):
                S2A_AUTOPLAY="0", S2A_GAME_NAME=game["name"], S2A_GAME_ID=game["id"],
                S2A_INPUT_GUIDE_PREFS=str(c.private / "input-guides" / (game["id"] + ".json")),
                # 金手指（11-12）：这款游戏文件夹的 cheats/（玩家导入 + 启动器从公开库取的 txt、开关 enabled.txt），Mac 宿主 Cheats.cs 读它
-               S2A_CHEATS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "cheats"))),
-               # 资源替换类 mod（11-15）：这款游戏文件夹的 mods/（启动器「游戏设置 → Mod」导入），服务层 RomFsMods.cs 起局叠到 RomFS 上
-               S2A_MODS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "mods"))))
+               S2A_CHEATS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "cheats"))))
     if player:
         env["S2A_PLAYER_USER"] = player["user"]
         if player.get("name"):

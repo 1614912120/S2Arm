@@ -353,14 +353,10 @@ namespace S2A.Services.Tests
                 {
                     Environment.SetEnvironmentVariable("S2A_DOCS", Path.Combine(root, "docsroot"));
                     Check("S2A_DOCS → <文档根>/mods", Path.Combine(root, "docsroot", "mods"), RomFsMods.ModsDir() ?? "null");
-                    // Mac 作业层直接给这款游戏文件夹的 mods/（S2A_MODS_DIR，pack/jobs/build.py）：优先于 S2A_DOCS
-                    Environment.SetEnvironmentVariable("S2A_MODS_DIR", Path.Combine(root, "gamefolder", "mods"));
-                    Check("S2A_MODS_DIR 优先于 S2A_DOCS", Path.Combine(root, "gamefolder", "mods"), RomFsMods.ModsDir() ?? "null");
-                    Environment.SetEnvironmentVariable("S2A_MODS_DIR", null);
                     Environment.SetEnvironmentVariable("S2A_DOCS", null);
                     Check("Mac 没有 S2A_DOCS → 不启用（不碰用户文稿夹）", "null", RomFsMods.ModsDir() ?? "null");
                 }
-                finally { Environment.SetEnvironmentVariable("S2A_DOCS", was); Environment.SetEnvironmentVariable("S2A_MODS_DIR", null); }
+                finally { Environment.SetEnvironmentVariable("S2A_DOCS", was); }
             }
             finally
             {

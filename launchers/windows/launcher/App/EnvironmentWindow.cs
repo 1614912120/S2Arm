@@ -354,12 +354,6 @@ public sealed partial class EnvironmentWindow : Window
             ShowPage("cheats", body);
             return;
         }
-        if (page == "library" && modsFor is not null)   // 「Mod」页（ModsPage.cs）：从游戏库这款的菜单进、「返回」回游戏库
-        {
-            RenderMods(body);
-            ShowPage("mods", body);
-            return;
-        }
         if (page == "library" && sgradeOpen)   // 「S 级优化升级」页（SGradeUpgradePage.cs）：从游戏库进、确认 / 关闭回游戏库
         {
             RenderSGradeUpgrade(body);

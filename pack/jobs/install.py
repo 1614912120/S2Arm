@@ -738,37 +738,6 @@ def push_cheats(c, device, bid, gid, docs):
         print(f"[装机] 金手指文件 {len(files) - bad}/{len(files)} 份拷进手机{'（有拷不进的，游戏内菜单里会缺几份）' if bad else ''}", file=sys.stderr, flush=True)  # 非玩家句
 
 
-def push_mods(c, ph, gid, had):
-    """资源替换类 mod（11-15）：这款游戏文件夹 mods/<名字>/romfs 推进机上本款文档根 mods/（服务层 RomFsMods.cs 起局叠上）。
-    had = 上次推过的 {名字: 内容记号}（设备记录 games.<款>.mods）：记号变了的整份重推、电脑上删了的机上也删；玩家在手机上自己放的别的 mod 不碰。
-    推不进只记黄、不挡装机。→ 这次推完后机上的 {名字: 记号}（推失败的那份按没推算，下次再推）"""
-    import mods
-    home = mods.mods_dir(c, gid, create=False)
-    local = {d.name: mods.fingerprint(d) for d in sorted(home.iterdir()) if d.is_dir() and not d.name.startswith(".")} if home.is_dir() else {}
-    if not local and not had:
-        return {}
-    now, base = dict(had), f"{game_docs(gid)}/{mods.DIR}"
-    try:
-        with tempfile.TemporaryDirectory(dir=c.private) as w:
-            cl = ph.client(w)
-            for n in [n for n in had if local.get(n) != had[n]]:
-                ok, out = cl.rm(f"{base}/{n}")
-                if not ok:
-                    raise RuntimeError(f"删手机上的旧 mod「{n}」：{out.splitlines()[-1] if out else '失败'}")  # 非玩家句
-                now.pop(n)
-            for n, fp in local.items():
-                if had.get(n) == fp:
-                    continue
-                files = [f for f in sorted((home / n).rglob("*")) if f.is_file() and not f.is_symlink()]
-                c.emit("message", f"正在把 mod「{n}」推进 iPhone（{len(files)} 个文件）")
-                for f in files:
-                    cl.put(str(f), f"{base}/{n}/{f.relative_to(home / n).as_posix()}")
-                now[n] = fp
-    except Exception as e:   # 推不进：已推好的记下，其余下次装机再推
-        c.diagnostic(f"mod 没全推进 iPhone，这次游戏里会缺几份，下次「装到 iPhone」会补推：{str(e)[:200]}", code="resource_transfer_failed", severity="warning")  # 非玩家句
-    return now
-
-
 APPLY_FAILED = re.compile(r"资源包推进去了，但手机上解开失败：([^\n]+)")   # tools/push_pack.py apply 读到解包日志「解包失败：…」时报的那句  # 非玩家句
 
 
@@ -1704,9 +1673,6 @@ class MacPhone:
         if hit: self.pending = hit[-1].get("summary") or ""
         return r
 
-    def client(self, work):
-        return devpush_client(self.c, self.udid, self.bid, work)
-
     def purge(self, g):
         with tempfile.TemporaryDirectory(dir=self.c.private) as w:
             return purge_game(devpush_client(self.c, self.udid, self.bid, w), g)
@@ -2038,19 +2004,16 @@ def put_game(c, gid, ph, steps=True, others=None, skipped=()):
                       "把游戏推进 iPhone（只推变了的文件；第一次大游戏要几分钟）" if img else "把资源包推进 iPhone 并解开（只推变了的文件；第一次大游戏要几分钟）", 6, 6)
     files = size = 0
     pushed = dict((g, (rec["games"].get(g) or {}).get("pack", "")) for g in games)
-    modset = dict((g, (rec["games"].get(g) or {}).get("mods") or {}) for g in games)
     try:
         for g in stale:
             f, n = ph.push(g, packs[g])
             files += f; size += n
             pushed[g] = pack_id(packs[g])
-        for g in games:   # 资源替换类 mod：每款按记录只推变了的（多数情况一个都不用推、不连手机）
-            modset[g] = push_mods(c, ph, g, {} if moved else modset[g])
     finally:   # 推到一半失败：已推好的记下，没推的下次照推
         rec = layout.load_device(c, ph.key)
         # signed：这次签名（游戏库页的「还有几天到期 / 续签」读 layout.install_record）：免费账号的描述文件 7 天到期，容器里每款同一次签名
         signed = dict(signed=dict(at=time.time(), free=bool(ph.info["free"]), device=ph.info["device"])) if "free" in ph.info and not skipped else {}   # 跳过安装 = 没重签：到期时间照旧
-        layout.save_device(c, ph.key, dict(rec, games={g: dict(pack=pushed[g], **({"mods": modset[g]} if modset[g] else {})) for g in games}, shellId=sid, bundleId=ph.bid or rec.get("bundleId", ""), at=time.time(),
+        layout.save_device(c, ph.key, dict(rec, games={g: dict(pack=pushed[g]) for g in games}, shellId=sid, bundleId=ph.bid or rec.get("bundleId", ""), at=time.time(),
                                            staleAgreed={sid: left_out} if left_out else {}, **signed))
     packer.commit_phone_ipa(c, ipa, sid)
     # 资源传完但电脑没拉起 App 解开（manual_unpack_required，11-09 #336）：不算「已装好」，结果带上还差的一步，两端前端据此显示「还差最后一步」而不是「已装到 iPhone」

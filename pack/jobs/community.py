@@ -481,9 +481,8 @@ def describe_game(c, game):
         it["enabled"] = s["enabled"].get(it["id"]) is not False   # 11-13：没选过 = 默认开（S 级优化命中的打入并默认开）
     import cheats   # 金手指（11-12）：同一页「游戏设置 → 金手指」列出与开关
     import sgrade   # S 级按类状态（满屏来源 / 是否生效 / 自动关 / 版本，pack/jobs/sgrade.py state）
-    import mods     # 资源替换类 mod（11-15）：同一页「游戏设置 → Mod」列出、导入、删除
     return dict(gameId=game["id"], version=_version(game), mac=mac_settings(c, game["id"]), cheats=cheats.listing(c, game),
-                mods=mods.listing(c, game), crashed=cheats.crashed(c, game), sgradeState=sgrade.state(c, game), **a)
+                crashed=cheats.crashed(c, game), sgradeState=sgrade.state(c, game), **a)
 
 
 def listing(c):
@@ -494,8 +493,7 @@ def listing(c):
 
 def save(c):
     """请求可带 settings {设置项: 值 / null（回缺省）}（键与取值按定义表，只认 scope=game 的项）、graphics {画面编号: 真/假}（同互斥组至多开一个）、
-    cheatsImport [金手指 txt 路径]（导入进这款 cheats/）与 cheats {「文件名/条目名」: 真/假}（金手指开关）、
-    modsImport [zip / 文件夹路径]（资源替换 mod 导入进这款 mods/）与 modsRemove [mod 名字]"""
+    cheatsImport [金手指 txt 路径]（导入进这款 cheats/）与 cheats {「文件名/条目名」: 真/假}（金手指开关）"""
     game = game_of(c, c.r.get("gameId") or "")
     table = settings_table(c)
     data = load_launch(c, game["id"])
@@ -522,15 +520,6 @@ def save(c):
             c.r["cheatsImported"] = cheats.import_files(c, game, c.r["cheatsImport"], c.r.get("cheatsShare"))   # 勾了「分享给其他玩家」逐份上传（没给 = 缺省 cheats.SHARE_DEFAULT）
         if c.r.get("cheats") is not None:
             cheats.save(c, game, c.r["cheats"])
-    if c.r.get("modsImport") or c.r.get("modsRemove"):   # 资源替换类 mod（pack/jobs/mods.py）：导入 [zip / 文件夹路径] / 删除 [名字]
-        import mods
-        for k in ("modsImport", "modsRemove"):
-            if c.r.get(k) is not None and not (isinstance(c.r[k], list) and all(isinstance(x, str) for x in c.r[k])):
-                raise Failure("mod 导入 / 删除格式不对。", code="job_failed")
-        if c.r.get("modsRemove"):
-            mods.remove(c, game, c.r["modsRemove"])
-        if c.r.get("modsImport"):
-            c.r["modsImported"] = mods.import_paths(c, game, c.r["modsImport"])
     if c.r.get("crashAnswer") is not None:   # 上次开着金手指 / 补丁时异常退出、已当场关掉，玩家看过通知 ack（pack/jobs/cheats.py answer_crash）
         import cheats
         cheats.answer_crash(c, game, c.r["crashAnswer"])
@@ -560,8 +549,6 @@ def save(c):
     out = describe_game(c, game)
     if c.r.get("cheatsImported") is not None:
         out = dict(out, cheatsImported=c.r["cheatsImported"])   # 每份导入的分享结果（shared / duplicate / no_build / failed / off），界面据此说一句
-    if c.r.get("modsImported") is not None:
-        out = dict(out, modsImported=c.r["modsImported"])   # {imported: [名字], notes: [说明]}：界面据此说一句
     return out
 
 
