@@ -1117,6 +1117,19 @@ static void motion_notice(int sel, int ns2_known) {
         NSString *body = which == 1 ? S2AL(@"dprompt.motion.padNone.phone") : which == 2 ? S2AL(@"dprompt.motion.padNone.off") : S2AL(@"dprompt.motion.phoneOff");
         s2a_dprompt_notice(S2AL(@"dprompt.motion.title"), body, 0, 12); });
 }
+// 逐秒六轴读数（11-15 维护者现场测：甩手机能扔帽子、转手机视角不动，日志只有首个样本，分不清「角速度没值」还是「轴向不对」）：
+//   这一秒交给游戏的样本数、三轴角速度各自的绝对值峰值（度/秒，NS2 坐标）、加速度峰值（g）；手在动（任一轴峰值 > 20 度/秒）才打，静止不出行
+static void motion_tick(uint64_t now_us, int src, const s2a_pad_motion *m) {
+    static uint64_t t0; static unsigned n; static float g[3], a[3];
+    float gv[3] = {m->gyro_x, m->gyro_y, m->gyro_z}, av[3] = {m->acceleration_x, m->acceleration_y, m->acceleration_z};
+    for (int i = 0; i < 3; i++) { if (fabsf(gv[i]) > g[i]) g[i] = fabsf(gv[i]); if (fabsf(av[i]) > a[i]) a[i] = fabsf(av[i]); }
+    n++;
+    if (!t0) t0 = now_us;
+    if (now_us - t0 < 1000000) return;
+    if (g[0] > 20 || g[1] > 20 || g[2] > 20)
+        LOG("六轴每秒：来源 %s，交给游戏 %u 个样本，角速度峰值 x %.0f / y %.0f / z %.0f 度/秒，加速度峰值 x %.2f / y %.2f / z %.2f g", motion_src_name(src), n, g[0], g[1], g[2], a[0], a[1], a[2]);
+    t0 = now_us; n = 0; for (int i = 0; i < 3; i++) g[i] = a[i] = 0;
+}
 __attribute__((visibility("default"), used)) int s2a_pad_read_motion(s2a_pad_motion *out) {
     if (!out) return 0;
     *out = (s2a_pad_motion){0};
@@ -1157,6 +1170,7 @@ __attribute__((visibility("default"), used)) int s2a_pad_read_motion(s2a_pad_mot
         g_motion_pad_since_us = 0;
         phone_motion_use(1);
         *out = phone;
+        motion_tick(now, next, out);
         return 1;
     }
     if (next == S2A_MOTION_GC || next == S2A_MOTION_NS2) {
@@ -1167,6 +1181,7 @@ __attribute__((visibility("default"), used)) int s2a_pad_read_motion(s2a_pad_mot
         else *out = (s2a_pad_motion){motion.host_timestamp_us,
             motion.acceleration_x, motion.acceleration_y, motion.acceleration_z,
             motion.gyro_x, motion.gyro_y, motion.gyro_z};
+        motion_tick(now, next, out);
         return 1;
     }
     return 0;
