@@ -47,6 +47,7 @@ static int fence_far(uint64_t lo, uint64_t hi, uint64_t *fenced) {
     }
     return clash;
 }
+static void far_tick_start(void);
 void s2a_far_set(uint64_t lo, uint64_t hi, uint64_t sh_lo, uint64_t sh_hi) {
     if (hi <= lo || sh_hi <= sh_lo) return;
     if (hi - lo > S2A_FAR_SPAN) hi = lo + S2A_FAR_SPAN;
@@ -77,6 +78,7 @@ void s2a_far_set(uint64_t lo, uint64_t hi, uint64_t sh_lo, uint64_t sh_hi) {
 #endif
     LOG("远端：开，远端 %#llx +%llu MB 的内容放影子区（与堆共用 %#llx +%llu MB，影子从顶往下 2 MiB 一块），游戏一碰远端地址即缺页代执行并记点；远端空洞占住 %llu MB、与宿主映射重叠 %d 段",
         (unsigned long long)lo, (unsigned long long)((hi - lo) >> 20), (unsigned long long)sh_lo, (unsigned long long)((sh_hi - sh_lo) >> 20), (unsigned long long)(fenced >> 20), clash);
+    far_tick_start();
 }
 // 游戏地址 → 影子地址；没分块回 NULL。[*gbeg, *gend) 回差值相同的连续游戏地址（本块向前后各并一块）：代执行允许的访存范围。
 //   跨块且两块影子不相邻的访存（巫师3 sdk+0x58763c 的 16 字节 stp 正好跨块界）走 s2a_far_fault 里的两页并排槽
@@ -182,6 +184,29 @@ void s2a_far_release(uint64_t a, uint64_t n) {
 typedef struct { _Atomic uint64_t pc; _Atomic uint64_t n; _Atomic uint32_t cls; _Atomic uint32_t fail; } site_t;
 static site_t g_site[NSLOT];
 static _Atomic uint64_t g_faults, g_emul, g_skip, g_nsite, g_full, g_fail, g_cls_fail[10];
+// 逐秒账（#442 / D-DX74：Mac 大款玩久了内存池落进远端后掉到个位数帧，「慢在缺页代执行」要有直接读数）：远端开着就每秒醒一次，
+//   这一秒有缺页才打一行（游戏没碰远端时不出行，日志不涨）；和 [longframe] / 心跳同在一份日志里按时间对齐看。S2A_FAR_TICK=0 关
+static void *far_tick(void *arg) {
+    (void)arg; pthread_setname_np("s2a-far-tick");
+    uint64_t pf = 0, pe = 0, ps = 0, pfl = 0, pn = 0, sec = 0;
+    for (;;) {
+        sleep(1); sec++;
+        uint64_t f = atomic_load(&g_faults), e = atomic_load(&g_emul), s = atomic_load(&g_skip), fl = atomic_load(&g_fail), n = atomic_load(&g_nsite);
+        if (f != pf)
+            LOG("远端每秒 第 %llu 秒：缺页 %llu、代执行 %llu、跳过 %llu、失败 %llu、新访存点 %llu（累计缺页 %llu、访存点 %llu）", (unsigned long long)sec,
+                (unsigned long long)(f - pf), (unsigned long long)(e - pe), (unsigned long long)(s - ps), (unsigned long long)(fl - pfl), (unsigned long long)(n - pn), (unsigned long long)f, (unsigned long long)n);
+        pf = f; pe = e; ps = s; pfl = fl; pn = n;
+    }
+    return NULL;
+}
+static void far_tick_start(void) {
+    static atomic_flag once = ATOMIC_FLAG_INIT;
+    const char *e = getenv("S2A_FAR_TICK");
+    if ((e && !strcmp(e, "0")) || atomic_flag_test_and_set(&once)) return;
+    pthread_t t; pthread_attr_t a; pthread_attr_init(&a); pthread_attr_setdetachstate(&a, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&t, &a, far_tick, NULL)) LOG("【黄】远端：逐秒账线程起不来（errno=%d），只在收局 / 崩溃时打总账", errno);
+    pthread_attr_destroy(&a);
+}
 static site_t *site_get(uint64_t pc) {
     uint32_t i = (uint32_t)((pc >> 2) * 0x9E3779B97F4A7C15ull >> 48) & (NSLOT - 1);
     for (uint32_t k = 0; k < NSLOT; k++, i = (i + 1) & (NSLOT - 1)) {
