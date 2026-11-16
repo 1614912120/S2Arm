@@ -8,6 +8,8 @@
 每行：repo / commit / path / size / sha256 / kind（pchtxt | ips）/ cat（fps | widescreen | gfx）/ target_fps / aspect /
   gids（路径里出现的程序号）/ bids（pchtxt 的 @nsobid、ips 的文件名构建号）/ license（仓库 LICENSE 首行，没有写空）。
 romfs 下的文件（游戏数据）、大于 2 MB 的文件不收。
+带 romfs 配套的 mod（同一个 mod 根下既有 exefs 补丁又有 romfs/，散文件或包内都算）连它的 exefs 补丁也不收（11-16 D-Q3QJ：王国之泪 1800p 只收了改分辨率的
+  exefs、漏了 romfs 里调大显存堆的 HeapDef，按 1800p 建缓冲分配失败崩溃）；同一份内容在别的库里单独出现也不收。要整份交付走 mod 通道（0.5.0 之后）。
 压缩包（.zip / .rar，11-13：超宽屏 / 老牌补丁库把每款打成一个包）：包里的 exefs 补丁与 cheats/<构建号>.txt 金手指逐个成行，path 是包本身，
   另记 member（包内路径）、archive_sha256 / archive_size（整包，下载时先核它）；sha256 / size 是包内这一份。rar 用系统 bsdtar（libarchive）读。
 金手指（kind=cheat，cat=cheat）：cheats/<构建号>.txt（散文件或包内）；出包时由 pack/jobs/cheats.py 收进金手指一栏，不进画面补丁。
@@ -150,6 +152,29 @@ CHEAT_LIBS = {'bad1dea/NXCheats', 'HamletDuFromage/switch-cheats-db', 'ChanseyIs
 CHEAT = re.compile(r'(?:^|/)cheats/(?:[^/]+/)?([0-9A-Fa-f]{16})\.txt$', re.I)   # 也认多一层目录：cheats/<程序号或游戏名>/<构建号>.txt（tomvita/MyNXCheats 的写法，11-16）
 
 
+def mod_root(path):
+    """Atmosphere 结构 <mod 根>/exefs/… 或 <mod 根>/romfs/… 的 mod 根（小写比较，取最后一个 exefs / romfs 的上一级）；都不在里面 → None"""
+    low = [p.lower() for p in path.replace('\\', '/').split('/')]
+    for i in range(len(low) - 1, -1, -1):
+        if low[i] in ('exefs', 'romfs'):
+            return '/'.join(low[:i])
+    return None
+
+
+def romfs_roots(names):
+    """带 romfs 文件的 mod 根（小写）"""
+    return {mod_root(n) for n in names if '/romfs/' in '/' + n.replace('\\', '/').lower()}
+
+
+def half(path, roots):
+    """exefs 补丁且它的 mod 带 romfs 配套：只收这半边会出错（缺配套数据），整份不收"""
+    low = '/' + path.replace('\\', '/').lower()
+    return '/exefs/' in low and path.lower().endswith(('.pchtxt', '.ips')) and mod_root(path) in roots
+
+
+HALVES = []   # 本次扫描不收的半边：(文件, 包内路径或空, sha256)；scan 收尾按 sha256 把别的库里同一份内容也去掉
+
+
 def members(full):
     """压缩包 → [(包内路径, 字节)]，只取补丁（.pchtxt / .ips，不在 romfs 下）与 cheats/<构建号>.txt；读不了 = []"""
     want = lambda n: not n.endswith('/') and '/romfs/' not in '/' + n.lower() and (n.lower().endswith(('.pchtxt', '.ips')) or CHEAT.search(n))
@@ -157,13 +182,19 @@ def members(full):
     try:
         if full.lower().endswith('.zip'):
             with zipfile.ZipFile(full) as z:
+                roots = romfs_roots(i.filename for i in z.infolist())
                 for i in z.infolist():
-                    if want(i.filename) and i.file_size <= MAX:
+                    if half(i.filename, roots):
+                        HALVES.append((full, i.filename, hashlib.sha256(z.read(i)).hexdigest()))
+                    elif want(i.filename) and i.file_size <= MAX:
                         out.append((i.filename, z.read(i)))
         else:
             names = subprocess.run(['bsdtar', '-tf', full], capture_output=True, text=True, timeout=60).stdout.splitlines()
+            roots = romfs_roots(names)
             for n in names:
-                if want(n):
+                if half(n, roots):
+                    HALVES.append((full, n, hashlib.sha256(subprocess.run(['bsdtar', '-xOf', full, n], capture_output=True, timeout=60).stdout).hexdigest()))
+                elif want(n):
                     data = subprocess.run(['bsdtar', '-xOf', full, n], capture_output=True, timeout=60).stdout
                     if len(data) <= MAX:
                         out.append((n, data))
@@ -202,6 +233,13 @@ def keep_dir(name):
     return name != '.git' and name.lower() != 'romfs'
 
 
+def companion(base, dirpath, dirs, roots):
+    """散文件：这一级带游戏数据目录（mod 的 romfs 配套，keep_dir 不进）→ 记下它是带配套的 mod 根，它的 exefs 补丁不收（half）。
+    只看子目录名、不进目录"""
+    if any(not keep_dir(x) and x != '.git' for x in dirs):
+        roots.add(mod_root(os.path.relpath(os.path.join(dirpath, 'romfs'), base).replace(os.sep, '/')))
+
+
 HAMLET = re.compile(r'^cheats/(01[0-9A-Fa-f]{14})\.json$')   # 金手指汇总库：每款一份 JSON，键 = 构建号前 16 位，值 = {条目名: 整段代码}
 
 
@@ -209,6 +247,7 @@ def scan(mirror, keep_local=False, cheat_libs=False):
     """keep_local：每行另记 _local（镜像里的本地相对路径，tools/patch_pack.py 取字节用；不进索引）；汇总库 JSON 拆出的金手指另记 _data（内容是拼出来的，按路径取不回）。
     cheat_libs：金手指专门库（CHEAT_LIBS）的金手指也收（统一包用：11-13 起金手指也由我们的下载站分发，不再由出包端逐库去 GitHub 取）"""
     rows, pinned = [], {}
+    HALVES.clear()
     src = os.path.join(mirror, 'SOURCES.tsv')
     if os.path.isfile(src):
         for line in open(src, encoding='utf-8'):
@@ -249,7 +288,9 @@ def scan(mirror, keep_local=False, cheat_libs=False):
         tree = true_paths(repo, commit) if os.environ.get('S2A_PATCH_INDEX_NO_GH') != '1' else None
         if tree is None:
             print(f'{d}：取不到上游文件树，路径按本地（只差大小写的目录会 404）', file=sys.stderr)
+        loose_roots = set()
         for dirpath, dirs, files in os.walk(root):
+            companion(root, dirpath, dirs, loose_roots)
             dirs[:] = [x for x in dirs if keep_dir(x)]
             for f in files:
                 full = os.path.join(dirpath, f); rel = os.path.relpath(full, root).replace(os.sep, '/'); local = rel
@@ -284,6 +325,9 @@ def scan(mirror, keep_local=False, cheat_libs=False):
                 if not f.lower().endswith(('.pchtxt', '.ips')) and not fpsl and not CHEAT.search(rel):
                     continue
                 data = open(full, 'rb').read()
+                if half(local, loose_roots):
+                    HALVES.append((full, '', hashlib.sha256(data).hexdigest()))
+                    continue
                 if fpsl:
                     rows.append(dict(repo=repo, commit=commit, path=rel, size=len(data), sha256=hashlib.sha256(data).hexdigest(), kind='fpsl', cat='fps',
                                      target_fps='60', aspect='', gids=sorted({g.upper() for g in GID.findall(rel)}), bids=[os.path.splitext(f)[0].upper()], license=lic))
@@ -291,7 +335,10 @@ def scan(mirror, keep_local=False, cheat_libs=False):
                         rows[-1]['_local'] = local
                 else:
                     row(rel, rel, data)
-    return rows
+    gone = {h for _, _, h in HALVES}
+    kept = [r for r in rows if r['kind'] == 'cheat' or r['sha256'] not in gone]
+    print(f'带游戏数据配套、只能收到 exefs 半边的补丁不收：{len(HALVES)} 份（去掉 {len(rows) - len(kept)} 行，含别的库里同一份内容）', file=sys.stderr)
+    return kept
 
 
 # 转存合集 / 分叉（收别人的补丁再打包）：同一份内容（sha256 一样）在原作者库里也有时记原作者库，这几个排最后
