@@ -366,9 +366,9 @@
 "dprompt.ns2pro.body" = "Mantén cuatro dedos en la pantalla durante 1,5 segundos para abrir Ajustes, activa «Habilitar mando Switch 2 Pro» y luego pulsa el botón de emparejamiento del mando.";
 "dprompt.ns2pro.title" = "¿Usas un mando Switch 2 Pro?";
 "dprompt.motion.title" = "Controles de movimiento";
-"dprompt.motion.padNone.phone" = "Este mando no tiene sensores de movimiento (por ejemplo, Joy-Con de primera generación o mandos de Xbox), así que los controles de movimiento del juego usan el giroscopio del teléfono: solo tienes que girar el teléfono.";
-"dprompt.motion.padNone.off" = "Este mando no tiene sensores de movimiento (por ejemplo, Joy-Con de primera generación o mandos de Xbox) y el Giroscopio del teléfono está desactivado, así que por ahora los controles de movimiento no funcionan. Para usarlos: engranaje arriba a la izquierda → Mandos y movimiento → activa Giroscopio del teléfono.";
-"dprompt.motion.phoneOff" = "Este juego usa controles de movimiento, pero el Giroscopio del teléfono está desactivado, así que no responden. Para usarlos: engranaje arriba a la izquierda → Mandos y movimiento → activa Giroscopio del teléfono.";
+"dprompt.motion.padNone.phone" = "No se puede leer el movimiento de este mando (por ejemplo, Joy-Con de primera generación o mandos de Xbox), así que los controles de movimiento del juego usan el giroscopio del teléfono: solo tienes que girar el teléfono.";
+"dprompt.motion.padNone.off" = "No se puede leer el movimiento de este mando (por ejemplo, Joy-Con de primera generación o mandos de Xbox) y «Giroscopio del teléfono» está desactivado, así que por ahora los controles de movimiento no funcionan. Para usarlos: engranaje arriba a la izquierda → «Mandos y movimiento» → activa «Giroscopio del teléfono».";
+"dprompt.motion.phoneOff" = "Este juego usa controles de movimiento, pero «Giroscopio del teléfono» está desactivado, así que no responden. Para usarlos: engranaje arriba a la izquierda → «Mandos y movimiento» → activa «Giroscopio del teléfono».";
 "gfx.antiAliasing" = "Suavizado de bordes";
 "gfx.antiAliasing.high" = "SMAA Alto";
 "gfx.antiAliasing.medium" = "SMAA Medio";
