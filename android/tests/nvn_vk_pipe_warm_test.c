@@ -1,6 +1,6 @@
 // 管线预热清单的宿主单测：链生产 nvk_vk_pipe_warm.c，假程序来源 + 假 nvn_gpu_pipe_get。
 // 覆盖：逐字段往返（每个字段改一点都必须往返后不等）、同配方去重与 uses、散列撞但字节不同必须不命中、
-// 上限与淘汰、跨会话落盘/读回（顺序 = uses 降序）、坏文件整份拒绝、stats 转发。
+// 上限与淘汰（含缺省上限 8192 与硬顶）、跨会话落盘/读回（顺序 = uses 降序）、坏文件整份拒绝、stats 转发。
 //
 // 跨会话的部分用「同一个二进制换参数再跑一次」实现（模块是进程单例，load 只读一次）：
 //   父进程建临时目录、按顺序子进程跑各模式；缓存目录经环境变量交给子进程。
@@ -368,6 +368,53 @@ static int mode_cap(void) {
     return g_fail;
 }
 
+// ---- 模式：缺省上限（#1325）----
+// 没设 nvk_warm_max 时清单留 8192 条（= 硬顶）；设成比硬顶还大的数（hardcap 模式，S2A_PW_MAX=100000）也只留 8192。
+// 期望手算：热 100 条各记 3 次（uses 3），冷 8900 条各记 1 次（uses 1）。前 8192 条进表后表满（100 热 + 冷序号 100..8191），
+// 之后每进一条冷的就挤掉冷里最老的一条：8192..8999 共 808 条进来，挤掉冷序号 100..907；
+// 留下 100 热 + 冷序号 908..8999（8092 条）= 8192 条。序号藏在第 2 条流的 stride 里（每个序号一份不同的配方）。
+// 变异体：缺省回到 4096 → 读回 4096 条，红。
+static int mode_defcap_impl(void) {
+    enum { HOT = 100, TOTAL = 9000, KEEP = 8192, BASE = 1000 };
+    uint8_t id[32];
+    ident_fill(id, 0x66);
+    prog_setup(0x66);
+    nvn_gpu_pipe_desc d;
+    base_desc(&d);
+    for (uint32_t i = 0; i < TOTAL; i++) {
+        d.stream[1].stride = BASE + i;
+        for (int k = 0; k < (i < HOT ? 3 : 1); k++) nvk_pipe_warm_note(&d, id);
+    }
+    nvk_pipe_warm_save();
+    CHECK(nvk_pipe_warm_load() == KEEP, "default cap: save+load must bring back exactly %d recipes", KEEP);
+    CHECK(nvk_pipe_warm_pending() == KEEP, "default cap: %d recipes pending", KEEP);
+    static unsigned char seen[TOTAL];
+    memset(seen, 0, sizeof seen);
+    int dup = 0, bad = 0, taken = 0, hot_first = 1;
+    struct nvk_pipe_rec rec;
+    while (nvk_pipe_warm_take(&rec)) {
+        if (nvk_pipe_warm_build(&rec) != 0) { bad++; continue; }
+        uint32_t idx = g_last_desc.stream[1].stride - BASE;
+        if (idx >= TOTAL) { bad++; continue; }
+        if (seen[idx]) dup++;
+        seen[idx] = 1;
+        if (taken < HOT && idx >= HOT) hot_first = 0;   // uses 降序：前 100 条必须是热的
+        taken++;
+    }
+    CHECK(bad == 0 && dup == 0 && taken == KEEP, "default cap: %d distinct recipes handed out (bad %d, dup %d, taken %d)", KEEP, bad, dup, taken);
+    int hot_ok = 1, evicted_ok = 1, kept_ok = 1;
+    for (uint32_t i = 0; i < HOT; i++) if (!seen[i]) hot_ok = 0;
+    for (uint32_t i = HOT; i <= 907; i++) if (seen[i]) evicted_ok = 0;
+    for (uint32_t i = 908; i < TOTAL; i++) if (!seen[i]) kept_ok = 0;
+    CHECK(hot_ok, "default cap: all 100 hot recipes (uses 3) survive");
+    CHECK(evicted_ok, "default cap: the 808 oldest cold recipes (100..907) are the ones evicted");
+    CHECK(kept_ok, "default cap: the newest 8092 cold recipes (908..8999) are kept");
+    CHECK(hot_first, "default cap: hot recipes are handed out first (uses desc)");
+    return g_fail;
+}
+static int mode_defcap(void) { unsetenv("S2A_PW_MAX"); return mode_defcap_impl(); }
+static int mode_hardcap(void) { setenv("S2A_PW_MAX", "100000", 1); return mode_defcap_impl(); }
+
 // ---- 模式：落盘 / 读回 ----
 static int file_path(char *out, size_t n) {
     const char *dir = getenv("S2A_PW_DIR");
@@ -554,7 +601,7 @@ static int mode_frozen(void) {
     return g_fail;
 }
 
-static const char *k_modes[] = {"fields", "dedup", "collide", "cap", "frozen", "lease", "save", "load", "save_race"};
+static const char *k_modes[] = {"fields", "dedup", "collide", "cap", "defcap", "hardcap", "frozen", "lease", "save", "load", "save_race"};
 static const char *k_bad[] = {"magic", "fmt", "descver", "entry", "count", "sum", "trunc", "payload"};
 
 static int run_child(const char *self, const char *a, const char *b) {
@@ -576,6 +623,7 @@ int main(int argc, char **argv) {
         const char *m = argv[1];
         int (*fn)(void) = !strcmp(m, "fields") ? mode_fields : !strcmp(m, "dedup") ? mode_dedup :
                           !strcmp(m, "collide") ? mode_collide : !strcmp(m, "cap") ? mode_cap :
+                          !strcmp(m, "defcap") ? mode_defcap : !strcmp(m, "hardcap") ? mode_hardcap :
                           !strcmp(m, "frozen") ? mode_frozen : !strcmp(m, "lease") ? mode_lease :
                           !strcmp(m, "save_race") ? mode_save_race :
                           !strcmp(m, "save") ? mode_save : !strcmp(m, "load") ? mode_load : NULL;
@@ -602,6 +650,6 @@ int main(int argc, char **argv) {
         printf("bad/%-8s %s\n", k_bad[i], rc == 0 ? "ok" : "FAIL");
         if (rc != 0) fail = 1;
     }
-    printf("%s\n", fail ? "FAIL" : "PASS 主机管道：逐字段往返 / 去重 uses / 散列碰撞不去重 / 上限淘汰 / 跨会话清单 / 坏文件整份拒绝 / 本局预热集冻结 / 程序借用不泄漏 / 并发保存不损坏");
+    printf("%s\n", fail ? "FAIL" : "PASS 主机管道：逐字段往返 / 去重 uses / 散列碰撞不去重 / 上限淘汰（含缺省 8192 与硬顶）/ 跨会话清单 / 坏文件整份拒绝 / 本局预热集冻结 / 程序借用不泄漏 / 并发保存不损坏");
     return fail;
 }
