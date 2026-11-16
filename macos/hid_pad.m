@@ -131,7 +131,8 @@ static void attach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
     int vid = 0, pid = 0; CFNumberRef n;
     if ((n = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDVendorIDKey)))) CFNumberGetValue(n, kCFNumberIntType, &vid);
     if ((n = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDProductIDKey)))) CFNumberGetValue(n, kCFNumberIntType, &pid);
-    if (!s2a_hid_pad_wants(name, vid)) return;
+    // 不接的 HID 游戏手柄也记一行（#1276：8BitDo 蓝牙模式启动器 / 游戏都认不到，诊断里连名字都没有，只能猜是不是 GameController 没给）
+    if (!s2a_hid_pad_wants(name, vid)) { fprintf(stderr, "[输入] HID 游戏手柄：%s（厂商 / 产品号 0x%x / 0x%x）名字不带「Pro Controller」，兜底不接——GameController 认得它就走系统手柄，认不得就没有输入\n", name[0] ? name : "（没名字）", vid, pid); return; }
     pthread_mutex_lock(&g_mu);
     hp_dev *d = NULL;
     for (int i = 0; i < S2A_HID_PAD_MAX; i++) if (g_dev[i].dev == dev) { pthread_mutex_unlock(&g_mu); return; }
