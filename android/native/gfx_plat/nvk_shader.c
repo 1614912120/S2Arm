@@ -72,8 +72,13 @@ static int shader_compile_admit(void) {
     }
 }
 
-struct entry { struct rp_prog prog; int failed; int warm; int warm_hit; uint8_t fact_ok; uint32_t fact_mask[4]; };   // fact_*：结果字节里读出的「编译器实际读了哪些绑定事实」（nvk_shader_fact_cache.h），work_run 里算好，发布后由提交线程入表   // warm：预热带发布；warm_hit：已被真实 draw 采用过一次（验收计数口径）
-static nvn_hmap g_progs = {.klen = 32};   // 内容身份（SHA-256）→ struct entry *
+struct entry { struct rp_prog prog; int failed; int warm; int warm_hit; uint8_t fact_ok; uint32_t fact_mask[4]; uint8_t res_ok; uint8_t res_key[32]; uint8_t seen; };   // res_key：这份程序的结果合并比对键（结果摘要 / 负载长度 / 阶段数 / c1 的 SHA-256，见 alias_key_hash；结果合并 #1355）；seen：rp_shader_reset 按「同一 entry 只释放一次」去重时的临时标记   // fact_*：结果字节里读出的「编译器实际读了哪些绑定事实」（nvk_shader_fact_cache.h），work_run 里算好，发布后由提交线程入表   // warm：预热带发布；warm_hit：已被真实 draw 采用过一次（验收计数口径）
+static nvn_hmap g_progs = {.klen = 32};   // 内容身份（SHA-256）→ struct entry *。结果合并后，同一份结果的多个身份指向同一个 entry（拥有者只有一个，见 rp_shader_reset）
+// 结果合并（#1355）：比对键（见 alias_key_hash：缓存文件头里的结果摘要 + 负载长度 + 阶段数 + c1）→ struct entry *（只借用；g_progs_mu 下读写；整表随 rp_shader_reset 清）。
+// 同一份编译结果的不同身份共用一个 entry（一份着色器句柄，管线缓存按句柄比，所以管线也合并）。缺省打开；debug.s2a.nvk_alias=0 关闭（只有调试包读，出包版恒走缺省）。
+static nvn_hmap g_res_tab = {.klen = 32};
+static _Atomic uint64_t g_n_alias_fg, g_n_alias_bg, g_n_alias_probe, g_n_alias_nores, g_n_alias_nofile;   // 合并（前台 / 预热带）/ 读头次数 / 头好但没有比对键一致的常驻程序 / 读头失败
+static int alias_on(void) { static int v = -1; if (v < 0) v = nvn_plat_flag("nvk_alias", 1) ? 1 : 0; return v; }
 // g_progs 与「同身份在途」表共用一把锁：nvn_hm 不是线程安全的，而预热带（[后台]）与提交线程都会查找/发布。
 // 锁只覆盖表结构与 entry 标志；parse、建后端着色器、编译都在锁外（否则预热带持锁建对象会挡住回放线程）。
 static pthread_mutex_t g_progs_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -221,11 +226,72 @@ static int progs_publish(const uint8_t identity[32], struct entry *e, int from_w
         e->warm = from_warm;
         if (failed) *failed = e->failed;
         (void)nvn_hm_put(&g_progs, identity, e);
+        if (alias_on() && e->res_ok && !e->failed && !nvn_hm_get(&g_res_tab, e->res_key)) (void)nvn_hm_put(&g_res_tab, e->res_key, e);   // 结果合并：比对键相同的以后由它代表
         inflight_done_locked(identity);
         rc = 1;
     }
     pthread_mutex_unlock(&g_progs_mu);
     return rc;
+}
+// 结果合并的比对键（#1355）。除「结果摘要 + 负载长度」外，挂在程序对象上、**由身份推出来而不是由负载字节读出来**的东西都在这里比对，不一致就不合并：
+//   · nst：阶段数（由身份的阶段掩码来；build 用它校验结果阶段、也用它定支持绑定的阶段掩码）；
+//   · c1：每个阶段的 c1 常量段 + 「有没有」（来自请求方的源快照；c1 不在身份里——身份的源摘要只覆盖 control‖code——所以不能靠「身份相同」推出它相同）。
+// 其余字段（着色器句柄、绑定表 / 反射、贴图声明、支持缓冲长度、属性 / 片元输出掩码、c0 读集、base instance 判定）全由负载字节唯一决定，
+// z_raw 只由设备能力决定（本局内是常数）；出包预编库 / 离线库来的程序不带结果摘要，永远不进结果表。
+struct alias_key { int nst; uint8_t c1_ok; const uint8_t *c1[RP_PROG_STAGES]; };   // c1[st] 仅当 c1_ok 的位 st 为 1 时有效（长度 0x100）
+// 比对键 = SHA-256(结果摘要 ‖ 负载长度 ‖ 阶段数 ‖ c1 有无位 ‖ 各有 c1 阶段的 c1[0x100])。键里每一项都改一下 → 键就变 → 不合并（见 nvk_shader_alias_test.c 的逐项负对照）。
+// 有无位单独编进去：否则「只有阶段 0 有这段 c1」与「只有阶段 1 有同样的 c1」字节流相同。
+static void alias_key_hash(const uint8_t res[32], uint64_t rlen, const struct alias_key *k, uint8_t out[32]) {
+    uint8_t buf[32 + 8 + 2 + RP_PROG_STAGES * 0x100];
+    size_t n = 0;
+    memcpy(buf, res, 32); n += 32;
+    for (int i = 0; i < 8; i++) buf[n++] = (uint8_t)(rlen >> (8 * i));
+    buf[n++] = (uint8_t)k->nst;
+    const uint8_t mask = (uint8_t)((1u << k->nst) - 1u);
+    buf[n++] = (uint8_t)(k->c1_ok & mask);
+    for (int st = 0; st < k->nst; st++)
+        if (k->c1_ok & (1u << st)) { memcpy(buf + n, k->c1[st], 0x100); n += 0x100; }
+    sha256(buf, n, out);
+}
+// 建好的程序挂上自己的比对键（结果摘要来自缓存文件头已校验的值 / 现编结果现算；阶段数与 c1 取自程序对象本身，与 build 用的是同一份）。
+static void entry_set_res(struct entry *e, const uint8_t rsha[32], uint64_t rlen, int nst) {
+    struct alias_key k; memset(&k, 0, sizeof k);
+    k.nst = nst; k.c1_ok = e->prog.c1_ok;
+    for (int st = 0; st < nst && st < RP_PROG_STAGES; st++) k.c1[st] = e->prog.c1[st];
+    alias_key_hash(rsha, rlen, &k, e->res_key);
+    e->res_ok = 1;
+}
+// 结果合并（#1355）：读这个身份缓存文件的 88 字节头；头里的结果摘要对得上某份已常驻的程序，就把这个身份也登记成指向同一个 entry
+// （g_progs 里同一个 entry 多个键；拥有者只有以规范身份登记的那一项，见 rp_shader_reset）。不读负载、不建后端着色器。
+// 对得上 = 比对键（结果摘要、负载长度、阶段数、c1）一致。头本身没有校验字段：摘要由文件自己声明，正式读取才重算比对；负载长度也进键，把偶发位翻转挡在外面。
+// bg：1 = 预热带（受静默 / 换代约束）；0 = 前台。返回 entry（非 NULL = 这个身份已登记，可直接用）；失败项不合并；读头 / 没常驻 / 同身份在途 = NULL（走原来的路）。
+// *adopted：同 progs_get_adopted_locked（预热带建的那份第一次被前台采用时为 1）。
+static struct entry *alias_try(const uint8_t identity[32], int bg, const struct alias_key *key, int *adopted) {
+    if (adopted) *adopted = 0;
+    const char *cdir = getenv("S2A_DIRECT_CACHE_DIR");
+    if (!cdir || !*cdir || nvn_plat_flag("no_disk_cache", 0)) return NULL;
+    pthread_mutex_lock(&g_progs_mu);
+    const uint64_t epoch = g_progs_epoch;
+    const int busy = progs_get_locked(identity) != NULL || inflight_find_locked(identity) != NULL;   // 已发布 / 同身份已有人在做：不读头（调用方照旧命中它或等它）
+    pthread_mutex_unlock(&g_progs_mu);
+    if (busy) return NULL;
+    uint8_t res[32]; uint64_t rlen = 0; char why[96];
+    atomic_fetch_add_explicit(&g_n_alias_probe, 1, memory_order_relaxed);
+    if (s2a_program_cache_probe(cdir, identity, res, &rlen, why, sizeof why)) { atomic_fetch_add_explicit(&g_n_alias_nofile, 1, memory_order_relaxed); return NULL; }
+    uint8_t rk[32];
+    alias_key_hash(res, rlen, key, rk);
+    struct entry *ret = NULL;
+    pthread_mutex_lock(&g_progs_mu);
+    struct entry *r = (struct entry *)nvn_hm_get(&g_res_tab, rk);
+    if (shader_stopped() || epoch != g_progs_epoch || (bg && g_warm_quiesced)) { /* 停局 / 换代 / 静默：不登记 */ }
+    else if (!r || r->failed) atomic_fetch_add_explicit(&g_n_alias_nores, 1, memory_order_relaxed);
+    else if (!progs_get_locked(identity)) {   // 竞态里别人先发布了这个身份就不动它（调用方下一步照旧命中它）
+        (void)nvn_hm_put(&g_progs, identity, r);
+        atomic_fetch_add_explicit(bg ? &g_n_alias_bg : &g_n_alias_fg, 1, memory_order_relaxed);
+        ret = progs_get_adopted_locked(identity, NULL, adopted);   // 与正常命中同一口径
+    }
+    pthread_mutex_unlock(&g_progs_mu);
+    return ret;
 }
 // [提交线程] 同一身份已被别人（预热带 / 另一笔）认领：等它发布，自己不重复做。
 // 返回 1 = 已发布（*out 有效，可能是失败项）；0 = 在途已消失且没发布（本线程接手）；-1 = 停局。
@@ -804,12 +870,19 @@ static void libpack_mark_bad(const uint8_t identity[32]) {
 static void libpack_note_hit(void) { atomic_fetch_add(&g_n_libpack, 1); }
 // 程序累计一行：出包预编 / 离线库 / 跨局缓存 / 现场编 合计第 1 个和每 50 个打一次（每发布一份新程序合计正好加 1）
 static void prog_tally_log(void) {
-    uint64_t n = atomic_load(&g_n_libpack) + atomic_load(&g_n_offline) + atomic_load(&g_n_cache) + atomic_load(&g_n_compiled);
+    uint64_t n = atomic_load(&g_n_libpack) + atomic_load(&g_n_offline) + atomic_load(&g_n_cache) + atomic_load(&g_n_compiled) + atomic_load(&g_n_alias_fg);
     if (n != 1 && (!n || n % 50)) return;
-    char b[260]; snprintf(b, sizeof b, "程序累计：出包预编 命中 %llu / 没有 %llu / 坏 %llu / 不可用 %llu、离线库 %llu、跨局缓存 %llu、现场编 %llu、失败 %llu",
+    char b[420]; int bo = snprintf(b, sizeof b, "程序累计：出包预编 命中 %llu / 没有 %llu / 坏 %llu / 不可用 %llu、离线库 %llu、跨局缓存 %llu、现场编 %llu、失败 %llu",
         (unsigned long long)atomic_load(&g_n_libpack), (unsigned long long)s2a_libpack_misses(), (unsigned long long)s2a_libpack_rejects(),
         (unsigned long long)atomic_load(&g_n_libpack_bad), (unsigned long long)atomic_load(&g_n_offline), (unsigned long long)atomic_load(&g_n_cache),
         (unsigned long long)atomic_load(&g_n_compiled), (unsigned long long)atomic_load(&g_n_failed));
+    if (alias_on() && bo > 0 && (size_t)bo < sizeof b) {   // 结果合并读数（开着才出）
+        uint32_t resn = 0;
+        pthread_mutex_lock(&g_progs_mu); resn = g_res_tab.n; pthread_mutex_unlock(&g_progs_mu);
+        snprintf(b + bo, sizeof b - (size_t)bo, "、结果合并 前台 %llu / 预热 %llu（读头 %llu、没有可合并的常驻程序 %llu、读头失败 %llu；常驻比对键 %u 个）",
+            (unsigned long long)atomic_load(&g_n_alias_fg), (unsigned long long)atomic_load(&g_n_alias_bg), (unsigned long long)atomic_load(&g_n_alias_probe),
+            (unsigned long long)atomic_load(&g_n_alias_nores), (unsigned long long)atomic_load(&g_n_alias_nofile), (unsigned)resn);
+    }
     nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b);
 }
 
@@ -819,6 +892,7 @@ static void prog_tally_log(void) {
 // 返回失败项 entry（failed=1）表示编译失败——调用方按「同一份输入不再反复编」发布它。
 static struct entry *work_run(const struct work_snap *s, int background) {
     uint8_t *bytes = NULL; size_t len = 0; char why[256] = "";
+    uint8_t rsha[32]; int have_res = 0;   // 结果摘要（跨局缓存读到的已校验摘要 / 现编结果现算的）：挂在 entry 上给结果合并用，离线库 / 预编库来的不挂
     const char *root = getenv("S2A_SHADER_REVISION_ROOT"), *cdir = getenv("S2A_DIRECT_CACHE_DIR");
     if (root && s->pc.profile_hash && s->pc.profile_hash[0] && !nvn_plat_flag("no_offline", 0)) {
         struct s2a_offline_request oq = {0};
@@ -833,8 +907,10 @@ static struct entry *work_run(const struct work_snap *s, int background) {
         }
     }
     if (!bytes && cdir && !nvn_plat_flag("no_disk_cache", 0) &&
-        s2a_program_cache_load(cdir, s->identity, &bytes, &len, NULL, why, sizeof why) == 0)
+        s2a_program_cache_load(cdir, s->identity, &bytes, &len, rsha, why, sizeof why) == 0) {
         atomic_fetch_add_explicit(&g_n_cache, 1, memory_order_relaxed);
+        have_res = 1;
+    }
     if (!bytes && libpack_fetch(s->identity, (const uint8_t (*)[8])s->keys, s->nst, NULL, s->lp_ok, &s->pc, &bytes, &len)) {
         struct entry *le = build(bytes, len, s->views, s->nst, s->identity);
         if (le) le->prog.z_raw = 1;
@@ -891,9 +967,11 @@ static struct entry *work_run(const struct work_snap *s, int background) {
         atomic_fetch_add_explicit(&g_n_compiled, 1, memory_order_relaxed);
         if (g_texpool_diag) { g_pool_compiled++; if (g_pool_attempts == 1 || !(g_pool_attempts % 50)) pool_stats("progress"); }
         if (cdir && !nvn_plat_flag("no_disk_cache", 0)) s2a_program_cache_store_async(cdir, s->identity, bytes, len);
+        if (alias_on()) { sha256(bytes, len, rsha); have_res = 1; }   // 与缓存文件头里写的是同一个量（整份负载的 SHA-256）
     }
     if (!bytes) return NULL;
     struct entry *e = build(bytes, len, s->views, s->nst, s->identity);
+    if (e && !e->failed && have_res && alias_on()) entry_set_res(e, rsha, (uint64_t)len, s->nst);
     // 事实复用（#1187 nvk_shader_fact_cache.h）：结果字节在这里释放，掩码先算好挂在 entry 上（纯函数，后台线程也能算）
     if (e && !e->failed) e->fact_ok = (uint8_t)fact_cache_mask(bytes, len, &e->prog, e->fact_mask);
     free(bytes);
@@ -936,9 +1014,12 @@ static struct entry *warm_work_run(const struct nvk_prog_rec *rec, int nst) {
         }
     }
     const int had_bytes = bytes != NULL;
+    uint8_t rsha[32]; int have_res = 0;   // 同 work_run：跨局缓存读到的已校验结果摘要，挂在 entry 上给结果合并用
     if (!bytes && cdir && !nvn_plat_flag("no_disk_cache", 0) &&
-        s2a_program_cache_load(cdir, rec->identity, &bytes, &len, NULL, why, sizeof why) == 0)
+        s2a_program_cache_load(cdir, rec->identity, &bytes, &len, rsha, why, sizeof why) == 0) {
         atomic_fetch_add_explicit(&g_n_cache, 1, memory_order_relaxed);
+        have_res = 1;
+    }
     // 出包预编库：清单记着每阶段键，预热带直接按键取（新装的游戏第一局没有跨局缓存，靠的就是这一份）
     struct s2a_source_entry_view views[3];
     memset(views, 0, sizeof views);
@@ -963,6 +1044,7 @@ static struct entry *warm_work_run(const struct nvk_prog_rec *rec, int nst) {
     }
     // c1 随清单落盘（开局 source_store 是空的）：views 在上面按清单填好、传给 build()，逐位与真实解析一致。
     struct entry *e = build(bytes, len, views, nst, rec->identity);
+    if (e && !e->failed && have_res && alias_on()) entry_set_res(e, rsha, (uint64_t)len, nst);
     free(bytes);
     return e;
 }
@@ -1199,6 +1281,49 @@ static int shader_resolve_graphics(const struct rp_shader_req *q, const struct r
     return rc;
 }
 
+// [提交线程] 前台的结果合并入口：取各阶段的源快照（c1 来自它），再走 alias_try。源快照取不到 / 不完整 = 不合并（后面照旧由现编 / 读盘路径同样处理这件事）。
+static struct entry *alias_try_fg(const uint8_t sha[32], const struct s2a_input_identity *id, int nst, int *adopted) {
+    struct s2a_source_entry_view v[RP_PROG_STAGES]; struct alias_key k; int got = 0;
+    memset(&k, 0, sizeof k); k.nst = nst;
+    for (; got < nst; got++) {
+        if (!s2a_source_acquire(id->keys[got], &v[got])) break;
+        if (!v[got].complete) { s2a_source_release(v[got].ref); break; }
+        if (v[got].c1 && v[got].c1_bytes >= NVK_PROG_REC_C1_BYTES) { k.c1_ok |= (uint8_t)(1u << got); k.c1[got] = v[got].c1; }   // 与 build() 的 c1 判据同源
+    }
+    struct entry *e = got == nst ? alias_try(sha, 0, &k, adopted) : NULL;
+    for (int st = 0; st < got; st++) s2a_source_release(v[st].ref);
+    return e;
+}
+
+// [提交线程] 真实用过的身份记进预热清单：uses++，并**把程序对象里真实的 c1 一起记进清单**。
+// 这里原先只记身份（没有源快照，就没有 c1）。后果是：只要某份程序第一次是被「已发布对象命中」记进清单的，
+// 清单里这条就永远 c1_ok=0；下一局预热按它建出来的程序也 c1_ok=0，而 rp_draw 对带 C1 绑定的绘制
+// （火把/粒子等用 BRX 跳表的着色器）直接跳过 → 光消失、画面发黑。程序对象里就有 c1，直接抄过来即可。
+// 「已发布命中」与「结果合并命中」（#1355）共用这一份。
+static void prog_note_use(const uint8_t sha[32], uint32_t stages, int nst, const struct s2a_input_identity *id, const struct facts *f, const struct rp_prog *prog) {
+    struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec); memcpy(rec.identity, sha, 32); rec.stage_mask = stages; rec.lp_ok = libpack_state_ok(&f->gfx) ? 2 : 0;
+    for (int st = 0; st < nst; st++) memcpy(rec.keys[st], id->keys[st], 8);
+    rec.c1_ok = (uint8_t)(prog->c1_ok & (uint8_t)((1u << nst) - 1u));
+    for (int st = 0; st < nst; st++)
+        if (rec.c1_ok & (1u << st)) memcpy(rec.c1[st], prog->c1[st], NVK_PROG_REC_C1_BYTES);
+    // 程序对象本身也没有 c1（例如它是上一局按残缺清单预热出来的）：这一笔手上正好有源快照，补采一次，
+    // 让清单在下一次落盘时被修好（这一局仍会跳过该笔，下一局不再跳）。
+    if ((rec.c1_ok & (uint8_t)((1u << nst) - 1u)) != (uint8_t)((1u << nst) - 1u)) {
+        for (int st = 0; st < nst; st++) {
+            if (rec.c1_ok & (1u << st)) continue;
+            struct s2a_source_entry_view v;
+            if (s2a_source_acquire(id->keys[st], &v)) {
+                if (v.complete && v.c1 && v.c1_bytes >= NVK_PROG_REC_C1_BYTES) {
+                    memcpy(rec.c1[st], v.c1, NVK_PROG_REC_C1_BYTES);
+                    rec.c1_ok |= (uint8_t)(1u << st);
+                }
+                s2a_source_release(v.ref);
+            }
+        }
+    }
+    nvk_prog_warm_note(&rec);
+}
+
 // [提交线程] 三段式的第二、三段：先查已发布与在途（不重复准备），否则捕获快照 → 工作 → 发布。
 static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **out, const struct s2a_direct_compile_context *pcp,
                         uint32_t stages, int nst, uint64_t group) {
@@ -1235,31 +1360,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
     if (e) {
         if (e_failed) return -1;
         *out = &e->prog;
-        // 真实用过的身份：uses++，并**把程序对象里真实的 c1 一起记进清单**。
-        // 这里原先只记身份（没有源快照，就没有 c1）。后果是：只要某份程序第一次是被「已发布对象命中」记进清单的，
-        // 清单里这条就永远 c1_ok=0；下一局预热按它建出来的程序也 c1_ok=0，而 rp_draw 对带 C1 绑定的绘制
-        // （火把/粒子等用 BRX 跳表的着色器）直接跳过 → 光消失、画面发黑。程序对象里就有 c1，直接抄过来即可。
-        struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec); memcpy(rec.identity, sha, 32); rec.stage_mask = stages; rec.lp_ok = libpack_state_ok(&f.gfx) ? 2 : 0;
-        for (int st = 0; st < nst; st++) memcpy(rec.keys[st], id.keys[st], 8);
-        rec.c1_ok = (uint8_t)(e->prog.c1_ok & (uint8_t)((1u << nst) - 1u));
-        for (int st = 0; st < nst; st++)
-            if (rec.c1_ok & (1u << st)) memcpy(rec.c1[st], e->prog.c1[st], NVK_PROG_REC_C1_BYTES);
-        // 程序对象本身也没有 c1（例如它是上一局按残缺清单预热出来的）：这一笔手上正好有源快照，补采一次，
-        // 让清单在下一次落盘时被修好（这一局仍会跳过该笔，下一局不再跳）。
-        if ((rec.c1_ok & (uint8_t)((1u << nst) - 1u)) != (uint8_t)((1u << nst) - 1u)) {
-            for (int st = 0; st < nst; st++) {
-                if (rec.c1_ok & (1u << st)) continue;
-                struct s2a_source_entry_view v;
-                if (s2a_source_acquire(id.keys[st], &v)) {
-                    if (v.complete && v.c1 && v.c1_bytes >= NVK_PROG_REC_C1_BYTES) {
-                        memcpy(rec.c1[st], v.c1, NVK_PROG_REC_C1_BYTES);
-                        rec.c1_ok |= (uint8_t)(1u << st);
-                    }
-                    s2a_source_release(v.ref);
-                }
-            }
-        }
-        nvk_prog_warm_note(&rec);
+        prog_note_use(sha, stages, nst, &id, &f, &e->prog);
         return 0;
     }
     // 1b) 事实复用（#1187）：编译器只读了一部分绑定事实，事实相同的另一份身份可以直接用同一个程序。
@@ -1268,6 +1369,18 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
     uint8_t fact_base[32];
     const int reusable = fact_cache_shape(&id) && fact_cache_hash(&id, NULL, fact_base);
     if (reusable && (*out = fact_cache_find(&id, fact_base))) { nvn_hm_put(&g_fact_aliases, sha, (void *)*out); return 0; }
+    // 1c) 结果合并（#1355）：这个身份的缓存文件头里记的结果摘要，已经有常驻程序 → 登记成别名直接用（只读 88 字节头，不读负载、不建后端）。
+    if (alias_on()) {
+        int a_adopted = 0;
+        struct entry *ae = alias_try_fg(sha, &id, nst, &a_adopted);
+        if (a_adopted) nvk_prog_warm_stat_draw_hit();   // 合并到的正是预热带建的那份：第一次被真实 draw 采用
+        if (ae) {
+            *out = &ae->prog;
+            prog_note_use(sha, stages, nst, &id, &f, &ae->prog);
+            prog_tally_log();
+            return 0;
+        }
+    }
     // 2) 同身份在途：等它发布，不重复准备同一份程序。
     struct entry *win = NULL;
     int w = await_inflight(sha, &win);
@@ -1275,7 +1388,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
     if (w > 0) {
         if (win->failed) return -1;
         *out = &win->prog;   // 预建对象的采用计数在 await_inflight 的锁内记（每份一次）
-        // 同一处的 c1 记账（原因见上面「已发布」分支）：预建对象里有 c1 就记进清单。
+        // 同一处的 c1 记账（原因见 prog_note_use）：预建对象里有 c1 就记进清单。
         { struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec); memcpy(rec.identity, sha, 32); rec.stage_mask = stages; rec.lp_ok = libpack_state_ok(&f.gfx) ? 2 : 0;
           for (int st = 0; st < nst; st++) memcpy(rec.keys[st], id.keys[st], 8);
           rec.c1_ok = (uint8_t)(win->prog.c1_ok & (uint8_t)((1u << nst) - 1u));
@@ -1603,6 +1716,14 @@ void rp_shader_reset(void) {
     bs.borrowed = g_borrowed; bs.peak = g_borrow_peak; bs.rejected = g_borrow_rejected;
     bs.unmatched = g_borrow_unmatched; bs.retained = g_retained_progs;
     g_progs_epoch++;   // 换代：之后任何在途构建都不得再发布（预热带会释放自己那份 entry）
+    {   // 结果合并：同一个 entry 可能挂在多个身份键下（别名）。拥有者只留第一次见到的那一格，其余格置空——下面按格释放 / 计数时每个 entry 只算一次
+        for (uint32_t i = 0; i < g_progs.cap; i++) { struct entry *e = (struct entry *)g_progs.vals[i]; if (e) e->seen = 1; }
+        for (uint32_t i = 0; i < g_progs.cap; i++) {
+            struct entry *e = (struct entry *)g_progs.vals[i];
+            if (!e) continue;
+            if (e->seen) e->seen = 0; else g_progs.vals[i] = NULL;
+        }
+    }
     if (bs.borrowed) {
         // 借用没归零：这些 entry 不能释放——借用方手里的 rp_prog* 指向它们，归还前仍要能读。
         // 表结构照样换成空表：旧 entry 的 nvn_gpu_shader 属于本世代设备，下一局按身份命中它就是悬垂句柄。
@@ -1618,6 +1739,7 @@ void rp_shader_reset(void) {
         g_borrow_full_said = g_borrow_unmatched_said = 0;
     }
     free(g_progs.keys); free(g_progs.vals); nvn_hm_init(&g_progs, 32);
+    free(g_res_tab.keys); free(g_res_tab.vals); nvn_hm_init(&g_res_tab, 32);   // 结果表只借用 entry，随上面的释放一起清
     memset(g_inflight, 0, sizeof g_inflight);
     g_inflight_n = g_inflight_bg = 0;
     g_warm_quiesced = 0;   // 下一局重新允许（open 也会清）
@@ -1733,6 +1855,12 @@ int nvk_prog_warm_build(const struct nvk_prog_rec *rec) {
     int nst = stage_nst(rec->stage_mask);
     if (!nst) { warm_diag("程序预热：阶段掩码 %#x 不是 VS/FS/GS 组合，整条跳过", (unsigned)rec->stage_mask); nvk_prog_warm_stat_build(-1); return -1; }
     if (shader_stopped()) { warm_diag("程序预热：会话已置停局位，预热停止发布"); nvk_prog_warm_stat_build(-1); return -1; }   // 发布前校验：停局后不再建对象
+    if (alias_on()) {   // 结果合并：结果已常驻且比对键一致，登记成别名即可（不读负载、不建后端）
+        struct alias_key ak; memset(&ak, 0, sizeof ak);
+        ak.nst = nst; ak.c1_ok = (uint8_t)(rec->c1_ok & (uint8_t)((1u << nst) - 1u));
+        for (int st = 0; st < nst; st++) ak.c1[st] = rec->c1[st];
+        if (alias_try(rec->identity, 1, &ak, NULL)) { nvk_prog_warm_stat_build(0); return 0; }
+    }
     uint64_t epoch;
     pthread_mutex_lock(&g_progs_mu);
     struct entry *have = progs_get_locked(rec->identity);
