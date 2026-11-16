@@ -817,6 +817,11 @@ class AndroidDeliveryTest(unittest.TestCase):
         (repo / 'source.txt').write_text('modified')
         with patch.object(mod, 'ROOT', repo), self.assertRaisesRegex(ValueError, '未提交'):
             mod.export_sources(self.base / 'dirty-export', mod.build_environment(os.environ))
+        # 发版快照（根有 engine.json）：打包重签名让已跟踪文件和 HEAD 不同，照样导出，内容是已提交的那份
+        (repo / 'engine.json').write_text('{}')
+        with patch.object(mod, 'ROOT', repo):
+            mod.export_sources(self.base / 'snapshot-export', mod.build_environment(os.environ))
+        self.assertEqual((self.base / 'snapshot-export' / 'source.txt').read_text(), 'source')
 
     def test_game_output_cannot_be_inside_checkout(self):
         repo = self.base / 'repo'; repo.mkdir()
