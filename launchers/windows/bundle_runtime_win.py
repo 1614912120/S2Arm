@@ -65,6 +65,8 @@ def python(rt, versions):
         [sys.executable, "-m", "pip", "download", "--disable-pip-version-check", *target, "-d", str(folder), *missing], check=True))
     subprocess.run([sys.executable, "-m", "pip", "install", "--disable-pip-version-check", "--no-compile", "--no-index", "--find-links", str(wheels),
                     *target, "--target", str(site), *pins()], check=True, env=dict(os.environ, SOURCE_DATE_EPOCH="1262304000"))   # pip 生成的 .exe 启动器内含打包时刻，钉住才可复现
+    import pil_prune   # Pillow 只留出包用得到的（去 AVIF / 画字 / Tk 扩展，压缩后约 5 MB；Windows 轮子依赖静态链在 .pyd 里）
+    pil_prune.prune(site)
     versions["python"] = PY_VER; versions["python_url"] = PY_URL; versions["python_packages"] = pins()
 
 
