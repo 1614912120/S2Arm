@@ -9364,6 +9364,10 @@
   "en": "There are no ready-made cheats for this version."
  },
  {
+  "source": "没写构建号：文件名改成「<16 位构建号>.txt」或首行加 BID=<构建号> 才能编进 iPhone 包。",
+  "en": "No build ID: rename the file to “<16-digit build ID>.txt” or add BID=<build ID> as the first line so it can go into the iPhone package."
+ },
+ {
   "source": "版本不对：金手指是 {0}，这份游戏是 {1}。",
   "en": "Version mismatch: the cheats are for {0}, your game is {1}."
  },

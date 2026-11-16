@@ -38,6 +38,7 @@
 "cheats.status.execError" = "执行出错";
 "cheats.status.gameNotLoaded" = "游戏未装载";
 "cheats.status.modifiesCode" = "要改游戏代码，手机上导入的用不了：在电脑上的 S2Arm 里导入这份 txt，再更新手机上的 S2Arm 就能用";
+"cheats.status.notPacked" = "要改游戏代码，这次出包没编进去（同一模块的补丁太多等，原因见电脑上出包完成页）";
 "cheats.status.packed" = "已生效";
 "cheats.status.off" = "关";
 "cheats.status.pending" = "等待生效…";
