@@ -5340,7 +5340,26 @@ void nvn_res_by_kind(uint64_t k[8]) {
             k[c * 2]++; k[c * 2 + 1] += b; }
         pthread_mutex_unlock(&g_res_mu); }
 }
+// 贴图按大小前 10（11-16，马车世界 Mac 第 300 帧驻留集贴图 2287 张 31 GB、内存池才 7 GB）：只知总量定不了是哪类贴图在吃，
+//   贴图合计超过 4 GB 时列最大的 10 张（Metal 尺寸 / 层 / mip / 格式 / 存储 / 用途 / 标签），全程最多记 5 次
+static void tex_top_report(unsigned long long frame) {
+    static int said; if (said >= 5) return;
+    enum { N = 10 }; id top[N] = {nil}; uint64_t tb[N] = {0}, total = 0; unsigned long nt = 0;
+    @autoreleasepool { pthread_mutex_lock(&g_res_mu);
+        for (id o in g_res_objects) { if (![o conformsToProtocol:@protocol(MTLTexture)]) continue;
+            uint64_t b = res_bytes(o); total += b; nt++;
+            for (int i = 0; i < N; i++) if (b > tb[i]) { for (int j = N - 1; j > i; j--) { tb[j] = tb[j - 1]; top[j] = top[j - 1]; } tb[i] = b; top[i] = o; break; } }
+        pthread_mutex_unlock(&g_res_mu);
+        if (total < (4ull << 30)) return;
+        said++;
+        MLOG("textures by size up to frame %llu: %lu textures %llu MB in the residency set; largest %d:", frame, nt, (unsigned long long)(total >> 20), N);
+        for (int i = 0; i < N && top[i]; i++) { id<MTLTexture> t = top[i];
+            MLOG("  #%d %llu MB: %lux%lux%lu array %lu mips %lu samples %lu type %lu format %lu storage %lu usage %#lx label %s", i + 1, (unsigned long long)(tb[i] >> 20),
+                 (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.depth, (unsigned long)t.arrayLength, (unsigned long)t.mipmapLevelCount, (unsigned long)t.sampleCount,
+                 (unsigned long)t.textureType, (unsigned long)t.pixelFormat, (unsigned long)t.storageMode, (unsigned long)t.usage, t.label.UTF8String ?: "-"); } }
+}
 void nvn_be_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
+    tex_top_report(frame);
     alias_orphan_pass();   // #357: before the line cap below, which only limits the readout
     nvn_mem_detail(frame);   // before the line cap below: the detailed accounting has its own interval and must not be starved by the 400-line budget
     fb_report(frame); samp_report(frame); audit_probe_report(frame);
