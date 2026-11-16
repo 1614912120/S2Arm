@@ -24,6 +24,10 @@ class FakeContext:
     def __init__(self, private, request=None):
         self.private, self.r = Path(private), request or {}
 
+    def lock(self, *a, **k):   # 装机类作业的手机锁（ipa.phone_lock）
+        import contextlib
+        return contextlib.nullcontext()
+
 
 def game(*updates, gid=TITLE):
     pk = [dict(type="base", version=0, titleId=gid, sha256="b", display="1.0.0")]

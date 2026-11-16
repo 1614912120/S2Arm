@@ -2,6 +2,7 @@
 # Copyright 2026 S2Arm contributors
 """Windows 作业层打底（启动器线 11-07）：作业环境只用随包运行时、读取器取预编 nx_unpack、探活不用 os.kill(pid, 0)。
 期望按随包布局手写（launchers/windows/bundle_runtime_win.py：Runtime/{python, python/Scripts, dotnet, git/usr/bin, zstd}），不跑被测实现推。"""
+import contextlib
 import os
 from pathlib import Path
 import sys
@@ -308,7 +309,8 @@ class WinInstall(unittest.TestCase):
         self.progress_events = []   # 作业计数事件 (done, total, unit)
         emit = lambda *a, **k: self.progress_events.append((k.get("done"), k.get("total"), k.get("unit"))) if k.get("unit") else None
         self.c = types.SimpleNamespace(r={"gameId": self.gid}, library=self.t / "lib", private=self.t, logs=self.t / "logs", task="k", engine=self.t, emit=emit,
-                                       begin=lambda *a, **k: None, last_log=None, catalog=lambda: {"schema": 1, "games": []})
+                                       begin=lambda *a, **k: None, last_log=None, catalog=lambda: {"schema": 1, "games": []},
+                                       lock=lambda *a, **k: contextlib.nullcontext())   # 装机类作业的手机锁 / 程序锁（ipa.phone_lock / program_locks）
         ios_fixture(self.c, self.gid)   # 出好的 iPhone 版：image/ios/kit + image/ios/pack
 
     def go(self, w, **r):

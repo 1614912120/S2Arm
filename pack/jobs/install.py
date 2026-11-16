@@ -1105,6 +1105,11 @@ def _devpush_lines(c, exe, *args):
 
 def push_export_job(c):
     """「推到手机」作业（exportPush）：只推、不重新导出"""
+    with packer_phone_lock(c):   # 装机类作业一次一个（ipa.phone_lock）
+        return _push_export_job(c)
+
+
+def _push_export_job(c):
     return push_export(c, c.r.get("gameId") or None)   # pushed = 推进去的文件名（界面按它显示）
 
 
@@ -1323,6 +1328,9 @@ def export_phone(c, gid=None):
     if not gid and not others:
         raise Failure("游戏库里还没有能导出的 iPhone 版：先给游戏「打 iPhone 包」。", code="job_failed")
     from rewrite_refresh import refresh_ios
+    import contextlib
+    held = contextlib.ExitStack()   # 导出读各款程序件与资源包（写 .img）：整段持有这几款的程序锁，出包交付换件时等它写完
+    held.enter_context(packer.program_locks(c, ([gid] if gid else []) + others))
     refresh_ios(c, ([gid] if gid else []) + others)
     c.begin("组装 S2Arm.ipa（未签名）", 2, 4)
     work = Path(tempfile.mkdtemp(prefix=".export-", dir=c.library))
@@ -1362,6 +1370,7 @@ def export_phone(c, gid=None):
                 except PermissionError:   # 被占着：留着，不挡这次导出
                     pass
     finally:
+        held.close()
         shutil.rmtree(work, ignore_errors=True)
     if dest == want:   # 来源戳只记正式导出文件夹里的（换到带时刻的新名字时下次不沿用）
         atomic(c.private / EXPORT_STAMPS, stamps)
@@ -1878,6 +1887,11 @@ def dir_missing(out):
     return bool(re.search(r"no such file|object\s*not\s*found", out or "", re.I))
 
 
+def packer_phone_lock(c):
+    import ipa as packer
+    return packer.phone_lock(c)
+
+
 def phone_bid(ph):
     """这次要装的包名：这台记录过的；Windows 第一次装还没记录 → 按 Impactor 当前账号算（同 WinPhone.bundle_for_signing）"""
     return ph.bid or (ph.bundle_for_signing() if hasattr(ph, "bundle_for_signing") else None)
@@ -2049,9 +2063,10 @@ def put_game(c, gid, ph, steps=True, others=None, skipped=()):
     # 改写器修过的话：容器里各款按本引擎改写器核一遍，受影响的只换改写产物（不重出资源包、不推 game.img），再组进新壳（rewrite_refresh.py）
     from rewrite_refresh import refresh_ios
     ph.pull_kept([g for g in ([gid] if gid else []) + list(others) if g])   # 先收回机上留下的 NRO，refresh_ios 才补得进（#8be819）
-    refresh_ios(c, [g for g in ([gid] if gid else []) + list(others) if g])
-    # 已同意过「这次不带」的款（#479）：按壳号记在设备记录 staleAgreed，同一版壳不再每次问；换了壳号重新问。重新打过 iPhone 包的款组装时带得进，自然不在名单里
-    ipa, games, sid = packer.assemble(c, gid, others, failed=rec.get("failedShells", []), agreed=rec.get("staleAgreed") or {})
+    with packer.program_locks(c, ([gid] if gid else []) + list(others)):   # 各款程序件这段不让出包交付换（ipa.program_locks）
+        refresh_ios(c, [g for g in ([gid] if gid else []) + list(others) if g])
+        # 已同意过「这次不带」的款（#479）：按壳号记在设备记录 staleAgreed，同一版壳不再每次问；换了壳号重新问。重新打过 iPhone 包的款组装时带得进，自然不在名单里
+        ipa, games, sid = packer.assemble(c, gid, others, failed=rec.get("failedShells", []), agreed=rec.get("staleAgreed") or {})
     left_out = sorted({g.upper() for g in list(others) + list(skipped) if g} - set(games))   # 这次没带进去的（玩家已同意；游戏库删掉的也在里面，不碍事：它们组装时本来就不带、不问）
     # 这次要装的那款必须有资源包（上面已核）；容器里带着的别的款本机资源包不在（清理过 / 换了电脑）不拦整单（预检清单 #31）：
     #   它的资源包多半已在手机上，不推、记录照旧；手机上也没有的，App 里那款会显示要重新导入
@@ -2211,6 +2226,11 @@ def update_phone(c):
     """「更新 iPhone 上的 S2Arm」：用本版壳 + 手机上各款已有的程序模块组新容器 → 签名 → 只装 App；资源包（IMG）、直连库只推变了的（通常一个都不推），
     手机上的游戏库、存档不动。新壳认不得的款（要按新版重新出包）：没带 acceptStale 就停下报 container_stale 列出它们，玩家确认后不带它们装
     （它们的资源包和存档还在手机上，重新出包后再装就回来）。壳已是本版 → 不装，结果 updated = False"""
+    with packer_phone_lock(c):   # 装机类作业一次一个（ipa.phone_lock）
+        return _update_phone(c)
+
+
+def _update_phone(c):
     import ipa as packer
     if wants_export(c):   # 「导出新版 S2Arm」：本版壳带上游戏库里能带的各款出到文件夹，玩家自己覆盖安装
         return dict(export_phone(c), updated=True)
@@ -2248,6 +2268,11 @@ def update_phone(c):
 
 def install(c):
     """默认「装到 iPhone」：这款进容器（一个 App 装下整个游戏库，免费账号也只占 1 个 App 额度）。加款 = 同一个包名覆盖安装，Documents 保留"""
+    with packer_phone_lock(c):   # 装机类作业一次一个（ipa.phone_lock）
+        return _install(c)
+
+
+def _install(c):
     gid = c.r.get("gameId") or ""
     import downstream
     scheme = downstream.requested(c, dict(id=gid))   # 下游深度方案出的是独立 App：自己的包名，不进容器（pack/jobs/downstream.py）
@@ -2266,6 +2291,11 @@ def restore_previous(c):
     """装回换壳前的那一版手机 S2Arm（默认位置根 S2Arm.previous.ipa）：新运行层在手机上不好用时的回滚。
     装上后现行与上一版对调（再点一次 = 换回来）；被换下的壳号记进这台的 failedShells，之后给这台装机不再把旧款只换宿主带进它（要按新版重出）。
     手机上的资源包和存档不动；换宿主之后才新装的游戏不在上一版里，App 里暂时看不到（数据还在）"""
+    with packer_phone_lock(c):   # 装机类作业一次一个（ipa.phone_lock）
+        return _restore_previous(c)
+
+
+def _restore_previous(c):
     import ipa as packer
     current, previous = layout.phone_ipa(c), layout.phone_ipa(c, previous=True)
     games, old_sid = packer.ipa_games(previous)
@@ -2293,6 +2323,11 @@ def remove_from_phone(c):
     """从手机上的 S2Arm 里删一款：备份本款存档 → 用剩下各款现组容器 → 覆盖装 → 删机上本款文档根。
     剩下的款有新运行层认不得的（升级后还没重出）：退回从 S2Arm.ipa 里摘掉这款（pack/ship_ext.py container-drop，其余各款逐字节不变、不换壳）。
     装上之后才改设备记录（装失败时两边还一致）；机上目录没删掉只报黄字（App 里这款已经没了，占的空间下次再清）"""
+    with packer_phone_lock(c):   # 装机类作业一次一个（ipa.phone_lock）
+        return _remove_from_phone(c)
+
+
+def _remove_from_phone(c):
     import ipa as packer
     gid = (c.r.get("gameId") or "").upper()
     c.begin("找签名账号与 iPhone", 1, 4)
@@ -2319,7 +2354,8 @@ def remove_from_phone(c):
     #   下一步删掉它的数据后库界面按「数据不在」不再显示 = 空库；下次装新游戏时覆盖装把旧程序一起换掉
     if left:
         try:
-            ipa, left, sid = packer.assemble(c, None, left, failed=rec.get("failedShells", []))
+            with packer.program_locks(c, left):
+                ipa, left, sid = packer.assemble(c, None, left, failed=rec.get("failedShells", []))
         except Failure as e:
             if e.code != "container_stale":
                 raise

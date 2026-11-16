@@ -1136,6 +1136,43 @@ class AssembleTests(unittest.TestCase):
         _, cmd = self._games_arg(runs)
         self.assertEqual([cmd[i + 1] for i, x in enumerate(cmd) if x == "--banner"], [f"{self.A}={banner}"])
 
+    def test_locks_program_parts_during_assembly_and_one_phone_job_at_a_time(self):
+        # 出包时并行装机（11-16）：装机组壳期间要带的各款程序锁都被占着（出包交付换件拿不到，要等）；装机类作业的手机锁互斥。
+        #   期望手写：put_game 里的组装（替身）中，用另一个任务同库拿各款程序锁、等 0 秒 → library_busy；装完立刻拿得到；手机锁同理
+        import core
+        import ipa as packer, host_update
+        A, B = self.A, self.B
+        self._library((A, "甲"), (B, "乙"))
+        ios_fixture(self.c, A, pack="pa"); ios_fixture(self.c, B, pack="pb")
+        layout.save_device(self.c, "dev1", dict(games={A: dict(pack="pa"), B: dict(pack="pb")}, shellId="SID1"))
+        ph, _, _ = self._phone()
+        other = core.Context(dict(self.c.r, taskId="peer-" + self.c.task))
+        seen = {}
+        real = packer.assemble
+        def probe(c, gid, others, **kw):
+            for g in (A, B):
+                try:
+                    with other.lock("program-" + g, wait=0):
+                        seen[g] = "free"
+                except Failure as e:
+                    seen[g] = e.code
+            return real(c, gid, others, **kw)
+        self.sid = "SID1"
+        shell = self.c.private / "shell"; shell.mkdir(exist_ok=True); (shell / "manifest.json").write_text("{}")
+        with um.patch.object(packer, "current_shell_id", return_value="SID1"), um.patch.object(packer, "container_shell", return_value=shell), \
+             um.patch.object(host_update, "engine_compat", return_value=dict(self.COMPAT)), um.patch.object(self.c, "run", self._run([])), \
+             um.patch.object(packer, "assemble", probe):
+            install.put_game(self.c, A, ph)
+        self.assertEqual(seen, {A: "library_busy", B: "library_busy"})
+        for g in (A, B):
+            with other.lock("program-" + g, wait=0):   # 组完就放
+                pass
+        with packer.phone_lock(self.c):
+            with self.assertRaises(Failure) as e:
+                with other.lock("phone", wait=0):
+                    pass
+            self.assertEqual(e.exception.code, "library_busy")
+
     def test_assemble_carries_phone_games_of_same_shell(self):
         """这台手机已有的款（同壳出的）现组时一起带上，容器件取各自的 image/ios/kit"""
         self._library((self.A, "甲"), (self.B, "乙"))
