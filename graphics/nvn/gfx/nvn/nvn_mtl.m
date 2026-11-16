@@ -23,6 +23,8 @@
 #include "../../../metal/mtl_slot.h"   // machine-wide Metal client slot
 #include "nvn_fps.h"
 #include "nvn_link_backoff.h"   // 低频链路档降档退避（link_sync）
+#include "nvn_link_drain.h"     // 排空站着的帧、晚锁存（DM_PRESENT_LATCH，缺省关；nxnative 60284e79，MIT）
+#include "nvn_link_latch.h"
 #include "nvn_pso_retry.h"   // 编译服务失败的管线重试节奏（pso_get_vs）
 #include "nvn_obj.h"
 #include "nvn2.h"   // Switch 2: NVN2 control sections (DM_NVN_SHDUMP code length)
@@ -156,6 +158,16 @@ static uint64_t g_link_tick_ns, g_link_tick_n;
 //   11-04 进程内重启（设置页「立刻重启」）后拍号从 0 重数、它却留着上一局的约 5124，每帧都等满超时 2 拍 → 锁 30 帧，追平前约 85 秒（泰拉瑞亚 s04 两局）
 static uint64_t g_link_started_tick;
 static uint64_t g_link_dropped;
+// The late latch and the drain that empties its queue (DM_PRESENT_LATCH=1, off by default; nxnative 60284e79, MIT; nvn_link_latch.h, nvn_link_drain.h). Per session (nvn_session.inc).
+// Frames standing in the present queue: the callback asks the game's next acquire to wait g_link_drain_req more ticks, once (with LINK_DRAIN_LATCH: the callback that ends
+// the drain latches that acquire's present), and nvn_be_link_wait_tick does. g_link_blocked_ns: how long the acquire's last wait for the link blocked (0 = it was behind and
+// did not wait), the callback's evidence that the game has room to spare; g_link_drain_ns: the time acquires spent on drains since nvn_be_link_drain_take_ns last asked
+// (pacing, not a late frame: hle_nvn.c fstep_tick); g_link_drained: drains done.
+// g_link_waiter, under g_link_mu: the tick an acquire blocks for in nvn_be_link_wait_tick (0 = none), so the callback knows it woke one; g_link_waiter_end: that tick ends a
+// drain into the latch. On the callback thread: latches that took the woken acquire's present, latches that timed out, the timeouts in a row, and woken callbacks
+static nvn_link_drain g_link_drain;   // display-link callback thread only
+static _Atomic int g_link_drain_req; static _Atomic uint64_t g_link_blocked_ns, g_link_drain_ns, g_link_drained;
+static uint64_t g_link_waiter, g_link_latched, g_link_latch_out, g_link_woken; static unsigned g_link_latch_misses; static int g_link_waiter_end;
 static double g_link_hold_until; static uint64_t g_link_held;   // Changed only on the display-link callback thread: the time the previous frame must stay on screen until by its present interval (0 = no hold), and the ticks that took no new frame because of it
 static int g_pq_inflight;   // Under g_pq_mu: number of presents committed to the GPU whose completion callback has not arrived yet
 int g_dm_present_link;   // Present pacing mode (runtime value of DM_PRESENT_LINK, modified directly during same-process alternating measurement): 0 = acquire the drawable itself; 1 = display link at 60 Hz; 2 = display link at 120 Hz, the game presents a frame every other display-link tick
@@ -17847,10 +17859,37 @@ static uint64_t g_stall_t0, g_stall_drop, g_stall_n; static int g_stall_red, g_s
 // but it is not counted as stuck and no failure is reported; the stall is measured from the later of "the most recent callback / the most recent activation" (A16 logs: 8–17 seconds inactive and 17 seconds in the background were both reported as "stuck in foreground")
 __attribute__((weak)) int dm_focus_now(void) { return 1; }   // Mac/iOS application shells provide strong lifecycle-backed definitions; shell-less graphics components have no application focus
 __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
+static int link_rate(void);
+// DM_PRESENT_LATCH=1 / 0: whether the callback that woke the game's acquire waits for its present (nvn_link_latch.h), with the drain that empties its queue (nvn_link_drain.h).
+// Off by default on the Mac and on iOS: here it has not been measured yet
+static int g_link_latch_on = -1;   // -1 = not read yet
+static int link_latch_on(void) {
+    if (g_link_latch_on < 0) {
+        const char *e = getenv("DM_PRESENT_LATCH"); g_link_latch_on = e && atoi(e) != 0;
+        MLOG("display link: %s (DM_PRESENT_LATCH=%d)", g_link_latch_on ? "late latch on: the callback that woke the acquire waits briefly for its present and takes it, and standing frames are drained" : "late latch off: each callback takes the frame already queued", g_link_latch_on);
+    }
+    return g_link_latch_on;
+}
+// The absolute time (CLOCK_REALTIME, as pthread_cond_timedwait takes it) ns nanoseconds from now
+static struct timespec link_deadline(uint64_t ns) {
+    struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += ns / 1000000000ull; ts.tv_nsec += ns % 1000000000ull;
+    if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+    return ts;
+}
+// Once per frame the display-link callback takes with the latch (its thread): cb the callback's time, age how long the frame waited in the queue (both seconds), dropped whether
+// older frames were merged away on this tick, lead and room the frame's present after the callback that woke its acquire and that callback's room (nvn_link_latch_spare; room 0
+// when the latch does not run for it). Asks the next acquire for the ticks the queued frames have to spare (g_link_drain_req). Only on the 60 Hz link, as the latch
+static void link_drain_note(double cb, double age, int dropped, double lead, double room) {
+    int k = nvn_link_drain_next(&g_link_drain, cb, age, 1.0 / 60, atomic_load(&g_link_blocked_ns) / 1e9, !dropped, lead, room);
+    if (k) atomic_store(&g_link_drain_req, k);
+    if (k & LINK_DRAIN_LATCH) g_link_latch_misses = 0;   // its early frames show the presents come in time again: the end of the drain latches whatever the give-up said
+}
 @implementation NvMetalDisplayLinkDelegate
 - (void)metalDisplayLink:(CAMetalDisplayLink *)link needsUpdate:(CAMetalDisplayLinkUpdate *)update {
     (void)link;
     uint64_t arrival = now_ns();
+    const double cb = CACurrentMediaTime();   // the callback's time, in targetTimestamp's clock (late latch)
     pthread_mutex_lock(&g_pq_mu);
     int active = dm_focus_now() == 1;
     uint64_t since = dm_focus_in_since();
@@ -17894,14 +17933,45 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     }
     pthread_mutex_lock(&g_link_mu);
     g_link_tick_ns = now_ns();
-    g_link_tick_n++;
+    const uint64_t tick = ++g_link_tick_n;
+    const int woke = g_link_waiter && tick >= g_link_waiter;   // this tick wakes an acquire, whose present follows shortly (late latch)
+    const int drain_end = woke && g_link_waiter_end;   // and it ends a drain into the latch (nvn_be_link_wait_tick): the queue has run empty for it
     pthread_cond_broadcast(&g_link_cv);
     pthread_mutex_unlock(&g_link_mu);
     pthread_mutex_lock(&g_pq_mu);
-    if (!g_dm_present_link || g_pq_read == g_pq_in) { pthread_mutex_unlock(&g_pq_mu); return; }
+    // The late latch (nvn_link_latch.h, DM_PRESENT_LATCH=1): only on the 60 Hz link, where nxnative measured it (on the 120 Hz link a 60 fps acquire waits two ticks with no hold
+    // between them; the 30 / 20 Hz power-saving links are unmeasured)
+    const int latch = link_latch_on() && link_rate() == 60;
+    if (!g_dm_present_link || (!latch && g_pq_read == g_pq_in)) { pthread_mutex_unlock(&g_pq_mu); return; }
     // The previous frame's present interval was >= 2 (period > 25 ms): keep it on screen for its whole period before taking the next one, as the Switch flips only every N vertical syncs. This also holds while the link runs at 60 Hz (Mario 1.2.1 sets 2 for single frames, see nvn_game_fps in hle_nvn.c);
     //   before, every tick took the newest frame, so that frame, carrying the extra time step the game advanced for it, was shown for only 16.7 ms and the game looked like it jumped ahead
-    if (g_link_hold_until > 0 && update.targetPresentationTimestamp < g_link_hold_until - tol) { g_link_held++; pthread_mutex_unlock(&g_pq_mu); return; }
+    const int hold = g_link_hold_until > 0 && update.targetPresentationTimestamp < g_link_hold_until - tol;
+    // With the latch: wait briefly for the woken acquire's present (g_pq_mu is released while waiting, so present_enqueue can queue it; the wait is bounded). Only into an empty
+    // queue: a frame that stands (one that missed the previous tick) goes out first, in order as without the latch, until a drain (link_drain_note) lets the queue run empty again
+    const double room = latch ? update.targetTimestamp - cb : 0;   // the time from the callback to its targetTimestamp, the latch's room
+    static double wk_cb[2] = {-1, -1}, wk_room[2];   // the last two callbacks that woke an acquire and their room: each frame taken is timed from the wake before it (the drain's clock)
+    if (latch) {
+        if (woke) { g_link_woken++; wk_cb[1] = wk_cb[0]; wk_room[1] = wk_room[0]; wk_cb[0] = cb; wk_room[0] = room; }
+        static double rmin = 1e9, rsum; static int rn; static uint64_t lat0, out0;
+        if (room < rmin) rmin = room;
+        rsum += room;
+        if (++rn == 300) {   // the readout, once per 300 ticks
+            MLOG("display link late latch over 300 ticks: took %llu presents, timed out %llu times (in all %llu / %llu; %u timeouts in a row); callback to targetTimestamp min %.2f ms, mean %.2f ms; standing frames drained %llu times, %llu of them into the latch, the next needs %.0f s of early frames",
+                 (unsigned long long)(g_link_latched - lat0), (unsigned long long)(g_link_latch_out - out0), (unsigned long long)g_link_latched, (unsigned long long)g_link_latch_out, g_link_latch_misses,
+                 rmin * 1e3, rsum / rn * 1e3, (unsigned long long)atomic_load(&g_link_drained), (unsigned long long)g_link_drain.entries, LINK_DRAIN_SECS * (double)(1u << g_link_drain.back));
+            lat0 = g_link_latched; out0 = g_link_latch_out; rmin = 1e9; rsum = 0; rn = 0;
+        }
+        if (woke && !hold && g_pq_read == g_pq_in) {
+            double w = nvn_link_latch_wait(cb, cb + room, vp > 0 ? vp : 1.0 / 60, g_link_latch_misses, g_link_woken, drain_end);
+            if (w > 0) {
+                const uint64_t in0 = g_pq_in; struct timespec ts = link_deadline((uint64_t)(w * 1e9));
+                while (g_pq_in == in0) if (pthread_cond_timedwait(&g_pq_cv, &g_pq_mu, &ts) == ETIMEDOUT) break;
+                if (g_pq_in > in0) { g_link_latched++; g_link_latch_misses = 0; } else { g_link_latch_out++; g_link_latch_misses++; }
+            }
+        }
+        if (g_pq_read == g_pq_in) { pthread_mutex_unlock(&g_pq_mu); return; }
+    }
+    if (hold) { g_link_held++; pthread_mutex_unlock(&g_pq_mu); return; }
     uint64_t first = g_pq_read + 1, ticket = g_pq_in;
     // In order, one frame per tick and at most one behind the newest: two waiting, the older now and the newer on the next tick; three or more, the older ones are dropped. Taking the newest
     // dropped the one before whenever two frames landed in the same refresh, as frames of a 60 fps game that take 16-17.5 ms do, and the next frame then stayed up 33 ms
@@ -17914,6 +17984,15 @@ __attribute__((weak)) uint64_t dm_focus_in_since(void) { return 0; }
     if (ticket > 1 && g_pq_done < ticket - 1) g_pq_done = ticket - 1;
     pthread_cond_broadcast(&g_pq_cv);
     pthread_mutex_unlock(&g_pq_mu);
+    // The drain (nvn_link_drain.h), with the latch's rule for frames of one vsync: a frame the callback holds for two ticks (present interval 2) is taken on a tick that woke
+    // no acquire, so the latch cannot run there. A drain into the latch asks the next acquire to wait the ticks the queued frames have to spare: the callback shows them on the
+    // ticks between, so the screen neither repeats nor drops a frame (the game loses those ticks of wall time once), the queue runs empty, and the callback that ends the drain
+    // latches its own present, as do the woken callbacks after it. A frame that comes late after that stands again: the callback goes back to taking frames in order, and a
+    // fallback soon after the drain backs it off (nvn_link_drain_next)
+    if (latch) {
+        const int k = it.period > 0.025 ? -1 : it.t_in >= wk_cb[0] ? 0 : it.t_in >= wk_cb[1] ? 1 : -1;
+        link_drain_note(cb, cb - it.t_in, ticket > first, k < 0 || wk_cb[k] < 0 ? -1 : it.t_in - wk_cb[k], k < 0 ? 0 : wk_room[k]);
+    }
     int submitted;
     ext_wait(it.ev_val);
     @autoreleasepool { submitted = present_now(&it.t, it.period, it.frame, ticket, it.crop, update.drawable, update.targetPresentationTimestamp); }
@@ -17950,6 +18029,7 @@ static CAFrameRateRange link_range(int mode) {
     return mode == 2 ? CAFrameRateRangeMake(60, 120, 120) : CAFrameRateRangeMake(rate, rate, rate);
 }
 static int g_link_mode = 1;   // 1 / 2 same as g_dm_present_link, 3 = 30 Hz, 4 = 20 Hz
+static int link_rate(void) { return g_link_mode == 4 ? 20 : g_link_mode == 3 ? 30 : g_link_mode == 2 ? 120 : 60; }   // the link's rate (late latch; nvn_be_link_wait_tick reads the same)
 static int g_link_pending;
 static uint64_t g_link_pending_since, g_link_pending_period;
 static link_backoff g_low;   // 降到低频档的退避（nvn_link_backoff.h）
@@ -18263,16 +18343,39 @@ int nvn_be_link_wait_tick(int vsyncs, uint64_t timeout_ns) {
     double period = nvn_fps_period(vsyncs / 60.0);
     int rate = g_link_mode == 4 ? 20 : g_link_mode == 3 ? 30 : g_link_mode == 2 ? 120 : 60;
     const uint64_t step = (uint64_t)fmax(1, ceil(period * rate - 1e-6));
+    // A drain the callback asked for (nvn_link_drain.h, only with DM_PRESENT_LATCH=1) is taken by this wait or not at all: a wait that finds its tick already passed is a game
+    // that fell behind since
+    const int req = atomic_exchange(&g_link_drain_req, 0), drain = req & (LINK_DRAIN_LATCH - 1), into_latch = !!(req & LINK_DRAIN_LATCH);
     pthread_mutex_lock(&g_link_mu);
-    if (g_link_tick_n >= g_link_started_tick + step) { g_link_started_tick = g_link_tick_n; pthread_mutex_unlock(&g_link_mu); return 1; }
-    struct timespec ts; clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += timeout_ns / 1000000000ull; ts.tv_nsec += timeout_ns % 1000000000ull;
-    if (ts.tv_nsec >= 1000000000L) { ts.tv_sec++; ts.tv_nsec -= 1000000000L; }
+    if (g_link_tick_n >= g_link_started_tick + step) { g_link_started_tick = g_link_tick_n; pthread_mutex_unlock(&g_link_mu); atomic_store(&g_link_blocked_ns, 0); return 1; }
+    struct timespec ts = link_deadline(timeout_ns);
     pthread_mutex_unlock(&g_link_mu); DM_BLOCK_BEGIN(); pthread_mutex_lock(&g_link_mu);
-    while (g_link_tick_n < g_link_started_tick + step) if (pthread_cond_timedwait(&g_link_cv, &g_link_mu, &ts) == ETIMEDOUT) { pthread_mutex_unlock(&g_link_mu); DM_BLOCK_END(); return 0; }
+    const uint64_t w0 = now_ns();
+    g_link_waiter = drain > 0 ? 0 : g_link_started_tick + step;   // the callback of this tick may latch this frame's present (with a drain, the tick that ends it, below)
+    while (g_link_tick_n < g_link_started_tick + step) if (pthread_cond_timedwait(&g_link_cv, &g_link_mu, &ts) == ETIMEDOUT) { g_link_waiter = 0; pthread_mutex_unlock(&g_link_mu); atomic_store(&g_link_blocked_ns, 0); DM_BLOCK_END(); return 0; }
+    g_link_waiter = 0;
+    uint64_t w1 = now_ns(), drained = 0;
+    atomic_store(&g_link_blocked_ns, w1 - w0);
+    if (drain > 0) {   // the standing frames go to the screen on these ticks; a link that goes silent meanwhile ends the drain after two tick periods each
+        const uint64_t until = g_link_tick_n + (uint64_t)drain;
+        ts = link_deadline((uint64_t)drain * 2000000000ull / (uint64_t)rate);
+        if (into_latch) { g_link_waiter = until; g_link_waiter_end = 1; }   // by its end tick the queue has run empty, and that callback latches this frame's present
+        while (g_link_tick_n < until) if (pthread_cond_timedwait(&g_link_cv, &g_link_mu, &ts) == ETIMEDOUT) break;
+        g_link_waiter = 0; g_link_waiter_end = 0;
+        drained = now_ns() - w1;
+    }
     g_link_started_tick = g_link_tick_n;
-    pthread_mutex_unlock(&g_link_mu); DM_BLOCK_END(); return 1;
+    pthread_mutex_unlock(&g_link_mu); DM_BLOCK_END();
+    if (drain > 0) {
+        atomic_fetch_add(&g_link_drain_ns, drained);
+        uint64_t n = atomic_fetch_add(&g_link_drained, 1) + 1;
+        if (n <= 20) MLOG("display link: frames stood in the present queue while the game kept up, the acquire waited %d more tick%s (%.1f ms) to let them out (drain #%llu%s, frame %llu%s)",
+                          drain, drain == 1 ? "" : "s", drained / 1e6, (unsigned long long)n, into_latch ? ", into the late latch" : "", (unsigned long long)atomic_load(&g_cur_frame), n == 20 ? "; further drains only counted" : "");
+    }
+    return 1;
 }
+// The time acquires spent draining standing frames since the last call (nanoseconds): hle_nvn.c fstep_tick counts it as pacing, not as a frame that took longer
+uint64_t nvn_be_link_drain_take_ns(void) { return atomic_exchange(&g_link_drain_ns, 0); }
 
 // The display's vsync for vi::GetDisplayVsyncEvent (hle_sdk16.c): returns 1 at the first display-link tick of the next 60 Hz vsync after *seen (the tick count it last returned, updated),
 // 0 when the link does not run, runs below 60 Hz (the 60 Hz event cannot come from it) or gives no tick within the timeout; the caller then keeps its own clock

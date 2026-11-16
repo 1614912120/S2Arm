@@ -3184,6 +3184,11 @@ extern uint32_t nvn_be_present_qos(void);
 static uint64_t g_frame;
 static uint64_t g_acq_wait_ns, g_pq_wait_ns;   // Accumulated display-link wait / wait for the present queue to return inside acquire, recorded per frame at present (there can be several acquires within one frame)
 static uint64_t g_fs_start, g_fs_wait;   // frame step (fstep_tick): when the first acquire after a present returned (the frame's start, 0 = none yet), and its pacing wait
+// A drain of frames standing in the display link's queue (nvn_mtl.m nvn_be_link_drain_take_ns, nvn_link_drain.h; only with DM_PRESENT_LATCH=1) is extra pacing: the screen showed
+// every queued frame for its hold meanwhile, so fstep_tick takes it out of the frame's time (nvn_fstep_drain_cut). g_fs_drain: in the acquire that starts the frame (part of
+// g_fs_wait); g_fs_drain_late: in a later acquire of the same frame (part of the time to the next start only)
+static uint64_t g_fs_drain, g_fs_drain_late;
+__attribute__((weak)) uint64_t nvn_be_link_drain_take_ns(void) { return 0; }   // nvn_mtl.m; backends without the display link's drain (Android, replay) have none
 uint64_t dm_nvn_frame_count(void) { return g_frame; }
 extern uint64_t g_t0_ns;   // Host process start point (main.c; same base as the UIMSG timestamps)
 // The thread that presented last owns the frame pacing below. Another thread acquiring a swapchain texture (a loader drawing one frame of its
@@ -3255,7 +3260,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
         return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;
     }
     // Vsync blocks here (real-device NVN: when all textures in the swapchain are waiting for display, wait for the next one to be released), not in present -- the game often calls present while holding a lock
-    uint64_t at = *idx < 4 ? o->avail[*idx] : 0, now = dm_detclock_enabled() ? guest_ns() : now_ns(), wait = at > now ? at - now : 0, pace_ns = 0;
+    uint64_t at = *idx < 4 ? o->avail[*idx] : 0, now = dm_detclock_enabled() ? guest_ns() : now_ns(), wait = at > now ? at - now : 0, pace_ns = 0, drain_ns = 0;
     if (!dm_detclock_enabled()) {   // Register the acquire thread as a time-constraint thread (no longer registered only when it "arrived early": it must also declare itself when it is constantly behind in the hot state)
         static uint64_t rt_period; uint64_t period = present_period(o), rtp = rt_period_ns(o, period);
         if (rtp && rt_period != rtp) { rt_period = rtp; set_time_constraint(rtp); }
@@ -3263,6 +3268,7 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
         uint64_t p0 = now_ns();
         if (nvn_be_link_active()) { if (!nvn_be_link_wait_tick(link_vsyncs(o), period ? 2 * period : 33333333ull) && wait) sleep_until_ns(at); }   // DM_PRESENT_LINK: pacing fully follows the display link (wait for the present interval's display-link ticks when running fast, go immediately when behind); our own 60 Hz clock is only the fallback when no display-link tick arrives
         else if (wait) sleep_until_ns(at);
+        drain_ns = nvn_be_link_drain_take_ns();   // the ticks a drain of standing frames added to the link's wait
         pace_ns = now_ns() - p0;
     } else {   // DM_DETCLOCK_PACE=1 (used by the screenshot gate): while the guest clock advances per frame, each frame's wall clock is no shorter than one step -- frame count and in-game time are deterministic, and the background loading thread has at least one step of wall clock available per frame;
                // When the machine is fully loaded frames only get slower and the background only gets more wall clock, so the picture captured at "the Nth frame after the message" is independent of load
@@ -3275,7 +3281,8 @@ NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsyn
     uint64_t tk = *idx < 4 ? o->ticket[*idx] : 0;
     if (tk) { uint64_t w0 = now_ns(); nvn_be_present_wait(tk); g_pq_wait_ns += now_ns() - w0; }
     if (s) sync_publish((sync_t *)s, nvn_be_last_fence());   // The swapchain texture becomes available once the commits before this point have completed
-    if (!g_fs_start) { g_fs_start = now_ns(); g_fs_wait = pace_ns; }   // the frame starts when the first acquire after a present returns: on a display-link tick when on time
+    if (!g_fs_start) { g_fs_start = now_ns(); g_fs_wait = pace_ns; g_fs_drain += drain_ns; }   // the frame starts when the first acquire after a present returns: on a display-link tick when on time
+    else g_fs_drain_late += drain_ns;
     return NVN_WINDOW_ACQUIRE_TEXTURE_RESULT_SUCCESS;
 }
 // The older API (NVN 53, Super Mario 3D World + Bowser's Fury): the queue waits for the texture on the GPU and no sync object is handed out. The host replays in submission order, so later commands already come after earlier presents; the same as WindowAcquireTexture without a sync object
@@ -3773,7 +3780,12 @@ static void fstep_tick(const win_t *o) {
     static uint64_t prev, t0, v0, fixed_sum, held[FSTEP_MAX + 1]; static int nlog;
     const double v = 1e9 / 60;
     uint64_t st = g_fs_start ? g_fs_start : now_ns(), pw = g_fs_wait; g_fs_start = g_fs_wait = 0;
-    double shown = prev ? (st - prev) / v : 0, gpu = 0; prev = st;
+    // A drain of standing frames (g_fs_drain, DM_PRESENT_LATCH=1) comes out of the frame's time as far as it made the frame longer than its hold (nvn_fstep_drain_cut)
+    static uint64_t drain_before;   // a drain in a later acquire of the previous frame: in this frame's time since that start, not in its pacing wait
+    uint64_t span = prev ? st - prev : 0;
+    if (prev && (g_fs_drain || drain_before)) span = nvn_fstep_drain_cut(span, (uint64_t)((g_fs.k ? g_fs.k : 60 / fps_step_cap()) * v), g_fs_drain, drain_before, &pw);
+    drain_before = g_fs_drain_late; g_fs_drain = g_fs_drain_late = 0;
+    double shown = prev ? span / v : 0, gpu = 0; prev = st;
     // The frame's work: its critical path, from its submits' start to its GPU work's end (latest frame with the GPU done). 11-02 direct line, job8 timestamps: the submits are
     //   committed in pieces (sub_cut, about 12 a frame), so the GPU starts 1.5 ms after the CPU and the two overlap; at hold 3, CPU start → GPU end was 27 ms (fits hold 2), while
     //   the start-to-start time less the pacing wait counted the submit thread's waits on the GPU too (35 ms), so a failed probe stepped up to 3 (20 fps) and hold 2 never fitted again.

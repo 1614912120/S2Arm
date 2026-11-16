@@ -228,6 +228,8 @@ int nvn_be_shutdown_session(void) {
     g_link20_last = 0; g_link20_n = 0; g_link20_sample = g_link20_reported = 0;
     memset(g_link20_ns, 0, sizeof g_link20_ns); atomic_store(&g_link20_unavailable, 0);
     g_link_tick_ns = g_link_tick_n = g_link_dropped = g_link_held = g_link_started_tick = 0;   // 拍号与「上一帧开工拍号」一起从 0 起，否则新局每帧等满超时锁 30 帧
+    g_link_drain = (nvn_link_drain){0}; atomic_store(&g_link_drain_req, 0); atomic_store(&g_link_blocked_ns, 0); atomic_store(&g_link_drain_ns, 0);   // 晚锁存与排空（DM_PRESENT_LATCH）逐局：退避和在途请求不带进新局
+    g_link_waiter = 0; g_link_waiter_end = 0; g_link_latch_misses = 0;
     g_xv_npresent = 0; g_cur_frame = 0; g_present_n = 0; g_stat_pass = g_stat_draw = 0;
     g_nshotq = 0; g_td_list = nil; g_td_frames = nil;
     free(g_td_owned_path); g_td_owned_path = NULL;
