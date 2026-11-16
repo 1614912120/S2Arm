@@ -477,7 +477,10 @@ int main(void) {
       snprintf(c, sizeof c, "grep -q '格式号' '%s/unpack.log'", D); CHECK(sh(c) == 0, "⑬e 解包日志带「格式号」"); 
       { // ⑬f D-4VAX（本体目录表路径区错位：表里出现「…/0100000000000823/」这种相邻两条路径首尾拼成的一截，原先当文件写 → 每次同一处 -4 EISDIR）：
         //   读表自检，路径以「/」结尾 / 有重复路径 = 本体被改坏 → 不硬解，判 IMG 坏（码 ios_install_img_corrupt），现场写明。期望手写
-        const char *bad8[2] = {"823/ac_2_b1_nxsystemdata/0100000000000823/", "exefs/main.npdX"};   // 一条以「/」结尾；一条造好后在文件里改成和第一行重复（img.py 自己不写重复项）
+        // 两条都先用 img.py 造合法表、再在文件里改字节（img.py 自己不写「/」结尾项、也不写重复项，见 pack/img.py toc_bytes）：
+        //   0：末字符 X 改成「/」；1：npdX 改成 npdm，和第一行重复
+        const char *bad8[2] = {"823/ac_2_b1_nxsystemdata/0100000000000823X", "exefs/main.npdX"};
+        const char *from8[2] = {"0100000000000823X", "exefs/main.npdX"}, *to8[2] = {"0100000000000823/", "exefs/main.npdm"};
         const char *expect8[2] = {"IMG 目录表路径不对", "IMG 目录表有重复路径"};
         for (int v = 0; v < 2; v++) {
             char D8[1300], G8[1400]; snprintf(D8, sizeof D8, "%s/img_docs8_%d", T, v); snprintf(G8, sizeof G8, "%s/资源包", D8);
@@ -487,7 +490,7 @@ int main(void) {
                      " && printf '{\"version\":3,\"format\":\"img\",\"imgFile\":\"game.img\",\"index_sha256\":\"img8\"}' > '%s/manifest.json'",
                      G8, D, D, D, bad8[v], D, D, v, R, D, v, G8, G8, G8, G8, G8);
             int built = sh(c) == 0;
-            if (built && v == 1) { snprintf(c, sizeof c, "python3 -c \"import sys;p=sys.argv[1];b=open(p,'rb').read();assert b.count(b'exefs/main.npdX')==1;open(p,'wb').write(b.replace(b'exefs/main.npdX',b'exefs/main.npdm'))\" '%s/game.img'", G8); built = sh(c) == 0; }
+            if (built) { snprintf(c, sizeof c, "python3 -c \"import sys;p=sys.argv[1];b=open(p,'rb').read();assert b.count(b'%s')==1;open(p,'wb').write(b.replace(b'%s',b'%s'))\" '%s/game.img'", from8[v], from8[v], to8[v], G8); built = sh(c) == 0; }
             int r8 = built ? s2a_pack_apply(D8) : 99;
             CHECK(built && r8 != 0 && !strcmp(s2a_pack_apply_code(), "ios_install_img_corrupt") && strstr(s2a_pack_apply_failure(), expect8[v]),
                   "⑬f 坏表 %d：不硬解、判 IMG 坏、现场写「%s」（造 %d、返回 %d、码 %s「%s」）", v, expect8[v], built, r8, s2a_pack_apply_code(), s2a_pack_apply_failure());
