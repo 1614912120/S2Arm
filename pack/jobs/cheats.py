@@ -211,7 +211,8 @@ def listing(c, game):
             k, _, v = line.partition("\t")
             status[k] = v
     items = []
-    for f in sorted(d.glob("*.txt")):
+    import layout
+    for f in layout.entries(d, "*.txt"):   # exFAT 上的 ._<名>.txt 不是金手指（#911 同类）
         if f.name in SKIP:
             continue
         fbid, entries = parse(f.read_text(encoding="utf-8", errors="replace"))

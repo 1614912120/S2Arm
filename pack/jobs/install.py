@@ -727,7 +727,7 @@ def push_cheats(c, device, bid, gid, docs):
     拷不进只记黄、不挡装机"""
     import cheats
     d = cheats.cheats_dir(c, gid.upper(), create=False)
-    files = [f for f in sorted(d.glob("*.txt")) if f.name not in cheats.SKIP] if d.is_dir() else []
+    files = [f for f in layout.entries(d, "*.txt") if f.name not in cheats.SKIP]   # ._<名>.txt（exFAT 附属文件）不推进手机金手指目录
     bad = 0
     for f in files:
         r = subprocess.run(["xcrun", "devicectl", "device", "copy", "to", "--device", device, "--domain-type", "appDataContainer",
@@ -744,7 +744,7 @@ def push_mods(c, ph, gid, had):
     推不进只记黄、不挡装机。→ 这次推完后机上的 {名字: 记号}（推失败的那份按没推算，下次再推）"""
     import mods
     home = mods.mods_dir(c, gid, create=False)
-    local = {d.name: mods.fingerprint(d) for d in sorted(home.iterdir()) if d.is_dir() and not d.name.startswith(".")} if home.is_dir() else {}
+    local = {d.name: mods.fingerprint(d) for d in layout.entries(home) if d.is_dir() and not d.name.startswith(".")}
     if not local and not had:
         return {}
     now, base = dict(had), f"{game_docs(gid)}/{mods.DIR}"
@@ -759,7 +759,7 @@ def push_mods(c, ph, gid, had):
             for n, fp in local.items():
                 if had.get(n) == fp:
                     continue
-                files = [f for f in sorted((home / n).rglob("*")) if f.is_file() and not f.is_symlink()]
+                files = [f for f in layout.entries(home / n, recursive=True) if f.is_file() and not f.is_symlink()]   # ._<名> 不推进 romfs 叠加层
                 c.emit("message", f"正在把 mod「{n}」推进 iPhone（{len(files)} 个文件）")
                 for f in files:
                     cl.put(str(f), f"{base}/{n}/{f.relative_to(home / n).as_posix()}")
@@ -1085,7 +1085,7 @@ def _full_imgs(folder):
     不当这款的完整文件给出去、也不随「推到手机」推（推过去手机上还没本体就认领不了）"""
     if not folder.is_dir():
         return []
-    return [p for p in sorted(folder.glob("*.img")) if p.is_file() and int.from_bytes(_img_head(p)[1][8:12], "little") != 2]
+    return [p for p in layout.entries(folder, "*.img") if p.is_file() and int.from_bytes(_img_head(p)[1][8:12], "little") != 2]   # 导出文件夹在 exFAT 上：._<名>.img 不是游戏文件
 
 
 def _devpush_exe(c):
@@ -1285,6 +1285,7 @@ def export_phone(c, gid=None):
     """导出，自己签名安装：本版壳 + 游戏库里能放进本壳、已出成单一 IMG 的各款组一个容器（ipa.assemble，同一键装），
     出未签名 S2Arm.ipa + 每款一个 <游戏名>.img + 说明到游戏库根「S2Arm 自签导出」（英文界面「S2Arm Self-Sign Export」）。不连手机、不签名。
     gid：这次点的那款（必须带上，放不进就报真实原因）；None = 「导出新版 S2Arm」（只换壳，带上能带的各款）。
+    带 gid 时 .img 只新写这一款，别的款能沿用上次导出的就沿用、不能就不写（结果 unwritten 点名）；None 时照旧每款都写。
     放不进本壳（要按新版重新出包）/ 还不是单一 IMG 形态的别的款不带，结果 skipped 点名"""
     import ipa as packer
     gid = gid.upper() if gid else None
@@ -1333,13 +1334,18 @@ def export_phone(c, gid=None):
         os.replace(ipa, out / "S2Arm.ipa")
         shutil.rmtree(work / "assemble", ignore_errors=True)
         c.begin("写各款游戏的 .img（含着色器库）与着色器更新包", 3, 4)
-        used, listed, fresh = set(), [], []
+        used, listed, fresh, unwritten = set(), [], [], []
         prev, stamps = export_dir(c), {}
         old_stamps = read(c.private / EXPORT_STAMPS, {}) or {}
         for g in games:
             f = _img_name(names.get(g, g), g, used)
             stamp = _pack_stamp(c, layout.ios_pack(c, g))
             if not _reuse_export(prev / f, out / f, old_stamps.get(f), stamp):
+                # 点了哪款只新写那一款（库大时第一次导出 / 换版本不再把每款几 GB 全写一遍）：别的款上次导出的 .img 来源没变就沿用，
+                #   变了或没有就这次不写，完成页点名（unwritten）。程序都在 S2Arm.ipa 里；手机上已有的旧 .img 照常能玩（game.img 不随壳变）
+                if gid and g != gid:
+                    unwritten.append(names.get(g, g))
+                    continue
                 _export_img(c, layout.ios_pack(c, g), out / f)
                 fresh.append(f)   # 这次新写的（#1132 完成页点名「.img 只要拷这几个」；沿用的和上次导出逐字节相同，手机上已有就不用再拷）
             # 着色器更新包（维护者 11-13）：只含派生件，几百 MB；手机上已有这款同一版本体时只放它就能换着色器，不用重拷几 GB 的 .img
@@ -1372,8 +1378,8 @@ def export_phone(c, gid=None):
         c.diagnostic("这几款和这次导出的游戏地址空间类型不同，放不进同一个 App，这次没带：" + "、".join(names[g] for g in apart)  # 非玩家句
                      + "（要玩它们就单独点它们导出，导出的 S2Arm 会换成只含同一类的游戏）", code="container_incompatible", severity="warning")  # 非玩家句
     return dict(exported=True, outputPath=str(dest), ipa=str(dest / "S2Arm.ipa"), readme=str(dest / readme), sgrade=patches_results(c),
-                games=[x["gameId"] for x in listed], files=listed, skipped=skipped + [names[g] for g in apart], exportBytes=size,
-                fresh=fresh, reused=len(listed) - len(fresh))
+                games=list(games), files=listed, skipped=skipped + [names[g] for g in apart], exportBytes=size,
+                fresh=fresh, reused=len(listed) - len(fresh), unwritten=unwritten)
 
 
 def readiness(c):
@@ -1712,6 +1718,19 @@ class MacPhone:
             return purge_game(devpush_client(self.c, self.udid, self.bid, w), g)
 
 
+def win_install_failure(e):
+    """Windows plumesign 签名装机失败（install_win.Fail）→ 作业失败。有对应处理建议的码（free_appid_limit = Apple 9120 等）：上屏说人话的原因与办法，
+    plumesign 英文原文只进诊断（Windows 实机：原先整句英文「Developer API error 9120 …」直接上屏，玩家只看到签名失败）；没有专门建议的照旧上屏原文。
+    容器装机（WinPhone.install）与下游独立 App 装机（downstream.install_ios_win）同用"""
+    code = e.err or "device_install_failed"
+    from errors import RECOVERY
+    if code in RECOVERY and code not in ("device_install_failed", "job_failed"):
+        # 连不上签名服务器：plumesign 那句是系统的本地化原话（如「不知道这样的主机。 (os error 11001)」），一并上屏，玩家 / 帮他的人能照着查网络
+        said = f"（Impactor 原话：{str(e).split('：', 1)[-1].strip()}）" if code == "signing_server_unreachable" else ""
+        return Failure("签名装机没成：" + RECOVERY[code] + said, code=code, internal=str(e))  # 非玩家句
+    return Failure(str(e), code=code)
+
+
 class WinPhone:
     """Windows：Impactor 同版 plumesign 签名装机（包名由它按账号定、装完才知道，记在这台的设备记录 devices/<设备>.json 的 bundleId，供下次覆盖前备份）+ s2a-devpush 备份 / 推 / 删"""
 
@@ -1781,15 +1800,7 @@ class WinPhone:
         try:
             self.bid = self.W.install_app(ns, say=lambda m: self.c.emit("message", m))
         except self.W.Fail as e:
-            # 有对应处理建议的码（free_appid_limit = Apple 9120 等）：上屏说人话的原因与办法，plumesign 英文原文只进诊断（Windows 实机：
-            #   原先整句英文「Developer API error 9120 …」直接上屏，玩家只看到签名失败）；没有专门建议的照旧上屏原文
-            code = e.err or "device_install_failed"
-            from errors import RECOVERY
-            if code in RECOVERY and code not in ("device_install_failed", "job_failed"):
-                # 连不上签名服务器：plumesign 那句是系统的本地化原话（如「不知道这样的主机。 (os error 11001)」），一并上屏，玩家 / 帮他的人能照着查网络
-                said = f"（Impactor 原话：{str(e).split('：', 1)[-1].strip()}）" if code == "signing_server_unreachable" else ""
-                raise Failure("签名装机没成：" + RECOVERY[code] + said, code=code, internal=str(e)) from e  # 非玩家句
-            raise Failure(str(e), code=code) from e
+            raise win_install_failure(e) from e
         rec = layout.load_device(self.c, self.key)
         layout.save_device(self.c, self.key, dict(rec, bundleId=self.bid))
 
@@ -2210,6 +2221,8 @@ def install(c):
     import downstream
     scheme = downstream.requested(c, dict(id=gid))   # 下游深度方案出的是独立 App：自己的包名，不进容器（pack/jobs/downstream.py）
     if scheme:
+        if wants_export(c):   # 导出自签包只组 S2Arm 容器；独立 App 的资源靠推送进去，玩家自签装上也拿不到资源——说清楚，不悄悄改成连手机装机
+            raise Failure(f"这款用的是 {scheme['name']} 方案（独立 App），现在只能「装到 iPhone」，还不能导出自签包。", code="downstream_export_unsupported")
         return downstream.install_ios(c, next((g for g in c.catalog()["games"] if g["id"].upper() == gid.upper()), dict(id=gid)), scheme)
     ios_pack(c, gid)
     if wants_export(c):   # 这次是「导出自签包」：不连手机、不签名，出到文件夹；推不推到手机由玩家在完成页选（exportPush）

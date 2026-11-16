@@ -117,7 +117,7 @@ STUBS = {
 'org/s2arm/android/LibraryShelf.java': '''package org.s2arm.android; import android.content.Context; import android.view.View; import java.io.File;
  final class LibraryShelf extends View { interface Listener { void play(String titleId); void openGameSettings(); void openControllers(); void openSettings(); }
  static final java.util.List<String> added=new java.util.ArrayList<>();
- LibraryShelf(Context c,Listener l){} void addGame(String titleId,String name,File art){added.add(titleId);} String selectedId(){return null;} }''',
+ LibraryShelf(Context c,Listener l){} void addGame(String titleId,String name,File art){added.add(titleId);} String selectedId(){return null;} void refreshPlaytime(){} }''',
 'android/widget/ScrollView.java': '''package android.widget; import android.content.Context; import android.view.View; public class ScrollView extends View {
  public ScrollView(Context c){} public void addView(View v){} }''',
 'android/app/Activity.java': '''package android.app; import android.content.*; import android.os.Bundle; import android.content.res.Resources; import android.view.View; import java.io.File;

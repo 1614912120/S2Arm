@@ -17,6 +17,8 @@ struct PhoneJobPanel: View {
     let session: JobSession
     /// 成功页额外的提示（装机页：第一次打开前要信任、免费 Apple ID 7 天到期……）
     var notes: [String] = []
+    /// 外层已用大标题写明是什么操作（导出自签包弹层）时不再画这一行，免得「导出自签包」下面又一行「导出，自己签名安装」
+    var showsOperation = true
     @State private var showDetails = false
 
     private var language: String { loc.lang.sharedCode }
@@ -41,7 +43,9 @@ struct PhoneJobPanel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 30) {
             // 这是什么操作（维护者：原先只看得到「更新中 · …」一小行）
-            Text(t(exporting ? "phone.title.export" : "phone.title." + session.kind.rawValue)).font(.manrope(18, .bold)).accessibilityIdentifier("phone.operation")
+            if showsOperation {
+                Text(t(exporting ? "phone.title.export" : "phone.title." + session.kind.rawValue)).font(.manrope(18, .bold)).accessibilityIdentifier("phone.operation")
+            }
             switch session.phase {
             case .running, .stopping: running
             case .finished(.failed) where pendingConfirm != nil: dropAsk
@@ -182,6 +186,10 @@ struct PhoneJobPanel: View {
                 Text(LauncherCopy.note(o.exportFresh.isEmpty ? t("phone.done.export.same")
                     : t("phone.done.export.fresh").replacingOccurrences(of: "{0}", with: o.exportFresh.joined(separator: "、")).replacingOccurrences(of: "{1}", with: "\(o.exportReused)")))
                     .font(.manrope(15, .semibold)).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("phone.export.fresh")
+            }
+            if !o.exportUnwritten.isEmpty {   // 只新写了点的那款：别的款这次没写 .img，说清手机上已有照常能玩、没有怎么办（Windows PhoneJobCard 同）
+                Text(LauncherCopy.note(t("phone.done.export.unwritten").replacingOccurrences(of: "{0}", with: o.exportUnwritten.joined(separator: "、"))))
+                    .font(.manrope(15, .semibold)).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("phone.export.unwritten")
             }
             HStack(alignment: .top, spacing: 52) {
                 ForEach(Array(stats.enumerated()), id: \.offset) { _, s in
