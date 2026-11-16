@@ -1822,7 +1822,7 @@
   "s2arm.notice.waitBusy.failed": "{1} est toujours en cours. Réessayez {0} une fois terminé.",
   "s2arm.space.sharedNote": "%@ est partagé entre les éléments ci-dessus : supprimer un seul d'entre eux ne le libèrera pas, il faut tous les cocher. Chaque taille indique ce que la suppression de cet élément seul libérerait.",
   "s2arm.controller.countTitle": "{0} manettes Switch 2",
-  "s2arm.controller.generic": "Manette Switch",
+  "s2arm.controller.generic": "Joy-Con 2 · Pro 2",
   "s2arm.controller.status.notConnected": "Non connecté",
   "s2arm.controller.status.searching": "Recherche",
   "s2arm.controller.status.connecting": "Connexion",
@@ -1835,7 +1835,7 @@
   "s2arm.controller.button.disconnect": "Déconnecter",
   "s2arm.controller.button.reconnect": "Reconnecter",
   "s2arm.controller.keyboard": "Clavier",
-  "s2arm.controller.autoConnect": "Connecter à l'ouverture de S2Arm",
+  "s2arm.controller.autoConnect": "Connecter automatiquement les manettes Switch 2",
   "s2arm.controller.disconnectOnClose": "Déconnecter à la fermeture du jeu",
   "s2arm.controller.openBluetooth": "Ouvrir les réglages Bluetooth",
   "s2arm.controller.assignPlayers": "Attribuer les joueurs",
@@ -1850,5 +1850,11 @@
   "s2arm.controller.players": "Joueurs",
   "s2arm.controller.bluetoothCount": "{0} manettes Bluetooth",
   "s2arm.controller.toolbar": "Manette",
-  "s2arm.punct.list": ", "
+  "s2arm.punct.list": ", ",
+  "bluetooth.usage": "Sert à connecter les manettes Switch 2.",
+  "s2arm.controller.status.bluetoothDenied": "Bluetooth non autorisé",
+  "s2arm.controller.button.allowBluetooth": "Autoriser le Bluetooth",
+  "s2arm.controller.settings": "Réglages",
+  "s2arm.controller.gameController": "Manette de jeu",
+  "s2arm.controller.bluetooth": "Bluetooth"
 }

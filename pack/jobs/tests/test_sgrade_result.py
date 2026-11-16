@@ -59,6 +59,16 @@ class OutcomeTests(unittest.TestCase):
         self.write([], "移植不了\twidescreen:x1\tmain\t21:9\t自 AAAA → BBBB：画幅值找不到\n")
         self.assertEqual([(f["id"], f["why"]) for f in patches.outcome(self.root)["failed"]], [("widescreen:x1", "result.why.port")])
 
+    def test_mod_applied_and_wrong_version_listed(self):
+        # 玩家导入的 mod 代码补丁（11-15）：打上的列在 mod 一类；构建号对不上的（pack/cpatch.py mod_miss）列「没打上：Mod 是别的版本的」——社区补丁版本不对照旧不列
+        self.write([("mod:aa", "main", "1", "mod", "60 FPS", "", "Smooth/m.pchtxt", "", "0")],
+                   "收\tmod:aa\tmain\t60 FPS\t位 1\n"
+                   "不收\tmod:bb\t-\tOld/x.pchtxt\tmod 构建号对不上：mod 是 1111，这份游戏的主程序是 2222\n"
+                   "不收\tgfx:old\tmain\t旧版画质\t版本不对：补丁是 1111，这份是 2222\n")
+        r = patches.outcome(self.root)
+        self.assertEqual([(a["id"], a["cat"]) for a in r["applied"]], [("mod:aa", "mod")])
+        self.assertEqual([(f["id"], f["cat"], f["name"], f["why"]) for f in r["failed"]], [("mod:bb", "mod", "Old/x.pchtxt", "result.why.version")])
+
     def test_no_records_is_empty(self):
         self.assertEqual(patches.outcome(self.root), dict(applied=[], failed=[], cheats=0))
 

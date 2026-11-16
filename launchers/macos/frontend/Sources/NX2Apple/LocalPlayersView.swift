@@ -41,10 +41,11 @@ struct PlayerToolbarButton: View {
 
     private var popover: some View {
         VStack(alignment: .leading, spacing: 12) {
-            LauncherHeadingLine {
+            // 说明放标题下、整句换行，不截断（面板只有 340 宽，并排会被「…」吃掉）
+            VStack(alignment: .leading, spacing: 4) {
                 Text(loc.t("s2arm.players.title")).font(LauncherTheme.TypeStyle.panelTitle)
-            } subtitle: {
-                Text(loc.t("s2arm.players.intro")).font(.manrope(12)).foregroundStyle(.secondary).help(loc.t("s2arm.players.intro"))
+                Text(loc.t("s2arm.players.intro")).font(.manrope(12)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             ForEach(players) { row($0) }
             if editing == .adding { field(loc.t("s2arm.players.add.confirm")) { commit { try store.add(text) } } }

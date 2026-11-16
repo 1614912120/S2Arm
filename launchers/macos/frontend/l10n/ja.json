@@ -1822,7 +1822,7 @@
   "s2arm.notice.waitBusy.failed": "{1} はまだ実行中です。終了してから {0} を再度お試しください。",
   "s2arm.space.sharedNote": "%@ は上記の項目間で共有されています:1つだけ削除しても解放されず、すべてにチェックを入れる必要があります。各サイズはその項目のみを削除した場合に解放される容量を示します。",
   "s2arm.controller.countTitle": "{0} 個の Switch 2 コントローラー",
-  "s2arm.controller.generic": "Switch コントローラー",
+  "s2arm.controller.generic": "Joy-Con 2 · Pro 2",
   "s2arm.controller.status.notConnected": "未接続",
   "s2arm.controller.status.searching": "検索中",
   "s2arm.controller.status.connecting": "接続中",
@@ -1835,7 +1835,7 @@
   "s2arm.controller.button.disconnect": "接続解除",
   "s2arm.controller.button.reconnect": "再接続",
   "s2arm.controller.keyboard": "キーボード",
-  "s2arm.controller.autoConnect": "S2Arm 起動時に自動接続",
+  "s2arm.controller.autoConnect": "Switch 2 コントローラーを自動接続",
   "s2arm.controller.disconnectOnClose": "ゲーム終了後にコントローラーを切断",
   "s2arm.controller.openBluetooth": "Bluetooth 設定を開く",
   "s2arm.controller.assignPlayers": "プレイヤーを割り当て",
@@ -1850,5 +1850,11 @@
   "s2arm.controller.players": "プレイヤー",
   "s2arm.controller.bluetoothCount": "{0} 個の Bluetooth コントローラー",
   "s2arm.controller.toolbar": "コントローラー",
-  "s2arm.punct.list": ", "
+  "s2arm.punct.list": ", ",
+  "bluetooth.usage": "Switch 2 コントローラーの接続に使用します。",
+  "s2arm.controller.status.bluetoothDenied": "Bluetooth が許可されていません",
+  "s2arm.controller.button.allowBluetooth": "Bluetooth を許可",
+  "s2arm.controller.settings": "設定",
+  "s2arm.controller.gameController": "ゲームコントローラー",
+  "s2arm.controller.bluetooth": "Bluetooth"
 }

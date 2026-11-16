@@ -179,23 +179,9 @@ def orig_romfs(root, work):
 
 
 def std_files(path, base):
-    """IMG 里标准 RomFS 段（起点 base）的文件表 → {相对路径: (game.img 里的绝对偏移, 长度)}；按公开格式只读元数据，不读文件数据"""
-    with open(path, 'rb') as f:
-        def rd(off, n): f.seek(base + off); return f.read(n)
-        hs, dho, dhs, dmo, dms, fho, fhs, fmo, fms, data = struct.unpack('<10Q', rd(0, 0x50))
-        dmeta, fmeta = rd(dmo, dms), rd(fmo, fms)
-    out, todo = {}, [(0, '')]
-    while todo:
-        off, p = todo.pop()
-        _, _, child, first, _, nl = struct.unpack_from('<6I', dmeta, off)
-        name = dmeta[off + 24: off + 24 + nl].decode('utf-8'); here = (p + '/' + name).lstrip('/') if name else p
-        fo = first
-        while fo != 0xFFFFFFFF:
-            _, sib, foff, size, _, fnl = struct.unpack_from('<IIQQII', fmeta, fo)
-            out[(here + '/' + fmeta[fo + 32: fo + 32 + fnl].decode('utf-8')).lstrip('/')] = (base + data + foff, size); fo = sib
-        c = child
-        while c != 0xFFFFFFFF: todo.append((c, here)); c = struct.unpack_from('<6I', dmeta, c)[1]
-    return out
+    """IMG 里标准 RomFS 段（起点 base）的文件表 → {相对路径: (game.img 里的绝对偏移, 长度)}；按公开格式只读元数据，不读文件数据（解析只此一份：pack/romfs_img.py）"""
+    from romfs_img import RomfsImage
+    return RomfsImage(path, base).files()
 
 
 def write_map(pack_dir, img_path):

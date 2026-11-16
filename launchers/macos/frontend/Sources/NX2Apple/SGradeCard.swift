@@ -34,18 +34,37 @@ struct SGradeCard: View {
     @ObservedObject var model: S2ArmLauncherModel
     @EnvironmentObject var loc: Localizer
     let gameID: String
-    /// 作业层答「这个版本没命中、别的版本也没有」：上层整张不出
-    var nothing: () -> Void = {}
     @State private var match: PatchMatch?
     @State private var failed = false
+    @State private var modNotes: [String] = []
 
     var body: some View {
-        SGradeCardView(match: match, failed: failed, zh: loc.cjkPunctuation, on: Binding(get: { model.sgradeOn(gameID) }, set: { model.setSgrade(gameID, $0) })) {
+        SGradeCardView(match: match, failed: failed, zh: loc.cjkPunctuation, on: Binding(get: { model.sgradeOn(gameID) }, set: { model.setSgrade(gameID, $0) }),
+                       importMod: importMod, modNotes: modNotes) {
             BackendText.launcherText("export.sgrade." + $0, language: loc.lang.sharedCode) }
-            .task(id: gameID) {
-                match = nil; failed = false
-                if let r = try? await model.saveJob("patchMatch", gameID: gameID) { let m = PatchMatch(r); match = m; if m.total == 0, !m.port, !m.ownWiden, m.others.isEmpty, !m.build.isEmpty { nothing() } } else { failed = true }
-            }
+            .task(id: gameID) { modNotes = []; await refresh() }
+    }
+
+    private func refresh() async {
+        match = nil; failed = false
+        if let r = try? await model.saveJob("patchMatch", gameID: gameID) { match = PatchMatch(r) } else { failed = true }
+    }
+
+    /// 导入 Mod（11-15 维护者「打包页增加 mod 导入，S 级优化又升级了」）：同启动设置「资源 Mod」那一栏（作业层 communitySave modsImport → pack/jobs/mods.py）。
+    ///   资源替换（romfs）起局叠上；带代码补丁（exefs 的 pchtxt / IPS）的这次出包编进程序，跟 Mod 开关走。导入完重算卡片（mod 一类的份数）
+    private func importMod() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true; panel.canChooseDirectories = true; panel.canChooseFiles = true
+        panel.allowedContentTypes = [.zip, .folder]
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        Task {
+            do {
+                let mods = try await model.launchSettingsFull(gameID, modsImport: panel.urls.map(\.path)).5
+                modNotes = (mods.imported.isEmpty ? [] : [BackendText.launcherText("display.mods.imported", language: loc.lang.sharedCode).replacingOccurrences(of: "{0}", with: mods.imported.joined(separator: loc.t("s2arm.punct.list")))])
+                    + mods.notes.map { loc.backend($0) }
+            } catch { modNotes = [error.localizedDescription] }
+            await refresh()
+        }
     }
 }
 
@@ -56,6 +75,9 @@ struct SGradeCardView: View {
     let zh: Bool
     /// 「出包时打入」勾选（v0.4.0 维护者：作为 Beta 功能出包页默认勾上，玩家可取消；取消 = 这次出包不带社区补丁与金手指）；nil = 不出勾选（单测旧图）
     var on: Binding<Bool>? = nil
+    /// 打包页「导入 Mod」按钮（nil = 不出，单测旧图）与刚导入的说明（导入了哪几份、哪些没收、代码补丁几份）
+    var importMod: (() -> Void)? = nil
+    var modNotes: [String] = []
     /// export.sgrade.<键> → 当前语言的文字
     let x: (String) -> String
     /// 金色 S（缺省读 App 资源 s-gold.png；单测传仓库里的原图）
@@ -105,7 +127,7 @@ struct SGradeCardView: View {
         .accessibilityIdentifier("export.sgrade")
     }
 
-    private static let catSymbol = ["widescreen": "arrow.up.left.and.arrow.down.right", "fps": "speedometer", "gfx": "wand.and.stars", "cheat": "gamecontroller.fill"]
+    private static let catSymbol = ["widescreen": "arrow.up.left.and.arrow.down.right", "fps": "speedometer", "gfx": "wand.and.stars", "cheat": "gamecontroller.fill", "mod": "puzzlepiece.extension.fill"]
 
     /// 玩家这份游戏的版本：显示版本号优先，没有就用构建号前 16 位
     private func mine(_ m: PatchMatch) -> String { m.version.isEmpty ? m.build.prefix(16).uppercased() : m.version }
@@ -116,7 +138,7 @@ struct SGradeCardView: View {
         } else if let m = match {
             if m.total > 0 || m.port || m.ownWiden {
                 VStack(alignment: .leading, spacing: 9) {
-                    ForEach(["widescreen", "fps", "gfx", "cheat"], id: \.self) { c in
+                    ForEach(["widescreen", "fps", "gfx", "cheat", "mod"], id: \.self) { c in
                         if let n = m.exact[c], n > 0 { hitRow(x("hit." + c).replacingOccurrences(of: "{0}", with: String(n)), symbol: Self.catSymbol[c] ?? "checkmark") }
                         if c == "widescreen", (m.exact[c] ?? 0) == 0, !m.port, m.ownWiden { hitRow(x("ownWiden"), symbol: Self.catSymbol[c] ?? "checkmark") }
                         if c == "widescreen", m.port { hitRow(x("port").replacingOccurrences(of: "{0}", with: m.portVersions.isEmpty ? x("port.any") : m.portVersions.prefix(3).joined(separator: zh ? "、" : ", ")), symbol: Self.catSymbol[c] ?? "checkmark") }
@@ -130,6 +152,14 @@ struct SGradeCardView: View {
             if m.total == 0, !m.others.isEmpty {   // 补丁按版本生效（11-14 维护者）：列出的版本和玩家这份不同（或还不知道玩家是哪版）就不会打入，说清楚
                 note(x(m.build.isEmpty ? "listed" : "others") + m.others.prefix(6).map { "\($0.version)\(zh ? "（" : " (")\($0.cats.map(catName).joined(separator: zh ? "、" : ", "))\(zh ? "）" : ")")" }
                     .joined(separator: zh ? "；" : "; "))
+            }
+            if let importMod {   // 导入 Mod（11-15）：带代码补丁的 mod 这次出包编进程序；资源替换照常起局叠上
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    note(x("mod.note"))
+                    Spacer(minLength: 8)
+                    Button(x("mod.import"), action: importMod).buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("export.sgrade.mod.import")
+                }
+                ForEach(modNotes, id: \.self) { note($0) }
             }
         } else {
             HStack(spacing: 8) { ProgressView().controlSize(.small).tint(Self.gold); Text(x("loading")).font(.manrope(12.5)).foregroundStyle(.secondary) }

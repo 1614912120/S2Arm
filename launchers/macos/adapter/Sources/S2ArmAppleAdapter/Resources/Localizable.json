@@ -9712,10 +9712,6 @@
   "en": "Sending mod \"{0}\" to iPhone ({0} files)"
  },
  {
-  "source": "里面的代码补丁（exefs 的 pchtxt / IPS）这里不收：只导入资源替换（romfs）",
-  "en": "Code patches inside (exefs pchtxt / IPS) aren't imported here: only asset replacements (romfs)"
- },
- {
   "source": "mod 要选 zip 压缩包或文件夹（7z / rar 先解压成文件夹再导入）：{0}",
   "en": "Choose a zip file or a folder for mods (extract 7z / rar into a folder first): {0}"
  },
@@ -9734,14 +9730,6 @@
  {
   "source": "这个压缩包解开超过 16 GB：{0}",
   "en": "This archive is larger than 16 GB when extracted: {0}"
- },
- {
-  "source": "「{0}」里没找到 romfs 文件夹：资源替换 mod 要带 romfs/（如 atmosphere/contents/{0}/romfs）。",
-  "en": "No romfs folder found in \"{0}\": asset mods need a romfs/ folder (for example atmosphere/contents/{0}/romfs)."
- },
- {
-  "source": "「{0}」的 romfs 是空的，没收",
-  "en": "The romfs in \"{0}\" is empty, skipped"
  },
  {
   "source": "NUP 程序号 {0} 与游戏库 {0} 不一致",
@@ -9834,5 +9822,25 @@
  {
   "source": "这款没有 RomFS，Apple TV 包不用预转贴图",
   "en": "This game has no RomFS, so no texture conversion is needed for Apple TV"
+ },
+ {
+  "source": "「{0}」里没找到 mod：资源替换要带 romfs/（如 atmosphere/contents/{0}/romfs），代码补丁要带 exefs/ 里的 pchtxt / IPS（或 atmosphere/exefs_patches/<名字>/）。",
+  "en": "No mod found in \"{0}\": asset mods need a romfs/ folder (for example atmosphere/contents/{0}/romfs); code mods need pchtxt / IPS files in exefs/ (or atmosphere/exefs_patches/<name>/)."
+ },
+ {
+  "source": "「{0}」是空的，没收",
+  "en": "\"{0}\" is empty, skipped"
+ },
+ {
+  "source": "「{0}」带 {0} 份代码补丁：重新打包这款（或 S 级优化升级）后生效",
+  "en": "\"{0}\" includes {0} code patch(es): they take effect after you re-pack this game (or run the S-grade upgrade)"
+ },
+ {
+  "source": "显卡卡住了，S2Arm 把这局安全停下了。",
+  "en": "The GPU hung, so S2Arm stopped this session safely."
+ },
+ {
+  "source": "再开一次一般能接着玩（存档停在游戏上次保存的地方）；同一处反复这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上。",
+  "en": "Starting again usually lets you keep playing (your save is as of the last time the game saved). If it keeps happening at the same spot, export a diagnostics package from Environment Check and attach it to a GitHub issue."
  }
 ]

@@ -16,7 +16,6 @@ struct ExportView: View {
     /// 当前页面的选择；打开时恢复上次手动选择，没有时由模型选缺省位置。
     @State private var location = ""
     /// S 级优化卡片报了「这款什么都没有」的游戏号（整张卡不出）
-    @State private var sgradeNothing: String?
     let game: GameSummary
     /// 打开装机页（已出过 iPhone 包的款直接装）。
     let install: () -> Void
@@ -26,9 +25,9 @@ struct ExportView: View {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 34) {
                     header
-                    if sgradeNothing != game.id {   // 都没有（这个版本没命中、别的版本也没有）就整张不出（11-13 维护者「没匹配就什么都不显示」），换一款再出
-                        SGradeCard(model: model, gameID: game.id, nothing: { sgradeNothing = game.id })   // S 级优化（Beta，11-13）：这款这个版本命中了哪些社区补丁，命中的出包时自动打入
-                    }
+                    // S 级优化（Beta，11-13）：这款这个版本命中了哪些社区补丁，命中的出包时自动打入。11-15 起总是出：卡片里有「导入 Mod」入口
+                    //   （维护者「打包页增加 mod 导入，S 级优化又升级了」；原「没匹配就整张不出」时玩家找不到入口，没匹配时只剩一句「没有这个版本的补丁」+ 导入 Mod）
+                    SGradeCard(model: model, gameID: game.id)
                     platforms
                 }
                 .frame(maxWidth: 1120, alignment: .leading)

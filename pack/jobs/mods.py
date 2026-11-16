@@ -67,55 +67,82 @@ def _unpack(src, work):
     return out
 
 
+CODE_EXT = (".pchtxt", ".ips")   # exefs 里的代码补丁（11-15 维护者：电脑端导入、出包 / S 级升级时编进程序，pack/cpatch.py）
+
+
+def _code_files(d):
+    return sorted(f for f in Path(d).iterdir() if f.is_file() and not f.is_symlink() and f.suffix.lower() in CODE_EXT) if Path(d).is_dir() else []
+
+
+def _child(d, name):
+    """d 下名为 name 的子目录（大小写都认）"""
+    return next((p for p in Path(d).iterdir() if p.is_dir() and not p.is_symlink() and p.name.lower() == name), None) if Path(d).is_dir() else None
+
+
+def _parts(d):
+    """mod 根 d → (romfs 目录或 None, 代码补丁目录或 None)：d/romfs；d/exefs 里有 pchtxt / IPS；Atmosphere 的 exefs_patches/<名>/ 本身放着 IPS"""
+    code = _child(d, "exefs")
+    code = code if code and _code_files(code) else d if d.parent.name.lower() == "exefs_patches" and _code_files(d) else None
+    return _child(d, "romfs"), code
+
+
 def _find(root, gid):
-    """→ ([(mod 名, romfs 目录)], [说明]）。romfs 目录名大小写都认；路径上出现别的程序号 = 不是这款，不收"""
-    found, notes, exefs = [], [], False
+    """→ ([(mod 名, romfs 目录或 None, 代码补丁目录或 None)], [说明]）。mod 根 = 下面有 romfs/ 或带代码补丁的 exefs/ 的文件夹（大小写都认；
+    玩家直接选 romfs / exefs 本身也认），或 Atmosphere 的 exefs_patches/<名>/（IPS 文件名是构建号、不带程序号：对不上这款的出包时自然不打）。
+    路径上出现别的程序号 = 不是这款，不收"""
+    found, notes = [], []
     root = Path(root)
-    if root.name.lower() == "romfs":   # 玩家直接选的就是 romfs 文件夹
-        return [("", root)], notes
-    for d in sorted(p for p in root.rglob("*") if p.is_dir() and not p.is_symlink()):
-        low = d.name.lower()
-        if low == "exefs" and any(f.suffix.lower() in (".pchtxt", ".ips") for f in d.iterdir() if f.is_file()):
-            exefs = True
-        if low != "romfs" or any(q.name.lower() == "romfs" for q in d.relative_to(root).parents if q != Path(".")):
+    if root.name.lower() in ("romfs", "exefs"):   # 玩家直接选的就是 romfs / exefs 文件夹：它的上一级当 mod 根
+        return [("",) + _parts(root.parent)], notes
+    cands = [root] + sorted(p for p in root.rglob("*") if p.is_dir() and not p.is_symlink() and p.name.lower() not in ("romfs", "exefs"))
+    for d in cands:
+        rel = d.relative_to(root).parts
+        if any(q.lower() in ("romfs", "exefs") for q in rel):
+            continue   # 不进 romfs / exefs 里面再找
+        rd, code = _parts(d)
+        if not (rd or code):
             continue
-        rel = d.relative_to(root).parts[:-1]
-        ids = [p.upper() for p in rel if GID_RE.match(p)]
+        ids = [q.upper() for q in rel if GID_RE.match(q)]
         if ids and gid.upper() not in ids:
-            notes.append("「%s」是给另一款游戏（%s）的，没收" % ("/".join(rel) or "romfs", ids[-1]))
+            notes.append("「%s」是给另一款游戏（%s）的，没收" % ("/".join(rel) or d.name, ids[-1]))
             continue
-        label = [p for p in rel if not GID_RE.match(p) and p.lower() not in ("atmosphere", "contents", "mods")]
-        found.append(("/".join(label[-2:]) if label else "", d))
-    if exefs:
-        notes.append("里面的代码补丁（exefs 的 pchtxt / IPS）这里不收：只导入资源替换（romfs）")
+        label = [q for q in rel if not GID_RE.match(q) and q.lower() not in ("atmosphere", "contents", "mods", "exefs_patches")]
+        found.append(("/".join(label[-2:]) if label else "", rd, code))
     return found, notes
 
 
 def import_paths(c, game, paths):
-    """玩家导入（zip 或文件夹，可多选）：每个找到的 romfs 存成 mods/<名字>/romfs（同名整份替换）。→ {imported: [名字], notes: [说明]}
-    一个都没找到 = 报错（说清要什么结构）"""
+    """玩家导入（zip 或文件夹，可多选）：每个 mod 根存成 mods/<名字>/romfs（资源替换，起局叠上）与 mods/<名字>/exefs（代码补丁 pchtxt / IPS，
+    下次出包 / S 级升级时编进程序，code_index）；同名整份替换。→ {imported: [名字], notes: [说明]}。一个都没找到 = 报错（说清要什么结构）"""
     gid = game["id"].upper()
     home = mods_dir(c, gid)
     home.mkdir(parents=True, exist_ok=True)
     imported, notes = [], []
     for raw in paths:
         src = Path(raw)
-        base = _safe_name(src.stem if src.is_file() else src.parent.name if src.name.lower() == "romfs" else src.name)
+        base = _safe_name(src.stem if src.is_file() else src.parent.name if src.name.lower() in ("romfs", "exefs") else src.name)
         with tempfile.TemporaryDirectory(dir=c.private) as work:
             root = _unpack(src, work)
             found, why = _find(root, gid)
             notes += why
             if not found:
-                raise Failure("「%s」里没找到 romfs 文件夹：资源替换 mod 要带 romfs/（如 atmosphere/contents/%s/romfs）。" % (src.name, gid), code="job_failed")
-            for label, rd in found:
+                raise Failure("「%s」里没找到 mod：资源替换要带 romfs/（如 atmosphere/contents/%s/romfs），代码补丁要带 exefs/ 里的 pchtxt / IPS（或 atmosphere/exefs_patches/<名字>/）。" % (src.name, gid), code="job_failed")
+            for label, rd, cd in found:
                 name = _safe_name(base if len(found) == 1 or not label else "%s - %s" % (base, label.replace("/", " - ")))
-                files = [f for f in rd.rglob("*") if f.is_file() and not f.is_symlink()]
-                if not files:
-                    notes.append("「%s」的 romfs 是空的，没收" % name)
+                code = _code_files(cd) if cd else []
+                files = [f for f in rd.rglob("*") if f.is_file() and not f.is_symlink()] if rd else []
+                if not files and not code:
+                    notes.append("「%s」是空的，没收" % name)
                     continue
                 tmp = home / (".importing-" + name)
-                shutil.rmtree(tmp, ignore_errors=True)
-                shutil.copytree(rd, tmp / "romfs", symlinks=True, ignore=lambda d, ns: [n for n in ns if Path(d, n).is_symlink()])
+                shutil.rmtree(tmp, ignore_errors=True); tmp.mkdir()
+                if files:
+                    shutil.copytree(rd, tmp / "romfs", symlinks=True, ignore=lambda d, ns: [n for n in ns if Path(d, n).is_symlink()])
+                if code:
+                    (tmp / "exefs").mkdir()
+                    for f in code:
+                        shutil.copyfile(f, tmp / "exefs" / f.name)
+                    notes.append("「%s」带 %d 份代码补丁：重新打包这款（或 S 级优化升级）后生效" % (name, len(code)))
                 dst = home / name
                 for old in (dst, home / (OFF + name)):   # 同名整份替换：关着的那份也换掉，新导入的是开着的
                     if old.exists():
@@ -144,7 +171,7 @@ def listing(c, game):
     out = []
     for name, (d, on) in sorted(_folders(mods_dir(c, game["id"].upper(), create=False)).items()):
         files = [f for f in (d / "romfs").rglob("*") if f.is_file()] if (d / "romfs").is_dir() else []
-        out.append(dict(name=name, enabled=on, files=len(files), bytes=sum(f.stat().st_size for f in files)))
+        out.append(dict(name=name, enabled=on, files=len(files), bytes=sum(f.stat().st_size for f in files), code=len(_code_files(d / "exefs"))))
     return out
 
 
@@ -178,3 +205,37 @@ def fingerprint(d):
         st = f.stat()
         h.update(f"{f.relative_to(d).as_posix()}\t{st.st_size}\t{int(st.st_mtime)}\n".encode())
     return h.hexdigest()[:16]
+
+
+def code_index(c, game):
+    """出包 / S 级升级前调（pack/jobs/patches.py fetch）：这款各 mod 的代码补丁整理成一个补丁索引目录交 pack/cpatch.py（类别 mod、编号 mod:<sha>）。
+    开着、关着的都收：编进程序的是双路开关，运行时按 mods/<名字> 在不在（关掉 = .off-<名字>）决定开不开（runtime/src/cpatch.c），
+    手机上关掉也即时生效、不用重出包。索引里路径 = <mod 名>/<文件名>，进 cpatch.tsv「来源」列，运行时按第一段认 mod。没有代码补丁 → None"""
+    gid = game["id"].upper()
+    rows = [(name, f) for name, (d, _) in sorted(_folders(mods_dir(c, gid, create=False)).items()) for f in _code_files(d / "exefs")]
+    out = Path(c.private) / "community-cache" / "games" / gid / "mod"
+    shutil.rmtree(out, ignore_errors=True)
+    if not rows:
+        return None
+    import hashlib
+    lines = ["\t".join(["game", "title_id", "path", "type", "source", "license", "in_pack", "sha256", "mod", "origin"])]
+    for name, f in rows:
+        rel = f"{name}/{f.name}"
+        (out / name).mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(f, out / rel)
+        data = f.read_bytes()
+        lines.append("\t".join(["", gid, rel, "pchtxt" if f.suffix.lower() == ".pchtxt" else "ips", "mod", "", "yes",
+                                hashlib.sha256(data).hexdigest(), name, rel]))
+    (out / "INDEX.tsv").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(out)
+
+
+def code_digest(c, gid):
+    """各 mod 代码补丁的内容摘要（S 级升级记号用，pack/jobs/rewrite_refresh.py sgrade_key）：导入 / 删了代码补丁要重编；只开关不算（运行时开关）"""
+    import hashlib
+    h = hashlib.sha256()
+    for name, (d, _) in sorted(_folders(mods_dir(c, gid.upper(), create=False)).items()):
+        for f in _code_files(d / "exefs"):
+            h.update(f"{name}/{f.name}\0".encode()); h.update(hashlib.sha256(f.read_bytes()).digest())
+    return h.hexdigest()[:16] if h.digest() != hashlib.sha256().digest() else "-"
+

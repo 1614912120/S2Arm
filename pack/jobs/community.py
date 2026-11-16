@@ -441,7 +441,7 @@ def packed_patches(c, gid):
     for r in _rows(layout.image_mac(c, gid, create=False) / "cpatch.tsv"):
         uid = r.get("编号") or ""  # 非玩家句
         label = r.get("段名") or uid  # 非玩家句
-        if not uid or uid in seen or uid.startswith(("fps:", "cheat:", "wsauto:")):   # 自适应满屏一族跟满屏开关（adaptive_patches），不单列
+        if not uid or uid in seen or uid.startswith(("fps:", "cheat:", "wsauto:", "mod:")):   # 自适应满屏一族跟满屏开关（adaptive_patches），不单列；mod 代码补丁跟资源 Mod 开关（runtime/src/cpatch.c cp_mod_on）
             continue
         try: fa = float(r.get("画幅") or 0) if uid.startswith("widescreen:") else 0  # 非玩家句
         except ValueError: fa = 0

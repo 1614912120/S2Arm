@@ -154,6 +154,9 @@ def bundle(destination, developer_dir):
     toolchain.prepare(c)
     host = compile_host(c, fingerprint, c.env(), c.logs)
     prepare = c.private / "tools/prepare"
+    # 每次从空目录编：dotnet publish -o 不清目标目录，上一次（别的编法）留下的产物会混进来（v0.4.4 第三次候选：上一版编出的 dsh_batch.dSYM
+    #   残留，去符号那步拿它当二进制处理报错）。这几样工具每次本来就全量重编，清掉不损失增量
+    shutil.rmtree(prepare, ignore_errors=True)
     prepare.mkdir(parents=True, exist_ok=True)
     c.run(["make", "-C", ROOT / "graphics/metal", str(ROOT / "build/gal/gal_xc"),
            "DEVELOPER_DIR=" + developer_dir], c.logs / "gal-tools.log")
@@ -392,6 +395,9 @@ def seal_snapshot(destination, fingerprint):
     diff = sorted(k for k in before.keys() | after.keys() if before.get(k) != after.get(k))
     if failed or diff:
         raise RuntimeError(f"引擎快照自检不过：git 读法报错 {failed}；删 .git 后读到的值与 git 算的不同 {diff}")
+    leftovers = sorted(str(p.relative_to(destination)) for p in destination.rglob("*.dSYM"))
+    if leftovers:   # 调试符号包不随包（去符号那步会拿它当二进制处理；也不该给玩家）：多半是构建目录的残留
+        raise RuntimeError(f"引擎目录里有调试符号包（构建残留），不出包：{leftovers[:5]}")
     return write_manifest(destination, fingerprint)     # 再写一遍（沿用字段）：顺带核自检没往引擎目录里多写文件
 
 

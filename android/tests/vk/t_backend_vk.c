@@ -5542,12 +5542,12 @@ static void c82_occlusion(const char *dir) {
 
 // C90：无附件渲染通道（NVN 不挂任何目标照样绘制：片元只写存储 / 只为遮挡计数；真机一款大作每帧约 4 笔）。
 // 通道 0 个颜色槽、无深度，帧缓冲 32x24；管线不挂任何颜色格式；整屏三角形开遮挡计数。
-// 期望（手算）：后端声明 NVN_GPU_CAP_NO_ATTACH_PASS；槽 0 样本数 = 32 × 24 = 768（片元在零附件子通道里照样跑）。
+// 期望（手算）：后端**不**对核心声明 NVN_GPU_CAP_NO_ATTACH_PASS（#697 撤回，核心照旧跳过这些笔）；直接开零附件通道仍可用：槽 0 样本数 = 32 × 24 = 768。
 static uint64_t g_c90_occ; static uint32_t g_c90_n;
 static void c90_done(void *user, const nvn_gpu_done *d) { (void)user; g_c90_n = d->nocclusion; if (d->nocclusion && d->occlusion) g_c90_occ = d->occlusion[0]; on_done(NULL, d); }
 static void c90_no_attachment(const char *dir) {
     nvn_gpu_caps caps; nvn_gpu_caps_get(&caps);
-    CHECK(caps.caps & NVN_GPU_CAP_NO_ATTACH_PASS, "C90 后端声明无附件通道");
+    CHECK(!(caps.caps & NVN_GPU_CAP_NO_ATTACH_PASS), "C90 后端不声明无附件通道（#697 撤回）");
     nvn_gpu_shader vs = NULL, fs = NULL; void *vm = NULL, *fm = NULL;
     if (!load_shader_pair(dir, "tri3.vert", "solid_green.frag", NULL, NULL, &vs, &fs, &vm, &fm)) { CHECK(0, "C90 读不到 solid_green"); return; }
     nvn_gpu_buf vb = full_vb();

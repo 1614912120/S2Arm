@@ -1822,7 +1822,7 @@
   "s2arm.notice.waitBusy.failed": "Try {0} again after {1} finishes",
   "s2arm.space.sharedNote": "%@ is shared and freed only when all related parts are selected; each row shows its individual savings",
   "s2arm.controller.countTitle": "{0} Switch 2 controllers",
-  "s2arm.controller.generic": "Switch Controller",
+  "s2arm.controller.generic": "Joy-Con 2 · Pro 2",
   "s2arm.controller.status.notConnected": "Not connected",
   "s2arm.controller.status.searching": "Searching",
   "s2arm.controller.status.connecting": "Connecting",
@@ -1835,7 +1835,7 @@
   "s2arm.controller.button.disconnect": "Disconnect",
   "s2arm.controller.button.reconnect": "Reconnect",
   "s2arm.controller.keyboard": "Keyboard",
-  "s2arm.controller.autoConnect": "Connect when S2Arm opens",
+  "s2arm.controller.autoConnect": "Auto-connect Switch 2 controllers",
   "s2arm.controller.disconnectOnClose": "Disconnect when game closes",
   "s2arm.controller.openBluetooth": "Open Bluetooth Settings",
   "s2arm.controller.assignPlayers": "Assign players",
@@ -1883,5 +1883,11 @@
   "s2arm.install.teamGuide.step1": "Open the helper project and select S2ArmSigning → Signing & Capabilities → Personal Team",
   "s2arm.install.teamGuide.step2": "Connect and unlock your iPhone, select it in Xcode and click Run",
   "s2arm.install.teamGuide.step3": "After it runs, return and click Check again to refresh the signing status",
-  "s2arm.install.teamGuide.failed": "Could not open the helper project: {0}"
+  "s2arm.install.teamGuide.failed": "Could not open the helper project: {0}",
+  "bluetooth.usage": "Used to connect Switch 2 controllers.",
+  "s2arm.controller.status.bluetoothDenied": "Bluetooth not allowed",
+  "s2arm.controller.button.allowBluetooth": "Allow Bluetooth",
+  "s2arm.controller.settings": "Settings",
+  "s2arm.controller.gameController": "Game controller",
+  "s2arm.controller.bluetooth": "Bluetooth"
 }

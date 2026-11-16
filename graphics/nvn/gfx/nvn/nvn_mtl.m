@@ -1221,6 +1221,7 @@ static int pend_room(int nodes) {
 // (Fire Emblem Engage writes its query reports into the page of a uniform block); it counts for later submissions while this one runs (gw_commit)
 enum { SBW_N = 16384, SBW_PAGES = 4096 };
 static struct { uint64_t page; uint32_t gen; uint8_t src; } g_sbwp[SBW_N]; static int g_nsbw, g_sbw_over;   // src: SBW_* bits; pages in the set this submission; over: a write could not be kept (too large, set full, size not known)
+static uint16_t g_sbw_list[SBW_N];   // the slots this submission took, in order (g_nsbw of them): gw_commit reads these instead of all SBW_N slots (nxnative f63ecbd4, MIT: Ocarina of Time M4 Pro 42.8-43.9k -> 38.7-39.3k submit-thread instructions a draw)
 // Storage writes too large for the page set (over SBW_PAGES pages) are kept as ranges (#41): they used to mark the submission over, which refused every partly covered uniform shadow
 //   after them and, through gw_commit, every shadow of the next submission while this one ran (g_gw_all). A Switch 2 title (0400380020056000) binds a 53 MB writable storage buffer
 //   to a compute dispatch every frame: from then on each of its 180–285 occlusion-query quads a frame, 7 inline updates of one uniform block before each, ended its render pass and
@@ -1230,7 +1231,7 @@ static struct { uint64_t lo, hi; } g_sbw_wide[SBW_WIDE]; static int g_nsbw_wide;
 static int sbw_slot(uint64_t pg, int add) {   // open addressing; −1 = not there (or no room to add)
     unsigned h = (unsigned)((pg * 0x9E3779B97F4A7C15ull) >> 50) & (SBW_N - 1);
     for (int i = 0; i < 64; i++, h = (h + 1) & (SBW_N - 1)) {
-        if (g_sbwp[h].gen != g_pend_gen) { if (!add) return -1; g_sbwp[h].page = pg; g_sbwp[h].gen = g_pend_gen; g_sbwp[h].src = 0; g_nsbw++; return (int)h; }
+        if (g_sbwp[h].gen != g_pend_gen) { if (!add) return -1; g_sbwp[h].page = pg; g_sbwp[h].gen = g_pend_gen; g_sbwp[h].src = 0; g_sbw_list[g_nsbw++] = (uint16_t)h; return (int)h; }
         if (g_sbwp[h].page == pg) return (int)h; }
     return -1;
 }
@@ -2051,7 +2052,7 @@ static void gw_commit(uint64_t fence) {
         if (g_pend_kind[e] == 1 && g_pend_upd[e] && ifw_on()) { const upd_ent *u = &g_upd[g_pend_upd[e] - 1];
             if (ifw_put(g_pend_lo[e], g_pend_hi[e], (const uint8_t *)u->buf.contents + u->off + (g_pend_lo[e] - u->lo), fence, done)) continue; }
         gw_put(g_pend_lo[e], g_pend_hi[e], fence, done); }
-    if (g_nsbw) for (int i = 0; i < SBW_N; i++) if (g_sbwp[i].gen == g_pend_gen) gw_put(g_sbwp[i].page << 12, (g_sbwp[i].page + 1) << 12, fence, done);
+    for (int i = 0; i < g_nsbw; i++) { unsigned h = g_sbw_list[i]; gw_put(g_sbwp[h].page << 12, (g_sbwp[h].page + 1) << 12, fence, done); }   // the pages this submission noted (g_sbw_list), not a scan of all SBW_N slots; the running-write table does not depend on their order
     for (int i = 0; i < g_nsbw_wide; i++) gw_put(g_sbw_wide[i].lo, g_sbw_wide[i].hi, fence, done);
 }
 // The writes queued in this submission from index since on that overlap [a, b), newest first, into out (room for every entry a lookup can meet); -1 when they cannot all be told
@@ -9954,13 +9955,17 @@ static NSArray<NSString *> *warm_paths(int say) {
     const char *e = getenv("DM_PSO_MANIFEST");
     if (e && !strcmp(e, "off")) return nil;
     if (e && *e) return @[@(e)];
+    // 两份清单各自独立：包里的种子表（出包时给的）与本机记下的 user 表（以前玩过建过的管线）。缺哪份就只用另一份。
+    //   原先种子表一缺就整个返回 nil，本机 user 表跟着被丢：不预热 → 归档没有未命中可写（par_writer 只写预热的未命中）→ 每次进游戏都冷编
+    //   （D-EPJ8 真人快打 5 局全是「256 compiled, 0 from the archive, 0 written」；保留诊断 821 份里 90 份带这句，含奥德赛、旷野之息，v0.1.0 起如此）
     NSString *seed = [shmap_path().stringByDeletingLastPathComponent stringByAppendingPathComponent:@"pso_manifest.tsv"];
-    NSMutableArray<NSString *> *all = [NSMutableArray arrayWithObject:seed];
+    NSMutableArray<NSString *> *all = [NSMutableArray array];
+    if ([NSFileManager.defaultManager fileExistsAtPath:seed]) [all addObject:seed];
+    else if (say) MLOG("pipeline prewarm: this package has no seed list (%s): prewarm uses this device's user list only", seed.UTF8String);
     NSString *user = pso_user_path();
     if (user && [NSFileManager.defaultManager fileExistsAtPath:user]) [all addObject:user];
     else if (say) MLOG("pipeline prewarm: this device's user list %s%s", user ? "does not exist yet: " : "has no path (neither DM_PSO_USER nor DM_SAVE is set)", user ? user.UTF8String : "");
-    if (![NSFileManager.defaultManager fileExistsAtPath:seed]) { if (say) MLOG("【红】 pipeline prewarm: seed list does not exist: %s", seed.UTF8String); return nil; }
-    return all;
+    return all.count ? all : nil;
 }
 // Tell the front end at once that the first frame will wait for the prewarm (10-30 device line, Monster Hunter Rise cold start mhrise_1030172905_1: the game's first present, 0.96 s, came
 //   before its first submission, where the shader map loads lazily and the prewarm runs, so the loading page was taken down at that present and the 15 s prewarm showed black).

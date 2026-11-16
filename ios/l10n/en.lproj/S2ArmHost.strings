@@ -370,6 +370,10 @@
 "dprompt.expiry.title" = "Signature expires soon";
 "dprompt.ns2pro.body" = "Hold four fingers on the screen for 1.5 seconds to open Settings, turn on “Enable Switch 2 Pro Controller”, then press the pairing button on the controller.";
 "dprompt.ns2pro.title" = "Using a Switch 2 Pro Controller?";
+"dprompt.motion.title" = "Motion controls";
+"dprompt.motion.padNone.phone" = "S2Arm can’t read motion from this controller (for example first-generation Joy-Con or Xbox controllers), so the game’s motion controls use the phone’s gyro instead: just turn the phone.";
+"dprompt.motion.padNone.off" = "S2Arm can’t read motion from this controller (for example first-generation Joy-Con or Xbox controllers), and Phone gyro is off, so motion controls won’t work for now. To use them: gear at the top left → Controllers & Motion → turn on Phone gyro.";
+"dprompt.motion.phoneOff" = "This game uses motion controls, but Phone gyro is off, so they won’t respond. To use them: gear at the top left → Controllers & Motion → turn on Phone gyro.";
 "gfx.antiAliasing" = "Anti-aliasing";
 "gfx.antiAliasing.high" = "SMAA High";
 "gfx.antiAliasing.medium" = "SMAA Medium";

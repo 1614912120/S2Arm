@@ -830,6 +830,9 @@
   "export.sgrade.hit.fps": "Correctifs de fréquence d'images : {0}, ajoutés et activés par défaut",
   "export.sgrade.hit.gfx": "Correctifs graphiques : {0}, ajoutés à la version Mac uniquement et activés par défaut",
   "export.sgrade.hit.cheat": "Codes de triche : {0}, ajoutés mais désactivés par défaut ; activez-les un par un dans le jeu",
+  "export.sgrade.hit.mod": "Correctifs de code de vos mods : {0}, intégrés au programme lors de l’export ; désactivez le mod pour les arrêter",
+  "export.sgrade.mod.note": "Importer des mods : les remplacements de ressources se chargent au lancement du jeu ; les correctifs de code (pchtxt / IPS dans exefs) sont intégrés lors de l’export",
+  "export.sgrade.mod.import": "Importer un mod…",
   "export.sgrade.hit.version": "Ces correctifs correspondent à la version {0} de votre jeu. Chaque octet est vérifié avant l'ajout ; ceux qui ne correspondent pas sont ignorés.",
   "export.sgrade.hit.note": "Si un correctif est incompatible avec ce jeu et provoque un plantage ou un blocage, les correctifs actifs sont désactivés automatiquement pour que vous puissiez continuer à jouer. Vous pouvez les réactiver dans les Réglages de lancement.",
   "export.sgrade.toggle": "Ajouter à la compilation",
@@ -844,6 +847,7 @@
   "sgrade.result.why.translate": "cette partie ne peut pas encore être traduite",
   "sgrade.result.why.full": "trop de correctifs pour ce module",
   "sgrade.result.why.port": "il est destiné à une autre version et n'a pas pu être adapté",
+  "sgrade.result.why.version": "ce mod est destiné à une autre version du jeu",
   "mods.page.menu": "Mods…",
   "mods.page.title": "{0} · Mods",
   "mods.page.importZip": "Importer un zip…",
@@ -883,6 +887,7 @@
   "export.sgrade.cat.fps": "fréquence d'images",
   "export.sgrade.cat.gfx": "graphismes",
   "export.sgrade.cat.cheat": "codes de triche",
+  "export.sgrade.cat.mod": "mod",
   "display.mods.import": "Importer un mod…",
   "display.mods.remove": "Supprimer",
   "display.mods.files": "{0} fichiers · {1}",
@@ -3813,6 +3818,10 @@
   "这个 S2Arm 安装包不完整（缺 Apple TV 签名权限文件），请重新下载 S2Arm。": "Cette installation de S2Arm est incomplète (le fichier de droits de signature Apple TV manque). Retéléchargez S2Arm.",
   "这款游戏还没出 Apple TV 包：先在出包页勾上「Apple TV」出一次包。": "Ce jeu n'a pas encore été compilé pour l'Apple TV : cochez Apple TV sur la page de compilation et compilez-le une fois.",
   "没找到这款的 Apple TV 资源包（{0}），没有装。请重新出 Apple TV 包后再装。": "Le pack de ressources Apple TV de ce jeu est introuvable ({0}), rien n'a été installé. Recompilez-le pour l'Apple TV, puis installez-le.",
-  "装到 Apple TV": "Installer sur l'Apple TV"
+  "装到 Apple TV": "Installer sur l'Apple TV",
+  "显卡卡住了，S2Arm 把这局安全停下了。": "Le GPU s'est bloqué : S2Arm a arrêté cette session en toute sécurité.",
+  "再开一次一般能接着玩（存档停在游戏上次保存的地方）；同一处反复这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上。": "Relancer permet en général de continuer (la sauvegarde est celle du dernier enregistrement du jeu). Si cela se reproduit au même endroit, exportez un diagnostic depuis Vérification de l'environnement et joignez-le à un ticket GitHub.",
+  "显卡卡住了，这局被安全停下": "Le GPU s'est bloqué, cette session a été arrêtée en sécurité",
+  "游戏运行中显卡卡住了，S2Arm 为了不让整台电脑跟着卡死，停下了这局。存档停在游戏上次保存的地方。": "Le GPU s'est bloqué pendant le jeu. S2Arm a arrêté cette session pour éviter que tout le Mac ne se fige. La sauvegarde est celle du dernier enregistrement du jeu."
  }
 }
