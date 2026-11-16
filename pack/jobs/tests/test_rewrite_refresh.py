@@ -494,3 +494,32 @@ class OriginalExefsFormatTests(unittest.TestCase):
         self.assertEqual(result, self.saved)
         self.assertIn("--exefs-only", self.reader_args)
         self.assertIn(str(source), self.reader_args)
+
+    def test_wrong_program_id_is_failure_not_crash(self):
+        # 维护方修正：程序号不符等原件问题统一成 Failure（升级循环 check_and_update 外层只接 Failure / OSError / SubprocessError；
+        #   原先 ValueError 穿出去整轮升级作业崩掉）。期望手写：抛 Failure、不留保存的副本
+        from core import Failure
+        root = self.tmp / "wrong"; exefs = root / "exefs"; exefs.mkdir(parents=True)
+        (exefs / "main").write_bytes(b"x")
+        (exefs / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16) ^ 0x1000))
+        self.packages = [self.package(root, "extract")]
+        with self.assertRaises(Failure):
+            self.original()
+        self.assertFalse((self.saved / "main").exists())
+
+    def test_zbic_reader_passed_explicitly(self):
+        # 维护方修正：ZBIC 压缩的 NSO 要 nx_unpack 解；S 级升级这条路显式把读取器交给 normalize_exefs（作业进程环境里没有 S2A_NX_UNPACK）
+        import build, library
+        ns2_dump = library.engine_tool(self.c, "ns2_dump")
+        reader = self.tmp / "nx_unpack"; reader.write_bytes(b"#!")
+        root = self.tmp / "zb"; exefs = root / "exefs"; exefs.mkdir(parents=True)
+        (exefs / "main").write_bytes(b"m"); (exefs / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+        self.packages = [self.package(root, "extract")]
+        seen = []
+        real = ns2_dump.normalize_exefs
+        def spy(src, dst, tid, nxu=None):
+            seen.append(nxu); return real(src, dst, tid, nxu)
+        with patch.object(build, "reader_program", return_value=reader), patch.object(ns2_dump, "normalize_exefs", side_effect=spy), \
+             patch.object(library, "engine_tool", side_effect=lambda _c, name: ns2_dump):
+            self.original()
+        self.assertEqual(seen, [str(reader)])

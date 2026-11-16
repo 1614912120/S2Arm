@@ -25,6 +25,7 @@ import hashlib
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 from pathlib import Path
@@ -75,10 +76,15 @@ def original_exefs(c, game, work):
         pass
     packages = selected_packages(game)
     formats = {p.get("format") for p in packages if p.get("type") in ("base", "update")}
-    if formats and formats <= {"nup"}:
-        return _original_nup_exefs(c, game, packages, work)
-    if formats and formats <= {"dump", "extract", "loose"}:
-        return _original_tree_exefs(c, game, packages, work)
+    # 新两条路上原件读不了 / 程序号不符 / ZBIC 解不开会抛 ValueError、RuntimeError、struct.error：统一成 Failure，
+    #   调用方（check_and_update 外层只接 Failure / OSError / SubprocessError）按这一款「没补上」记，不让整轮升级作业崩掉
+    try:
+        if formats and formats <= {"nup"}:
+            return _original_nup_exefs(c, game, packages, work)
+        if formats and formats <= {"dump", "extract", "loose"}:
+            return _original_tree_exefs(c, game, packages, work)
+    except (ValueError, RuntimeError, KeyError, IndexError, struct.error) as e:
+        raise Failure(str(e)) from e
     if any(p.get("format") for p in packages if p.get("format") not in (None, "nsp", "xci", "nsz", "xcz")):
         return None
     paths = [source_path(c, p) for p in packages if p["type"] in ("base", "update")]
@@ -103,6 +109,17 @@ def original_exefs(c, game, work):
     return sgrade.save_program(c, game["id"], out / "exefs") or out / "exefs"   # 从原件解出来的存一份，下次不用回原件
 
 
+def _nxu(c):
+    """ZBIC 压缩的 NSO 要 nx_unpack --nso-normalize 解（Switch 2 款常见）：出包时 build.py 经 S2A_NX_UNPACK 给 ns2_dump，S 级升级这条路同样显式给，
+    不靠进程环境（作业进程里没有这个变量，原先 ZBIC 主程序一律「没成」）。取不到读取器 = None，normalize_exefs 照旧报缺"""
+    try:
+        from build import reader_program
+        p = reader_program(c)
+        return str(p) if Path(p).is_file() else None
+    except Exception:   # 取读取器是顺手：取不到（没准备引擎 / 假上下文）= None，只有真遇到 ZBIC 时 normalize_exefs 才报缺，不挡不压缩的款
+        return None
+
+
 def _save_normalized_exefs(c, game, source, work):
     """复制并规范化一个松散 exefs，再按原始程序缓存的原子替换规则保存；不写回 source。"""
     from library import engine_tool
@@ -112,7 +129,7 @@ def _save_normalized_exefs(c, game, source, work):
     scratch = Path(tempfile.mkdtemp(prefix="sgrade-exefs-", dir=work))
     try:
         normalized = scratch / "normalized"
-        dump.normalize_exefs(str(source), str(normalized), int(game["id"], 16))
+        dump.normalize_exefs(str(source), str(normalized), int(game["id"], 16), nxu=_nxu(c))
         return sgrade.save_program(c, game["id"], normalized)
     finally:
         # save_program 已复制所需模块；保存失败则不留下半成品临时目录。
@@ -171,7 +188,7 @@ def _original_nup_exefs(c, game, packages, work):
             stat = [0, 0, 0]
             nup.write_tree(container, chosen.exefs, str(extracted), stat)
             normalized = scratch / "normalized"
-            dump.normalize_exefs(str(extracted), str(normalized), app)
+            dump.normalize_exefs(str(extracted), str(normalized), app, nxu=_nxu(c))
             return sgrade.save_program(c, game["id"], normalized)
         finally:
             shutil.rmtree(scratch, ignore_errors=True)
