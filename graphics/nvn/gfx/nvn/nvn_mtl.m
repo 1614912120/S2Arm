@@ -2109,13 +2109,19 @@ static void gw_commit(uint64_t fence) {
     for (int i = 0; i < g_nsbw_wide; i++) gw_put(g_sbw_wide[i].lo, g_sbw_wide[i].hi, fence, done);
 }
 // The writes queued in this submission from index since on that overlap [a, b), newest first, into out (room for every entry a lookup can meet); -1 when they cannot all be told
+// 查一次最多看这么多条（遍历步数，含整表扫描、宽写列表与每页桶链）：超了按「数不清」回 -1，调用方不做影子、结束渲染遍（同 g_pend_over）。
+//   #640（一款开放世界动作冒险 1.9.0，iPad、我方帧率表开）：第 18100 帧一次提交里同页积到 11.6 万条，每次查常量块都整条链走一遍再 O(n²) 合并排序，
+//   提交线程用户态跑满 133 秒、30 秒只上屏 4 帧后停住、GPU 空闲。平常一次提交同页几百条，远在上限内
+enum { PEND_SINCE_MAX = 8192 };
 static int pend_since(uint64_t a, uint64_t b, int since, int *out) {
     if (g_pend_over) return -1;
-    int n = 0; uint64_t p0 = a >> 12, p1 = (b - 1) >> 12;
-    if (p1 - p0 >= PEND_SPAN) { for (int e = g_npend - 1; e >= since; e--) if (a < g_pend_hi[e] && g_pend_lo[e] < b) out[n++] = e; return n; }   // every entry, newest first
+    int n = 0, steps = 0; uint64_t p0 = a >> 12, p1 = (b - 1) >> 12;
+    if (p1 - p0 >= PEND_SPAN) { if (g_npend - since > PEND_SINCE_MAX) return -1;
+        for (int e = g_npend - 1; e >= since; e--) if (a < g_pend_hi[e] && g_pend_lo[e] < b) out[n++] = e; return n; }   // every entry, newest first
     for (int i = 0; i < g_nwide; i++) { int e = g_pend_wide[i]; if (e >= since && a < g_pend_hi[e] && g_pend_lo[e] < b) out[n++] = e; }
     for (uint64_t pg = p0; pg <= p1; pg++) { unsigned bk = pend_bucket(pg); if (g_pend_hgen[bk] != g_pend_gen) continue;
-        for (int k = g_pend_head[bk]; k >= 0 && g_pend_node[k].e >= since; k = g_pend_node[k].next) { int e = g_pend_node[k].e; if (a < g_pend_hi[e] && g_pend_lo[e] < b) out[n++] = e; } }   // chains run newest first
+        for (int k = g_pend_head[bk]; k >= 0 && g_pend_node[k].e >= since; k = g_pend_node[k].next) { if (++steps > PEND_SINCE_MAX) return -1;
+            int e = g_pend_node[k].e; if (a < g_pend_hi[e] && g_pend_lo[e] < b) out[n++] = e; } }   // chains run newest first
     if (n > 1 && (g_nwide || p1 > p0)) {   // several lists: newest first, each once
         for (int i = 1; i < n; i++) { int v = out[i], j = i; while (j > 0 && out[j - 1] < v) { out[j] = out[j - 1]; j--; } out[j] = v; }
         int m = 1; for (int i = 1; i < n; i++) if (out[i] != out[m - 1]) out[m++] = out[i];
