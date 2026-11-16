@@ -1512,6 +1512,7 @@ class AssembleTests(unittest.TestCase):
             ph, pushed, signed = self._phone(); ph.udid = "UDID1"
             seen = {}
             class Cl:
+                def get(self_, *a, **k): return False   # 手机账本 Documents/.s2a-games.json：这些替身里没有（旧 App）
                 def call(self_, *a):
                     seen["args"] = a; return 0, (seen["want"] if phone_same else "aaaaaaaaaaaaaaaaaaaaaaaa") + "\n"
             orig_digest = packer.ipa_digest
@@ -1549,6 +1550,7 @@ class AssembleTests(unittest.TestCase):
     def _app_gone(self, ph):
         """玩家在手机上删了整个 S2Arm：进不了容器、平台确认这个包名没装（走真的 install.phone_games，不用夹具里的替身）"""
         class Cl:
+            def get(self_, *a, **k): return False   # 手机账本 Documents/.s2a-games.json：这些替身里没有（旧 App）
             def call(self, op, rel): return 1, "取不到 x 的容器（App 没装或不是开发签名）：device socket io failed"
         ph.udid = "U1"; ph.app_missing.return_value = True
         for p in (um.patch.object(install, "phone_games", _phone_games), um.patch.object(install, "devpush_client", lambda c, udid, bid, work: Cl())):
@@ -2157,6 +2159,7 @@ class PhoneGamesTruthTests(unittest.TestCase):
     def fs(self, dirs, ls_error=None, rms=None):
         """假手机：dirs = {设备侧目录: [条目…]}，不在 dirs 里的目录 ls 报 AFC 不存在；ls_error = 每次 ls 都报这句（锁屏 / 没装）"""
         class Cl:
+            def get(self_, *a, **k): return False   # 手机账本 Documents/.s2a-games.json：这些替身里没有（旧 App）
             def call(self, op, rel):
                 if ls_error: return 1, ls_error
                 return (0, "\n".join(dirs[rel])) if rel in dirs else (1, test.MISSING)
@@ -2265,6 +2268,7 @@ class PhoneGamesTruthTests(unittest.TestCase):
         # Windows 第一次装（这台还没记录包名）：确认框里的名字照样按这次要装的包名去手机上读 control.nacp（Windows 实机曾显示成游戏号）
         seen = []
         class Cl:
+            def get(self_, *a, **k): return False   # 手机账本 Documents/.s2a-games.json：这些替身里没有（旧 App）
             def get(self, rel, dst): seen.append(rel); return False
         ph = types.SimpleNamespace(udid="U1", bid=None, bundle_for_signing=lambda: "io.s2arm.games.abcde12345")
         with um.patch.object(install, "devpush_client", lambda c, udid, bid, work: (seen.append(bid), Cl())[1]):
@@ -2287,6 +2291,36 @@ class PhoneGamesTruthTests(unittest.TestCase):
         self.assertTrue(win.app_missing(bid, "S2A_APP_MISSING：手机上没装 x"))
         self.assertFalse(win.app_missing(bid, "取不到 x 的容器（App 没装或不是开发签名）：device socket io failed"))
         self.assertFalse(win.app_missing(bid, "connection reset"))
+
+    def test_phone_ledger_removed_games_are_not_carried(self):
+        # 11-16 维护者「手机上删了的游戏，下次不用跟着自动更新」：手机账本里 B 是 removed → 不带 B，本机记录里 B 摘掉；
+        #   A present、C 不在账本里照带；这次明确要装的 D 即使账本里是 removed 也照装（leave 不在候选里，由 assemble 按 gid 放进去）。
+        #   读不到账本（None）→ 按现状。期望手写
+        atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=g, name=g) for g in (self.A, self.B, self.C, self.D)]))
+        layout.save_device(self.c, "devL", dict(games={self.A: {}, self.B: {}, self.C: {}}))
+        ph = types.SimpleNamespace(udid="U1", bid="io.s2arm.games.abcde12345", app_missing=lambda bid, why: False, c=self.c, key="devL")
+        with um.patch.object(install, "phone_games", lambda c, ph: {self.A, self.B}), um.patch.object(install, "phone_removed", lambda c, ph: {self.B, self.D}):
+            rec = layout.load_device(self.c, "devL")
+            self.assertEqual(install.container_others(self.c, ph, rec, leave=self.D), [self.A, self.C])
+        self.assertEqual(sorted(layout.load_device(self.c, "devL")["games"]), [self.A, self.C])
+        layout.save_device(self.c, "devL", dict(games={self.A: {}, self.B: {}}))
+        with um.patch.object(install, "phone_games", lambda c, ph: {self.A, self.B}), um.patch.object(install, "phone_removed", lambda c, ph: None):
+            self.assertEqual(install.container_others(self.c, ph, layout.load_device(self.c, "devL"), leave=self.D), [self.A, self.B])
+
+    def test_phone_removed_reads_the_ledger(self):
+        # 账本按格式读：version 1、state = removed 的游戏号（大写）；别的状态、坏格式、版本不对、读不到都按「没有账本」（None 或不算删）
+        def cl(text):
+            class Cl:
+                def call(self_, *a): return 0, ""
+                def get(self_, rel, dst, t=None):
+                    if text is None: return False
+                    assert rel == "Documents/.s2a-games.json"; Path(dst).write_text(text, encoding="utf-8"); return True
+            return lambda *a: Cl()
+        ph = types.SimpleNamespace(udid="U1", bid="io.s2arm.games.abcde12345", app_missing=lambda bid, why: False, c=self.c)
+        good = json.dumps({"version": 1, "games": {self.A.lower(): {"state": "removed", "at": 1}, self.B: {"state": "present", "at": 2}, "bad": {"state": "removed"}}})
+        for text, want in ((good, {self.A}), (None, None), ("{", None), (json.dumps({"version": 2, "games": {}}), None)):
+            with self.subTest(text=(text or "")[:20]), um.patch.object(install, "devpush_client", cl(text)):
+                self.assertEqual(install.phone_removed(self.c, ph), want)
 
     def test_include_what_we_can_ask_before_dropping_the_rest(self):
         # 本机记录 A；手机上 A、B、C；本机游戏库有 C（另一台电脑装的、这台也导入过）→ 带 A、C；B 只在手机上 → 先问

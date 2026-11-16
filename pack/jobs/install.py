@@ -1913,6 +1913,33 @@ def phone_games(c, ph):
         return {g for g in names if GID_RE.fullmatch(g) and ".applied" in (pack_listing(cl, g, ph)[1] or [])}
 
 
+PHONE_LEDGER = "Documents/.s2a-games.json"   # 手机 App 写的游戏账本（11-16 维护者「手机端得有个记录在根目录下」）：{"version": 1, "games": {游戏号: {"state": "present" | "removed", "at", "program"}}}
+
+
+def phone_removed(c, ph):
+    """手机账本里玩家在手机上删掉的款（state = removed）→ 游戏号集合；读不到账本（旧 App 没写、进不了容器、格式不对）→ None，按现状组壳。
+    只有手机写账本，电脑只读：电脑重新装上一款，手机见到它的资源包回来就自己改回 present"""
+    bid = phone_bid(ph)
+    if not bid or not ph.udid:
+        return None
+    with tempfile.TemporaryDirectory(dir=c.private) as w:
+        try:
+            cl = devpush_client(c, ph.udid, bid, w)
+        except (Failure, ImportError):   # 推送工具不在：同「读不到账本」，按现状组壳，不挡装机
+            return None
+        dst = Path(w) / "ledger.json"
+        if not cl.get(PHONE_LEDGER, dst):
+            return None
+        try:
+            data = json.loads(dst.read_text(encoding="utf-8"))
+            games = data.get("games") if isinstance(data, dict) and data.get("version") == 1 else None
+        except (OSError, ValueError):
+            return None
+    if not isinstance(games, dict):
+        return None
+    return {g.upper() for g, v in games.items() if isinstance(v, dict) and v.get("state") == "removed" and GID_RE.fullmatch(g.upper())}
+
+
 def _who(ph):
     info = getattr(ph, "info", None) or {}
     return f"{info.get('deviceKind') or 'iPhone / iPad'}「{info.get('deviceName')}」" if info.get("deviceName") else (info.get("deviceKind") or "设备")
@@ -1981,6 +2008,14 @@ def container_others(c, ph, rec, leave=None):
     on_phone = phone_games(c, ph)
     if on_phone is None:
         known = on_phone = set()
+    # 手机账本里玩家删掉的款不再带（原先这台电脑记录里还有它，下次更新 S2Arm 又把程序带回去、手机上却没资源，11-16 维护者）；
+    #   这次明确要装的那款（leave）不在候选里、照装。读到了就顺手把本机记录里这几款摘掉
+    removed = phone_removed(c, ph) or set()
+    if removed & known:
+        rec["games"] = {g: v for g, v in rec.get("games", {}).items() if g not in removed}
+        layout.save_device(c, ph.key, rec)
+        known -= removed
+    on_phone -= removed
     names = {g["id"].upper(): g.get("name") or "" for g in c.catalog()["games"]}
     candidates = sorted((known | on_phone) - {leave})
     # 带不进的两种：手机上有、这台电脑没记录也没有（别的电脑装的）；这台电脑记录装在手机上、游戏库里已删（玩家删了这款）——
