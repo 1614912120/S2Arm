@@ -305,7 +305,7 @@ root_commit() {
     if _root_shared && [ "$now" != 无 ]; then local ns ms st touched=; ns=$(cat "$(root_cur "$g")/.root_src" 2> /dev/null); ms=$(cat "$w.tmp/.root_src" 2> /dev/null)
       for st in ${ROOT_REPLAY:-}; do case $st in .stage_*) [ "$(cat "$(root_cur "$g")/$st" 2> /dev/null)" = "$(awk -F'\t' -v k="$st" '$1 == k { print $2 }' "$w.tmp/.root_base_stages" 2> /dev/null)" ] || touched=$st;; esac; done
       [ -z "${ROOT_REPLAY:-}" ] && touched=整份   # 不声明产物路径的阶段本来就不重放
-      if [ -n "$touched" ] && [ -n "$ns" ] && [ -n "$ms" ] && ! git -C "$(dirname "${BASH_SOURCE[0]}")/.." merge-base --is-ancestor "$ns" "$ms" 2> /dev/null; then
+      if [ -n "$touched" ] && [ -n "$ns" ] && [ -n "$ms" ] && ! _root_is_ancestor "$ns" "$ms"; then
         _root_unlock "$g"; _root_rm "$w.tmp"
         echo "【红】$g 现行在本阶段期间已由更新的 main ${ns:0:9} 刷过（本树 ${ms:0:9}）：共享现行只许往前，丢弃 $(basename "$w")、不重放；要用本树产物走私有根 S2A_ROOTS=${S2A_RUN_ROOT:-$HOME/.s2arm/run}/s2arm/roots_priv/<名>" >&2; return 1; fi
     fi
