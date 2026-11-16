@@ -110,7 +110,8 @@
 "settings.fps.patchTitle" = "Frame rate";
 "settings.fps.patchNote" = "Community patch · up to %ld fps";
 "settings.fps.pick" = "Frame rate level";
-"settings.fps.pick.auto" = "Auto (match screen)";
+"settings.fps.pick.auto" = "Auto (60 fps)";
+"settings.fps.pick.note" = "120 fps needs a device that really keeps up; if it can't, the game slows down.";
 "settings.fps.pick.level" = "%ld fps";
 "settings.patchNote" = "Community patch";
 "settings.fullscreen.patchNote" = "Community full-screen patch";

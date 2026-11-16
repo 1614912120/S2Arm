@@ -2559,3 +2559,35 @@ class WinWidgetInstallTests(unittest.TestCase):
         with zipfile.ZipFile(out) as z: self.assertEqual(z.getinfo("Payload/S2Arm.app/S2Arm").external_attr >> 16, 0o755)
         plain = self.tmp / "plain.ipa"; shutil.copy(out, plain)
         self.assertFalse(install.ipa_strip_widget(plain, self.tmp / "x.ipa")); self.assertFalse((self.tmp / "x.ipa").exists())
+
+
+class UpdatePrepareTests(unittest.TestCase):
+    """「更新 iPhone」电脑侧准备（installUpdatePrepare，update_prepare）：不连手机；各台手机记录里、游戏库里还在的款逐款补（refresh_ios），
+    每款在自己的程序件锁里补；游戏库里已删的款不补。期望按规则手写"""
+    A, B, C = "0100000000010000", "0100000000020000", "0100000000030000"
+
+    def test_prepares_recorded_games_one_lock_each_without_phone(self):
+        import contextlib, ipa as packer, rewrite_refresh
+        with tempfile.TemporaryDirectory() as t:
+            lib = Path(t); (lib / "devices").mkdir()
+            (lib / "devices/UDID1.json").write_text(json.dumps({"games": {self.B: {}, self.C: {}}}))   # C 已从游戏库删掉
+            (lib / "devices/UDID2.json").write_text(json.dumps({"games": {self.A.lower(): {}}}))
+            held, calls = [], []
+            @contextlib.contextmanager
+            def lock(name, wait=None):
+                held.append(name); yield; held.remove(name)
+            c = types.SimpleNamespace(library=lib, catalog=lambda: {"games": [{"id": self.A}, {"id": self.B}]}, begin=lambda *a: None, lock=lock)
+            def refresh(cc, games):
+                calls.append((list(games), list(held))); return [g for g in games if g == self.B]
+            def no_phone(cc):
+                raise AssertionError("准备段不该找手机")
+            with um.patch.object(rewrite_refresh, "refresh_ios", refresh), um.patch.object(install, "phone_for", no_phone):
+                r = install.update_prepare(c)
+        self.assertEqual(calls, [([self.A], ["program-" + self.A]), ([self.B], ["program-" + self.B])])
+        self.assertEqual(r, {"prepared": [self.A, self.B], "updated": [self.B]})
+
+    def test_operation_registered(self):
+        import core
+        src = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+        self.assertIn('"installUpdatePrepare": install.update_prepare', src)
+        self.assertEqual(core.OPERATION_NAMES["installUpdatePrepare"], "准备更新 iPhone 上的 S2Arm")
