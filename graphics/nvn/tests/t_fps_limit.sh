@@ -72,6 +72,7 @@ run_case() {
     if [[ "$pin" != 0 ]]; then run_env+=(DM_FPS="$pin"); fi
     if [[ "$return_one" == 1 ]]; then run_env+=(FPS_TEST_RETURN_ONE=1); fi
     if [[ "$focus" == 1 ]]; then run_env+=(FPS_TEST_FOCUS=1); fi
+    if [[ "$focus" == 1 ]]; then run_env+=(S2A_FRONT_BACKGROUND=0); else run_env+=(S2A_FRONT_BACKGROUND="${S2A_FRONT_BACKGROUND:-1}"); fi   # 失焦探针要真激活；其余静默跑（macos/front_mac.m front_background；对照时外面给 0 = 原样激活）
     if [[ "$stall" == 1 ]]; then run_env+=(FPS_TEST_STALL=1 DM_TEST_LINK_STALL=0.5,0.5); fi
     if [[ "$split" == 1 ]]; then run_env+=(FPS_TEST_SPLIT=1); fi
     if [[ "$flap" == 1 ]]; then run_env+=(FPS_TEST_FLAP=1); fi
