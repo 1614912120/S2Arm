@@ -341,6 +341,7 @@
 "diag.error.zip" = "打包失败（写 zip 出错，可能是手机空间不够）";
 "diag.export" = "导出诊断包";
 "diag.prompt.abnormalExit" = "上次 S2Arm 没有正常退出（崩溃、卡住或被系统关掉）";
+"diag.prompt.imlLost" = "上次 S2Arm 没有正常退出。这次安装丢了「提高内存上限」权限，玩大游戏时退出多半是内存不够：在电脑上的 S2Arm 点「装到 iPhone」重新安装（免费 Apple ID 也会带上这项权限）；自己签名的话用 Xcode 或 AltStore Classic v2.3，SideStore 0.7.0 重签会丢；已经装好的也可以用 GetMoreRam 给 App ID 补上权限后重装";
 "diag.prompt.crash" = "系统报告上次 S2Arm 崩溃或卡住了";
 "diag.prompt.message" = "%@。会上传运行日志、崩溃记录和游戏用过的图形管线清单（只有着色器编号），不传存档、密钥和游戏文件；传完给你一个短码。";
 "diag.prompt.no" = "不用了";
@@ -387,7 +388,7 @@
 "gfx.fpsLimit" = "帧率上限";
 "gfx.fpsLimit.none" = "不限";
 "gfx.resolution" = "渲染分辨率";
-"iml.lost.body" = "大游戏可能内存不够或变慢。请用 Xcode 或 AltStore Classic v2.3 重签后重装，或用 GetMoreRam 给 App ID 补上权限后重装。";
+"iml.lost.body" = "大游戏可能内存不够闪退或变慢。在电脑上的 S2Arm 点「装到 iPhone」重新安装（免费 Apple ID 也会带上这项权限）；自己签名的话用 Xcode 或 AltStore Classic v2.3，SideStore 0.7.0 重签会丢；已经装好的也可以用 GetMoreRam 给 App ID 补上权限后重装。";
 "iml.lost.title" = "这次安装丢了「提高内存上限」权限";
 "lan.denied.later" = "以后再说";
 "lan.denied.message" = "系统没有允许「%@」查找本地网络中的设备，联机找不到其他玩家。\n\n请到「设置 › 隐私与安全性 › 本地网络」，打开「%@」，再回来重新进联机。";

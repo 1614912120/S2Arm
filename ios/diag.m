@@ -733,7 +733,11 @@ void s2a_diag_attach(UIViewController *vc) {
         // 真机自动化（S2A_OPEN_SETTINGS 测试开关在）每局都是被强杀收尾的，上次异常退出的提示会挡住要截的设置页：只在这时不问（玩家给不了这个环境变量）
         if (prev == S2A_SESMARK_FG) crash_auto_off();
         { void s2a_ios_crash_session_begin_single(int); s2a_ios_crash_session_begin_single(prev != S2A_SESMARK_FG); }   // 单款壳：关完再记这局开着的（v0.4.1，game_options.m）
-        if (prev == S2A_SESMARK_FG && !getenv("S2A_OPEN_SETTINGS")) s2a_diag_prompt(S2AL(@"diag.prompt.abnormalExit"));
+        // 这次安装丢了「提高内存上限」权限（iml_probe.m，确定丢了才算）：上次异常退出多半是内存不够，原因那句直接说清、给出怎么重装（11-16 维护者「要，做提示」）
+        if (prev == S2A_SESMARK_FG && !getenv("S2A_OPEN_SETTINGS")) {
+            int s2a_iml_lost(void);
+            s2a_diag_prompt(s2a_iml_lost() ? S2AL(@"diag.prompt.imlLost") : S2AL(@"diag.prompt.abnormalExit"));
+        }
       }); }
 }
 // 进后台 / 回前台（app.m 生命周期通知，主线程）：改写会话标记，在后台被划掉 / 被系统回收不算异常
