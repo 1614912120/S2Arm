@@ -2205,7 +2205,7 @@ PLAYING_WINDOW_S = 45   # 游玩时间心跳：游戏在前台时每 10 秒写�
 def playing_by_heartbeat(client, games, work, now=None):
     """手机上各款的游玩时间心跳（<容器>/Documents/games/<程序号>/playtime.json 的 lastPlayed，手机写入时的时刻）：
     任一款在 PLAYING_WINDOW_S 秒内写过 → True（正在玩，装 App 会杀掉这局）；都没有 / 文件不在（没玩过）→ False；
-    一个都读不了（锁屏、断开）→ None（查不清）。Windows 没有 devicectl 查进程，靠它判（11-16 总指挥定的判据）"""
+    一个都读不了（锁屏、断开）→ None（查不清）。Windows 没有 devicectl 查进程，靠它判（11-16 定的判据）"""
     import time as _t
     now = _t.time() if now is None else now
     got_any, stale = False, True
