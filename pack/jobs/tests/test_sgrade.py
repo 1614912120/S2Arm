@@ -2,6 +2,8 @@
 # Copyright 2026 S2Arm contributors
 """S 级优化升级（pack/jobs/sgrade.py，v0.4.0）：原始程序存一份 / 按顺序找 / 升级前查找的分组 / Mac 逐款补。游戏库换成临时目录，期望手写"""
 import contextlib
+import subprocess
+import sys
 import tempfile
 import types
 import unittest
@@ -13,6 +15,10 @@ import build
 import layout
 import sgrade
 from core import Failure
+from pack.orch import dirrename
+
+ROOT = Path(__file__).resolve().parents[3]
+JOBS = ROOT / "pack" / "jobs"
 
 
 def nso(d, bid):
@@ -23,6 +29,20 @@ def nso(d, bid):
 
 
 class SGradeTests(unittest.TestCase):
+    def test_isolated_import_adds_repository_root(self):
+        # -I excludes cwd and PYTHONPATH. Only add pack/jobs explicitly, as
+        # `main.py` does; sgrade must make the package root available itself.
+        code = "import sys; sys.path.insert(0, sys.argv[1]); import sgrade"
+        result = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(JOBS)],
+                                cwd=ROOT, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_isolated_launcher_help(self):
+        result = subprocess.run([sys.executable, "-I", "-B", "pack/jobs/main.py", "--help"],
+                                cwd=ROOT, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage:", result.stdout)
+
     def setUp(self):
         self.t = Path(tempfile.mkdtemp())
         self.events = []
@@ -51,6 +71,51 @@ class SGradeTests(unittest.TestCase):
         sgrade.save_program(self.c, "0100A", src)
         self.assertEqual((d / "sdk").read_bytes(), b"mine", "同一主程序（构建号相同）不重复写")
         self.assertIsNone(sgrade.save_program(self.c, "0100B", self.t / "empty"), "源目录不完整不存")
+
+    def test_save_program_retries_transient_windows_rename_denial(self):
+        src = nso(self.t / "x", "AABBCCDD00112233")
+        real_rename = Path.rename
+        real_move = dirrename.rename_dir
+        attempts = []
+        sleeps = []
+        def rename(path, target):
+            if path.name == "original-exefs.partial":
+                attempts.append(path)
+                if len(attempts) == 1:
+                    error = PermissionError(5, "Access is denied", str(path))
+                    error.winerror = 5
+                    raise error
+            return real_rename(path, target)
+        with patch.object(dirrename, "os", types.SimpleNamespace(name="nt")), \
+             patch.object(dirrename, "DIR_RENAME_RETRIES", (0.1,)), \
+             patch.object(dirrename, "rename_dir", side_effect=lambda src, dst: real_move(src, dst, sleep=sleeps.append)):
+            with patch.object(Path, "rename", rename):
+                saved = sgrade.save_program(self.c, "0100A", src)
+        self.assertEqual(saved, self.t / "lib/0100A/original-exefs")
+        self.assertEqual((saved / "main").read_bytes(), (src / "main").read_bytes())
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(sleeps, [0.1])
+
+    def test_save_program_persistent_rename_denial_preserves_previous_program(self):
+        old = nso(self.t / "lib/0100A/original-exefs", "1111111111111111")
+        (old / "main").write_bytes(b"previous saved program")
+        src = nso(self.t / "x", "AABBCCDD00112233")
+        real_rename = Path.rename
+        real_move = dirrename.rename_dir
+        def rename(path, target):
+            if path.name == "original-exefs.partial":
+                error = PermissionError(5, "Access is denied", str(path))
+                error.winerror = 5
+                raise error
+            return real_rename(path, target)
+        with patch.object(dirrename, "os", types.SimpleNamespace(name="nt")), \
+             patch.object(dirrename, "DIR_RENAME_RETRIES", (0.1,)), \
+             patch.object(dirrename, "rename_dir", side_effect=lambda src, dst: real_move(src, dst, sleep=lambda _: None)):
+            with patch.object(Path, "rename", rename):
+                with self.assertRaises(PermissionError):
+                    sgrade.save_program(self.c, "0100A", src)
+        self.assertEqual((old / "main").read_bytes(), b"previous saved program")
+        self.assertEqual(sorted(p.name for p in old.iterdir()), ["main", "main.npdm", "rtld", "sdk"])
 
     def test_find_program_order(self):
         g = {"id": "0100A"}
