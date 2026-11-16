@@ -1,8 +1,10 @@
 """Package S2Arm's own engine, reader and preparation source closure.
 
 Only repository inputs enter the snapshot; ignored outputs and user data never do.
-The fresh Git snapshot preserves existing HEAD-based pipeline keys, with no remote
-or developer history. At runtime it is cloned to the app's private writable cache.
+A fresh single-commit Git repository is built over the snapshot only to compute the
+HEAD-based pipeline keys; they are written into engine.json, checked against the
+readers, and the repository is removed before shipping (seal_snapshot). At runtime
+the snapshot is cloned to the app's private writable cache.
 """
 import hashlib
 import json
@@ -292,7 +294,86 @@ def bundle(destination, developer_dir):
     if source_fingerprint(ROOT) != fingerprint:
         raise RuntimeError("Engine sources changed during packaging; retry with stable inputs")
     precompile(destination, destination.parent / RUNTIME_PYTHON)   # 先于清单：.pyc 和源码一起进 engine.json、一起签
-    return write_manifest(destination, fingerprint)
+    return seal_snapshot(destination, fingerprint)
+
+
+# 快照不带 .git（瘦身约 28 MB）：出包各阶段原先在快照库里用 git 取的值，打包时（快照库已 commit + gc、文件都放齐、签名之前）用 git 算好写进 engine.json，
+#   读方有字段就用（pack/stage_keyfiles.sh engine_snap、pack/orch/roots.py snapshot、tools/stage_deps.py _listed）。不能签名后按文件重算：
+#   签名改写了快照里的 Mach-O（translator/dmsh_xlate_bin/dmsh_xlate 在直连库阶段的输入表里），按文件算出的对象号与提交里的不同，所有玩家的直连库都会重编
+SNAP_KEYS = ("commit", "stageFilesKeys", "scanTree", "romfsIndexOids", "listed")
+SNAP_STAGES = ("extract", "direct", "direct_seed")   # 玩家出包路径上调 stage_files_key 的阶段
+ROMFS_WRITER = ("services/S2A.Services/RomFsIndex.cs", "services/romfs_index", "services/romfs_index.sh", "compat/tree/Directory.Packages.props")
+
+
+def _bash():
+    sys.path.insert(0, str(ROOT)); from pack.orch.bash import find_bash   # Windows 打包机不认 WSL 存根（同出包编排层）
+    exe = find_bash()
+    if not exe:
+        raise RuntimeError("打包自检要 bash（算阶段键）")
+    return exe
+
+
+def _git_out(destination, *args):
+    env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(Path(destination).resolve().parent), GIT_OPTIONAL_LOCKS="0")
+    env.pop("DEVELOPER_DIR", None)
+    return subprocess.run(["git", "-C", str(destination), *args], env=env, check=True, capture_output=True).stdout
+
+
+def snapshot_fields(destination):
+    """在带 .git 的快照上用 git 算出 engine.json 的快照字段（旧读法的原值）"""
+    destination = Path(destination)
+    keys = {}
+    for st in SNAP_STAGES:
+        keys[st] = subprocess.run([_bash(), "-c", 'source "$1/pack/stage_keyfiles.sh" && stage_files_key "$2" "$1"', "_", str(destination), st],
+                                  check=True, capture_output=True, text=True).stdout.strip()
+    listed = _git_out(destination, "ls-files", "-co", "--exclude-standard", "-z").decode("utf-8", "surrogateescape").split("\0")
+    return dict(commit=_git_out(destination, "rev-parse", "HEAD").decode().strip(),
+                stageFilesKeys=keys,
+                scanTree=_git_out(destination, "rev-parse", "HEAD:graphics/widen/scan").decode().strip(),
+                romfsIndexOids=_git_out(destination, "rev-parse", *("HEAD:" + p for p in ROMFS_WRITER)).decode().split(),
+                listed=sorted({f for f in listed if f}))
+
+
+PROBE_PY = """import json, sys
+sys.dont_write_bytecode = True
+e = sys.argv[1]; sys.path.insert(0, e); sys.path.insert(0, e + '/tools')
+from pack.orch import roots, stages
+import stage_deps
+files, _ = stage_deps._listed(e)
+print(json.dumps(dict(py_head=roots.head(e), py_scan=stages.scan_tree(), py_romfs=stages.romfs_writer_oids(),
+                      listed=sorted(files) if files is not None else None)))
+"""
+
+
+def reader_values(destination):
+    """出包各读方在这份快照上实际读到的值（bash 与 Python 两套读方各跑一遍）：带 .git、engine.json 没有快照字段时走 git，删 .git 后走 engine.json"""
+    destination = str(Path(destination))
+    out = {}
+    for name, call in (("sh_commit9", 'src_commit9 "$1"'), ("sh_scan", 'scan_tree "$1"'), ("sh_romfs", 'romfs_writer_oids "$1"'),
+                       *((f"sh_key_{st}", f'stage_files_key {st} "$1"') for st in SNAP_STAGES),
+                       ("sh_root_src", 'source "$1/pack/roots.sh" && _root_head')):
+        p = subprocess.run([_bash(), "-c", 'source "$1/pack/stage_keyfiles.sh" && ' + call, "_", destination], capture_output=True, text=True,
+                           env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+        out[name] = [p.returncode, p.stdout]
+    p = subprocess.run([sys.executable, "-B", "-I", "-c", PROBE_PY, destination], capture_output=True, text=True, check=True)
+    out.update(json.loads(p.stdout))
+    return out
+
+
+def seal_snapshot(destination, fingerprint):
+    """快照库已 commit + gc、引擎目录里的文件都放齐之后调：git 算快照字段写进 engine.json → 删 .git → 各读方新旧两种读法逐项比对，不一致就停、不出包"""
+    destination = Path(destination)
+    write_manifest(destination, fingerprint, snap={})   # engine.json / prepare.json 先落盘：玩家副本里 git ls-files 会列出它们，listed 要算进去
+    before = reader_values(destination)                 # 旧读法（git）
+    fields = snapshot_fields(destination)
+    shutil.rmtree(destination / ".git")
+    write_manifest(destination, fingerprint, snap=fields)
+    after = reader_values(destination)                  # 新读法（engine.json）
+    failed = [k for k, v in before.items() if k.startswith("sh_") and v[0]]
+    diff = sorted(k for k in before.keys() | after.keys() if before.get(k) != after.get(k))
+    if failed or diff:
+        raise RuntimeError(f"引擎快照自检不过：git 读法报错 {failed}；删 .git 后读到的值与 git 算的不同 {diff}")
+    return write_manifest(destination, fingerprint)     # 再写一遍（沿用字段）：顺带核自检没往引擎目录里多写文件
 
 
 # 签名封存的 App 包运行时一个字节都不能多（多了 codesign --verify 报「a sealed resource is missing or invalid」、Gatekeeper 拒开）。
@@ -321,16 +402,23 @@ def seal_runtime(resources):
         precompile(d, resources / RUNTIME_PYTHON)
 
 
-def write_manifest(destination, fingerprint):
+def write_manifest(destination, fingerprint, snap=None):
     """按引擎目录里文件的最终字节写 prepare.json 与 engine.json（逐文件大小 + sha256，启动时 embedded.artifact 校验）。
-    打包时调一次；发版签名（sign_release.sh）重签了里面的二进制、字节变了，签完整包之前再调一次（不重算会报「准备产物缺失或大小不符」）"""
+    打包时（seal_snapshot）调；发版签名（sign_release.sh）重签了里面的二进制、字节变了，签完整包之前再调一次（不重算会报「准备产物缺失或大小不符」）。
+    snap = 快照字段（SNAP_KEYS）；不给 = 沿用已有 engine.json 里的，这时文件集合不许变（listed 是按打包时的文件集合算的）"""
     destination = Path(destination)
+    old = {}
+    if snap is None:
+        old = json.loads((destination / "engine.json").read_text(encoding="utf-8"))
+        snap = {k: old[k] for k in SNAP_KEYS if k in old}
     tools = destination / "Binaries/Prepare"
     tool_files = {str(p.relative_to(tools)): [p.stat().st_size, digest(p)] for p in tools.rglob("*") if p.is_file() and p.name != "prepare.json"}
     atomic(tools / "prepare.json", dict(schema=1, source=fingerprint, files=tool_files))
     # Binaries are hashed too. engine.json itself is the signed bundle's manifest.
     files = {str(p.relative_to(destination)): [p.stat().st_size, digest(p)]
              for p in sorted(destination.rglob("*")) if p.is_file() and p != destination / "engine.json"}
+    if old.get("listed") and set(files) != set(old.get("files", {})):
+        raise RuntimeError("引擎目录在封存快照之后多了 / 少了文件，engine.json 的 listed 已过期：%s" % sorted(set(files) ^ set(old.get("files", {})))[:5])
     identity = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
     # 壳编号（pack/shell/manifest.py current_id）：在开发树按壳输入表算好写进来，快照里的出包直接读（快照按目录挑文件、剔测试目录，重算会对不上发布的壳）
     sys.path.insert(0, str(ROOT)); from pack.shell import manifest as shell_manifest
@@ -338,5 +426,5 @@ def write_manifest(destination, fingerprint):
     #   显示版本（v0.3.0 / v0.2.6-dev+ba0ef07）同理在开发树算好写进来——快照是全新单提交 Git 库，在快照里现算会得到快照自己的提交号（core.display_version）
     from core import display_version, release_version
     atomic(destination / "engine.json", dict(schema=1, id=identity, source=fingerprint, version=release_version(ROOT), displayVersion=display_version(ROOT),
-                                           memoryRequirementsVersion=2, shellId=shell_manifest.current_id(), files=files))
+                                           memoryRequirementsVersion=2, shellId=shell_manifest.current_id(), **snap, files=files))
     return identity

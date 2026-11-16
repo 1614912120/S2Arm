@@ -78,7 +78,7 @@ UB=$(grep '^上限不定原因' "$AN" | cut -f2-); [ -z "$UB" ] || echo "  $G �
 # 改写器进键只取它的编译输入（rewriter.py source：CMakeLists / main.c / rewriter.c / rewriter.h / prepare_deps.py）+ 本阶段调的 nro_to_nso.py，
 #   不取整个 runtime/rewriter 目录的树号（10-31：原先 README / 许可说明改一行，全部款整段重改写）
 SD=$("$PY" "$H/rewriter.py" source) && [ -s "$R/runtime/rewriter/nro_to_nso.py" ] || { echo "【红】取不到改写器编译输入指纹（pack/rewriter.py source）或 runtime/rewriter/nro_to_nso.py"; exit 1; }
-KR=$( { echo "$SD"; cat "$R/runtime/rewriter/nro_to_nso.py"; } | shasum -a 256 | cut -c1-40); [ ${#KR} = 40 ] && KS=$(git -C "$R" rev-parse HEAD:graphics/widen/scan 2>/dev/null) || { echo "【红】改写器指纹不完整或取不到 graphics/widen/scan 的树对象号"; exit 1; }
+KR=$( { echo "$SD"; cat "$R/runtime/rewriter/nro_to_nso.py"; } | shasum -a 256 | cut -c1-40); [ ${#KR} = 40 ] && KS=$(scan_tree "$R") || { echo "【红】改写器指纹不完整或取不到 graphics/widen/scan 的树对象号"; exit 1; }
 RK=$("$PY" "$H/rewriter.py" key) || exit 1
 T=${S2A_TARGET:-apple}; TK=; [ "$T" = apple ] || TK=" target=$T"
 # 自旋闸（S2A_REWRITE_SPIN=1，原生层借鉴上游的一项）改改写产物（多出 S 行与 spin 门），要进键：不进键时私有根从共享现行起步会判「改写没变」跳过，出的包没有自旋区（10-24 测试出包线）

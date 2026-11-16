@@ -3,9 +3,10 @@
 在 Windows 出包机上（要 .NET SDK / clang / cmake / cargo 等，见 bundle_prepare_win.py）：
   python -X utf8 launchers/windows/bundle_win.py <目标> --shell <预编壳目录> --tzdata <时区目录> --fonts <字体目录>
 产物（<目标> 不许已存在）：
-  Engine/           引擎快照（同 Mac：按 bundle_engine.INPUTS 挑仓库文件、全新单提交 Git 库）+ Binaries/Prepare（bundle_prepare_win 预编件 + Tzdata）+ engine.json
-                    （逐文件大小 + sha256、源码指纹、壳编号；作业层 embedded.install 校验后克隆进私有目录）
-  Runtime/          随包运行时（bundle_runtime_win.py：Python 嵌入版、.NET 运行时、bash、MinGit、zstd、许可）
+  Engine/           引擎快照（同 Mac：按 bundle_engine.INPUTS 挑仓库文件）+ Binaries/Prepare（bundle_prepare_win 预编件 + Tzdata）+ engine.json
+                    （逐文件大小 + sha256、源码指纹、壳编号、出包要的 git 值；作业层 embedded.install 校验后克隆进私有目录）。
+                    打包时建的单提交 Git 库只用来算 git 值（bundle_engine.seal_snapshot），算完删掉、不随包
+  Runtime/          随包运行时（bundle_runtime_win.py：Python 嵌入版、.NET 运行时、bash、zstd、许可）
   Shell/            预编壳（壳编号须等于 engine.json 的 shellId）
   Fonts/            开源共享字体 7 份 .bfttf
   ThirdParty/Impactor/  官方原版 Impactor + plumesign（v2.7.2，不改不重签，SHA-256 钉在 pack/jobs/impactor.py BUNDLED，不符拒打）+ 许可（MIT、内嵌 apple-codesign 的 MPL-2.0）+ 来源说明
@@ -38,7 +39,7 @@ def say(m): print(m, flush=True)
 
 
 def snapshot(engine):
-    """仓库输入 → 全新单提交 Git 库（同 Mac bundle_engine.bundle 的快照段；出包各阶段按 git 对象号取源码身份）"""
+    """仓库输入 → 全新单提交 Git 库（同 Mac bundle_engine.bundle 的快照段；只用来算出包各阶段要的 git 对象号，bundle_engine.seal_snapshot 算完删掉）"""
     engine.mkdir(parents=True)
     n = 0
     for rel in bundle_engine.snapshot_files(ROOT):   # 挑文件与 Mac 同一个函数（单测 pack/jobs/tests/test_downstream.py 锁登记表在内）
@@ -124,7 +125,7 @@ def bundle(target, shell, tzdata, fonts):
     say(f"[组装] 引擎快照：{snapshot(engine)} 个文件")
     say("[组装] 预编件"); bundle_prepare_win.bundle(engine)
     shutil.copytree(tzdata, engine / "Binaries/Prepare/Tzdata")
-    identity = bundle_engine.write_manifest(engine, fingerprint)
+    identity = bundle_engine.seal_snapshot(engine, fingerprint)
     say(f"[组装] engine.json：{identity[:16]}（壳 {want}）")
     say("[组装] 随包运行时"); bundle_runtime_win.main([str(target)])
     shutil.copytree(shell, target / "Shell")
