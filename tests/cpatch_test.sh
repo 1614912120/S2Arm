@@ -300,6 +300,30 @@ open(m10 + '/INDEX.tsv', 'w').write('game\ttitle_id\tpath\ttype\tsource\tlicense
 subprocess.run([sys.executable, H + '/pack/cpatch.py', 'plan', r10, '', m10], capture_output=True, text=True)
 lg10 = open(r10 + '/cpatch_plan.log').read() if os.path.exists(r10 + '/cpatch_plan.log') else ''
 ck(f'⑩ mod 版本对不上记「不收」（实得 {[l for l in lg10.splitlines() if l.startswith("不收")]}）', any(l.startswith('不收\tmod:') and 'mod 构建号对不上：mod 是 1111222233334444' in l for l in lg10.splitlines()))
+# ⑪ 调用改成空、整数返回值换成调用前的 32 位参数（11-15 奥德赛 1.3.0「Disable Dynamic Resolution」：+0x5ee438 的 bl 改 nop，x20 = 枚举小整数当字符串指针，读 0x2 崩）。
+#    合成 main（编码按 ARM 手册手写）：0x100 <W100>  0x104 bl 0x200（9400003F）  0x108 <W108>  0x10c ret  0x200 ret；补丁只把 0x104 改成 nop
+#    A W100 = ldr w0,[x19,#0xa0]（B940A260，32 位写 x0）、W108 = mov x20,x0（AA0003F4，64 位读）→ 不收，原因「调用改成空」
+#    B W100 = ldr x0,[x19,#0x10]（F9400A60，64 位写）、W108 同 A → 收（参数本来就是 64 位，按原样透传）
+#    C W100 同 A、W108 = mov w20,w0（2A0003F4，32 位读）→ 收（整数照整数用；上游满屏补丁删浮点调用让参数直接当结果的写法同属这一类，不误伤）
+#  旧代码反证：改动前「全是 nop 不引入读写」直接放行，A 也收（期望不收 → 红）
+def nopcall_case(tag, w100, w108):
+    r = f'{T}/nopcall_{tag}'; ix = f'{T}/nopcall_{tag}_idx'; os.makedirs(r + '/exefs'); os.makedirs(ix)
+    t = bytearray(0x3000)
+    for a, w in {0x100: w100, 0x104: 0x9400003F, 0x108: w108, 0x10c: 0xD65F03C0, 0x200: 0xD65F03C0}.items(): struct.pack_into('<I', t, a, w)
+    ro = bytes(0x1000); h = bytearray(0x100); h[:4] = b'NSO0'; h[0x40:0x50] = bytes.fromhex(BID)
+    for k, (mo, seg) in enumerate(((0, t), (0x3000, ro), (0x4000, bytes(0x1000)))):
+        struct.pack_into('<III', h, 0x10 + 0x10 * k, 0x100 + mo, mo, len(seg)); struct.pack_into('<I', h, 0x60 + 4 * k, len(seg))
+    open(r + '/exefs/main', 'wb').write(bytes(h) + bytes(t) + ro + bytes(0x1000))
+    shutil.copy(root + '/exefs/main.npdm', r + '/exefs/main.npdm')
+    open(ix + '/N.pchtxt', 'w').write(f'@nsobid-{BID}\n@flag offset_shift 0x100\n@enabled\n00000104 1F2003D5\n@stop\n')
+    open(ix + '/INDEX.tsv', 'w').write('title_id\tkind\tpath\tlicense\n0100A3501946E000\tpchtxt\tN.pchtxt\tMIT\n')
+    subprocess.run([sys.executable, H + '/pack/cpatch.py', 'plan', r, '', ix], capture_output=True, text=True)
+    lg = open(r + '/cpatch_plan.log').read().splitlines() if os.path.exists(r + '/cpatch_plan.log') else []
+    return [l.split('\t')[0] + ('\t' + l.split('\t')[4] if l.startswith('不收') else '') for l in lg if l.startswith(('收', '不收'))]
+WHY11 = '调用改成空：main+0x104 原是调用（9400003f），改成 nop 后返回值换成了调用前的 32 位参数 w0，接着按 64 位 x0 用（整数当指针）'
+for tag, w100, w108, want in (('A', 0xB940A260, 0xAA0003F4, ['不收\t' + WHY11]), ('B', 0xF9400A60, 0xAA0003F4, ['收']), ('C', 0xB940A260, 0x2A0003F4, ['收'])):
+    got = nopcall_case(tag, w100, w108)
+    ck(f'⑪ {tag}：期望 {want}（实得 {got}）', got == want)
 sys.exit(bad)
 EOF
 [ $bad = 0 ] && echo "✅ cpatch_test 全过" || { echo "🔴 cpatch_test 有不通项"; exit 1; }
