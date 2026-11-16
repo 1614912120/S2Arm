@@ -605,6 +605,7 @@ static int geo_pt_pick(NvProg *pr, NvShader *base, int tf, int instances, int to
     if (!side || !creader || side->geo_invocations != 1) return 0;
     *gs = side; *reader = creader; return 1;
 }
+static int geo_vs_writes(NvShader *vs) { for (int i = 0; i < vs->rf.nb; i++) if (vs->rf.b[i].rw) return 1; return 0; }   // the vertex stage writes memory (storage, images, pool tables)
 static void geo_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
     NvShader *vs = pr->sh[0], *base = pr->sh[2];
     // Feedback on with a geometry shader that has no capture layout (control section strides all 0, e.g. Xenoblade 3 95bfab6122539993): the GPU captures nothing and still draws,
@@ -745,7 +746,11 @@ static void geo_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
     nvn_geo_assemble(prim, order, count, restart, restart_index, pmap, words);
     for (size_t i = 0; i < words; i++) ((uint32_t *)pmap)[i] -= lo;
     static uint64_t *uq_bm; static size_t uq_words;   // submit thread only
-    size_t unique_count = nvn_geo_unique_sorted(restart ? unique : order, nu, lo, hi, (uint32_t *)pcapture_ix, &uq_bm, &uq_words);
+    // 抓顶点按区间（11-16 能耗线：040074A01BF12000 帧回放，121 笔几何的去重结果与 [lo, hi] 逐笔相等，去重这段每笔约 1.5 万条指令）：没有重启、顶点阶段不写内存、
+    //   跨度不超过下标数时，不排序去重，直接对 [lo + base_vertex, 跨度) 画点（同 tf_draw 的变换反馈抓取）。lo、hi 都是被引用的顶点，中间的顶点地址落在两者之间；
+    //   多抓的顶点只写进没人读的记录槽（主遍下标只指被引用的），GPU 多算至多「跨度 − 去重数」≤ 下标数个顶点。非索引绘制本来就按 first / count 抓，不需要去重
+    int by_range = !di0 || (!restart && span <= (uint64_t)count && !geo_vs_writes(vs));
+    size_t unique_count = by_range ? 0 : nvn_geo_unique_sorted(restart ? unique : order, nu, lo, hi, (uint32_t *)pcapture_ix, &uq_bm, &uq_words);
     uint32_t vi[8] = {(uint32_t)span, (uint32_t)instances, 0, 0, (uint32_t)np, 0, 0, 0}; memcpy(pinfo, vi, 32);
     uint64_t ci[2] = {input, 0}; memcpy(pcapture_info, ci, 16);
     uint32_t cc[4] = {(uint32_t)first, (uint32_t)span, first_instance, (uint32_t)instances}; memcpy((uint8_t *)pcapture_info + 16, cc, 16);
@@ -770,7 +775,8 @@ static void geo_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
     p_draw vertex_range = {.first = (int32_t)first, .count = (int32_t)span, .instances = instances, .base_instance = (int32_t)first_instance};
     vconv_bind(re, vs, 1, &vertex_range, NULL);
     args_dirty_all(); encode_args(re, vs, 0, 1); enc_r_vbuf(re, 13, capture_info);
-    if (di0) enc_r_draw_indexed(re, MTLPrimitiveTypePoint, unique_count, MTLIndexTypeUInt32, capture_ix, nu * 4, instances, di.base_vertex, first_instance);
+    if (di0 && !by_range) enc_r_draw_indexed(re, MTLPrimitiveTypePoint, unique_count, MTLIndexTypeUInt32, capture_ix, nu * 4, instances, di.base_vertex, first_instance);
+    else if (di0) enc_r_draw_instanced(re, MTLPrimitiveTypePoint, (NSUInteger)first, (NSUInteger)span, instances, first_instance);
     else enc_r_draw_instanced(re, MTLPrimitiveTypePoint, dw.first, dw.count, instances, first_instance);
     if (!run) enc_r_end(re);
     g_geo_bind[0] = input; g_geo_bind[1] = output; g_geo_bind[2] = raw; g_geo_bind[3] = info; g_geo_bind[4] = map;
