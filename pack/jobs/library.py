@@ -2150,7 +2150,7 @@ def _retry_shared(func, path, error, sleep=time.sleep):
 def _rmtree(p):
     """删整棵目录；遇到只读目录（产物根的 RomFS 共享存储 roots/.romfs_store/ 整棵只读，pack/roots.sh）先给它加回写权限再删。
     Windows 上封存不是只读位，是 ACL 里给当前用户的拒写项（pack/orch/roots.py seal → _win_acl），chmod 解不开：
-    按 roots 同一个函数把出错的项和它的父目录解封再删（11-07 Windows 出包机：启动器出包成功后清中间产物卡在 .romfs_store，WinError 5）。
+    按 roots 同一个函数把出错的项和它的父目录解封、再去掉只读位后再删（11-07 Windows 出包机：启动器出包成功后清中间产物卡在 .romfs_store，WinError 5）。
     exFAT 上删数据文件时 AppleDouble 附属文件（._*）会一并消失，scandir 里还挂着的名字再 unlink 得到 ENOENT——当作已删完。"""
     def unlock(func, path, err):
         error = err[1] if isinstance(err, tuple) else err   # onerror 给 exc_info、onexc 给异常本身
@@ -2170,6 +2170,8 @@ def _rmtree(p):
             for q in (parent, path):
                 if os.path.lexists(q) and not os.path.islink(q):
                     roots._win_acl(q, False)
+            if os.path.lexists(path) and not os.path.islink(path) and not os.path.isdir(path):
+                os.chmod(path, stat.S_IWRITE)   # 只读位（别的来源放进来的只读文件，os.unlink 不认、报 WinError 5）：去掉再删；还删不掉就照抛
         else:
             os.chmod(parent, stat.S_IMODE(os.lstat(parent).st_mode) | stat.S_IRWXU)
         func(path)
