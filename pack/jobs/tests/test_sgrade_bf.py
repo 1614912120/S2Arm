@@ -75,7 +75,7 @@ class UpgradeMac(unittest.TestCase):
             locks = []
             @contextlib.contextmanager
             def lock():
-                locks.append(1); yield
+                locks.append(1); yield True
             c = types.SimpleNamespace(emit=lambda *a, **k: None, private=t)
             with patch.object(sgrade_bf, "rebuild", return_value=new):
                 self.assertTrue(sgrade_bf.upgrade_mac(c, "G", rt, lock))
@@ -86,6 +86,21 @@ class UpgradeMac(unittest.TestCase):
                                  ["shaders/direct/b-c/lib.idx", "shaders/direct/keys.tsv"], "旧库整份换掉、不留临时目录")
                 self.assertEqual(locks, [1], "换库在锁里做一次")
                 self.assertFalse(sgrade_bf.upgrade_mac(c, "G", rt, lock), "代数已是本引擎的：不再重出")
+
+    def test_busy_gives_up_without_touching(self):
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t); rt = t / "runtime"; (rt / "romfs").mkdir(parents=True); (rt / "shaders/direct").mkdir(parents=True)
+            (rt / "shaders/direct/keys.tsv").write_text("old\n"); m0 = json.dumps({"files": {"shaders/direct/keys.tsv": [4, ""]}})
+            (rt / "manifest.json").write_text(m0)
+            new = t / "new"; (new / "b-c").mkdir(parents=True); (new / "keys.tsv").write_text("k\n"); (new / "b-c/lib.idx").write_bytes(b"1")
+            @contextlib.contextmanager
+            def busy():
+                yield False
+            c = types.SimpleNamespace(emit=lambda *a, **k: None, private=t)
+            with patch.object(sgrade_bf, "rebuild", return_value=new):
+                self.assertFalse(sgrade_bf.upgrade_mac(c, "G", rt, busy), "玩家正在开局：这次放弃")
+            self.assertEqual(((rt / "shaders/direct/keys.tsv").read_text(), (rt / "manifest.json").read_text()), ("old\n", m0), "运行版本与清单一个字节不动、不记代数")
+            self.assertFalse((rt / "shaders/direct.sgbf").exists(), "不留临时目录")
 
 
 if __name__ == "__main__":

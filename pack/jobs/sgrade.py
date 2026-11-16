@@ -126,7 +126,10 @@ def scan(c):
 
 
 def mac_all(c):
-    """启动器打开时后台跑（v0.4.0）：有 Mac 运行版本的款逐款补上 S 级优化；补丁记号没变的 refresh_mac 自己跳过。一款出错不挡别的"""
+    """启动器打开时后台跑（v0.4.0）：有 Mac 运行版本的款逐款补上 S 级优化；补丁记号没变的 refresh_mac 自己跳过。一款出错不挡别的
+    后台活给玩家让路（诊断 D-R8NG：原先整款改写都拿着与开始游戏同一把 execution 锁，一款要两分多钟，玩家点开始等 30 秒报「另一个任务正在使用游戏库」）：
+      库里有任务在用这把锁（正在玩 / 正在出包）就这款不做，不抢 CPU；改写在锁外的临时目录里做，只有换进运行版本那一下「没人用才拿锁」，
+      拿不到就放弃这款——开始游戏起局前自己会补它（build.launch → refresh_mac）"""
     from rewrite_refresh import refresh_mac
     import sgrade_bf
     games = [g for g in c.catalog()["games"] if (layout.image_mac(c, g["id"], create=False) / "exefs/main").is_file()]
@@ -134,11 +137,14 @@ def mac_all(c):
     done = []
     for g in games:
         try:
-            with c.lock("execution"):   # 与开始游戏同一把锁：正在玩的那款不在运行中改
-                if refresh_mac(c, g["id"], layout.image_mac(c, g["id"], create=False)):
-                    done.append(g["id"].upper())
-            # 老包直连库缺可读瓦片版着色器（_bf）：整份重出要几分钟到几十分钟，在锁外出；只有换进运行版本那一下拿「开始游戏」同一把锁
-            if sgrade_bf.upgrade_mac(c, g["id"], layout.image_mac(c, g["id"], create=False), lambda: c.lock("execution")) and g["id"].upper() not in done:
+            with c.idle("execution") as free:
+                pass
+            if not free:
+                continue
+            if refresh_mac(c, g["id"], layout.image_mac(c, g["id"], create=False), hold=lambda: c.idle("execution")):
+                done.append(g["id"].upper())
+            # 老包直连库缺可读瓦片版着色器（_bf）：整份重出在锁外做（几分钟到几十分钟），换进运行版本前同样进 c.idle，玩家正在开局就这次放弃
+            if sgrade_bf.upgrade_mac(c, g["id"], layout.image_mac(c, g["id"], create=False), hold=lambda: c.idle("execution")) and g["id"].upper() not in done:
                 done.append(g["id"].upper())
         except (Failure, OSError) as e:
             c.emit("message", f"【黄】{g.get('name') or g['id']} 这次没补上：{str(e)[:160]}")

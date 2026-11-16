@@ -1050,16 +1050,26 @@ namespace S2A.Services.Tests
                 InputPump.SetPrimary(Host.Device, Ryujinx.HLE.HOS.Services.Hid.PlayerIndex.Handheld, Ryujinx.HLE.HOS.Services.Hid.ControllerType.Handheld);
                 var npid = (uint*)(_game + 0x3E00);
                 Msg IdType(int n) { Msg m = Msg.Cmif(102, Bytes(0L)); m.X.Add(((ulong)npid, (ulong)(n * 4))); return m; }   // SetSupportedNpadIdType(aruid, X 数组)
+                // 审计 P1-192：游戏读的是手柄共享内存，不是 InputPump 的变量。这次调用返回那一刻，共享内存里 Player1 / 掌机格的样式（StyleSet 非 0 = 已连接）
+                //   期望手写：只收 Player1 → Player1 已连、掌机格断开；再收掌机格 → 掌机格已连、Player1 断开。反证：只靠输入泵下一拍 Remap 时两次都还是调用前的连接
+                string Shm() { var n = Host.Device.Hid.SharedMemory.Npads; return $"P1={(n[(int)Ryujinx.HLE.HOS.Services.Hid.PlayerIndex.Player1].InternalState.StyleSet != 0 ? "连" : "断")} 掌机={(n[(int)Ryujinx.HLE.HOS.Services.Hid.PlayerIndex.Handheld].InternalState.StyleSet != 0 ? "连" : "断")}"; }
+                Host.Device.Hid.Npads.S2AApplyConfiguration();   // 起点：掌机格已写进共享内存
+                string before = Shm();
                 npid[0] = 0;   // NpadIdType.Player1
                 Call(hid, IdType(1));
-                string only1 = InputPump.Player.ToString();
+                string only1 = InputPump.Player.ToString(), shm1 = Shm();
                 npid[0] = 0; npid[1] = 0x20;   // Player1 + Handheld
                 Call(hid, IdType(2));
-                string back = InputPump.Player.ToString();
+                string back = InputPump.Player.ToString(), shm2 = Shm();
+                Check("P1-192 声明那次 hid 调用返回时，共享内存里的连接已改（起点 / 只收 Player1 / 再收掌机格）", "P1=断 掌机=连 / P1=连 掌机=断 / P1=断 掌机=连", $"{before} / {shm1} / {shm2}");
                 var npads = Host.Device.Hid.Npads;
                 for (int i = 0; i < 9; i++) npads.SetSupportedPlayer((Ryujinx.HLE.HOS.Services.Hid.PlayerIndex)i);   // 还原成都收
                 InputPump.SetPrimary(Host.Device, Ryujinx.HLE.HOS.Services.Hid.PlayerIndex.Handheld, Ryujinx.HLE.HOS.Services.Hid.ControllerType.Handheld);
                 Check("声明手柄号的那次 hid 调用里就跟随改接（只收 Player1 → Player1；再收掌机格 → 挪回）", "Player1 / Handheld", $"{only1} / {back}");
+                // 审计 P1-192：收局摘回调（之后服务线程的声明不再改已拆掉的手柄）；再 Start 登记回去，后面的用例照旧
+                InputPump.Stop();
+                Check("P1-192 收局后声明回调已摘", "空", Ryujinx.HLE.HOS.Services.Hid.NpadDevices.S2ASupportedChanged == null ? "空" : "还挂着");
+                InputPump.Start(Host.Device);
             }
 
             // 每帧都调的上游桩（01006F8002326000 pctl IsFreeCommunicationAvailable 每秒 25 次）：稳态零分配、汇总里次数照计

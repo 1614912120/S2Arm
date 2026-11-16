@@ -89,7 +89,8 @@ def parse(text):
     return (m.group(1)[:16].upper() if m else ""), [(n, mst, k, fx) for n, mst, k, fx in out if k]
 
 
-SHORT = {"bad1dea/NXCheats": "nxcheats", "HamletDuFromage/switch-cheats-db": "cheatsdb", "ChanseyIsTheBest/NX-60FPS-RES-GFX-Cheats": "gfx"}   # 文件名里的库简名（同 11-12 起的文件名，玩家已开的开关键不变）
+SHORT = {"bad1dea/NXCheats": "nxcheats", "HamletDuFromage/switch-cheats-db": "cheatsdb", "ChanseyIsTheBest/NX-60FPS-RES-GFX-Cheats": "gfx",
+         "s2arm/player-cheats": "player"}   # 玩家分享：<构建号>.player.txt，iPhone 金手指面板按文件名认「玩家分享、未验证」（ios/vpad_cheats.m）   # 文件名里的库简名（同 11-12 起的文件名，玩家已开的开关键不变）
 
 
 def _unified(c):
@@ -146,8 +147,34 @@ def atomic_text(p, text):
     tmp.replace(p)
 
 
-def import_files(c, game, paths):
-    """玩家导入：Atmosphere txt 拷进 cheats/（同名覆盖），登记 from = player；解析不出条目的不收"""
+# 玩家分享（11-15 维护者：「支持玩家自己导入金手指，还能收集更多金手指文件」）：导入时勾了「分享给其他玩家」就把原文连同程序号、构建号
+#   传到诊断上传 Worker（diag.s2arm.com/v1/cheats，release/diag/worker.js；不碰补丁库发布令牌），取件后收进补丁库「玩家分享」上游
+#   s2arm/player-cheats，下一次补丁库发布后别的玩家出包时带上（缺省关、标未验证）。只传金手指原文和游戏版本，不带设备 / 账号信息
+SHARE_DEFAULT = True   # 勾选框缺省勾不勾（维护者定，改这一行）
+SHARE_URL = "https://diag.s2arm.com/v1/cheats"
+PLAYER_REPO = "s2arm/player-cheats"   # 玩家分享上游的库名（补丁库按它记来源）：这类条目开之前提示一句可能坏存档，不拦
+
+
+def share(c, game, name, text):
+    """把一份玩家导入的金手指传上去 → "shared" / "duplicate" / "no_build"（这款没解过包、不知道构建号）/ "failed"（网络等，不影响导入本身）"""
+    bid = main_build(c, game)
+    if not bid:
+        return "no_build"
+    body = json.dumps({"gid": game["id"].upper(), "bid": bid, "name": name, "text": text}).encode()
+    plat = "win" if sys.platform.startswith("win") else "mac"
+    req = urllib.request.Request(SHARE_URL, data=body, method="POST", headers={
+        "content-type": "application/json", "x-s2arm-client": f"{plat}/{app_version(c) or 'dev'}", "user-agent": "s2arm"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return "duplicate" if json.loads(r.read()).get("duplicate") else "shared"
+    except Exception as e:   # 分享失败不挡导入：玩家这台照样能用
+        print("金手指分享失败（不影响导入）：%s" % (str(e)[:200]), file=sys.stderr)  # 非玩家句
+        return "failed"
+
+
+def import_files(c, game, paths, share_on=None):
+    """玩家导入：Atmosphere txt 拷进 cheats/（同名覆盖），登记 from = player；解析不出条目的不收。
+    share_on（缺省 SHARE_DEFAULT）：勾了「分享给其他玩家」就逐份上传（share）。→ [{name, shared}]"""
     d = cheats_dir(c, game["id"].upper())
     d.mkdir(parents=True, exist_ok=True)
     src = read(d / "sources.json", {}) or {}
@@ -164,9 +191,10 @@ def import_files(c, game, paths):
             name = "imported-" + name
         atomic_text(d / name, text)
         src[name] = {"from": "player", "repo": "", "path": p.name, "author": "", "license": ""}
-        done.append(name)
+        done.append((name, text))
     atomic(d / "sources.json", src)
-    return done
+    on = SHARE_DEFAULT if share_on is None else bool(share_on)
+    return [{"name": n, "shared": share(c, game, n, t) if on else "off"} for n, t in done]
 
 
 def listing(c, game):
@@ -199,6 +227,7 @@ def listing(c, game):
             key = f"{f.name}/{name}"
             items.append(dict(key=key, file=f.name, name=name, enabled=key in enabled, status=STATUS.get(status.get(key, ""), status.get(key, "")),
                               **{"from": s.get("from", "player")}, repo=s.get("repo", ""), author=s.get("author", ""), license=s.get("license", ""),
+                              shared=s.get("repo", "") == PLAYER_REPO or f.name.endswith(".player.txt"),   # 玩家分享、未验证：开之前提示一句可能坏存档（不拦）
                               ok=ok, fixed=fixed, reason="" if ok else f"版本不对：金手指是 {want}，这份游戏是 {bid}。"))
     return dict(items=items, reason="" if items else "这个版本没有现成的金手指。")
 

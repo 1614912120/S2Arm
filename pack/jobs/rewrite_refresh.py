@@ -479,9 +479,11 @@ def _refresh_code_ios(c, games):
     return updated
 
 
-def refresh_mac(c, gid, runtime):
+def refresh_mac(c, gid, runtime, hold=None):
     """起局前：这款的 Mac 运行版本按本引擎改写器核一遍（运行版本自带 exefs/，不用回原件）；记号记在运行版本的 manifest.json（rewriterId）。
-    换了的文件同步改清单里的大小与摘要（起局前按清单核文件）。核不了不挡起局 → True = 换了改写产物"""
+    换了的文件同步改清单里的大小与摘要（起局前按清单核文件）。核不了不挡起局 → True = 换了改写产物
+    hold（后台补 S 级用，诊断 D-R8NG）：改写只往临时目录写、不碰运行版本，放在锁外做；换进运行版本前才进 hold()，
+      它 yield False（库里有任务在用：玩家点了开始游戏）就整款放弃——开始游戏起局前自己会补这一款。不给 hold = 调用方已持锁（起局）"""
     import json
     from core import atomic, read
     runtime = Path(runtime)
@@ -496,34 +498,44 @@ def refresh_mac(c, gid, runtime):
             return False
         game = next((g for g in c.catalog()["games"] if g["id"].upper() == gid.upper()), None)
         names = None
-        with tempfile.TemporaryDirectory(dir=c.private) as tmp:
-            if key is not None and game is not None:   # S 级优化补到老游戏（见文件头）：全部模块与补丁表换进运行版本
+        import contextlib
+        with tempfile.TemporaryDirectory(dir=c.private) as tmp, contextlib.ExitStack() as held:
+            sg = key is not None and game is not None
+            if sg:   # S 级优化补到老游戏（见文件头）：全部模块与补丁表换进运行版本
                 c.emit("message", "正在按当前补丁库给这款补上 S 级优化（只改程序，资源不动）")
                 out, hit, tables = sgrade_rewrite(c, game, runtime, runtime / "exefs", "apple", Path(tmp))
+            else:
+                out = Path(tmp)
+                hit = rewrite_modules(rewriter_bin(c), rewrite_env(c, runtime, runtime / "exefs", "apple"), runtime / "exefs", out, runtime / "widen_sites.tsv")
+            if hold is not None:
+                if not held.enter_context(hold()):
+                    return False
+                manifest = read(runtime / "manifest.json", {})   # 锁外算的这段时间里别的任务（起局）可能已经换过：按换进时的清单记，记号已对上就不再换
+                if not isinstance(manifest.get("files"), dict) or (manifest.get("rewriterId") == rid and (key is None or manifest.get("sgradeKey") == key)):
+                    return False
+            if sg:
                 names = apply_sgrade(out, runtime, hit, tables)
                 import patches
                 patches.remember(c, gid.upper(), patches.record(c, gid, "mac", out))
             else:
-                out = Path(tmp)
-                hit = rewrite_modules(rewriter_bin(c), rewrite_env(c, runtime, runtime / "exefs", "apple"), runtime / "exefs", out, runtime / "widen_sites.tsv")
                 if hit:
                     c.emit("message", "正在按新版更新这款游戏的程序（资源不动）")
                 apply_outputs(out, runtime, hit)
-        files = dict(manifest["files"])
-        if names is not None:   # 补丁表：清单里先去掉旧的，再记这次出的
-            for k in [k for k in files if k in SGRADE_TABLES or k.startswith("cheat-src.")]:
-                files.pop(k)
-            for n in names:
-                files[n] = [(runtime / n).stat().st_size, ""]
-        for m in hit:
-            for ext in OUTPUTS:
-                name, p = f"{m}.{ext}", runtime / f"{m}.{ext}"
-                if p.is_file():
-                    files[name] = [p.stat().st_size, ""]   # 同 build.snapshot：只记大小（v0.2.3 起校验只核大小）
-                else:
-                    files.pop(name, None)
-        atomic(runtime / "manifest.json", dict(manifest, files=files, rewriterId=rid, **({"sgradeKey": key} if names is not None else {})))
-        return bool(hit) or names is not None
+            files = dict(manifest["files"])
+            if names is not None:   # 补丁表：清单里先去掉旧的，再记这次出的
+                for k in [k for k in files if k in SGRADE_TABLES or k.startswith("cheat-src.")]:
+                    files.pop(k)
+                for n in names:
+                    files[n] = [(runtime / n).stat().st_size, ""]
+            for m in hit:
+                for ext in OUTPUTS:
+                    name, p = f"{m}.{ext}", runtime / f"{m}.{ext}"
+                    if p.is_file():
+                        files[name] = [p.stat().st_size, ""]   # 同 build.snapshot：只记大小（v0.2.3 起校验只核大小）
+                    else:
+                        files.pop(name, None)
+            atomic(runtime / "manifest.json", dict(manifest, files=files, rewriterId=rid, **({"sgradeKey": key} if names is not None else {})))
+            return bool(hit) or names is not None
     except (Failure, OSError, subprocess.SubprocessError, ValueError) as e:
         import patches
         if not sgrade_off(c, gid):

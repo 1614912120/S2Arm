@@ -72,9 +72,10 @@ def rebuild(c, gid, src_root, plat, work):
 
 # ---- Mac ----
 
-def upgrade_mac(c, gid, runtime, lock=None):
-    """Mac 运行版本补 _bf：整份重出直连库换进运行版本（运行版本自带全部输入，不用原件）→ True = 换了。代数已是本引擎的 → False。
-    lock：换库时持的锁（返回上下文管理器的函数；sgrade.mac_all 给「开始游戏」那把）——重出只读运行版本、在锁外做，换库与改清单在锁里"""
+def upgrade_mac(c, gid, runtime, hold=None):
+    """Mac 运行版本补 _bf：整份重出直连库换进运行版本（运行版本自带全部输入，不用原件）→ True = 换了。代数已是本引擎的 / 这次放弃 → False。
+    hold（同 rewrite_refresh.refresh_mac）：重出只读运行版本、在锁外做；换库与改清单前进 hold()，它 yield False（玩家正在开始游戏）就整款放弃、
+      不记代数，下次再补。不给 hold = 调用方已持锁"""
     import contextlib
     import tempfile
     from core import atomic, read
@@ -91,7 +92,10 @@ def upgrade_mac(c, gid, runtime, lock=None):
         for p in (stage, old):
             shutil.rmtree(p, ignore_errors=True)
         shutil.copytree(new, stage, copy_function=_clone_file)
-        with (lock() if lock else contextlib.nullcontext()):
+        with (hold() if hold else contextlib.nullcontext(True)) as free:
+            if not free:
+                shutil.rmtree(stage, ignore_errors=True)
+                return False
             manifest = read(runtime / "manifest.json", {})   # 锁里再读一次：重出期间别的作业可能改过清单（refresh_mac 补程序）
             os.replace(runtime / "shaders/direct", old)
             try:
