@@ -469,9 +469,11 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
     out = nvn_gpu_cmd_begin(NULL, &ch, err);
     if (!nvn_gpu_ok(out)) { s->held = idx; s->held_sem = sem; goto done; }
     struct nvn_gpu_cmd_s *c = ch;
-    // 可选的上屏 EASU 放大（默认关）：nvn_plat_flag 只在调试构建里读得到 debug.s2a.nvk_upscale。
+    // 上屏 EASU 放大：玩家选「高画质」时开（S2A_HIGH_QUALITY=1，宿主创建前由外壳设，缺省更省电 = 关）；
+    //   调试构建里 debug.s2a.nvk_upscale 设了就以它为准（A/B 用），发布包 nvn_plat_flag 恒取缺省 -1 → 按玩家选项
     int upscaled = 0;
-    { int up = nvn_plat_flag("nvk_upscale", 0);
+    { static int hq = -1; if (hq < 0) { const char *e = getenv("S2A_HIGH_QUALITY"); hq = e && e[0] == '1'; }
+      int up = nvn_plat_flag("nvk_upscale", -1); if (up < 0) up = hq;
       int elig = up ? easu_eligible(st, s->format) : 0;
       { static int seen = -1; int now = up * 2 + elig;   // 只在「开关 × 适用」变化时记一行
         if (now != seen) { seen = now; char b[160];

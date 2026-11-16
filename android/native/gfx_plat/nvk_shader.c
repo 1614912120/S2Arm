@@ -397,8 +397,7 @@ static const char *alpha_op(uint32_t func) {
 }
 static int src1(unsigned f) { return f >= 0x10 && f <= 0x13; }
 
-// The request may carry BUFFER facts now that the compiler can distinguish
-// them; replay will still reject their layout until buffer views are wired.
+// The request carries BUFFER facts so the compiler can distinguish them.
 static int request_texture_fact(uint32_t fmt, uint32_t target, uint32_t layers,
                                 struct s2a_nvn_texture_fact *out, char *why, size_t why_size) {
     return target == NVN_TEXTURE_TARGET_BUFFER ? s2a_nvn_texture_buffer_fact(fmt, out, why, why_size) :
@@ -585,10 +584,11 @@ static void sampled_decl(const void *blob, size_t bytes, uint32_t set, uint32_t 
             q = w + ids[id].off;
             uint32_t op = q[0] & 0xffffu;
             if (op == 28 || op == 29) { id = q[2]; continue; }
-            if (op != 27) break;
-            id = q[2];
-            if (id >= bound || !ids[id].off) break;
-            q = w + ids[id].off;
+            if (op == 27) {
+                id = q[2];
+                if (id >= bound || !ids[id].off) break;
+                q = w + ids[id].off;
+            } else if (op != 25) break;
             if ((q[0] & 0xffffu) != 25) break;
             uint32_t type = q[2], dim = q[3], depth = q[4], arrayed = q[5], ms = q[6];
             if (arrayed > 1 || ms > 1 || depth > 2 || type >= bound || !ids[type].off) break;
@@ -599,6 +599,7 @@ static void sampled_decl(const void *blob, size_t bytes, uint32_t set, uint32_t 
                 (arrayed ? NVN_TEXTURE_TARGET_2D_ARRAY : NVN_TEXTURE_TARGET_2D);
             else if (dim == 2 && !arrayed && !ms) target = NVN_TEXTURE_TARGET_3D;
             else if (dim == 3 && !ms) target = arrayed ? NVN_TEXTURE_TARGET_CUBEMAP_ARRAY : NVN_TEXTURE_TARGET_CUBEMAP;
+            else if (dim == 5 && !arrayed && !ms) target = NVN_TEXTURE_TARGET_BUFFER;
             if (target < 0) break;
             const uint32_t *sample = w + ids[type].off;
             uint32_t op_type = sample[0] & 0xffffu;
@@ -636,6 +637,7 @@ static struct entry *build(const uint8_t *bytes, size_t len, const struct s2a_so
         }
     }
     e->prog.support_bytes = fp.support_bytes; e->prog.attr_mask = fp.stage[0].attr_mask;
+    for (int st = 0; st < nst && st < RP_PROG_STAGES; st++) if (fp.stage[st].binst_unread) e->prog.binst_unread |= (uint8_t)(1u << st);
     e->prog.z_raw = depth_clip_cap() == 1;   // 同 fill_facts：有管线裁剪深度时所有图形程序都不改写 z（预编库的程序另在取用处置 1）
     e->prog.color_out_mask = nst >= 2 && fp.stage[1].present ? fp.stage[1].fragment_output_map : 0xffffffffu;
     { static _Atomic int said; if (nst >= 2 && nvn_plat_flag("nvk_drawlog", 0) && atomic_fetch_add(&said, 1) < 40) { char m[96]; snprintf(m, sizeof m, "片元输出映射 %#x（片元代码 %zu 字节）", (unsigned)e->prog.color_out_mask, fp.stage[1].spirv_bytes); nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", m); } }
@@ -648,10 +650,13 @@ static struct entry *build(const uint8_t *bytes, size_t len, const struct s2a_so
             nvn_gpu_layout_ent *le = &e->prog.ent[st][e->prog.nent[st]];
             if (!layout_ent(b, le)) { char nm[40]; snprintf(nm, sizeof nm, "binding_kind_%d_slot_%d", b->kind, b->slot); red1(nm, b->stage); e->failed = 1; break; }
             if ((le->src_kind == NVN_RB_TEXU || le->src_kind == NVN_RB_TBUFU) && !usrc_put(&e->prog, b, le)) { red1("too_many_uniform_handles", b->stage); e->failed = 1; break; }
-            if (le->cls == NVN_GPU_RES_TBUF) { red1("texture_buffer_replay_unsupported", b->stage); e->failed = 1; break; }
+            if (le->cls == NVN_GPU_RES_TBUF && le->src_kind != NVN_RB_TBUF) { red1("texture_buffer_replay_unsupported", b->stage); e->failed = 1; break; }
             le->stages = b->is_support ? (1u << nst) - 1u : 1u << st;
             if (b->kind == 2) sampled_decl(fp.stage[st].spirv, fp.stage[st].spirv_bytes, (uint32_t)b->set, (uint32_t)b->binding,
                 &e->prog.dtt[st][e->prog.nent[st]], &e->prog.dcls[st][e->prog.nent[st]]);
+            if (le->cls == NVN_GPU_RES_TBUF && e->prog.dtt[st][e->prog.nent[st]] != NVN_TEXTURE_TARGET_BUFFER + 1) {
+                red1("tbuf_shader_type_unproven", b->stage); e->failed = 1; break;
+            }
             e->prog.nent[st]++;
         }
         if (e->failed) break;
@@ -1384,10 +1389,13 @@ static struct entry *build_compute(const uint8_t *bytes, size_t len, const struc
             }
         } else ok = layout_ent(b, le);
         if (!ok) { char nm[56]; snprintf(nm, sizeof nm, "compute_binding_kind_%d_slot_%d_map_%d", b->kind, b->slot, b->kind == 1 ? (int)cp.storage[i].mapping : 0); red1(nm, "cs"); e->failed = 1; break; }
-        if (le->cls == NVN_GPU_RES_TBUF) { red1("texture_buffer_replay_unsupported", "cs"); e->failed = 1; break; }
+        if (le->cls == NVN_GPU_RES_TBUF && le->src_kind != NVN_RB_TBUF) { red1("texture_buffer_replay_unsupported", "cs"); e->failed = 1; break; }
         le->stages = 1u << NVN_GPU_SH_CS;
         if (b->kind == 2) sampled_decl(cp.stage.spirv, cp.stage.spirv_bytes, (uint32_t)b->set, (uint32_t)b->binding,
             &e->prog.dtt[0][e->prog.nent[0]], &e->prog.dcls[0][e->prog.nent[0]]);
+        if (le->cls == NVN_GPU_RES_TBUF && e->prog.dtt[0][e->prog.nent[0]] != NVN_TEXTURE_TARGET_BUFFER + 1) {
+            red1("tbuf_shader_type_unproven", "cs"); e->failed = 1; break;
+        }
         e->prog.nent[0]++;
     }
     if (!e->failed && !cp.stage.present) { red1("stage_missing_in_result", "cs"); e->failed = 1; }
@@ -1419,6 +1427,7 @@ static uint64_t compute_input_sig(const struct s2a_direct_compile_context *pc) {
     { int un = 0; for (int i = 0; i < 16; i++) if (rp_S.ssbo[5][i].addr && pc->storage_buffer_offset_alignment && rp_S.ssbo[5][i].addr % pc->storage_buffer_offset_alignment) un = 1; MIX(un); MIX(pc->storage_buffer_offset_alignment); }
     MIX(rp_S.tex_pool_n); MIX(rp_S.samp_pool_n); MIX(rp_S.tex_base);
     MIX(combined_fact_sig(5)); MIX(sep_fact_sig(5));
+    { uint32_t m = 0; for (int i = 0; i < 8; i++) if (rp_S.img[5][i]) m |= 1u << i; MIX(m); MIX(rp_tex_fact_sig(rp_S.img[5], 8, rp_S.tex_base, rp_S.tex_pool_n)); }   // 图像事实（同请求：只出已绑的槽）
     #undef MIX
     return h;
 }
@@ -1456,7 +1465,7 @@ static int resolve_compute_slow(const struct rp_prog **out, const struct s2a_dir
     { uint32_t m = 0; for (int i = 0; i < 16; i++) if (rp_S.ubo[5][i].size) m |= 1u << i; st.ubo_use[5] = m << 3; }   // 用户常量缓冲从 c3 起
     st.tex_pool_n = (uint32_t)rp_S.tex_pool_n; st.samp_pool_n = (uint32_t)rp_S.samp_pool_n; st.tex_pool_seen = rp_S.tex_pool_n > 0; st.samp_pool_seen = rp_S.samp_pool_n > 0; st.tex_pool_base = rp_S.tex_base;
     // 贴图事实：计算阶段的 32 个组合槽，取法同图形（没绑过的槽读作池里的第 0 项）
-    static struct s2a_compile_texture_src tex[160]; static char tfmt[160][S2A_TEX_FORMAT_MAX], tsmp[160][S2A_TEX_SAMPLER_MAX]; int ntex = 0;
+    static struct s2a_compile_texture_src tex[168]; static char tfmt[168][S2A_TEX_FORMAT_MAX], tsmp[168][S2A_TEX_SAMPLER_MAX]; int ntex = 0;
     for (int slot = 0; slot < 32; slot++) {
         uint64_t h = rp_S.tex[5][slot]; long id = h ? (long)(h & 0xFFFFF) : (long)rp_S.tex_base;
         tex_t t; view_t tv; int has_tv = 0; struct s2a_nvn_texture_fact nf; char why[96];
@@ -1479,6 +1488,19 @@ static int resolve_compute_slow(const struct rp_prog **out, const struct s2a_dir
                 (uint32_t)(has_tv && tv.set_target ? tv.target : t.d.target), t.d.depth, &nf, why, sizeof why)) continue;
         memcpy(tfmt[ntex], nf.format, sizeof tfmt[ntex]); memcpy(tsmp[ntex], nf.sampler_type, sizeof tsmp[ntex]);
         tex[ntex] = (struct s2a_compile_texture_src){"cs", (uint32_t)(90 + 2 * slot), 2, tsmp[ntex], tfmt[ntex], nf.is_buffer, nf.normalized, 1, nf.array_length};
+        ntex++;
+    }
+    // 图像事实：c2 图像句柄表 8 槽（字节 0x120 + 8k = 字 72 + 2k，同解析器的 72..86 与 iOS C2_IMG），句柄 = 贴图号（BindImages 已按池基址挪过）。
+    //   着色器用立即句柄（cbufSlot −1）或从 c2 读（cbufSlot 2，编译器回落到 −1 的同字事实）取图像时，编译器要这一格的类型与格式（空轨 2nd 9000：cs handle 72）。
+    //   没绑的槽、登记表里没有、格式表达不了的都不出事实：编译器如实报缺，不猜。
+    for (int slot = 0; slot < 8; slot++) {
+        uint64_t h = rp_S.img[5][slot];
+        tex_t t; view_t tv; int has_tv = 0; struct s2a_nvn_texture_fact nf; char why[96];
+        if (!h || !rp_tex_snap_by_id((int)(h & 0xFFFFF), &t, &tv, &has_tv)) continue;
+        if (request_texture_fact((uint32_t)(has_tv && tv.set_format ? tv.format : t.d.format),
+                (uint32_t)(has_tv && tv.set_target ? tv.target : t.d.target), t.d.depth, &nf, why, sizeof why)) continue;
+        memcpy(tfmt[ntex], nf.format, sizeof tfmt[ntex]); memcpy(tsmp[ntex], nf.sampler_type, sizeof tsmp[ntex]);
+        tex[ntex] = (struct s2a_compile_texture_src){"cs", (uint32_t)(72 + 2 * slot), -1, tsmp[ntex], tfmt[ntex], nf.is_buffer, nf.normalized, 0, nf.array_length};
         ntex++;
     }
     struct nvk_compute_texture_facts tf = {tex, ntex, 1};

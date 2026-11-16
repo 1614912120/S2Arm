@@ -47,9 +47,10 @@ class SGradeTests(unittest.TestCase):
         self.t = Path(tempfile.mkdtemp())
         self.events = []
         self.c = types.SimpleNamespace(private=self.t, emit=lambda k, text, **_: self.events.append(text), begin=lambda *a, **k: None,
-                                       lock=lambda name: contextlib.nullcontext(),
+                                       lock=lambda name: contextlib.nullcontext(), idle=lambda name: contextlib.nullcontext(self.free),
                                        catalog=lambda: {"games": [{"id": g, "name": n} for g, n in self.games]})
         self.games = []
+        self.free = True   # execution 锁是不是没人用（c.idle）
         self.info = {}
         def game_path(c, gid, *parts, create=True):
             d = self.t / "lib" / gid.upper()
@@ -151,13 +152,39 @@ class SGradeTests(unittest.TestCase):
         for g in ("0100A", "0100B"):
             nso(self.t / "lib" / g / "image/mac/exefs", "1111111111111111")
         import rewrite_refresh
-        def refresh(c, gid, rt):
+        def refresh(c, gid, rt, hold=None):
             if gid == "0100A": raise Failure("坏了")
             return True
         with patch.object(rewrite_refresh, "refresh_mac", side_effect=refresh):
             r = sgrade.mac_all(self.c)
         self.assertEqual(r, {"updated": ["0100B"], "checked": 2})
         self.assertTrue(any("甲" in e and "没补上" in e for e in self.events))
+
+    def test_mac_all_yields_when_library_busy(self):
+        # 诊断 D-R8NG：execution 锁有人用（正在玩 / 玩家刚点开始）→ 后台一款都不做、不等锁，立刻返回；开始游戏起局前自己补
+        self.games = [("0100A", "甲"), ("0100B", "乙")]
+        for g in ("0100A", "0100B"):
+            nso(self.t / "lib" / g / "image/mac/exefs", "1111111111111111")
+        self.free = False
+        import rewrite_refresh
+        with patch.object(rewrite_refresh, "refresh_mac", side_effect=AssertionError("锁有人用不该开始改写")):
+            r = sgrade.mac_all(self.c)
+        self.assertEqual(r, {"updated": [], "checked": 2})
+
+    def test_mac_all_rewrites_outside_lock(self):
+        # 后台改写不拿 execution 锁（c.lock 不该被调用），换进运行版本那一下交 hold = c.idle
+        self.games = [("0100A", "甲")]
+        nso(self.t / "lib" / "0100A" / "image/mac/exefs", "1111111111111111")
+        self.c.lock = lambda name: (_ for _ in ()).throw(AssertionError("后台不该排队等锁"))
+        seen = []
+        import rewrite_refresh
+        def refresh(c, gid, rt, hold=None):
+            with hold() as ok:
+                seen.append(ok)
+            return True
+        with patch.object(rewrite_refresh, "refresh_mac", side_effect=refresh):
+            r = sgrade.mac_all(self.c)
+        self.assertEqual((r["updated"], seen), (["0100A"], [True]))
 
 
 if __name__ == "__main__":

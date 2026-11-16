@@ -25,6 +25,7 @@ import hashlib
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 from pathlib import Path
@@ -74,8 +75,18 @@ def original_exefs(c, game, work):
     except (OSError, Failure):
         pass
     packages = selected_packages(game)
+    formats = {p.get("format") for p in packages if p.get("type") in ("base", "update")}
+    # 新两条路上原件读不了 / 程序号不符 / ZBIC 解不开会抛 ValueError、RuntimeError、struct.error：统一成 Failure，
+    #   调用方（check_and_update 外层只接 Failure / OSError / SubprocessError）按这一款「没补上」记，不让整轮升级作业崩掉
+    try:
+        if formats and formats <= {"nup"}:
+            return _original_nup_exefs(c, game, packages, work)
+        if formats and formats <= {"dump", "extract", "loose"}:
+            return _original_tree_exefs(c, game, packages, work)
+    except (ValueError, RuntimeError, KeyError, IndexError, struct.error) as e:
+        raise Failure(str(e)) from e
     if any(p.get("format") for p in packages if p.get("format") not in (None, "nsp", "xci", "nsz", "xcz")):
-        return None   # 解包好的文件夹 / Switch 2 NUP：没有现成的只解 exefs 路子，留给重新出包
+        return None
     paths = [source_path(c, p) for p in packages if p["type"] in ("base", "update")]
     if not paths or not all(Path(p).is_file() for p in paths):
         return None
@@ -96,6 +107,91 @@ def original_exefs(c, game, work):
     if not (out / "exefs/main").is_file():
         return None
     return sgrade.save_program(c, game["id"], out / "exefs") or out / "exefs"   # 从原件解出来的存一份，下次不用回原件
+
+
+def _nxu(c):
+    """ZBIC 压缩的 NSO 要 nx_unpack --nso-normalize 解（Switch 2 款常见）：出包时 build.py 经 S2A_NX_UNPACK 给 ns2_dump，S 级升级这条路同样显式给，
+    不靠进程环境（作业进程里没有这个变量，原先 ZBIC 主程序一律「没成」）。取不到读取器 = None，normalize_exefs 照旧报缺"""
+    try:
+        from build import reader_program
+        p = reader_program(c)
+        return str(p) if Path(p).is_file() else None
+    except Exception:   # 取读取器是顺手：取不到（没准备引擎 / 假上下文）= None，只有真遇到 ZBIC 时 normalize_exefs 才报缺，不挡不压缩的款
+        return None
+
+
+def _save_normalized_exefs(c, game, source, work):
+    """复制并规范化一个松散 exefs，再按原始程序缓存的原子替换规则保存；不写回 source。"""
+    from library import engine_tool
+    import sgrade
+    dump = engine_tool(c, "ns2_dump")
+    Path(work).mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix="sgrade-exefs-", dir=work))
+    try:
+        normalized = scratch / "normalized"
+        dump.normalize_exefs(str(source), str(normalized), int(game["id"], 16), nxu=_nxu(c))
+        return sgrade.save_program(c, game["id"], normalized)
+    finally:
+        # save_program 已复制所需模块；保存失败则不留下半成品临时目录。
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _original_tree_exefs(c, game, packages, work):
+    """Switch 2 dump 或已解包目录：dump 取最新数字更新（有 main 才用），其余取 exefs/。"""
+    from library import source_path
+    rows = [p for p in packages if p.get("type") in ("base", "update")]
+    if not rows:
+        return None
+    root = Path(source_path(c, rows[-1]))
+    fmt = rows[-1].get("format")
+    if fmt == "dump":
+        updates = root / "updates"
+        versions = sorted((p for p in updates.iterdir() if p.is_dir() and p.name.isdigit()), key=lambda p: int(p.name)) if updates.is_dir() else []
+        latest = versions[-1] / "exefs" if versions and (versions[-1] / "exefs" / "main").is_file() else None
+        source = latest or root / "base" / "exefs"
+    else:
+        source = root / "exefs"
+    if not (source / "main").is_file() or not (source / "main.npdm").is_file():
+        return None
+    return _save_normalized_exefs(c, game, source, work)
+
+
+def _original_nup_exefs(c, game, packages, work):
+    """NUP：复用 NUP 扫描与 ns2_dump 的选择规则，只写入本体或所选更新的 exefs 树。"""
+    from library import source_path, engine_tool
+    import sgrade
+    rows = [p for p in packages if p.get("type") in ("base", "update")]
+    if not rows:
+        return None
+    source = source_path(c, rows[-1])
+    if not Path(source).is_file():
+        return None
+    nup = engine_tool(c, "ns2_nup")
+    dump = engine_tool(c, "ns2_dump")
+    with nup.Nup(str(source)) as container:
+        app, base, updates, _ = nup.scan(container)
+        if app != int(game["id"], 16):
+            raise ValueError(f"NUP 程序号 {app:016X} 与游戏库 {game['id']} 不一致")
+        selected_update = next((p for p in rows if p.get("type") == "update"), None)
+        chosen = updates.get(int(selected_update["version"])) if selected_update else base
+        if chosen is None:
+            return None
+        if chosen.exefs == nup.NO_DIR or container.child(chosen.exefs, b"main") is None:
+            # 与 ns2_dump.convert 一致：更新里没有 main 才回退本体 exefs。
+            chosen = base if selected_update else None
+        if chosen is None or chosen.exefs == nup.NO_DIR or container.child(chosen.exefs, b"main") is None:
+            return None
+        Path(work).mkdir(parents=True, exist_ok=True)
+        scratch = Path(tempfile.mkdtemp(prefix="sgrade-nup-", dir=work))
+        try:
+            extracted = scratch / "exefs"
+            stat = [0, 0, 0]
+            nup.write_tree(container, chosen.exefs, str(extracted), stat)
+            normalized = scratch / "normalized"
+            dump.normalize_exefs(str(extracted), str(normalized), app, nxu=_nxu(c))
+            return sgrade.save_program(c, game["id"], normalized)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 def rewrite_env(c, kit, exefs, target):   # exefs None：不带随包代码补丁（补丁按主程序构建号认，只改 exefs 模块）
@@ -145,7 +241,9 @@ def sgrade_key(c, gid, rid, main_bid):
     """补丁记号：改写器指纹 + 出表代码指纹 + 这款在补丁库里的包版本（pack/jobs/patches.py version_key）+ 这款金手指文件夹的内容
     （11-14：玩家在电脑上导入 / 删了金手指，下次升级要重编——要改游戏代码的条目只能编进程序，记号不变就会被当成「不用补」跳过）"""
     import patches
-    return f"{rid}:{plan_code_id(c)}:{patches.version_key(c, gid, main_bid)}:{cheats_digest(c, gid)}"
+    import mods   # 玩家导入的 mod 代码补丁（11-15）：导入 / 删了要重编；只开关不算（运行时开关）。没有 mod 代码补丁时记号与原来一字不差（不让所有老游戏白白重补）
+    md = mods.code_digest(c, gid)
+    return f"{rid}:{plan_code_id(c)}:{patches.version_key(c, gid, main_bid)}:{cheats_digest(c, gid)}" + (f":{md}" if md != "-" else "")
 
 
 def cheats_digest(c, gid):
@@ -400,9 +498,37 @@ def check_and_update(c, gid, kit, target, rid):
 
 
 def refresh_ios(c, games):
-    """组容器前：这几款的 iPhone 容器件按本引擎改写器核一遍（见文件头）。→ 换了改写产物的款"""
+    """组容器前：这几款的 iPhone 容器件按本引擎改写器核一遍（见文件头），再补缺的可读瓦片版着色器（pack/jobs/sgrade_bf.py）。→ 换了改写产物 / 资源包的款"""
     if not games:
         return []
+    return sorted(set(_refresh_code_ios(c, games)) | set(_refresh_bf_ios(c, games)))
+
+
+def _refresh_bf_ios(c, games):
+    """老包直连库缺 _bf 的款：整份重出、覆盖层进资源包（put_game 随后按资源包号只推新增的文件）。取不到原料的点名、记 bfMissing（「更新 iPhone」不再因它重组容器，升级页照样再试）"""
+    import sgrade_bf
+    todo = [g for g in games if sgrade_bf.SUPPORTED and sgrade_bf.stale((layout.game_info(c, g).get("ios") or {}).get("bfGen"))]
+    done, missing = [], []
+    names = {x["id"].upper(): x.get("name") or x["id"] for x in c.catalog()["games"]} if todo else {}
+    for i, g in enumerate(todo, 1):
+        c.emit("message", f"补片上读取着色器 {i}/{len(todo)}：{names.get(g.upper(), g)}")
+        try:
+            r = sgrade_bf.upgrade_ios(c, g)
+        except (Failure, OSError, subprocess.SubprocessError) as e:   # 一款出错不挡这次装机：这款保留原来的着色器库、不记代数（下次再试）
+            c.emit("message", f"【红】{names.get(g.upper(), g)}：片上读取着色器没补上，先用原来的着色器库：{str(e)[:200]}")
+            continue
+        if r == "updated":
+            done.append(g)
+        elif r == "unavailable":
+            missing.append(g)
+            layout.update_info(c, g, ios=dict(layout.game_info(c, g).get("ios") or {}, bfMissing=sgrade_bf.BF_GEN))
+    if missing:   # 不悄悄跳过（同 _refresh_code_ios）
+        c.emit("message", "【黄】这几款这次没补上片上读取着色器（游戏库里没有它的资源文件 game.img 与原始程序，也没有 Mac 版可借）："  # 非玩家句
+               + "、".join(names.get(g.upper(), g) for g in missing) + "。需要原件：重新添加原件后再升级一次就会补上；这次照常装，游戏照常能玩")  # 非玩家句
+    return done
+
+
+def _refresh_code_ios(c, games):
     try:
         rid = rewriter_id(c)
     except (Failure, OSError, subprocess.SubprocessError) as e:
@@ -451,9 +577,11 @@ def refresh_ios(c, games):
     return updated
 
 
-def refresh_mac(c, gid, runtime):
+def refresh_mac(c, gid, runtime, hold=None):
     """起局前：这款的 Mac 运行版本按本引擎改写器核一遍（运行版本自带 exefs/，不用回原件）；记号记在运行版本的 manifest.json（rewriterId）。
-    换了的文件同步改清单里的大小与摘要（起局前按清单核文件）。核不了不挡起局 → True = 换了改写产物"""
+    换了的文件同步改清单里的大小与摘要（起局前按清单核文件）。核不了不挡起局 → True = 换了改写产物
+    hold（后台补 S 级用，诊断 D-R8NG）：改写只往临时目录写、不碰运行版本，放在锁外做；换进运行版本前才进 hold()，
+      它 yield False（库里有任务在用：玩家点了开始游戏）就整款放弃——开始游戏起局前自己会补这一款。不给 hold = 调用方已持锁（起局）"""
     import json
     from core import atomic, read
     runtime = Path(runtime)
@@ -468,34 +596,44 @@ def refresh_mac(c, gid, runtime):
             return False
         game = next((g for g in c.catalog()["games"] if g["id"].upper() == gid.upper()), None)
         names = None
-        with tempfile.TemporaryDirectory(dir=c.private) as tmp:
-            if key is not None and game is not None:   # S 级优化补到老游戏（见文件头）：全部模块与补丁表换进运行版本
+        import contextlib
+        with tempfile.TemporaryDirectory(dir=c.private) as tmp, contextlib.ExitStack() as held:
+            sg = key is not None and game is not None
+            if sg:   # S 级优化补到老游戏（见文件头）：全部模块与补丁表换进运行版本
                 c.emit("message", "正在按当前补丁库给这款补上 S 级优化（只改程序，资源不动）")
                 out, hit, tables = sgrade_rewrite(c, game, runtime, runtime / "exefs", "apple", Path(tmp))
+            else:
+                out = Path(tmp)
+                hit = rewrite_modules(rewriter_bin(c), rewrite_env(c, runtime, runtime / "exefs", "apple"), runtime / "exefs", out, runtime / "widen_sites.tsv")
+            if hold is not None:
+                if not held.enter_context(hold()):
+                    return False
+                manifest = read(runtime / "manifest.json", {})   # 锁外算的这段时间里别的任务（起局）可能已经换过：按换进时的清单记，记号已对上就不再换
+                if not isinstance(manifest.get("files"), dict) or (manifest.get("rewriterId") == rid and (key is None or manifest.get("sgradeKey") == key)):
+                    return False
+            if sg:
                 names = apply_sgrade(out, runtime, hit, tables)
                 import patches
                 patches.remember(c, gid.upper(), patches.record(c, gid, "mac", out))
             else:
-                out = Path(tmp)
-                hit = rewrite_modules(rewriter_bin(c), rewrite_env(c, runtime, runtime / "exefs", "apple"), runtime / "exefs", out, runtime / "widen_sites.tsv")
                 if hit:
                     c.emit("message", "正在按新版更新这款游戏的程序（资源不动）")
                 apply_outputs(out, runtime, hit)
-        files = dict(manifest["files"])
-        if names is not None:   # 补丁表：清单里先去掉旧的，再记这次出的
-            for k in [k for k in files if k in SGRADE_TABLES or k.startswith("cheat-src.")]:
-                files.pop(k)
-            for n in names:
-                files[n] = [(runtime / n).stat().st_size, ""]
-        for m in hit:
-            for ext in OUTPUTS:
-                name, p = f"{m}.{ext}", runtime / f"{m}.{ext}"
-                if p.is_file():
-                    files[name] = [p.stat().st_size, ""]   # 同 build.snapshot：只记大小（v0.2.3 起校验只核大小）
-                else:
-                    files.pop(name, None)
-        atomic(runtime / "manifest.json", dict(manifest, files=files, rewriterId=rid, **({"sgradeKey": key} if names is not None else {})))
-        return bool(hit) or names is not None
+            files = dict(manifest["files"])
+            if names is not None:   # 补丁表：清单里先去掉旧的，再记这次出的
+                for k in [k for k in files if k in SGRADE_TABLES or k.startswith("cheat-src.")]:
+                    files.pop(k)
+                for n in names:
+                    files[n] = [(runtime / n).stat().st_size, ""]
+            for m in hit:
+                for ext in OUTPUTS:
+                    name, p = f"{m}.{ext}", runtime / f"{m}.{ext}"
+                    if p.is_file():
+                        files[name] = [p.stat().st_size, ""]   # 同 build.snapshot：只记大小（v0.2.3 起校验只核大小）
+                    else:
+                        files.pop(name, None)
+            atomic(runtime / "manifest.json", dict(manifest, files=files, rewriterId=rid, **({"sgradeKey": key} if names is not None else {})))
+            return bool(hit) or names is not None
     except (Failure, OSError, subprocess.SubprocessError, ValueError) as e:
         import patches
         if not sgrade_off(c, gid):

@@ -136,7 +136,9 @@ public sealed partial class EnvironmentWindow
     private Button? PhonePill()
     {
         if (installGameId is null || (!installBusy && installSeen) || (page == "install" && SelectedGame?.Id == installGameId)) return null;
-        var key = installBusy ? "install.pill.running" : installState == "succeeded" ? (installTrack.ExportFolder.Length > 0 ? "install.pill.exported" : "install.pill.done") : installState == "needsPlayer" ? "install.pill.needs_player" : "install.pill.failed";
+        var key = installBusy ? (installExport ? "install.pill.exporting" : "install.pill.running")
+            : installState == "succeeded" ? (installTrack.ExportFolder.Length > 0 ? "install.pill.exported" : "install.pill.done")
+            : installState == "needsPlayer" ? "install.pill.needs_player" : installExport ? "install.pill.exportFailed" : "install.pill.failed";
         var text = T(key).Replace("{0}", installGameName ?? installGameId).Replace("{1}", InstallTargetLabel);
         if (installBusy && installDone is { } d && installTotal is { } t && t > 0) text += " · " + (100 * d / t) + "%";
         var pill = new Button { Content = text, Padding = new Thickness(14, 8), CornerRadius = new CornerRadius(16),
@@ -377,7 +379,7 @@ public sealed partial class EnvironmentWindow
         }
         body.Children.Add(tiles);
         body.Children.Add(LocationRow(game));
-        if (exportIos) body.Children.Add(InstallModeLine());   // 装到 iPhone：一键装（Apple ID / 我的开发者证书）或导出 + 「更改」去环境检查（v0.3.0，InstallModePage.cs）
+        if (exportIos) body.Children.Add(InstallModeLine());   // 一键装用谁签名（Apple ID / 我的开发者证书）+ 「更改」去设置（InstallModePage.cs）
 
         // action bar
         var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 16 };
@@ -495,9 +497,9 @@ public sealed partial class EnvironmentWindow
             // 满屏 / 帧率解锁 / 金手指固定三行（11-15 维护者定：三项金色字 + 金色 S，三端一致）。Windows 不跑游戏：只写会打进包里的东西、
             //   进了包在哪开关（iPhone 齿轮菜单）；画面补丁只进 Mac 版，Windows 出的是 iPhone 包，不列
             var rows = new StackPanel { Spacing = 10 };
-            void Row(string titleText, string note, bool dim = false)
+            void Row(string titleText, string note, bool dim = false, Control? action = null)
             {
-                var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 11, Opacity = dim ? 0.55 : 1 };
+                var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 11, Opacity = dim ? 0.55 : 1 };
                 row.Children.Add(new Image { Source = SGoldImage(), Width = 22, Height = 22, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 1, 0, 0) });
                 var text = new StackPanel { Spacing = 2 };
                 text.Children.Add(new TextBlock { Text = titleText, FontSize = 14, FontWeight = FontWeight.Bold,
@@ -505,6 +507,7 @@ public sealed partial class EnvironmentWindow
                         GradientStops = { new GradientStop(SGoldHi, 0), new GradientStop(SGold, 1) } } });
                 text.Children.Add(new TextBlock { Text = note, FontSize = 12, Foreground = new SolidColorBrush(Color.FromRgb(168, 168, 173)), TextWrapping = TextWrapping.Wrap });
                 Grid.SetColumn(text, 1); row.Children.Add(text);
+                if (action is not null) { action.VerticalAlignment = VerticalAlignment.Center; Grid.SetColumn(action, 2); row.Children.Add(action); }
                 rows.Children.Add(row);
             }
             // 满屏跨版本（patches.match port，同 Mac SGradeCard）：这份没有同版本的满屏补丁、别的版本有 → 出包时尝试移植
@@ -518,6 +521,11 @@ public sealed partial class EnvironmentWindow
             Row(T("sgrade.row.fs"), Hit("widescreen") > 0 ? T("sgrade.win.patch") : port ? portText : T("sgrade.win.fs.own"));
             Row(T("sgrade.row.fps"), Hit("fps") > 0 ? T("sgrade.win.patch") : T("sgrade.win.fps.fi"));
             Row(T("sgrade.row.cheats"), Hit("cheat") > 0 ? T("export.sgrade.hit.cheat").Replace("{0}", Hit("cheat").ToString()) : T("sgrade.cheats.none"), dim: Hit("cheat") == 0);
+            // Mod（11-15 维护者「打包页增加 mod 导入，S 级优化又升级了」，同 Mac SGradeCard）：带代码补丁的 mod 出包时编进程序；按钮打开这款的 Mod 页（ModsPage.cs）导入
+            var modBtn = new Button { Content = T("export.sgrade.mod.import"), FontSize = 12.5 };
+            modBtn.Click += (_, _) => OpenMods(game);
+            Avalonia.Automation.AutomationProperties.SetAutomationId(modBtn, "export.sgrade.mod.import");
+            Row(T("export.sgrade.cat.mod"), Hit("mod") > 0 ? T("export.sgrade.hit.mod").Replace("{0}", Hit("mod").ToString()) : T("export.sgrade.mod.note"), action: modBtn);
             var build = r.TryGetProperty("build", out var b) ? b.GetString() ?? "" : "";
             // 补丁按版本生效（11-14 维护者）：写明对应玩家这份游戏的哪个版本；列出的别的版本不会打入（同 Mac SGradeCard）
             var ver = r.TryGetProperty("version", out var vv) ? vv.GetString() ?? "" : "";
@@ -727,7 +735,7 @@ public sealed partial class EnvironmentWindow
     {
         var plan = ExportStream.InlinePlan(game.Id, game.Name, ["iphone"], packLocation, spaceOverride);
         if (SGradeOff().Contains(game.Id)) plan["sgrade"] = false;   // 出包页取消「S 级优化（Beta）」：这次不带社区补丁与金手指（pack/jobs/patches.py prepare）
-        return RunExportAsync(plan, batch: false);
+        return RunExportAsync(plan, batch: false, mode: selfSignAfterPack.Contains(game.Id) ? "export" : null);
     }
 
     // 这一步收到 stepEnded 没有（没收到 = 编排作业在第一步前就结束了：被拒、已有一个在出、取消）；子作业的终态（失败页的原因 / 建议从这里读）
@@ -735,16 +743,34 @@ public sealed partial class EnvironmentWindow
     private LibraryJobResult? exportChildReport;
 
     /// <summary>跑一个出包编排作业：每一步的开始 / 子作业事件 / 结局都由 OnExportEvent 显示；取消 = 取消这个作业（它把正在出的那步停下）</summary>
-    private LibraryGame? exportAfterPack;   // 导出模式下这次出完要接着导出的那款（出包作业收尾后起导出）
+    private LibraryGame? exportAfterPack;   // 这次出完要接着导出的那款（出包作业收尾后起导出）
+    /// <summary>「导出自签包」点在没出过包的款上：这几款出完 iPhone 包接着导出（不是装机）</summary>
+    private readonly HashSet<string> selfSignAfterPack = new();
+    /// <summary>这次装机作业是导出自签包：进度 / 结局按导出写，装机页只画结局卡、不画装机清单</summary>
+    private bool installExport;
 
-    private async Task RunExportAsync(Dictionary<string, object?> plan, bool batch)
+    /// <summary>游戏库「导出自签包」（11-15 维护者：导出不是装法，按钮常驻、1 下开始导出、不经装机清单）：iPhone 包能直接导出（新格式）的直接导出；
+    ///   没出过、或包是旧格式的先出 iPhone 包再导出（玩家点的是导出，就把导出做完）</summary>
+    private void ExportSelfSign(LibraryGame game)
+    {
+        libraryFolder = libraryFolderBox.Text ?? libraryFolder;
+        selectedGame = game.Id;
+        if (game.IphoneExportable) { _ = InstallAsync(game, export: true); Navigate("install"); return; }
+        selfSignAfterPack.Add(game.Id);
+        if (ExportStops(game)) { selfSignAfterPack.Remove(game.Id); OpenBuild(); return; }   // 出不了（缺文件 / 没勾 iPhone 等）：去出包页看原因
+        StartPack(game);
+    }
+
+    private async Task RunExportAsync(Dictionary<string, object?> plan, bool batch, string? mode = null)
     {
         var front = packJob!;
         LibraryJobOutput? job = null;
         string? error = null, endState = null;
         try
         {
-            job = await PackJobClient.RunAsync(PackRequest("export", "", new Dictionary<string, object?> { ["plan"] = plan }),
+            var extra = new Dictionary<string, object?> { ["plan"] = plan };
+            if (mode is not null) extra["mode"] = mode;   // 这次出包是为了导出自签包：作业层步骤名照自签路写（子作业照带）
+            job = await PackJobClient.RunAsync(PackRequest("export", "", extra),
                 e => Dispatcher.UIThread.Post(() => OnExportEvent(e, batch)), front.Token, front.Next());
         }
         catch (LibraryProtocolException e) { endState = "invalid"; error = e.Message; }
@@ -769,7 +795,8 @@ public sealed partial class EnvironmentWindow
                 EndJob(front); if (packJob == front) packJob = null;
                 Render();
                 if (batch) _ = BatchExportEndedAsync(job?.Report, error);
-                else if (exportAfterPack is { } g) { exportAfterPack = null; _ = InstallAsync(g); }
+                else if (exportAfterPack is { } g) { exportAfterPack = null; selfSignAfterPack.Remove(g.Id); _ = InstallAsync(g, export: true); }
+                else if (packGame is { } pg) selfSignAfterPack.Remove(pg.Id);   // 出包没成（起不来 / 失败 / 取消）：标记清掉，这款以后正常出包不再当导出画
                 if (!batch) PumpExportQueue();
             });
         }
@@ -812,8 +839,8 @@ public sealed partial class EnvironmentWindow
                 {
                     readinessFor = null;
                     if (packGame is not null) finishedPacks[packGame.Id] = (packState, packIpa ?? "", packIpaBytes, packPackBytes, packSeconds ?? 0);
-                    // 装法是「导出，自己签名安装」：出好就接着导出（D-9ZF9，同 Mac exportSink）；导出不连手机、不签名，等这次出包作业收尾后起
-                    if (!batch && installMode == "export" && packGame is not null) exportAfterPack = packGame;
+                    // 「导出自签包」点在没出过包的款上：出好就接着导出（D-9ZF9，同 Mac exportSink）；导出不连手机、不签名，等这次出包作业收尾后起
+                    if (!batch && packGame is not null && selfSignAfterPack.Contains(packGame.Id)) exportAfterPack = packGame;
                 }
                 if (batch) _ = ReloadBatchAsync();
                 Render();
@@ -1204,7 +1231,7 @@ public sealed partial class EnvironmentWindow
     ///   同 Mac SGradeResultView（launchers/macos/frontend/Sources/NX2Apple/SGradeResult.swift）；都没有内容 = null（不出这块）
     internal Control? SGradeResultPanel(IEnumerable<(string Name, JsonElement Res)> results, bool cheats = true)
     {
-        string Cat(string c) => T("export.sgrade.cat." + (c is "widescreen" or "fps" or "gfx" or "cheat" ? c : "gfx"));
+        string Cat(string c) => T("export.sgrade.cat." + (c is "widescreen" or "fps" or "gfx" or "cheat" or "mod" ? c : "gfx"));
         IEnumerable<JsonElement> Arr(JsonElement r, string k) => r.TryGetProperty(k, out var a) && a.ValueKind == JsonValueKind.Array ? a.EnumerateArray() : [];
         string S(JsonElement e, string k) => e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
         int Cheats(JsonElement r) => cheats && r.TryGetProperty("cheats", out var n) && n.ValueKind == JsonValueKind.Number ? n.GetInt32() : 0;
@@ -1270,10 +1297,11 @@ public sealed partial class EnvironmentWindow
 
             // 两个大按钮
             var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
-            // 导出模式：按钮与说明照导出写（不写「一键装到 iPhone」），点了直接导出（D-9ZF9）
-            var install = installMode == "export"
-                ? Primary(T("export.done.export"), () => { if (packGame is { } g) _ = InstallAsync(g); })
-                : Primary(T(PadKey("export.done.install")), () => { readinessFor = null; Navigate("install"); });
+            // 这次出包是为了导出自签包：按钮与说明照导出写（不写「一键装到 iPhone」），点了直接导出（D-9ZF9）
+            var selfSign = packGame is not null && selfSignAfterPack.Contains(packGame.Id);
+            var install = selfSign
+                ? Primary(T("library.hero.selfSign"), () => { if (packGame is { } g) ExportSelfSign(g); })
+                : Primary(T(PadKey("export.done.install")), () => { readinessFor = null; if (!installBusy) installExport = false; Navigate("install"); });
             AutomationId(install, "progress.install");
             install.Margin = new Thickness(0, 0, 12, 0); buttons.Children.Add(install);
             // IPA 是装机时组装、整个游戏库共用一份（默认位置根 S2Arm.ipa）：出包这步没有 IPA，只给「打开游戏文件夹」（按索引找这款实际所在的位置）
@@ -1287,7 +1315,7 @@ public sealed partial class EnvironmentWindow
             folder.Margin = new Thickness(0, 0, 12, 0); buttons.Children.Add(folder);
             result.Children.Add(buttons);
             if (revealProblem.Length > 0) result.Children.Add(Muted(revealProblem, 13));
-            result.Children.Add(Muted(T(installMode == "export" ? "export.done.exportNote" : "export.win.done.installNote"), 12));
+            result.Children.Add(Muted(T(selfSign ? "export.done.exportNote" : "export.win.done.installNote"), 12));
 
             // 详细记录（折叠步骤列表）
             if (estimate is not null)
@@ -1396,7 +1424,15 @@ public sealed partial class EnvironmentWindow
         if (game is null || connectedFolder is null || libraryId is null) { body.Children.Add(Label(T("export.no_game"), 18)); return; }
         if (readinessFor != game.Id && !installChecking) { readinessFor = game.Id; readiness = null; installCheckFailed = false; _ = CheckInstallAsync(); }
         body.Children.Add(GameHeader(game));
-        body.Children.Add(Label(installMode == "export" ? T("install.mode.export") : T(PadKey("install.title")), 22));   // 导出模式：标题照导出写
+        if (installExport && installState != "" && installGameId == game.Id)
+        {
+            // 导出自签包的进度 / 完成（11-15 维护者：不出现 Apple ID、数据线、检查清单、装回、删除）：标题 + 结局卡（导出文件夹可点、怎么自签安装）
+            body.Children.Add(Label(T("library.hero.selfSign"), 22));
+            if (!installBusy) installSeen = true;
+            body.Children.Add(LiveSlot(() => InstallStateCard(game)));
+            return;
+        }
+        body.Children.Add(Label(T(PadKey("install.title")), 22));
         body.Children.Add(Muted(T("install.description"), 14));
         body.Children.Add(Muted(T("install.container_note"), 14));
         body.Children.Add(Muted(T("install.legacy_note"), 14));
@@ -1552,15 +1588,19 @@ public sealed partial class EnvironmentWindow
     private static HashSet<string> AcceptFlags(ControlRequest r) => ConfirmCodes.Values.Where(r.Flag).ToHashSet();
 
     /// <summary>accept：玩家已同意的确认参数（ConfirmCodes 的值，逐次累积）。ask = false（控制口）原样失败、不弹确认，由调用方带参数再发。</summary>
-    private async Task InstallAsync(LibraryGame game, IReadOnlySet<string>? accept = null, bool ask = true)
+    /// <param name="export">游戏库「导出自签包」：不连手机、不签名，出到文件夹（作业层 install 请求带 mode = export，不带设备）</param>
+    private async Task InstallAsync(LibraryGame game, IReadOnlySet<string>? accept = null, bool ask = true, bool export = false)
     {
         if (installBusy) return;
         accept ??= new HashSet<string>();
+        installExport = export;
         var front = BeginPhoneJob(game, "");
         string? dropAsk = null, askCode = null;
         try
         {
-            var job = await PackJobClient.RunAsync(PackRequest("install", game.Id, AcceptExtra(accept, InstallDevice(game))), e => Dispatcher.UIThread.Post(() => IngestPhoneEvent(e)), front.Token, front.Next());
+            var extra = AcceptExtra(accept, export ? "" : InstallDevice(game)) ?? new Dictionary<string, object?>();
+            if (export) extra["mode"] = "export";
+            var job = await PackJobClient.RunAsync(PackRequest("install", game.Id, extra), e => Dispatcher.UIThread.Post(() => IngestPhoneEvent(e)), front.Token, front.Next());
             if (ask && JobCode(job) is { } c && ConfirmCodes.ContainsKey(c)) { dropAsk = job.Report.Message; askCode = c; }
             installedTo = job.Report.Succeeded ? InstalledLabel(job.Report.Result) : "";
             installCode = job.Report.Succeeded ? null : JobCode(job);
@@ -1573,7 +1613,7 @@ public sealed partial class EnvironmentWindow
             installOpenToFinish = job.Report.Succeeded && job.Report.Result.TryGetProperty("openToFinish", out var open) && open.ValueKind == JsonValueKind.True;
             installDiagnostics = JobDiagnostics(job);
             installTrack.Finish(job, GameName);
-            if (job.Report.Succeeded && installTrack.ExportFolder.Length > 0) OpenFolder(installTrack.ExportFolder);   // 导出模式：打开放好的文件夹
+            if (job.Report.Succeeded && installTrack.ExportFolder.Length > 0) OpenFolder(installTrack.ExportFolder);   // 导出自签包：打开放好的文件夹
         }
         catch (LibraryProtocolException error) { installState = "invalid"; installDiagnostics = error.Message; }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or
@@ -1581,7 +1621,7 @@ public sealed partial class EnvironmentWindow
         { installState = "failed"; installDiagnostics = error.Message; }
         finally { EndJob(front); readinessFor = null; Render(); }
         if (dropAsk is not null && await ConfirmInstallActionAsync("install.drop", dropAsk, ConfirmTitle(askCode)))
-            await InstallAsync(game, new HashSet<string>(accept) { ConfirmCodes[askCode!] });
+            await InstallAsync(game, new HashSet<string>(accept) { ConfirmCodes[askCode!] }, export: export);
     }
 
     /// 装到哪台：清单报回来的那台（续签时就是当初那台，在线才有），没有就是装机记录里的那台（不在线时作业层如实说「它不在线」）。

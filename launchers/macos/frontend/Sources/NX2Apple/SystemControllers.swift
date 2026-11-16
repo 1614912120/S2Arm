@@ -32,11 +32,11 @@ final class SystemControllers: ObservableObject {
         hid.observe { [weak self] names in Task { @MainActor in self?.hidNames = names } }
         hidWatcher = hid
         let center = NotificationCenter.default
-        // 蓝牙手柄接上 / 断开、启动器回到前台（后台接上的、启动前就配对连着的那几只，框架要到活跃才补齐）都重对一次
         for name in [Notification.Name.GCControllerDidConnect, .GCControllerDidDisconnect, NSApplication.didBecomeActiveNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
                 let connected = note.name == .GCControllerDidConnect ? note.object as? GCController : nil
-                Task { @MainActor in self?.refresh(connected: connected) }
+                let disconnected = note.name == .GCControllerDidDisconnect ? note.object as? GCController : nil
+                Task { @MainActor in self?.refresh(connected: connected, disconnected: disconnected) }
             })
         }
         refresh()
@@ -53,23 +53,34 @@ final class SystemControllers: ObservableObject {
     /// 单测：直接给一组手柄（不碰 GameController）
     init(pads: [Pad], gen1: [PlayerAssignment.Gen1Device] = [], hidNames: [String] = []) { self.pads = pads; self.gen1 = gen1; self.hidNames = hidNames }
 
+    deinit {
+        for observer in observers { NotificationCenter.default.removeObserver(observer) }
+        assignTimer?.invalidate()
+    }
+
     /// 分配中认一代 Joy-Con 的手势：(设备 id, 0 左只 / 1 右只, 手势)；nil 停
     func watchGen1(_ onGesture: ((String, Int, Int) -> Void)?) {
         gen1Watcher?.watchGestures(onGesture.map { handler in { id, side, g in Task { @MainActor in handler(id, side, g) } } })
     }
 
-    /// 枚举系统手柄。connected（连接通知里的那一只）是本次事件的真值：枚举快照还没更新时也要把它列进来，
-    ///   不然这只手柄等不到下一次事件，面板就一直「没连接」（系统明明已连上，#934）；它的输入描述还没就绪也照列，晚点再补。
-    func refresh(connected: GCController? = nil) {
-        var controllers = GCController.controllers()
-        if let connected, !controllers.contains(where: { $0 === connected }) { controllers.append(connected) }
-        pads = controllers.compactMap { c in
+    func refresh(connected: GCController? = nil, disconnected: GCController? = nil) {
+        pads = Self.snapshot(GCController.controllers(), connected: connected, disconnected: disconnected)
+    }
+
+    /// 顶栏与弹窗共用同一设备判据；通知对象优先于尚未更新的枚举快照，按对象身份去重而非名称。
+    static func snapshot(_ controllers: [GCController], connected: GCController? = nil, disconnected: GCController? = nil) -> [Pad] {
+        var current = controllers.filter { $0 !== disconnected }
+        if let connected, connected !== disconnected { current.insert(connected, at: 0) }
+        var seen = Set<ObjectIdentifier>()
+        return current.compactMap { c in
+            guard seen.insert(ObjectIdentifier(c)).inserted else { return nil }
             guard c.extendedGamepad != nil || !c.physicalInputProfile.buttons.isEmpty || c === connected else { return nil }
             let category = c.productCategory
             guard let family = Self.family(category: category, vendor: c.vendorName,
                                            xbox: c.extendedGamepad is GCXboxGamepad,
                                            playstation: c.extendedGamepad is GCDualSenseGamepad || c.extendedGamepad is GCDualShockGamepad) else { return nil }
-            return Pad(id: ObjectIdentifier(c), name: c.vendorName ?? category, family: family)
+            let name = c.vendorName.flatMap { $0.isEmpty ? nil : $0 } ?? (category.isEmpty ? "Game Controller" : category)
+            return Pad(id: ObjectIdentifier(c), name: name, family: family)
         }
     }
 

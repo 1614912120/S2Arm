@@ -367,6 +367,12 @@ static void cs_variant_source(unsigned variant, uint8_t digest[32]) {
     s2a_sha256 h; s2a_sha256_init(&h); s2a_sha256_update(&h,ctl,sizeof ctl); s2a_sha256_update(&h,code,sizeof code); s2a_sha256_final(&h,digest);
     CHECK(!s2a_source_keep(digest, 0, code, sizeof code, ctl, sizeof ctl), "CS fixture source variant=%u", variant);
 }
+// 绑了图像槽 2 的那次编译请求里必须有 c2 字 76、cbufSlot −1 的事实（夹具 78 号是 RGBA8 2D）
+static void check_image_fact(int rc_mode) {
+    const char *t = strstr(captured, "\"textures\"");
+    CHECK(strstr(captured, "{\"stage\":\"cs\",\"handle\":76,\"cbufSlot\":-1,\"samplerType\":\"2d\",\"format\":\"R8G8B8A8Unorm\"") != NULL,
+          "CS request carries the bound image's fact at c2 word 76 (reg_changes=%d): %.160s", rc_mode, t ? t : "(none)");
+}
 static void compute_fast_path_test(void) {
     for (int rc_mode = 1; rc_mode >= 0; rc_mode--) {
         const struct rp_prog *a = NULL, *b = NULL; uint8_t dig2[32];
@@ -406,6 +412,16 @@ static void compute_fast_path_test(void) {
         CS_MISS("changed CS texture fact recompiles", rp_S.tex[5][3] = 77, rp_S.tex[5][3] = 0);
         // 分离槽 100 的下标是 228：旧键只拷了 rp_S.tex[5] 的前 160 项，覆盖不到。
         CS_MISS("changed CS separate texture fact recompiles", bind_separate(5, 100, 1, 78), bind_separate(5, 100, 1, 0));
+        // 图像槽 2（c2 字 76）：绑上图像要进请求（图像事实）、快路也要认它；换成同格式的另一张不重编
+        captured[0] = 0;
+        CS_MISS("binding a CS image recompiles", rp_S.img[5][2] = 78, (check_image_fact(rc_mode), rp_S.img[5][2] = 0));
+        { const struct rp_prog *with_img = NULL; rp_S.img[5][2] = 78;
+          CHECK(rp_shader_resolve_compute(&with_img) == 0 && with_img && with_img != a, "CS image input has its own entry (reg_changes=%d)", rc_mode);
+          calls = compiler_calls; hits = nvk_shader_cs_fast_hits();
+          rp_S.img[5][2] = 79;   // 另一张同格式 / 目标 / 深度的图像：请求不变
+          CHECK(rp_shader_resolve_compute(&b) == 0 && b == with_img && compiler_calls == calls && nvk_shader_cs_fast_hits() == hits + 1,
+                "CS same-fact image handle reuses the program (reg_changes=%d)", rc_mode);
+          rp_S.img[5][2] = 0; calls = compiler_calls; hits = nvk_shader_cs_fast_hits(); }
 #undef CS_MISS
         // 来源登记冲突会毒化短键并推进代际：同一份状态不能再命中推进之前存下的快路表项（慢路仍给同一个程序、不重编）。
         { uint8_t wrong_code[16] = {9}, wrong_control[0x760] = {0};
@@ -424,7 +440,7 @@ static void compute_fast_path_test(void) {
               "after session reset the same CS state compiles again (reg_changes=%d)", rc_mode);
     }
     fake_cs_success = 0; separate_fixture = 0; fake_reg_changes = 1;
-    bind_separate(5, 100, 1, 0); memset(rp_S.ubo[5], 0, sizeof rp_S.ubo[5]); memset(rp_S.ssbo[5], 0, sizeof rp_S.ssbo[5]); memset(rp_S.tex[5], 0, sizeof rp_S.tex[5]);
+    bind_separate(5, 100, 1, 0); memset(rp_S.img[5], 0, sizeof rp_S.img[5]); memset(rp_S.ubo[5], 0, sizeof rp_S.ubo[5]); memset(rp_S.ssbo[5], 0, sizeof rp_S.ssbo[5]); memset(rp_S.tex[5], 0, sizeof rp_S.tex[5]);
     rp_shader_reset();
 }
 // 图形与计算共用的快表（#1146）：一帧里依次访问落在同一个旧桶（桶号低 9 位相同）的 5 个键。
@@ -475,9 +491,9 @@ static int emit_real_request(const char *profile_path, const char *closure, cons
     for (unsigned st = 0; st < 3; st++) { gs_stages[st] = (uint8_t)st; memcpy(gs_keys[st], keys[st], 8); }
     gs_keys_ok = 7; p_bind_program_id bind = {&gs_program, gs_program.serial, 0x1f, 0};
     if (!rp_state_op(OP_BIND_PROGRAM, &bind, sizeof bind + 8)) return 1;
-    bind_pools(tbuf == 1 || tbuf == 2 ? 100 : 7);
-    if (tbuf == 1 || tbuf == 2) { separate_fixture = 3; bind_separate(1, 0, 1, 77); }
-    if (tbuf == 2 || tbuf == 3) { fake_compile_file = output; fake_gs_success = 1; nvn_unimpl_reset(); memset(gs_loads, 0, sizeof gs_loads); }
+    bind_pools(tbuf == 1 || tbuf == 2 || tbuf == 7 ? 100 : 7);
+    if (tbuf == 1 || tbuf == 2 || tbuf == 7) { separate_fixture = 3; bind_separate(1, 0, 1, 77); }
+    if (tbuf == 2 || tbuf == 3 || tbuf == 7) { fake_compile_file = output; fake_gs_success = 1; nvn_unimpl_reset(); memset(gs_loads, 0, sizeof gs_loads); }
     else capture_output = output;
     if (tbuf == 4) rp_S.tex[0][0] = 99;
     if (tbuf == 6) rp_S.ubo[5][15].size = 16;
@@ -485,6 +501,12 @@ static int emit_real_request(const char *profile_path, const char *closure, cons
     struct rp_shader_req q = {0}; q.prim = 0; q.rt_count = 1; q.rt_format[0] = NVN_FORMAT_RGBA8;
     if (tbuf == 5) { q.rt_count=2; q.rt_format[1]=NVN_FORMAT_RGBA8; }
     const struct rp_prog *prog = NULL; int rc = rp_shader_resolve(&q, &prog);
+    if (tbuf == 7) {
+        int rejected = rc == -1 && !prog && compiler_calls == 1 &&
+            nvn_unimpl_count("shader", "texture_buffer_replay_unsupported") == 1 && gs_loads[1] == 0;
+        fprintf(stderr, "%s: graphics TBUFU is rejected before shader load\n", rejected ? "PASS" : "FAIL");
+        return !rejected;
+    }
     if (tbuf == 3) {
         CHECK(!rc && prog && compiler_calls == 1, "real compiler result loads for dependency reuse");
         const struct rp_prog *first = prog;
@@ -498,10 +520,13 @@ static int emit_real_request(const char *profile_path, const char *closure, cons
         return failures != 0;
     }
     if (tbuf == 2) {
-        int rejected = rc == -1 && !prog && compiler_calls == 1 &&
-            nvn_unimpl_count("shader", "texture_buffer_replay_unsupported") == 1 && gs_loads[1] == 0;
-        fprintf(stderr, "%s: real BUFFER result refuses unsupported replay before FS shader load\n", rejected ? "PASS" : "FAIL");
-        return !rejected;
+        int found = 0;
+        if (prog) for (uint32_t i = 0; i < prog->nent[1]; i++)
+            if (prog->ent[1][i].cls == NVN_GPU_RES_TBUF && prog->ent[1][i].src_reg == 128 &&
+                prog->dtt[1][i] == NVN_TEXTURE_TARGET_BUFFER + 1 && prog->dcls[1][i] == 0) found++;
+        int accepted = rc == 0 && prog && compiler_calls == 1 && gs_loads[1] == 1 && found == 1;
+        fprintf(stderr, "%s: real BUFFER result loads FS with declared TBUF layout\n", accepted ? "PASS" : "FAIL");
+        return !accepted;
     }
     printf("production Maxwell request: rc=%d captured=%d failures=%d\n", rc, compiler_calls, failures);
     return !(rc == -1 && compiler_calls == 1 && failures == 0);
@@ -529,11 +554,21 @@ static int emit_compute_request(const char *profile_path, const char *closure, c
     if (replay) { fake_compile_file = output; fake_gs_success = 1; nvn_unimpl_reset(); memset(gs_loads, 0, sizeof gs_loads); }
     else capture_output = output;
     compiler_calls = 0; const struct rp_prog *prog = NULL; int rc = rp_shader_resolve_compute(&prog);
-    if (replay) {
+    if (replay == 2) {
         int rejected = rc == -1 && !prog && compiler_calls == 1 &&
-            nvn_unimpl_count("shader", "texture_buffer_replay_unsupported") == 1 && gs_loads[NVN_GPU_SH_CS] == 0;
-        fprintf(stderr, "%s: real compute BUFFER result refuses unsupported replay before CS shader load\n", rejected ? "PASS" : "FAIL");
+            nvn_unimpl_count("shader", "compute_program_parse_failed") == 1 &&
+            strstr(last_red, "compute binding has no reflected guest slot") && gs_loads[NVN_GPU_SH_CS] == 0;
+        fprintf(stderr, "%s: compute TBUFU is rejected by parser before shader load (rc=%d red=%s)\n", rejected ? "PASS" : "FAIL", rc, last_red);
         return !rejected;
+    }
+    if (replay) {
+        int found = 0;
+        if (prog) for (uint32_t i = 0; i < prog->nent[0]; i++)
+            if (prog->ent[0][i].cls == NVN_GPU_RES_TBUF && prog->ent[0][i].src_reg == 0 &&
+                prog->dtt[0][i] == NVN_TEXTURE_TARGET_BUFFER + 1 && prog->dcls[0][i] == 0) found++;
+        int accepted = rc == 0 && prog && compiler_calls == 1 && gs_loads[NVN_GPU_SH_CS] == 1 && found == 1;
+        fprintf(stderr, "%s: real compute BUFFER result loads CS with declared TBUF layout\n", accepted ? "PASS" : "FAIL");
+        return !accepted;
     }
     printf("production compute Maxwell request: rc=%d captured=%d failures=%d red=%s\n", rc, compiler_calls, failures, last_red);
     return !(rc == -1 && compiler_calls == 1 && failures == 0);
@@ -568,6 +603,18 @@ static void graphics_fact_reuse_test(void) {
     CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 5, "attachment count alone does not split shader identity");
     q.rt_format[0] = NVN_FORMAT_R32UI;
     CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 6, "changed compiler output numeric type recompiles");
+    // A BUFFER fact excludes the entire request from the dependency shortcut,
+    // even if the mock result itself does not reflect a buffer binding.
+    rp_shader_reset(); rp_state_reset();
+    CHECK(rp_state_op(OP_BIND_PROGRAM, &bind, sizeof bind + 8), "TBUF fact identity program binds");
+    bind_pools(100); separate_fixture = 3; fake_reg_changes = 0; compiler_calls = 0;
+    rp_S.tex[0][3] = 77;
+    CHECK(!rp_shader_resolve(&q, &p) && p && compiler_calls == 1, "TBUF fact identity initial compile");
+    rp_S.tex[0][4] = 78;
+    CHECK(!rp_shader_resolve(&q, &p) && p && compiler_calls == 2, "TBUF input fact prevents dependency identity reuse");
+    rp_shader_reset(); rp_state_reset();
+    CHECK(rp_state_op(OP_BIND_PROGRAM, &bind, sizeof bind + 8), "fact reuse program rebinds after TBUF test");
+    bind_pools(100); separate_fixture = 1;
     for (int mode = 0; mode <= 5; mode++) if (mode != 1) {
         rp_shader_reset(); fake_gs_fact_deps = mode; compiler_calls = 0; rp_S.tex[0][3] = 0;
         CHECK(!rp_shader_resolve(&q, &p) && compiler_calls == 1, "unsupported dependency fixture resolves");
@@ -658,6 +705,10 @@ int main(int argc, char **argv) {
         return emit_real_request(argv[2], argv[3], argv[4], argv[5], 6);
     if (argc == 6 && !strcmp(argv[1], "--execute-reuse"))
         return emit_real_request(argv[2], argv[3], argv[4], argv[5], 3);
+    if (argc == 6 && !strcmp(argv[1], "--reject-graphics-tbufu"))
+        return emit_real_request(argv[2], argv[3], argv[4], argv[5], 7);
+    if (argc == 6 && !strcmp(argv[1], "--reject-compute-tbufu"))
+        return emit_compute_request(argv[2], argv[3], argv[4], argv[5], 2);
     if (argc == 6 && (!strcmp(argv[1], "--emit-real") || !strcmp(argv[1], "--emit-real-tbuf") || !strcmp(argv[1], "--execute-tbuf")))
         return emit_real_request(argv[2], argv[3], argv[4], argv[5], !strcmp(argv[1], "--execute-tbuf") ? 2 : !strcmp(argv[1], "--emit-real-tbuf"));
     if (argc == 6 && (!strcmp(argv[1], "--emit-compute-tbuf") || !strcmp(argv[1], "--execute-compute-tbuf")))

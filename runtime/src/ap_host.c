@@ -68,8 +68,9 @@ static void resume_frame(uint64_t f) {
     g_rs_first = 0; atomic_store(&g_rs_on, 0);
 }
 void s2a_dguard_frame(uint64_t now); void s2a_dguard_evidence(const char *why, int stall);
+void s2a_playtime_frame(uint64_t now, int focused); int s2a_host_focused(void);   // playtime.c 游玩时间（只算有焦点、连续上屏的段）；os.c 宿主焦点
 void s2a_load_first_frame(uint64_t now);   // loadprog.c：首帧上屏 → 加载页收起、全部编完的记下已完整预热   // dguard.c：直连安全网（首帧后前台满 60 秒清零连续失败）；没 arm 时一次原子读
-void s2a_frame_presented(void) { s2a_wg_frame(atomic_load_explicit(&g_nominal_fps, memory_order_relaxed)); s2a_dguard_frame(now_ns()); if (s2a_hud_on() || atomic_load_explicit(&g_hud_brief, memory_order_relaxed)) s2a_hud_frame(); uint64_t f = atomic_fetch_add_explicit(&g_frames, 1, memory_order_relaxed);
+void s2a_frame_presented(void) { s2a_wg_frame(atomic_load_explicit(&g_nominal_fps, memory_order_relaxed)); uint64_t now = now_ns(); s2a_dguard_frame(now); s2a_playtime_frame(now, s2a_host_focused()); if (s2a_hud_on() || atomic_load_explicit(&g_hud_brief, memory_order_relaxed)) s2a_hud_frame(); uint64_t f = atomic_fetch_add_explicit(&g_frames, 1, memory_order_relaxed);
     resume_frame(f);
     if (!f) { BOOT_MARK("nnMain → 首帧上屏（游戏自身加载 + 渲染器首帧）"); s2a_load_first_frame(now_ns()); }
     if (!f && !g_stall_started) { int m = s2a_ap_stall_mode(s2a_dev_on(), stall_s());

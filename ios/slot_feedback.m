@@ -28,6 +28,7 @@ static s2a_pad_motion g_motion[SLOT_PADS];
 static int g_motion_known[SLOT_PADS];
 static _Atomic int g_motion_wanted, g_active;
 static _Atomic int g_motion_first_logged;   // 首个样本只打一次（真机排查体感用）
+static _Atomic int g_motion_capable[SLOT_PADS];   // 槽里手柄有没有体感：0 空槽、1 有 GCMotion、2 系统不给（Joy-Con 一代 / Xbox 等）
 static dispatch_queue_t g_q;   // 震动对象只在这条队列上碰
 
 void s2a_ios_slot_feedback_stop(void);
@@ -194,6 +195,8 @@ __attribute__((visibility("default"), used)) int s2a_pad_read_motion_slot(int sl
     return known;
 }
 
+// 槽里手柄有没有体感（controller.m 判「玩家拿着没体感的手柄、游戏却要体感」时说一次）：0 空槽、1 有、2 系统不给
+int s2a_ios_slot_motion_capable(int slot) { return slot >= 0 && slot < SLOT_PADS ? atomic_load(&g_motion_capable[slot]) : 0; }
 // ---------- controller.m 调 ----------
 // 槽 slot 换了手柄（inputQueue 上，planSlots 分完槽；槽 0 = 玩家 1 由 attachSystem / clearSystem 调）：nil = 空槽。
 //   旧手柄摘体感回调、停震动；新手柄装体感回调
@@ -211,6 +214,7 @@ void s2a_ios_slot_feedback_owner(int slot, GCController *c) {
         if (!elsewhere) { motion_activate(old, NO); dispatch_async(queue(), ^{ rumbler_stop([g_rumblers objectForKey:old]); }); }
     }
     GCMotion *m = c.motion;
+    atomic_store(&g_motion_capable[slot], !c ? 0 : m ? 1 : 2);
     if (!m) {
         // 系统不给这只手柄六轴。已知：iOS 的 GameController 只对 Switch Pro / DualSense / DualShock 提供 GCMotion，
         //   **Joy-Con 一代的电量 / 按键能读到，但 motion 是 nil**（Apple 论坛 712394，2022 年起如此），这条路没有体感可读

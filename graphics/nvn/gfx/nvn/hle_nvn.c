@@ -1323,7 +1323,17 @@ static int keys_hash_early(const NVNshaderData *sd, uint8_t out[8]) {
 int prog_key(const prog_t *p, unsigned st, uint8_t key[8]) {
     if (st >= p->nstage) return 0;
     prog_keys_t *k = pk_get(p, 1);
-    if (!(k->ok >> st & 1)) { keys_hash(&p->sd[st], 0, k->key[st]); k->ok |= (uint8_t)(1u << st); }
+    if (!(k->ok >> st & 1)) {
+        int got = keys_hash(&p->sd[st], 0, k->key[st]); k->ok |= (uint8_t)(1u << st);
+        // S2Arm D-WQPH（11-15，Mac 奥日2 1.2.0：5 局每局 18–136 支「not in the shader map」，现编汇总成功 / 失败 / 跳过全 0）：SetShaders 时代码区还没进已登记的内存池
+        //   （keys_hash mapped=1 不算键），那支没进首遇现编的待编表；到这里首用才算出键，dm_shader_miss_late 对 Switch 1 只认待编表里有的键，于是不在库里的整支丢、不现编。
+        //   这里补登记（与 SetShaders 同一个入口：库里有就直接返回，没有就拷控制段进待编表 / 后台预编），控制段刚被 keys_hash 读过。NVN2 照旧走 dm_shader_miss_late 自己的首用登记
+        if (got && !(nvn2_on() && nvn2_ctl(p->sd[st].control))) {
+            static _Atomic uint64_t n; uint64_t c = atomic_fetch_add(&n, 1) + 1;
+            if (!(c & (c - 1))) LOG("[nvn] shaders keyed at first use (code not in a registered memory pool at SetShaders): %llu so far; handed to the first-use compile like SetShaders' keys", (unsigned long long)c);
+            dm_shader_miss(k->key[st], p->sd[st].data, p->sd[st].control);
+        }
+    }
     memcpy(key, k->key[st], 8);
     return 1;
 }
@@ -3366,7 +3376,7 @@ static void power_line(uint64_t frame) {
         double nf = frame > pf ? (double)(frame - pf) : 1;   // per frame: the fair comparison when one build holds the frame rate better than another
         LOG("[nvn] power up to frame %llu: CPU energy %.2f W, %.1f mJ per frame (%.1f fps); CPU %.0f%% (100 = one core), %.0f%% of it on performance cores; wakeups %.0f/s (out of platform idle %.0f); GPU busy %.1f ms/s (time, not energy); thermal %d; top yielders: %s", frame,
             (e - pe) / 1e9 / s, (e - pe) / 1e6 / nf, nf / s, (cpu - pcpu) / 1e7 / s, cpu > pcpu ? 100.0 * (double)(p - pp) / (double)(cpu - pcpu) : 0, (iw - piw) / s, (idw - ppw) / s, (g - pg) / 1e6 / s, dm_thermal_now(), yt);
-        char rs[400]; nvn_be_res_stats(rs, sizeof rs); static uint64_t pbs, pbf; uint64_t bs, bf; nvn_be_barrier_stats(&bs, &bf);
+        char rs[900]; nvn_be_res_stats(rs, sizeof rs); static uint64_t pbs, pbf; uint64_t bs, bf; nvn_be_barrier_stats(&bs, &bf);
         uint64_t nvn_be_cut_count(void), nvn_be_copy_cut_count(void), nvn_be_pass_cut_count(void), nvn_be_blit_splits(void); void nvn_be_ubd_stats(uint64_t *, uint64_t *); static uint64_t pcut, pccut, ppcut, pbsp, pud, puc; uint64_t cut = nvn_be_cut_count(), ccut = nvn_be_copy_cut_count(), pcutn = nvn_be_pass_cut_count(), bsp = nvn_be_blit_splits(), ud, uc; nvn_be_ubd_stats(&ud, &uc);
         void nvn_be_ubp_stats(uint64_t *, uint64_t *, uint64_t *); static uint64_t ppm, ppr, ppf; uint64_t pm, pr, pf_; nvn_be_ubp_stats(&pm, &pr, &pf_);
         void nvn_be_lc_stats(uint64_t *, uint64_t *); static uint64_t plt, pll; uint64_t lt, ll; nvn_be_lc_stats(&lt, &ll);
@@ -3378,7 +3388,7 @@ static void power_line(uint64_t frame) {
             (ld - pld) / 1048576.0 / nf, (st - pst) / 1048576.0 / nf, (fu - pfu) / nf, (udc - pudc) / 1048576.0 / nf); pbs = bs; pbf = bf; pcut = cut; pccut = ccut; ppcut = pcutn; pbsp = bsp; pud = ud; puc = uc; ppm = pm; ppr = pr; ppf = pf_; memcpy(pw5, w5, sizeof pw5); plt = lt; pll = ll;
         char tc[400]; dm_thread_cpu(tc, sizeof tc, s);
         LOG("[nvn] threads up to frame %llu: CPU %s", frame, tc); }
-    else { char yt[192], rs[400], tc[400]; dm_yield_top(yt, sizeof yt); nvn_be_res_stats(rs, sizeof rs); dm_thread_cpu(tc, sizeof tc, 1); }   // the first call only takes the baselines
+    else { char yt[192], rs[900], tc[400]; dm_yield_top(yt, sizeof yt); nvn_be_res_stats(rs, sizeof rs); dm_thread_cpu(tc, sizeof tc, 1); }   // the first call only takes the baselines
     pt = t; pe = e; pcpu = cpu; pp = p; piw = iw; ppw = idw; pg = g; pf = frame; nvn_be_bw(&pld, &pst, &pfu); pudc = nvn_be_udc_saved_bytes();
 #endif
 }

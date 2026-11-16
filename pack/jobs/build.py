@@ -147,14 +147,18 @@ def runtime_env(c, game, runtime, input_ok=True):
         p.mkdir(parents=True, exist_ok=True)
     # S2A_SAVE_DIR is a test/import seed that clears saves at boot; launch() sets it
     # only for a save the player just imported, never for normal play. Persist the Ryujinx data root instead.
+    # 游玩时间（runtime/src/playtime.c）写进这款的游戏文件夹：S2A_DOCS 在 temp/（总览里算可清的临时件），清了不能把累计时长一起清掉
     env.update(S2A_GAME_DATA=str(runtime), S2A_RYU_DATA=str(save), S2A_DOCS=str(docs), S2A_SAVE_FOLDER=str(save_folder),
+               S2A_PLAYTIME=str(layout.path(c, game["id"], "playtime.json")),
                NXGAL_SHADER_CACHE_DIR=str(cache / "shaders"), NXGAL_PSO_DEV_DIR=str(cache / "pso"),
                S2A_MACRO_DUMP=str(cache / "macros"),
                S2A_DOCKED="0" if c.r.get("docked") is False else "1",   # Mac 缺省主机模式（维护者 11-07）；只有请求明说 false 才掌机
                S2A_AUTOPLAY="0", S2A_GAME_NAME=game["name"], S2A_GAME_ID=game["id"],
                S2A_INPUT_GUIDE_PREFS=str(c.private / "input-guides" / (game["id"] + ".json")),
                # 金手指（11-12）：这款游戏文件夹的 cheats/（玩家导入 + 启动器从公开库取的 txt、开关 enabled.txt），Mac 宿主 Cheats.cs 读它
-               S2A_CHEATS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "cheats"))))
+               S2A_CHEATS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "cheats"))),
+               # 资源替换类 mod（11-15）：这款游戏文件夹的 mods/（启动器「游戏设置 → Mod」导入），服务层 RomFsMods.cs 起局叠到 RomFS 上
+               S2A_MODS_DIR=str(contained(layout.root_of(c, game["id"]), layout.path(c, game["id"], "mods"))))
     if player:
         env["S2A_PLAYER_USER"] = player["user"]
         if player.get("name"):
@@ -466,7 +470,7 @@ def clone_tree(c, source, destination, *, materialize_romfs=False):
             raise Failure("输入目录包含符号链接。")
     if materialize_romfs and not (source / "romfs").is_dir():
         raise Failure("准备产物缺少 RomFS 游戏资源目录。")
-    # 空目录也要建：内置引擎的 Git 快照 gc 后 .git/refs/heads 等是空目录，少了它 Git 判仓库无效、往上找到外层仓库（10-23 走查：认到了用户主目录的仓库）
+    # 空目录也要建：拷出的目录与源一模一样（RomFS 里的空目录、宿主包结构；10-23 走查起因是当年快照 .git 的空 refs 目录）
     for d in (p for p in entries if p.is_dir() and not p.is_symlink()):
         (destination / d.relative_to(source)).mkdir(parents=True, exist_ok=True)
     files = [p for p in entries if p.is_file()]
@@ -888,7 +892,8 @@ def prepare(c):
                             memoryRequirementsSha256=digest(current / "addr_need.tsv"),
                             engine="S2Arm", gameId=game["id"], gameName=game["name"], compatibility="unverified",
                             files=snapshot(c, temporary), **(host_update.engine_compat(c) or {}),   # 只换宿主的判据（host_update.py）
-                            rewriterId=__import__("rewrite_refresh").rewriter_id(c))   # 改写产物出自哪版改写器：改写器修了，起局前只核记号不同的（rewrite_refresh.refresh_mac）
+                            rewriterId=__import__("rewrite_refresh").rewriter_id(c),
+                            bfGen=__import__("sgrade_bf").BF_GEN)   # 直连库的可读瓦片版代数（S 级升级按它判要不要补 _bf，pack/jobs/sgrade_bf.py）   # 改写产物出自哪版改写器：改写器修了，起局前只核记号不同的（rewrite_refresh.refresh_mac）
             atomic(temporary / "manifest.json", manifest)   # v0.2.3 清理：不再紧接着全量复验——清单就是同一进程刚从这些文件量出来的
             sha = host_update.install_host(c, host)
             c.check()

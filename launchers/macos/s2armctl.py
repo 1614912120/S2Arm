@@ -34,6 +34,7 @@ USAGE = """s2armctl —— 让 AI 助手操作 S2Arm（每条命令 = 玩家点�
   games <文件或文件夹>...            放游戏（本体、更新、DLC 放一个文件夹传文件夹即可；多个更新自动用最新版本），等导入完成再返回
   prepare <游戏号>                   Mac 编译（排队）
   ipa <游戏号> [--space-override]    打 iPhone 包（出 IPA + 资源包）；--space-override 同界面「仍然继续」，磁盘预检不够也照出（先征得玩家同意）
+  selfsign <游戏号>                  导出自签包（同游戏库按钮）：能直接导出的直接导出；没出过 / 旧格式的先打 iPhone 包再导出
   build <游戏号> [ios|mac|android|harmony] [--space-override]   出包，按目标：ios = iPhone / iPad（缺省）、mac = Mac；安卓、鸿蒙即将上线
   batch <游戏号>[:mac,iphone] … [--location 文件夹]
                                     批量出包：几款一起，每款可指定平台（缺省 iphone；同一款先 Mac 后 iPhone，解包只做一次）、一批共用一个存放位置；
@@ -53,7 +54,8 @@ USAGE = """s2armctl —— 让 AI 助手操作 S2Arm（每条命令 = 玩家点�
   library <目录> [--move]            换游戏库位置（外接盘也行）；--move 把现有游戏、成品、缓存和存档一起搬到这个空文件夹
   cloud-folder [<iCloud 云盘里的文件夹>]   开 iCloud 存档同步（不给路径 = 关闭）；iPhone / iPad 上选同一个文件夹
   cloud-sync <游戏号>   这款立即同步一次（开局前 / 退出后会自动做）
-  display <游戏号> [--<设置项> on|off|default|<选项>]…   看 / 改这款的启动设置（设置项见 game_settings.v1.json，如 --enhance on --docked handheld），下次启动生效
+  mods <游戏号> [--import 路径]… [--off 名字]… [--on 名字]… [--remove 名字]…   资源替换 mod：列出 / 导入（zip 或文件夹）/ 关掉 / 打开 / 删除，下次开始游戏生效（同启动设置「资源 Mod」，Windows 同游戏库「Mod…」页）
+  display <游戏号> [--<设置项> on|off|default|<选项>]…   看 / 改这款的启动设置（设置项见 game_settings.v1.json，如 --quality MetalFX --docked handheld），下次启动生效
   errors [游戏号]                    最近失败任务的错误码、原因、建议、日志位置和日志末尾
   retry <任务号> | cancel <任务号>    重试 / 取消任务
   launch <游戏号>                    在 Mac 上启动游戏
@@ -643,7 +645,7 @@ def diag_body(rest, now=None):
 NEEDS_ARG = {'install', 'uninstall', 'launch', 'cancel', 'retry', 'delete', 'customize', 'ipa', 'prepare',
              'build', 'wait', 'install-check', 'logs', 'device', 'push-pack', 'snapshot', 'select',
              'onboarding', 'target', 'keys', 'games',
-             'cloud-sync', 'display', 'library', 'restore-iphone', 'show'}   # 合入时补：这几条同样直接取 rest[0]
+             'cloud-sync', 'display', 'library', 'restore-iphone', 'show', 'mods'}   # 合入时补：这几条同样直接取 rest[0]
 
 def main():
     a = sys.argv[1:]
@@ -721,6 +723,14 @@ def main():
         print(json.dumps(call('POST', '/cloudFolder', {'path': os.path.abspath(os.path.expanduser(rest[0])) if rest else ''}), ensure_ascii=False)); return
     if cmd == 'cloud-sync':
         print(json.dumps(call('POST', '/cloudSync', {'gameId': rest[0]}), ensure_ascii=False)); return
+    if cmd == 'mods':
+        body = {'gameId': rest[0], 'import': [], 'remove': [], 'enable': {}}
+        for flag, value in zip(rest[1::2], rest[2::2]):
+            if flag == '--import': body['import'].append(os.path.abspath(os.path.expanduser(value)))
+            elif flag == '--remove': body['remove'].append(value)
+            elif flag in ('--on', '--off'): body['enable'][value] = flag == '--on'
+            else: print(USAGE); sys.exit(2)
+        print(json.dumps(call('POST', '/mods', body, timeout=600), ensure_ascii=False, indent=1)); return
     if cmd == 'display':
         # 启动设置：--<设置项> <值>，设置项 = launchers/shared/game_settings.v1.json 的 id；on / off 是开关，default 回缺省，其余原样当选项值
         settings = {}

@@ -13,6 +13,8 @@ LIBRARY_ACTIVITY = JAVA / 'org/s2arm/android/LibraryActivity.java'
 
 STUBS = {
 'android/os/Parcelable.java': '''package android.os; public interface Parcelable {}''',
+'android/os/ParcelFileDescriptor.java': '''package android.os; public class ParcelFileDescriptor implements java.io.Closeable {
+ public int getFd(){return -1;} public long getStatSize(){return -1;} public void close(){} }''',
 'android/net/LocalServerSocket.java': '''package android.net; public class LocalServerSocket implements java.io.Closeable { public LocalServerSocket(String n) throws java.io.IOException {} public LocalSocket accept() throws java.io.IOException { throw new java.io.IOException("closed"); } public void close() throws java.io.IOException {} }''',
 'android/net/LocalSocket.java': '''package android.net; public class LocalSocket implements java.io.Closeable { public Credentials getPeerCredentials() { return new Credentials(); } public java.io.InputStream getInputStream() { return null; } public java.io.OutputStream getOutputStream() { return null; } public void close() throws java.io.IOException {} }''',
 'android/net/Credentials.java': '''package android.net; public class Credentials { public int getUid() { return 0; } }''',
@@ -32,6 +34,7 @@ STUBS = {
 'android/content/ContentResolver.java': '''package android.content; import android.net.Uri; import android.database.Cursor;
  public class ContentResolver { public Cursor query(Uri u,String[] c,String a,String[] b,String d){return null;}
  public java.io.InputStream openInputStream(Uri u) throws java.io.IOException {return null;}
+ public android.os.ParcelFileDescriptor openFileDescriptor(Uri u,String mode) throws java.io.IOException {throw new AssertionError("mod import unexpectedly called");}
  public java.io.OutputStream openOutputStream(Uri u,String mode) throws java.io.IOException {throw new AssertionError("diagnostic save unexpectedly called");} }''',
 'android/content/Context.java': '''package android.content; import java.io.File; import android.content.pm.*;
  public class Context { public static String packageName="fixture"; public static int flags; public final File root; public Context(File root){this.root=root;}
@@ -75,7 +78,7 @@ STUBS = {
 'android/os/Bundle.java': '''package android.os; public class Bundle { public String getString(String k){return null;} public void putString(String k,String v){} }''',
 'android/content/Intent.java': '''package android.content; import android.net.Uri; import java.util.*; public class Intent {
  public static final String ACTION_OPEN_DOCUMENT_TREE="android.intent.action.OPEN_DOCUMENT_TREE", ACTION_SEND="android.intent.action.SEND", EXTRA_STREAM="android.intent.extra.STREAM";
- public static final String ACTION_CREATE_DOCUMENT="android.intent.action.CREATE_DOCUMENT", CATEGORY_OPENABLE="android.intent.category.OPENABLE", EXTRA_TITLE="android.intent.extra.TITLE";
+ public static final String ACTION_OPEN_DOCUMENT="android.intent.action.OPEN_DOCUMENT", ACTION_CREATE_DOCUMENT="android.intent.action.CREATE_DOCUMENT", CATEGORY_OPENABLE="android.intent.category.OPENABLE", EXTRA_TITLE="android.intent.extra.TITLE";
  public static final int FLAG_GRANT_READ_URI_PERMISSION=1; private final Map<String,String> values=new HashMap<>();
  public Intent(){} public Intent(String s){} public Intent(String s,Uri u){} public Intent(Intent i){values.putAll(i.values);}
  public Intent putExtra(String k,String v){values.put(k,v);return this;} public Intent putExtra(String k,boolean v){values.put(k,String.valueOf(v));return this;} public void removeExtra(String k){values.remove(k);}
@@ -86,7 +89,8 @@ STUBS = {
  public void setClipData(ClipData value){throw new AssertionError("diagnostic share unexpectedly called");}
  public static Intent createChooser(Intent intent,CharSequence title){throw new AssertionError("diagnostic share unexpectedly called");}
  public Intent addCategory(String category){throw new AssertionError("diagnostic save unexpectedly called");} }''',
-'android/view/View.java': '''package android.view; public class View { public static final int VISIBLE=0, GONE=8; public void setBackgroundColor(int c){} public void setPadding(int a,int b,int c,int d){} private int vis; public void setVisibility(int v){vis=v;} public int getVisibility(){return vis;} public interface OnClickListener {void onClick(View v);} public void setEnabled(boolean enabled){throw new AssertionError("diagnostic export unexpectedly called");} }''',
+'android/view/View.java': '''package android.view; public class View { public static final int VISIBLE=0, GONE=8; public void setBackgroundColor(int c){} public void setPadding(int a,int b,int c,int d){} private int vis; public void setVisibility(int v){vis=v;} public int getVisibility(){return vis;} public interface OnClickListener {void onClick(View v);} public void setEnabled(boolean enabled){throw new AssertionError("diagnostic export unexpectedly called");}
+ private static int nextId=1; private int id; public static int generateViewId(){return nextId++;} public void setId(int v){id=v;} public int getId(){return id;} }''',
 'android/widget/TextView.java': '''package android.widget; import android.view.View; import android.content.Context; import java.util.concurrent.*;
  public class TextView extends View { public static final BlockingQueue<String> messages=new LinkedBlockingQueue<>();
  public TextView(Context c){} public void setText(String s){messages.add(s);} public void setText(int i){} public void setTextSize(float f){} public void setTextColor(int c){} }''',
@@ -99,7 +103,13 @@ STUBS = {
  public void setOnCheckedChangeListener(OnCheckedChangeListener value){listener=value;} }''',
 'android/widget/CheckBox.java': '''package android.widget; import android.content.Context; public class CheckBox extends CompoundButton { public CheckBox(Context c){super(c);} }''',
 'android/widget/LinearLayout.java': '''package android.widget; import android.content.Context; import android.view.View; public class LinearLayout extends View {
- public static final int VERTICAL=1; public LinearLayout(Context c){} public void setOrientation(int x){} public void setPadding(int a,int b,int c,int d){} public void addView(View v){} }''',
+ public static final int HORIZONTAL=0, VERTICAL=1; public LinearLayout(Context c){} public void setOrientation(int x){} public void setPadding(int a,int b,int c,int d){} public void addView(View v){} public void removeAllViews(){} }''',
+'android/widget/RadioButton.java': '''package android.widget; import android.content.Context; public class RadioButton extends CompoundButton { public RadioButton(Context c){super(c);} }''',
+'android/widget/RadioGroup.java': '''package android.widget; import android.content.Context; import android.view.View;
+ public class RadioGroup extends LinearLayout { public interface OnCheckedChangeListener {void onCheckedChanged(RadioGroup group,int checkedId);}
+ private int checked=-1; private OnCheckedChangeListener listener; public RadioGroup(Context c){super(c);}
+ public void check(int id){if(checked!=id){checked=id;if(listener!=null)listener.onCheckedChanged(this,id);}} public int getCheckedRadioButtonId(){return checked;}
+ public void setOnCheckedChangeListener(OnCheckedChangeListener l){listener=l;} }''',
 'android/view/Gravity.java': '''package android.view; public class Gravity { public static final int END=8388613, BOTTOM=80; }''',
 'android/widget/FrameLayout.java': '''package android.widget; import android.content.Context; import android.view.View; public class FrameLayout extends View {
  public static class LayoutParams { public LayoutParams(int w,int h){} public LayoutParams(int w,int h,int g){} }
@@ -107,7 +117,7 @@ STUBS = {
 'org/s2arm/android/LibraryShelf.java': '''package org.s2arm.android; import android.content.Context; import android.view.View; import java.io.File;
  final class LibraryShelf extends View { interface Listener { void play(String titleId); void openGameSettings(); void openControllers(); void openSettings(); }
  static final java.util.List<String> added=new java.util.ArrayList<>();
- LibraryShelf(Context c,Listener l){} void addGame(String titleId,String name,File art){added.add(titleId);} }''',
+ LibraryShelf(Context c,Listener l){} void addGame(String titleId,String name,File art){added.add(titleId);} String selectedId(){return null;} }''',
 'android/widget/ScrollView.java': '''package android.widget; import android.content.Context; import android.view.View; public class ScrollView extends View {
  public ScrollView(Context c){} public void addView(View v){} }''',
 'android/app/Activity.java': '''package android.app; import android.content.*; import android.os.Bundle; import android.content.res.Resources; import android.view.View; import java.io.File;
@@ -129,13 +139,19 @@ STUBS = {
  library_game_starting=7, library_current_game=8, library_switch_title=9, library_switch_message=10, library_switch_confirm=11, library_switch_waiting=12, library_switch_timeout=13, library_launch_failed=14, library_switch_cancel=15, player_err_fmt=100, player_err_import=101, player_err_start=102, player_err_no_space=103, player_err_no_space_next=104, player_err_apk=105, player_err_apk_next=106, player_err_access=107, player_err_access_next=108, player_err_pack=109, player_err_pack_next=110, player_err_other=111, player_err_other_next=112, library_title=113, library_more=114, import_progress=115,
  save_diagnostics=116, save_diagnostics_done=117, save_diagnostics_failed=118,
  player_err_all_files=130, player_err_all_files_next=131, player_err_in_place=132, player_err_in_place_next=133,
- in_place_game=134, in_place_access_title=135, in_place_access_text=136, in_place_access_open=137, in_place_not_local=138; } }''',
+ in_place_game=134, in_place_access_title=135, in_place_access_text=136, in_place_access_open=137, in_place_not_local=138,
+ last_session_dismiss=119, quality_high=139, quality_saver=140, quality_note=141,
+ mods_title=142, mods_for_game=143, mods_no_game=144, mods_import_zip=145, mods_import_folder=146, mods_none=147, mods_item=148, mods_remove=149,
+ mods_working=150, mods_imported=151, mods_failed=152, mods_err_not_archive=153, mods_err_too_many=154, mods_err_too_large=155, mods_err_no_romfs=156,
+ mods_err_missing=157, mods_err_name_taken=158, mods_note_other_game=159, mods_note_exefs=160, mods_note_empty=161, mods_note=162; } }''',
 # These unrelated app boundaries must never be called in an import test.
 'org/s2arm/android/DiagnosticExport.java': '''package org.s2arm.android; import android.content.Context; import java.io.IOException; import java.nio.file.Path;
  public class DiagnosticExport { public static Path run(Context context) throws IOException {throw new AssertionError("diagnostic export unexpectedly called");} }''',
 'org/s2arm/android/DiagnosticShareProvider.java': '''package org.s2arm.android; import android.content.Context; import android.net.Uri; import java.nio.file.Path;
  public class DiagnosticShareProvider { public static Uri uri(Context context,Path path){throw new AssertionError("diagnostic share unexpectedly called");}
  public static Path directory(Context context){throw new AssertionError("diagnostic save unexpectedly called");} }''',
+'org/s2arm/android/LastSessionNotice.java': '''package org.s2arm.android; import android.content.Context;
+ public class LastSessionNotice { static String text(Context context,long markedAt){throw new AssertionError("last-session notice unexpectedly called");} }''',
 'org/s2arm/android/GameResume.java': '''package org.s2arm.android; import java.io.File; import java.io.IOException; public class GameResume { static String activeTitle(File c){return null;}
  public static final String EXTRA="resume"; public static String requireSame(File f,int p,String t,File g) throws IOException,BootContract.BadGame{return t;} }''',
 'org/s2arm/android/GameActivity.java': '''package org.s2arm.android; import android.content.*; public class GameActivity { static final String SWITCH_EXTRA="org.s2arm.android.SWITCH_GAME";

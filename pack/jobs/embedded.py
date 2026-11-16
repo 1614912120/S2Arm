@@ -1,7 +1,7 @@
 """Install the app's immutable engine snapshot into a writable cache (the default location's hosts/engine, see engines_root).
 
-The snapshot contains a fresh, local-only Git object database for the existing
-pipeline's HEAD-based stage keys. It contains no developer history or remotes.
+The snapshot carries no Git repository: the HEAD-based stage keys were computed when
+the app was packaged and are stored in engine.json (launchers/macos/bundle_engine.py).
 """
 import contextlib
 from pathlib import Path
@@ -9,41 +9,6 @@ import os
 import shutil
 import uuid
 from core import PROBES, Failure, atomic, contained, read
-
-
-def repair_git_skeleton(git_dir):
-    """同 pack/orch/roots.py repair_git_skeleton（作业层不 import pack.orch）：HEAD 与 objects/ 都在、只缺 refs 空目录时补上"""
-    git_dir = Path(git_dir)
-    if not (git_dir / "HEAD").is_file() or not (git_dir / "objects").is_dir():
-        return []
-    made = []
-    for d in ("refs", "refs/heads", "refs/tags"):
-        if not (git_dir / d).is_dir():
-            (git_dir / d).mkdir(parents=True, exist_ok=True)
-            made.append(d)
-    return made
-
-
-def check_git(engine):
-    """内置引擎的 Git 快照必须自成一库：Git 认出的仓库目录就是引擎自己的 .git，不许往上认到外层仓库"""
-    import subprocess
-    env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(Path(engine).resolve().parent))
-    # 先看 git 自己跑不跑得起来（#638：原先吞掉 stderr 一律说「快照无效，请重新安装」，分不清是副本坏还是这台机的 git 跑不起来）：
-    #   git 本身起不来 / 退非 0 → 如实转述 git 的原话，不猜原因；git 好好的而认不出引擎自己的仓库 → 才是快照坏
-    try:
-        v = subprocess.run(["git", "--version"], capture_output=True, text=True, env=env)
-    except OSError as e:
-        raise Failure("内置 S2Arm 引擎初始化要用系统的 git，git 起不来：" + str(e), internal=f"git --version：{e!r}") from None  # 非玩家句
-    if v.returncode:
-        said = (v.stderr or v.stdout).strip()
-        raise Failure("内置 S2Arm 引擎初始化要用系统的 git，git 报错（退出码 " + str(v.returncode) + "）：" + (" ".join(said.split())[:300] if said else "没有输出"),  # 非玩家句
-                      internal="git --version：" + said)
-    repair_git_skeleton(Path(engine) / ".git")   # 只缺 refs 这类空目录（安装 / 拷贝时丢了）：补上再认（pack/orch/roots.py 同一份规则）
-    p = subprocess.run(["git", "-C", str(engine), "rev-parse", "--absolute-git-dir"], capture_output=True, text=True, env=env)
-    found = Path(p.stdout.strip()).resolve() if not p.returncode else None
-    if found != (Path(engine) / ".git").resolve():
-        raise Failure("S2Arm 安装不完整（内置引擎的版本快照缺文件）：请重新安装 S2Arm。", code="engine_incomplete",
-                      internal=f"git rev-parse --absolute-git-dir 退出码 {p.returncode}，认出 {found}；{(p.stderr or '').strip()}")  # 非玩家句
 
 
 def install(c):
@@ -58,10 +23,8 @@ def install(c):
     root = engines_root(c)
     destination = contained(root, root / identity)
     _adopt_private_copy(c, root, identity)
-    repair_git_skeleton(destination / ".git")   # 已装的副本也补（覆盖安装 / 拷贝丢了 refs 空目录时，原先要到「播种」才以 git 128 失败）
     # 已装的副本每次用前按大小快速复核（#304：玩家机上已装副本里宿主的 Info.plist 被外部改过，0.1.7 只看安装标记、之后每次出包都报 runtime_invalid、
     #   重新打包也好不了）；对不上就挪开、从 App 包重解。逐文件 lstat，约 8500 个文件几十毫秒；摘要级核对仍在用到具体产物时（artifact）。
-    #   不核 .git/（_stable_files：快照自带的 Git 仓库元数据，正常使用就可能变）。
     #   完好的副本直接用、不拿锁；要挪开 / 重解时拿跨进程锁（_install_lock），拿到后重读标记、再核一次（别的作业可能刚装好）才动手——
     #   v0.2.0 前回归：启动时 preflight 与 setup 同时初始化同一份副本，一个读到另一个装到一半 / 正被收走的副本，误判「被改过」、挪走对方的
     if getattr(c, "operation", None) in PROBES and read(destination / ".installed.json", {}).get("schema") == 2:   # 非作业的调用方（tools 里的假上下文）没有 operation：按非探测、照常复核
@@ -77,8 +40,8 @@ def install(c):
 
 
 def _ready(c, destination, manifest):
-    """有安装标记且清单里稳定的文件都在、大小对"""
-    return read(destination / ".installed.json", {}).get("schema") == 2 and _intact(c, destination, manifest, _stable_files(manifest), full=False)
+    """有安装标记且清单里的文件都在、大小对"""
+    return read(destination / ".installed.json", {}).get("schema") == 2 and _intact(c, destination, manifest, full=False)
 
 
 @contextlib.contextmanager
@@ -109,7 +72,6 @@ def _reinstall(c, source, manifest, root, destination, identity):
     temporary.mkdir(parents=True)
     try:
         clone_tree(c, source, temporary)   # v0.2.3 清理：不再对刚拷出的副本再核一遍——源刚核过，clone_tree 拷错会自己报
-        check_git(temporary)
         atomic(temporary / ".installed.json", dict(schema=2, id=identity))
         c.check()
         os.rename(temporary, destination)
@@ -180,11 +142,6 @@ def _retain(c, root, identity):
         others.append((used, d.name, d))
     for _, _, d in sorted(others, reverse=True)[1:]:
         shutil.rmtree(d, ignore_errors=True)
-
-
-def _stable_files(manifest):
-    """清单里不会被正常使用改动的文件：去掉 Git 仓库元数据 .git/"""
-    return {p: v for p, v in (manifest.get("files") or {}).items() if not (p == ".git" or p.startswith(".git/"))}
 
 
 def _intact(c, root, manifest, files=None, full=False):

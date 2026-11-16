@@ -277,7 +277,10 @@ def sgrade_pending(c, games):
         return True
     pend = rewrite_refresh.pending_ios(c, [g for g in games if g], rid)
     # 这一版记号下已经试过、缺原件补不上的不算（不然每次「更新 iPhone」都白重装一遍）
-    return any((layout.game_info(c, g).get("ios") or {}).get("sgradeMissing") != (rewrite_refresh.ios_key(c, g, rid) or "") for g in pend)
+    if any((layout.game_info(c, g).get("ios") or {}).get("sgradeMissing") != (rewrite_refresh.ios_key(c, g, rid) or "") for g in pend):
+        return True
+    import sgrade_bf   # 老包直连库缺可读瓦片版着色器（_bf）：取不到原料、这一代已试过的不算
+    return any(sgrade_bf.due(c, g) for g in games if g)
 
 def patches_results(c):
     import patches
@@ -735,6 +738,37 @@ def push_cheats(c, device, bid, gid, docs):
         print(f"[装机] 金手指文件 {len(files) - bad}/{len(files)} 份拷进手机{'（有拷不进的，游戏内菜单里会缺几份）' if bad else ''}", file=sys.stderr, flush=True)  # 非玩家句
 
 
+def push_mods(c, ph, gid, had):
+    """资源替换类 mod（11-15）：这款游戏文件夹 mods/<名字>/romfs 推进机上本款文档根 mods/（服务层 RomFsMods.cs 起局叠上）。
+    had = 上次推过的 {名字: 内容记号}（设备记录 games.<款>.mods）：记号变了的整份重推、电脑上删了的机上也删；玩家在手机上自己放的别的 mod 不碰。
+    推不进只记黄、不挡装机。→ 这次推完后机上的 {名字: 记号}（推失败的那份按没推算，下次再推）"""
+    import mods
+    home = mods.mods_dir(c, gid, create=False)
+    local = {d.name: mods.fingerprint(d) for d in sorted(home.iterdir()) if d.is_dir() and not d.name.startswith(".")} if home.is_dir() else {}
+    if not local and not had:
+        return {}
+    now, base = dict(had), f"{game_docs(gid)}/{mods.DIR}"
+    try:
+        with tempfile.TemporaryDirectory(dir=c.private) as w:
+            cl = ph.client(w)
+            for n in [n for n in had if local.get(n) != had[n]]:
+                ok, out = cl.rm(f"{base}/{n}")
+                if not ok:
+                    raise RuntimeError(f"删手机上的旧 mod「{n}」：{out.splitlines()[-1] if out else '失败'}")  # 非玩家句
+                now.pop(n)
+            for n, fp in local.items():
+                if had.get(n) == fp:
+                    continue
+                files = [f for f in sorted((home / n).rglob("*")) if f.is_file() and not f.is_symlink()]
+                c.emit("message", f"正在把 mod「{n}」推进 iPhone（{len(files)} 个文件）")
+                for f in files:
+                    cl.put(str(f), f"{base}/{n}/{f.relative_to(home / n).as_posix()}")
+                now[n] = fp
+    except Exception as e:   # 推不进：已推好的记下，其余下次装机再推
+        c.diagnostic(f"mod 没全推进 iPhone，这次游戏里会缺几份，下次「装到 iPhone」会补推：{str(e)[:200]}", code="resource_transfer_failed", severity="warning")  # 非玩家句
+    return now
+
+
 APPLY_FAILED = re.compile(r"资源包推进去了，但手机上解开失败：([^\n]+)")   # tools/push_pack.py apply 读到解包日志「解包失败：…」时报的那句  # 非玩家句
 
 
@@ -928,31 +962,20 @@ def devcert_items(c, item, udid):
     return got
 
 
-# 装到 iPhone 的方式（11-11 维护者定「怎么签、怎么装收成一套」）：device = 一键装（启动器签名并装；签名身份仍是 devcert 状态 active 与否，不另存）；
-#   export = 导出，自己签名安装（未签名 S2Arm.ipa + 各款 game.img 到文件夹）。存私有目录 install.json，Mac / Windows 两端读同一份；完成页临时换一次不改这里
-INSTALL_MODES = ("device", "export")
-
-
-def install_mode(c):
-    m = read(c.private / "install.json", {})
-    return m.get("mode") if isinstance(m, dict) and m.get("mode") in INSTALL_MODES else "device"
-
-
+# 导出自签包不再是一种「装法」（11-15 维护者：让玩家先去设置里切模式本身就是多出来的一道）：游戏库「装到 iPhone」与「导出自签包」两个按钮并排，
+#   导不导出只看这次请求带的 mode = export（wants_export）。原先存在私有目录 install.json 的装法设置作废：installMode 作业（两端启动时读签名身份）顺手删掉它，迁移一次
 def export_available(c):
-    """「导出，自己签名安装」能不能用：导出作业（export_phone，IMG + 未签名壳）在就是 True；两端为 False 时把这一项置灰写「下一版提供」"""
+    """导出作业（export_phone，IMG + 未签名壳）在不在"""
     return callable(globals().get("export_phone"))
 
 
 def install_mode_job(c):
-    """作业 installMode：带 mode 就改（只认 device / export；导出还不能用时拒收 export），不带只读 → {mode, exportAvailable, signMode}"""
-    mode = c.r.get("mode")
-    if mode is not None:
-        if mode not in INSTALL_MODES:
-            raise Failure(f"不认识的安装方式：{mode}", code="job_failed")
-        if mode == "export" and not export_available(c):
-            raise Failure("「导出，自己签名安装」下一版提供。", code="job_failed")
-        atomic(c.private / "install.json", dict(mode=mode))
-    return dict(mode=install_mode(c), exportAvailable=export_available(c), signMode="devcert" if devcert.active(c) else "appleId")
+    """作业 installMode：只读签名身份 → {signMode, exportAvailable}；旧版留下的装法设置 install.json 删掉（迁移一次）"""
+    try:   # 删不掉（Windows 上被杀软 / 别的进程占着）不碍事：wants_export 已经不看它，下次启动再删；这个作业是启动时读签名身份的，不能因此失败
+        (c.private / "install.json").unlink(missing_ok=True)
+    except OSError:
+        pass
+    return dict(exportAvailable=export_available(c), signMode="devcert" if devcert.active(c) else "appleId")
 
 
 # 导出给自签玩家（v0.3.1，维护者 11-12「导出，自己签名安装」）：游戏库根下这个文件夹放未签名 S2Arm.ipa + 各款 <游戏名>.img + 一份说明。
@@ -975,9 +998,8 @@ def export_dir(c):
 
 
 def wants_export(c):
-    """这次按导出走：请求带 mode（完成页「这次改为导出自签 / 一键装」临时换一次）就照它，不带按设置里的装法"""
-    m = c.r.get("mode")
-    return (m if m in INSTALL_MODES else install_mode(c)) == "export"
+    """这次按导出走：请求带 mode = export（游戏库「导出自签包」、完成页「这次改为导出自签」、S 级优化升级页「自签导出」）；没带 = 一键装"""
+    return c.r.get("mode") == "export"
 
 
 def _img_name(name, gid, used):
@@ -1405,7 +1427,7 @@ def readiness(c):
     item("deviceReady", dev_mode and stage == "", "{0} 已准备好安装".replace("{0}", kind), link["problem"] if stage == "prepare" else "", who="app", waiting=not paired or stage == "developerMode")
     account = (cert or {}).get("teamName") or "" if use_cert else (team["name"] or team["id"]) if team else ""
     return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=name, deviceKind=kind.lower() if one else "", account=account, ipaPath=ipa_path, imgPath=phone_img_path(c, gid), shaderCachePath=phone_shader_cache(c, gid),
-                signing="" if use_cert else signing_summary(c.env()), signMode="devcert" if use_cert else "appleId", devcert=cert, installMode=install_mode(c))
+                signing="" if use_cert else signing_summary(c.env()), signMode="devcert" if use_cert else "appleId", devcert=cert)
 
 
 def linked_sdk(exe):
@@ -1597,8 +1619,7 @@ def readiness_windows(c, gid):
         except (OSError, ValueError):
             kind = ""
     return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=udids[0] if len(udids) == 1 else "", deviceKind=kind,
-                account=(cert or {}).get("teamName") or "", ipaPath=ipa_path, imgPath=phone_img_path(c, gid), shaderCachePath=phone_shader_cache(c, gid), signMode="devcert" if use_cert else "appleId", devcert=cert,
-                installMode=install_mode(c))
+                account=(cert or {}).get("teamName") or "", ipaPath=ipa_path, imgPath=phone_img_path(c, gid), shaderCachePath=phone_shader_cache(c, gid), signMode="devcert" if use_cert else "appleId", devcert=cert)
 
 
 def devpush_client(c, udid, bid, work):
@@ -1682,6 +1703,9 @@ class MacPhone:
         hit = [d for d in self.c.job["diagnostics"][n0:] if d.get("code") == "manual_unpack_required"]   # push_pack 按「需要玩家操作」收尾时记的那条
         if hit: self.pending = hit[-1].get("summary") or ""
         return r
+
+    def client(self, work):
+        return devpush_client(self.c, self.udid, self.bid, work)
 
     def purge(self, g):
         with tempfile.TemporaryDirectory(dir=self.c.private) as w:
@@ -2014,16 +2038,19 @@ def put_game(c, gid, ph, steps=True, others=None, skipped=()):
                       "把游戏推进 iPhone（只推变了的文件；第一次大游戏要几分钟）" if img else "把资源包推进 iPhone 并解开（只推变了的文件；第一次大游戏要几分钟）", 6, 6)
     files = size = 0
     pushed = dict((g, (rec["games"].get(g) or {}).get("pack", "")) for g in games)
+    modset = dict((g, (rec["games"].get(g) or {}).get("mods") or {}) for g in games)
     try:
         for g in stale:
             f, n = ph.push(g, packs[g])
             files += f; size += n
             pushed[g] = pack_id(packs[g])
+        for g in games:   # 资源替换类 mod：每款按记录只推变了的（多数情况一个都不用推、不连手机）
+            modset[g] = push_mods(c, ph, g, {} if moved else modset[g])
     finally:   # 推到一半失败：已推好的记下，没推的下次照推
         rec = layout.load_device(c, ph.key)
         # signed：这次签名（游戏库页的「还有几天到期 / 续签」读 layout.install_record）：免费账号的描述文件 7 天到期，容器里每款同一次签名
         signed = dict(signed=dict(at=time.time(), free=bool(ph.info["free"]), device=ph.info["device"])) if "free" in ph.info and not skipped else {}   # 跳过安装 = 没重签：到期时间照旧
-        layout.save_device(c, ph.key, dict(rec, games={g: dict(pack=pushed[g]) for g in games}, shellId=sid, bundleId=ph.bid or rec.get("bundleId", ""), at=time.time(),
+        layout.save_device(c, ph.key, dict(rec, games={g: dict(pack=pushed[g], **({"mods": modset[g]} if modset[g] else {})) for g in games}, shellId=sid, bundleId=ph.bid or rec.get("bundleId", ""), at=time.time(),
                                            staleAgreed={sid: left_out} if left_out else {}, **signed))
     packer.commit_phone_ipa(c, ipa, sid)
     # 资源传完但电脑没拉起 App 解开（manual_unpack_required，11-09 #336）：不算「已装好」，结果带上还差的一步，两端前端据此显示「还差最后一步」而不是「已装到 iPhone」
@@ -2143,7 +2170,7 @@ def update_phone(c):
     手机上的游戏库、存档不动。新壳认不得的款（要按新版重新出包）：没带 acceptStale 就停下报 container_stale 列出它们，玩家确认后不带它们装
     （它们的资源包和存档还在手机上，重新出包后再装就回来）。壳已是本版 → 不装，结果 updated = False"""
     import ipa as packer
-    if wants_export(c):   # 导出模式的「导出新版 S2Arm」：本版壳带上游戏库里能带的各款出到文件夹，玩家自己覆盖安装
+    if wants_export(c):   # 「导出新版 S2Arm」：本版壳带上游戏库里能带的各款出到文件夹，玩家自己覆盖安装
         return dict(export_phone(c), updated=True)
     c.begin("找签名账号与 iPhone", 1, 6)
     try:
@@ -2185,7 +2212,7 @@ def install(c):
     if scheme:
         return downstream.install_ios(c, next((g for g in c.catalog()["games"] if g["id"].upper() == gid.upper()), dict(id=gid)), scheme)
     ios_pack(c, gid)
-    if wants_export(c):   # 装法选了「导出，自己签名安装」（或完成页这次临时换成导出）：不连手机、不签名，出到文件夹；推不推到手机由玩家在完成页选（exportPush）
+    if wants_export(c):   # 这次是「导出自签包」：不连手机、不签名，出到文件夹；推不推到手机由玩家在完成页选（exportPush）
         return export_phone(c, gid)
     c.begin("找签名账号与 iPhone", 1, 6)
     return put_game(c, gid, phone_for(c))

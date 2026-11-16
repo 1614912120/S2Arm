@@ -218,6 +218,18 @@ void s2a_cpatch_frame(uint64_t now, int game, uint64_t dt) {
     }
     t0 = now; frames = ok = bad = 0;
 }
+// 玩家导入的 mod 带的代码补丁（编号 mod:，pack/jobs/mods.py code_index；11-15）：开关跟 mod 走、不看 S2A_CPATCH_ON——
+//   第 7 列「来源」= <mod 名>/<文件名>，本款 mod 目录（S2A_MODS_DIR：Mac 作业层给游戏文件夹 mods/；否则文档根 mods/，与服务层 RomFsMods.cs 同一处）
+//   下有 <mod 名> 文件夹 = 开；关掉的 mod 改名为 .off-<mod 名>（启动器 / iPhone 资源 Mod 页）= 关；删了 = 关。资源与代码同一个开关，手机上关掉不用重出包
+static int cp_mod_on(const char *src) {
+    const char *slash = src ? strchr(src, '/') : NULL;
+    if (!slash || slash == src || (size_t)(slash - src) >= 200 || src[0] == '.') return 0;
+    char dir[1300]; const char *own = getenv("S2A_MODS_DIR");
+    int n = own && *own ? snprintf(dir, sizeof dir, "%s/%.*s", own, (int)(slash - src), src)
+                        : s2a_docs_path(dir, sizeof dir, "mods/%.*s", (int)(slash - src), src);
+    struct stat st;
+    return n > 0 && n < (int)sizeof dir && !stat(dir, &st) && S_ISDIR(st.st_mode);
+}
 static int cp_ios_blocked(const char *id) {   // iOS 上不开的类：画面类（见上面 en 的说明）
 #if defined(__APPLE__) && TARGET_OS_IPHONE
     return !strncmp(id, "gfx:", 4);
@@ -282,7 +294,7 @@ static void cpatch_load_stream(module_t *m, FILE *f) {
         char *end; long bit = strtol(c[2], &end, 10);
         // 玩家没选过（没有 S2A_CPATCH_ON）= 默认开（11-13 维护者：S 级优化命中的补丁出包时打入并默认开，用户少做选择）；表里「缺省开」列现在只表示我方验过（界面标签）。
         //   画面类（gfx:，提分辨率 / 画质）在 iOS 上一律不开（维护者：iOS 默认不打——手机内存更紧，Switch 上没事的提分辨率可能被系统杀），Mac 照常默认开
-        int en = cp_ios_blocked(c[0]) ? 0 : on ? (strcmp(on, "none") && in_list(on, c[0])) : 1, fps = !strncmp(c[0], "fps:", 4);
+        int en = !strncmp(c[0], "mod:", 4) ? cp_mod_on(c[6]) : cp_ios_blocked(c[0]) ? 0 : on ? (strcmp(on, "none") && in_list(on, c[0])) : 1, fps = !strncmp(c[0], "fps:", 4);
         n++;
         // 帧率补丁里最高的目标帧率（s2a_cpatch_fps_follow 按它定出图上限、出图节拍与服务层 vsync）。帧率类的开关位本来就跟 60 帧开关走、不看开关列表，
         //   目标却原先只从列表里的取：iOS 设置页把帧率补丁做成 60 帧开关的联动、从不写进 S2ACommunityPatches，玩家动过任何一个补丁开关后目标就是 0，
@@ -496,11 +508,12 @@ static void fps_link(int on) {   // on = 选中档高于 60（开高刷）；包
     const char *pin = getenv("DM_PRESENT_LINK");
     static int owned = -1; if (owned < 0) owned = !pin;   // 第一次进来时启动环境没给，才归补丁管
     if (!owned) return;
-    // 关高刷（选回 60 档 / 关帧率）时：补帧开着（DM_PRESENT_FI=1）就回到「不建显示链」，画面交还补帧（nvn_mtl.m mtl_init 同口径）；否则回 60 Hz 显示链
-    const char *fi = getenv("DM_PRESENT_FI"); int off = fi && !strcmp(fi, "1") ? 0 : 1;
-    setenv("DM_PRESENT_LINK", on ? "2" : off ? "1" : "0", 1);   // 图形层还没初始化：mtl_init 读环境
+    // 关高刷（选回 60 档 / 关帧率）时回 60 Hz 显示链（1）。补帧这一帧真补不补、要不要把显示链关成 0，归图形层按当时判（审计 P1-188：原先这里见 DM_PRESENT_FI=1
+    //   就写 0，不看是不是 Metal 3、补帧建没建起来、玩家局中关没关）：起局 graphics/nvn/gfx/nvn/nvn_mtl.m present_link_from_env（Metal 4 + 补帧才把 1 换成 0），
+    //   局中 nvn_present_fi.inc fi_link_follow（每帧按「这一帧补不补」在 0 与 1 之间切）
+    setenv("DM_PRESENT_LINK", on ? "2" : "1", 1);   // 图形层还没初始化：mtl_init 读环境
     int *pl = (int *)dlsym(RTLD_DEFAULT, "g_dm_present_link");   // 直连图形层（nvn_mtl.m）已初始化：直接改，下一帧 link_sync 对齐；不链直连层的构建 / 单测里没有
-    if (pl) *pl = on ? 2 : off;
+    if (pl) *pl = on ? 2 : 1;
     // 出图节拍（模拟给游戏的垂直同步，graphics/nvn/gfx/nvn/hle_nvn.c present_cfg，缺省 60 Hz）也要跟上：游戏设间隔 1 时每拍出一帧，节拍不放开，
     //   只放开显示链游戏照样只出 60 帧（11-13 维护者实机：一款游戏开 120 帧补丁仍 60 帧，日志「present tick 60 Hz」）。启动环境显式给了 DM_PRESENT_HZ 的不动
     static int hz_owned = -1; if (hz_owned < 0) hz_owned = !getenv("DM_PRESENT_HZ");

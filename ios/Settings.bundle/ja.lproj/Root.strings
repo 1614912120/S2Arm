@@ -11,10 +11,11 @@
 "Off" = "オフ";
 "SMAA Medium" = "SMAA 中";
 "SMAA High" = "SMAA 高";
-"Used to scale the game picture to the screen; doesn’t change the internal render resolution." = "ゲーム画面を画面に合わせて拡大縮小するために使用されます。内部レンダリング解像度は変更されません。";
-"Scaling Filter" = "画面拡大縮小フィルター";
-"Bilinear (Smooth)" = "バイリニア（滑らか）";
-"Nearest Neighbor (Crisp Pixels)" = "最近傍（ピクセル鮮明）";
+"Used to scale the game picture to the screen; doesn’t change the internal render resolution. Sharp Upscaling (MetalFX) adds a little GPU time every frame, so frame rate and battery use may be slightly affected." = "ゲーム画面を画面に合わせて拡大縮小するために使用されます。内部レンダリング解像度は変更されません。シャープ拡大（MetalFX）は毎フレーム GPU の処理が少し増えるため、フレームレートと消費電力にわずかに影響します。";
+"Picture Quality" = "画質向上";
+"Standard" = "標準";
+"For 2D Games" = "2D ゲーム向け";
+"Sharp Upscaling (MetalFX)" = "シャープ拡大（MetalFX）";
 "Sets a frame rate cap for the game picture; doesn’t unlock the game’s own frame rate limit. The actual frame rate also depends on the game and the screen’s refresh rate." = "ゲーム画面のフレームレート上限を設定します。ゲーム独自のフレームレート制限は解除されません。実際のフレームレートはゲームのパフォーマンスと画面のリフレッシュレートにも依存します。";
 "Frame Rate Limit" = "フレームレート上限";
 "30 FPS" = "30 FPS";

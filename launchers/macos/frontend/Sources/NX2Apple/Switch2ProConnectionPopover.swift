@@ -5,13 +5,25 @@ import NXCore
 import NXModel
 import NXLauncher
 
+struct ControllerConnectionSection: Equatable {
+    enum Source { case switchRelay, system }
+    let source: Source
+    let title: String
+    let status: NS2LauncherController.Status
+}
+
 struct Switch2ProConnectionPopover: View {
     @ObservedObject var controller: NS2LauncherController
     @ObservedObject var systems: SystemControllers
     let lang: String   // 界面语言代码（Lang.code）
 
     private func t(_ key: String) -> String { NS2LauncherController.text("s2arm.controller." + key, lang) }
+    private var zh: Bool { lang.hasPrefix("zh") }
     @State private var keyMonitor: Any?   // 分配中收键盘按键（键盘登记成一位玩家）
+    @State private var showSwitchOptions = false
+    @State private var selectedPlayer = 0
+
+    private var currentPlayer: Int { controller.assignment.units.indices.contains(selectedPlayer) ? selectedPlayer : 0 }
 
     private func unitGlyph(_ unit: PlayerAssignment.Unit) -> ControllerIcon.Glyph {
         switch unit {
@@ -39,22 +51,39 @@ struct Switch2ProConnectionPopover: View {
         controller.assignment.units.map { (unitGlyph($0), unitName($0)) }
     }
 
-    // 照 #520 UI 稿（#520 UI 稿）：标题 → 状态下一句 → 两只怎么用 → 开关 + 主按钮 → 玩家
+    var connectionSections: [ControllerConnectionSection] {
+        var sections: [ControllerConnectionSection] = []
+        let names = systems.pads.map(\.name) + systems.fallback
+        // 只有系统手柄在线时，未建立的 Switch 通道留在独立入口里，不给同一设备再画一张失败卡片。
+        if showSwitchOptions || names.isEmpty || !controller.allDevices.isEmpty || [.connected, .inUse].contains(controller.status) {
+            sections.append(.init(source: .switchRelay, title: controller.switch2Title(lang: lang), status: controller.status))
+        }
+        if !names.isEmpty {
+            sections.append(.init(source: .system,
+                title: names.count == 1 ? names[0] : t("bluetoothCount").replacingOccurrences(of: "{0}", with: "\(names.count)"), status: .connected))
+        }
+        return sections
+    }
+
+    // 标题与连接状态共用基线；下面依次是操作、分配方法与玩家。
     var body: some View {
-        let status = controller.status
+        let sections = connectionSections
         VStack(alignment: .leading, spacing: 16) {
             // 分配中只放分配块（#520 讨论：省面板高度）；Switch 2 手柄那块、蓝牙手柄那块完成 / 取消后再出来
             if !controller.assigning {
+            if let connection = sections.first(where: { $0.source == .switchRelay }) {
+            let status = connection.status
             HStack(spacing: 12) {
                 ControllerIcon(glyph: ControllerIcon.header(kind: controller.kind, players: controller.players) ?? .unknown)
                     .frame(width: 48, height: 36)
-                VStack(alignment: .leading, spacing: 2) {
-                    // 标题一行、不缩字；太长截断、悬停看全名（#1151：原先 fixedSize 不截断，长名把整列撑出面板宽度，左边图标和「玩家」被裁）
-                    let title = controller.switch2Title(lang: lang)
-                    Text(title).font(.manrope(22, .bold)).lineLimit(1).truncationMode(.tail).help(title)
-                    HStack(spacing: 8) {
+                LauncherHeadingLine {
+                    Text(connection.title).font(.manrope(22, .bold)).lineLimit(1).truncationMode(.tail)
+                        .help(connection.title)   // 长名称在本行内省略，不能横向 fixedSize 撑宽整列内容
+                } subtitle: {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Circle().fill(Color(nsColor: NS2LauncherController.dotColor(status))).frame(width: 9, height: 9)
                         Text(NS2LauncherController.statusText(status, lang: lang)).font(.manrope(15, .semibold)).foregroundStyle(.secondary)
+                            .help(NS2LauncherController.statusText(status, lang: lang))
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -67,8 +96,8 @@ struct Switch2ProConnectionPopover: View {
             // 连着时：两个开关 + 主按钮在同一段（稿 panels.html）；没连 / 搜索 / 连接中 / 失败时只有主按钮（稿 status.html）
             let connected = status == .connected || status == .inUse
             let mainButton = Button(NS2LauncherController.mainButton(status, lang: lang)) { controller.mainAction() }
-                .buttonStyle(PanelButtonStyle())
-                .accessibilityIdentifier("controller.main-action")
+                .controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true))
+                .controllerID("controller.main-action")
             if connected {
                 PanelSection {
                     ToggleRow(label: t("autoConnect"),
@@ -81,31 +110,38 @@ struct Switch2ProConnectionPopover: View {
             } else if !controller.assigning {   // 分配中下面有「取消 / 完成」，这里不放「停止」（按了会把正在登记的手柄断开）
                 mainButton
             }
+            }
 
             // 系统手柄（#520 UI 稿 system.html）：一块——图、标题（一只写系统给的名字，太长一行截断、悬停看全名；多只写数量）、已连接、「打开蓝牙设置」
-            //   HID 兜底手柄（#1151：GameController 认不出、游戏里按 HID 直读的「… Pro Controller」）一并列在这一块，按 Pro 样式手柄算
-            let fallback = systems.fallback
-            if !systems.pads.isEmpty || !fallback.isEmpty {
-                let names = systems.pads.map(\.name) + fallback
-                let families = systems.pads.map(\.family) + fallback.map { _ in SystemControllers.Family.nintendoPro }
-                let title = names.count == 1 ? names[0] : t("bluetoothCount").replacingOccurrences(of: "{0}", with: "\(names.count)")
+            if let connection = sections.first(where: { $0.source == .system }) {
+                let names = systems.pads.map(\.name) + systems.fallback
+                let families = systems.pads.map(\.family) + systems.fallback.map { _ in SystemControllers.Family.nintendoPro }
                 let family = Set(families).count == 1 ? families[0] : .other   // 多只同一类用那一类的图，混着用通用手柄图
-                PanelSection {
+                PanelSection(separated: sections.contains(where: { $0.source == .switchRelay })) {
                     HStack(spacing: 12) {
                         ControllerIcon(glyph: ControllerIcon.system(family)).frame(width: 48, height: 36)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(title).font(.manrope(22, .bold)).lineLimit(1).truncationMode(.tail)   // 蓝牙手柄名字太长照截断（缩字太小），悬停看全名
+                        LauncherHeadingLine {
+                            Text(connection.title).font(.manrope(22, .bold)).lineLimit(1).truncationMode(.tail)   // 蓝牙手柄名字太长照截断（缩字太小），悬停看全名
                                 .help(names.joined(separator: "\n"))
-                            HStack(spacing: 8) {
-                                Circle().fill(Color(nsColor: NS2LauncherController.dotColor(.connected))).frame(width: 9, height: 9)
-                                Text(NS2LauncherController.statusText(.connected, lang: lang)).font(.manrope(15, .semibold)).foregroundStyle(.secondary)
+                        } subtitle: {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Circle().fill(Color(nsColor: NS2LauncherController.dotColor(connection.status))).frame(width: 9, height: 9)
+                                Text(NS2LauncherController.statusText(connection.status, lang: lang)).font(.manrope(15, .semibold)).foregroundStyle(.secondary)
+                                    .help(NS2LauncherController.statusText(connection.status, lang: lang))
                             }
                         }
                     }
                     .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("controller.system.status")
                     Button(t("openBluetooth")) { SystemControllers.openBluetoothSettings() }
-                        .buttonStyle(PanelButtonStyle())
+                        .controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true))
+                        .controllerID("controller.system.settings")
                 }
+            }
+
+            if !sections.contains(where: { $0.source == .switchRelay }) {
+                Button(zh ? "Switch 手柄连接选项" : "Switch controller options") { showSwitchOptions = true }
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true)).controllerID("controller.switch-options")
             }
 
             }
@@ -127,8 +163,8 @@ struct Switch2ProConnectionPopover: View {
                         }
                     }
                     HStack(spacing: 8) {
-                        Button(t("cancel")) { controller.cancelAssign() }.buttonStyle(PanelButtonStyle())
-                        Button(t("done")) { controller.finishAssign() }.buttonStyle(PanelButtonStyle(selected: true))
+                        Button(t("cancel")) { controller.cancelAssign() }.controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true)).controllerShortcut(.back)
+                        Button(t("done")) { controller.finishAssign() }.controllerButtonStyle(LauncherPrimaryButtonStyle(fill: true)).controllerShortcut(.rightTrigger)
                     }
                 }
                 .onAppear {
@@ -151,15 +187,26 @@ struct Switch2ProConnectionPopover: View {
                         Text(t("players")).font(.manrope(15, .semibold))
                         VStack(spacing: 8) {
                             ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                                PlayerRow(number: index + 1, glyph: row.glyph, name: row.name)   // 平时不给 ×，分配中才有
+                                Button { selectedPlayer = index } label: {
+                                    PlayerRow(number: index + 1, glyph: row.glyph, name: row.name, selected: currentPlayer == index)
+                                }
+                                .controllerButtonStyle(.plain)
+                                .controllerID("controller.player.\(index)")
+                                .accessibilityLabel("P\(index + 1) \(row.name)")
+                                .accessibilityAddTraits(currentPlayer == index ? .isSelected : [])
                             }
                         }
                         .accessibilityIdentifier("controller.players")
                     }
+                    if let pad = controller.assignment.pad(forPlayer: currentPlayer, in: systems.pads),
+                       ControllerFaceFamily(pad.family) != .nintendo {
+                        ControllerFaceMappingEditor(store: controller.faceMaps, family: ControllerFaceFamily(pad.family), simplifiedChinese: zh)
+                            .id(pad.id)
+                    }
                     // 两只以上手柄才有得分配（一对 Joy-Con 算两只、蓝牙手柄也算）
                     if controller.allDevices.count + systems.pads.count >= 2 {
                         Button(t("assignPlayers")) { controller.startAssign() }
-                            .buttonStyle(PanelButtonStyle())
+                            .controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true))
                             .accessibilityIdentifier("controller.assign")
                     }
                 }
@@ -168,16 +215,19 @@ struct Switch2ProConnectionPopover: View {
         }
         .padding(20)
         .frame(width: 380)   // 比稿（340）宽一些：标题不会整行撑满
+        .background(.regularMaterial)
+        .launcherDropdownHost()
         .preferredColorScheme(.dark)
     }
 }
 
 // 稿里的 .sec：上面一条细线、内容间距 12
 private struct PanelSection<Content: View>: View {
+    var separated = true
     @ViewBuilder let content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
+            if separated { Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1) }
             content
         }
     }
@@ -193,22 +243,6 @@ private struct ToggleRow: View {
             Spacer(minLength: 8)
             Toggle("", isOn: isOn).toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(label)
         }
-    }
-}
-
-// 稿里的 .btn：整宽、#34312e 底、12% 白边、圆角 12
-private struct PanelButtonStyle: ButtonStyle {
-    var selected = false   // 稿里「完成」那颗：反白（--sel）
-    func makeBody(configuration: Configuration) -> some View {
-        let fill = selected ? Color(red: 0xf2 / 255, green: 0xea / 255, blue: 0xd8 / 255) : Color(red: 0x34 / 255, green: 0x31 / 255, blue: 0x2e / 255)
-        return configuration.label
-            .font(.manrope(15, .semibold))
-            .foregroundStyle(selected ? Color(red: 0x1b / 255, green: 0x1a / 255, blue: 0x18 / 255) : Color.primary)
-            .frame(maxWidth: .infinity)
-            .padding(8)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(fill.opacity(configuration.isPressed ? 0.7 : 1)))
-            .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(selected ? fill : Color.white.opacity(0.12), lineWidth: 1))
-            .contentShape(Rectangle())
     }
 }
 
@@ -272,6 +306,7 @@ private struct PlayerRow: View {
     let number: Int
     let glyph: ControllerIcon.Glyph
     let name: String
+    var selected = false
     var clearLabel = ""
     var onClear: (() -> Void)?
 
@@ -296,7 +331,7 @@ private struct PlayerRow: View {
                     Image(systemName: "xmark").font(.system(size: 10, weight: .bold)).foregroundStyle(.secondary)
                         .frame(width: 18, height: 18).contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .controllerButtonStyle(.plain)
                 .help(clearLabel)
                 .accessibilityLabel(clearLabel)
             }
@@ -304,7 +339,7 @@ private struct PlayerRow: View {
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Self.fill))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(selected ? LauncherPalette.cream.opacity(0.7) : Color.white.opacity(0.12), lineWidth: 1))
         .accessibilityElement(children: .contain)
     }
 }

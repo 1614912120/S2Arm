@@ -3837,8 +3837,10 @@ static const char* cp_check(uint32_t w, A a) {
       (w & 0x7e000000u) == 0x36000000u || (w & 0x1f000000u) == 0x10000000u)
     return NULL;
   if ((w & 0x3b000000u) == 0x18000000u) return ((w >> 26) & 1) && (w >> 30) == 3 ? "字面量编码不认" : NULL;
-  Ins x = dis(w, a);
-  if (!x.valid) return "解不出";
+  /* 解不出要回「解不出」记缺口（pack/cpatch.py prune 剔掉那份补丁重来），不能走 dis()：它对解不出的字 REQUIRE 整个改写器断言退出
+     （诊断 D-Z5E3 / #1234：画面补丁往代码段写浮点常数 0x3f800000，整款出包红在「条件不成立：decode(w, a, &x)」） */
+  Ins x;
+  if (!decode(w, a, &x)) return "解不出";
   if (has18(&x) || eq(x.m, "svc") || ((eq(x.m, "mrs") || eq(x.m, "msr")) && strstr(operand_text(&x), "tpidr"))) return "要翻译";
   return NULL;
 }

@@ -89,6 +89,10 @@ import S2ArmAppleAdapter
             guard let g = game() else { return .bad("没有这个 gameId") }
             return blocked(model.export(g, platforms: [.ios],
                                         deviceTarget: deviceTarget ?? (probe["connected"] as? [[String: Any]])?.first, spaceOverride: spaceOverride))
+        case ("POST", "/selfsign"):   // 同游戏库「导出自签包」：能直接导出的直接导出，没出过 / 旧格式的先出 iPhone 包再导出
+            guard let g = game() else { return .bad("没有这个 gameId") }
+            if let b = busy() { return b }
+            model.exportSelfSign(g); return .ok()
         case ("POST", "/batch"):   // 批量出包（v0.2.4）：同界面清单页——建批次后一款接一款地出，进度看 GET /state 的 batch
             if let r = busy() { return r }
             if model.batchState != nil, model.batchSummary["done"] as? Bool != true {   // 上一批暂停着 / 没出完：不盖掉（审计 P2-270），同 Windows 回 409
@@ -124,11 +128,11 @@ import S2ArmAppleAdapter
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
             // 往设备上装东西一律要说明装到哪台（11-11：作业层不替玩家挑，控制口也不拿界面上选中的那台顶替）；s2armctl targets 列设备号。
-            //   装法是「导出，自己签名安装」时不连手机、出到文件夹，不要 device（同界面按钮、同 Windows 控制口）
-            let device = str("device")
-            if device == nil, model.installMode.mode != "export" { return .bad(Self.deviceRequired) }
+            //   mode = export（同游戏库「导出自签包」）：不连手机、出到文件夹，不要 device（同 Windows 控制口）
+            let device = str("device"), export = str("mode") == "export"
+            if device == nil, !export { return .bad(Self.deviceRequired) }
             model.install(g, teamId: str("teamId"), device: device, acceptDropped: a["acceptDropped"] as? Bool ?? false,
-                          accept: Self.acceptFlags(a).subtracting(["acceptDropped"]), ask: false); return .ok()
+                          accept: Self.acceptFlags(a).subtracting(["acceptDropped"]), ask: false, export: export); return .ok()
         case ("POST", "/signingProject"):
             model.openSigningProject(); return .ok()
         case ("POST", "/update-phone"):   // 更新 iPhone 上的 S2Arm（v0.3.0）：同库页右上角按钮；有要重新出包的款没给 acceptStale → 409 列出它们
@@ -221,6 +225,16 @@ import S2ArmAppleAdapter
                     if !o.note.isEmpty { r["note"] = o.note }
                     return r })
             } catch { return .bad(error.localizedDescription) }
+        case ("POST", "/mods"):   // 资源替换 mod（同启动设置「资源 Mod」）：import [zip / 文件夹路径]、enable {名字: 真/假}（关掉 = 改名 .off-<名字>）、remove [名字]；都不给 = 只列
+            guard let id = str("gameId") else { return .bad("缺 gameId") }
+            if let b = busy() { return b }
+            let imp = a["import"] as? [String], rem = a["remove"] as? [String], en = a["enable"] as? [String: Bool]
+            do {
+                let m = try await model.launchSettingsFull(id, modsImport: imp?.isEmpty == false ? imp : nil, modsRemove: rem?.isEmpty == false ? rem : nil,
+                                                           modsEnable: en?.isEmpty == false ? en : nil).5
+                return .object(["mods": m.items.map { ["name": $0.id, "enabled": $0.enabled, "files": $0.files, "bytes": $0.bytes] as [String: Any] },
+                                "imported": m.imported, "notes": m.notes])
+            } catch { return .bad(error.localizedDescription) }
         case ("POST", "/cloudFolder"):
             // iCloud 存档同步的云盘文件夹（同环境页「选择文件夹…」）：path 为空 = 关闭
             let path = str("path") ?? ""
@@ -252,7 +266,10 @@ import S2ArmAppleAdapter
                 model.showEnvironment = false; model.showInstallFor = g.id
             case "sgradeUpgrade":   // S 级优化升级页（同点游戏库「S 级优化升级」）：截图核界面用
                 model.showEnvironment = false; model.exportFor = nil; model.sgradeUpgradeOpen = true
-            default: return .bad("page 只认 environment / export / library / install / sgradeUpgrade")
+            case "launchSettings":   // 这款的启动设置（同点游戏库齿轮）：截图核界面用
+                guard let g = game() else { return .bad("没有这个 gameId") }
+                model.showEnvironment = false; model.exportFor = nil; model.displayRequest = g.id
+            default: return .bad("page 只认 environment / export / library / install / sgradeUpgrade / launchSettings")
             }
             return .ok()
         case ("POST", "/refresh"):
@@ -302,6 +319,7 @@ import S2ArmAppleAdapter
         ["POST /installCheck {gameId}", "装机前清单（只读）：几秒后看 GET /state 的 installReadiness"],
         ["POST /install {gameId, acceptDropped?, acceptNoBackup?, acceptStale?}", "装到 iPhone（不用先 installCheck，缺什么作业报真实原因）；可确认的失败码先问玩家、同意了带对应参数再发：container_would_drop → acceptDropped（手机上有别的电脑装的游戏这次带不上）、save_backup_failed → acceptNoBackup（覆盖前没能备份存档）、container_stale → acceptStale（旧资源包要重出）"],
         ["POST /uninstall {gameId, acceptDropped?, acceptNoBackup?}", "从 iPhone 上的 S2Arm 删一款（备份存档 → 更新容器 → 删数据；其余游戏不动）；acceptDropped / acceptNoBackup 同 /install"],
+        ["POST /mods {gameId, import?:[路径], enable?:{名字: 真/假}, remove?:[名字]}", "资源替换 mod：导入 zip / 文件夹（找 romfs）、开关（关掉下次开始游戏不叠，装到 iPhone 时机上删掉）、删除；都不给只列；回 {mods:[{name, enabled, files, bytes}], imported, notes}"],
         ["POST /delete {gameId}", "删除这款游戏：IPA / 资源包 / 出包中间产物 / 缓存全删；存档与原始游戏文件保留"],
         ["POST /target {action:probe} | {productType, os}", "重新检测连接的设备 / 选出包提示用的机型和系统大版本"],
         ["POST /launch {gameId}", "在 Mac 上启动游戏"],
@@ -354,7 +372,7 @@ import S2ArmAppleAdapter
             "error": (m.actionError ?? (m.libraryError == LibraryProvider.noLibraryMessage ? nil : m.libraryError) ?? m.environmentError ?? m.installError ?? m.aiControlError).map { $0 as Any } ?? NSNull(),
             "installReadiness": rd,
             "update": m.updateStatus,
-            "installMode": ["mode": m.installMode.mode, "exportAvailable": m.installMode.exportAvailable],
+            "installMode": ["signMode": m.installMode.signMode, "exportAvailable": m.installMode.exportAvailable],
             "phoneUpdates": m.phoneUpdates.map { u in ["device": u.device, "games": u.games.map(\.id), "stale": u.stale.map(\.id)] as [String: Any] },
             "batch": m.batchState.map { s -> [String: Any] in ["running": m.batchRunning, "summary": s["summary"] ?? [:], "next": s["next"] ?? NSNull(),
                                                                    "items": ((s["batch"] as? [String: Any])?["items"]) ?? [], "paused": ((s["batch"] as? [String: Any])?["paused"]) ?? NSNull()] } ?? NSNull(),

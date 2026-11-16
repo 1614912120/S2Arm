@@ -34,6 +34,7 @@ public sealed partial class EnvironmentWindow
         messagesOpen = false;   // 顶栏导航离开「消息」页
         sgradeOpen = false;     // 也离开「S 级优化升级」页
         cheatsFor = null;       // 和「金手指」页
+        modsFor = null;         // 和「Mod」页
         page = destination;
         if (destination != "library") welcomeHome = false;   // 品牌名带去的欢迎页只管这一次回首页，去了别的页就回到平常
         // 环境检查页每次打开读一次装到 iPhone 的方式和开发者证书（InstallModePage.cs / DevCertPage.cs）
@@ -211,11 +212,16 @@ public sealed partial class EnvironmentWindow
             var heroBusy = BusyFor(hero) || hero.LocationState is "missing" or "offline";
             if (hero.IphoneReady)
             {
-                var install = Primary(T(installMode == "export" ? "export.done.export" : "library.hero.install"),
-                    () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; readinessFor = null; Navigate("install"); }, !BusyFor(hero));
+                var install = Primary(T("library.hero.install"),
+                    () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; readinessFor = null; if (!installBusy) installExport = false; Navigate("install"); }, !BusyFor(hero));
                 AutomationId(install, "library.hero.install");
                 heroActions.Children.Add(install);
             }
+            // 导出自签包（11-15 维护者：导出不是装法，常驻一个看得见的次按钮；没出过包的点了先出包再导出）
+            var selfSign = Action("library.hero.selfSign", () => ExportSelfSign(hero), !heroBusy && !installBusy);
+            selfSign.VerticalAlignment = VerticalAlignment.Center;
+            AutomationId(selfSign, "library.hero.selfSign");
+            heroActions.Children.Add(selfSign);
             var build = Action("nav.build", () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; OpenBuild(); }, !heroBusy);
             build.VerticalAlignment = VerticalAlignment.Center;
             heroActions.Children.Add(build);
@@ -272,9 +278,9 @@ public sealed partial class EnvironmentWindow
                 detail.Children.Add(Muted(T("library.location.at").Replace("{0}", where.Folder.Length > 0 ? where.Folder : where.Path), 12));
             Grid.SetColumn(detail, 1); line.Children.Add(detail);
             // Primary button: if iPhone pack is ready → install; otherwise export (storage not connected → disabled, game files missing → relink / remove)
-            var primaryKey = game.IphoneReady ? (installMode == "export" ? "export.done.export" : "library.hero.install") : "library.select";   // 导出模式：主按钮写导出（两路分开）
+            var primaryKey = game.IphoneReady ? "library.hero.install" : "library.select";
             var primaryAction = game.IphoneReady
-                ? (Action)(() => { libraryFolder = libraryFolderBox.Text ?? ""; selectedGame = game.Id; readinessFor = null; Navigate("install"); })
+                ? (Action)(() => { libraryFolder = libraryFolderBox.Text ?? ""; selectedGame = game.Id; readinessFor = null; if (!installBusy) installExport = false; Navigate("install"); })
                 : game.LocationState == "missing" ? () => _ = MissingAsync(game)
                 : () => { libraryFolder = libraryFolderBox.Text ?? ""; selectedGame = game.Id; OpenBuild(); };
             // 装机在跑时别的游戏照常能选、看详情、出包（只锁正在装的那款；同时只装一款：点别的「装到 iPhone」进装机页提示「另一款正在装 · 查看那一款」）
@@ -384,7 +390,8 @@ public sealed partial class EnvironmentWindow
             menu.Items.Add(item);
         }
         Add(T("nav.build"), "export", () => { libraryFolder = libraryFolderBox.Text ?? ""; selectedGame = game.Id; OpenBuild(); }, idle && game.Reachable);
-        Add(T("cheats.page.menu"), "cheats", () => OpenCheats(game), idle);   // 金手指：看 / 导入（CheatsPage.cs，同 Mac 启动设置里的金手指）
+        Add(T("cheats.page.menu"), "cheats", () => OpenCheats(game), idle);
+        Add(T("mods.page.menu"), "mods", () => OpenMods(game), idle);   // 资源替换 mod：看 / 导入 / 删除（ModsPage.cs，同 Mac 启动设置里的「资源 Mod」）   // 金手指：看 / 导入（CheatsPage.cs，同 Mac 启动设置里的金手指）
         menu.Items.Add(new Separator());
         Add(T("library.menu.revealWindows"), "reveal", () => RevealGame(game), (game.Location?.Path ?? "").Length > 0 && game.LocationState != "offline");
         Add(T("library.menu.move"), "move", () => BeginPicker(() => MoveGameAsync(game)), idle && game.Reachable && game.LocationState != "none");
