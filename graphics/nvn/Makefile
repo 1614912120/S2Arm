@@ -25,6 +25,24 @@ HDRS  := $(wildcard gfx/nvn/*.h gfx/nvn/*.inc gfx/nvn/include/*.h gfx/tex/*.h gf
 SRCSTAMP := $(OUT)/.srclist
 $(shell mkdir -p $(OUT); [ "$$(cat $(SRCSTAMP) 2>/dev/null)" = '$(sort $(SRCS) $(HDRS))' ] || printf '%s' '$(sort $(SRCS) $(HDRS))' > $(SRCSTAMP))
 PFX   := -ffile-prefix-map=$(ROOT)=.
+# 按剖析数据优化编译（PGO，graphics/nvn/pgo/README.md）：pgo/nvn.prof.txt（文本格式，只有函数名 + 分支计数）由本机工具链转成二进制剖析数据再 -fprofile-instr-use；
+#   文本入仓不入二进制：.profdata 的格式版本跟 clang 走，玩家机器的旧 Xcode 读不了新版本会编译报错，文本格式各版本都认。
+#   源码改了对不上的函数 clang 只告警（下面三个 -Wno 关掉）、按无剖析编，不影响正确性。S2A_PGO_GEN=1 = 编插桩版（tools/pgo_record.sh 用），不读剖析数据。
+#   取值记进 $(OUT)/.pgo_cfg：插桩 / 剖析数据换了库要重编
+PGO_TXT := $(ROOT)/graphics/nvn/pgo/nvn.prof.txt
+PGO_BIN := $(OUT)/pgo/nvn.profdata
+ifeq ($(S2A_PGO_GEN),1)
+PGO_CF := -fprofile-instr-generate
+PGO_DEP :=
+else ifneq ($(wildcard $(PGO_TXT)),)
+PGO_CF := -fprofile-instr-use=$(PGO_BIN) -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled -Wno-profile-instr-missing
+PGO_DEP := $(PGO_BIN)
+endif
+PGO_STAMP := $(OUT)/.pgo_cfg
+$(shell mkdir -p $(OUT); [ "$$(cat $(PGO_STAMP) 2>/dev/null)" = '$(PGO_CF)' ] || printf '%s' '$(PGO_CF)' > $(PGO_STAMP))
+$(PGO_BIN): $(PGO_TXT)
+	@mkdir -p $(OUT)/pgo
+	DEVELOPER_DIR=$(DEVELOPER_DIR) xcrun llvm-profdata merge -o $@.$$$$ $< && mv -f $@.$$$$ $@
 INC   := -I$(ROOT)/graphics/nvn/gfx/nvn/include -I$(ROOT)/graphics/nvn/host -I$(ROOT)/runtime/include -I$(ROOT)/graphics/nvn/third_party/vulkan-headers/include -I$(OUT)/gen
 WARN  := -Wall -Wno-unused-function -Wno-unguarded-availability-new -Wno-unguarded-availability
 
@@ -57,16 +75,16 @@ avail: $(AA_MSLH) $(AA_LUTH) $(GENH)
 # 静态库原子出（10-31 银河2 正式包红：同树并行 make host，graphics/metal/Makefile 同一处说明）：目标文件编进本次私有目录，库先出到临时名、
 #   核成员数不少于本次编出的目标文件数再原子改名到位；并行的另一份各编各的，谁后改名都是完整的库
 LIBCHK = [ $$(ar t $@.$$$$ | grep -c '\.o$$') -ge $$(ls "$$d"/*.o | wc -l) ] || { echo "【红】$@：建出的库成员数少于目标文件数"; exit 1; }
-$(OUT)/mac/libnvn.a: $(SRCS) $(HDRS) Makefile $(SRCSTAMP)
+$(OUT)/mac/libnvn.a: $(SRCS) $(HDRS) Makefile $(SRCSTAMP) $(PGO_STAMP) $(PGO_DEP)
 	@mkdir -p $(OUT)/mac
 	d=$$(mktemp -d $@.o.XXXXXX) && trap 'rm -rf "$$d" "$@.$$$$"' EXIT \
-	  && (cd "$$d" && for f in $(addprefix $(ROOT)/graphics/nvn/,$(SRCS)); do clang $(PFX) -std=gnu11 -O2 -g -fobjc-arc -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET) $(WARN) $(INC) -c $$f -o $$(echo $$f | sed 's|.*/gfx/nvn/||; s|/|_|g').o || exit 1; done) \
+	  && (cd "$$d" && for f in $(addprefix $(ROOT)/graphics/nvn/,$(SRCS)); do clang $(PFX) -std=gnu11 -O2 -g $(PGO_CF) -fobjc-arc -mmacosx-version-min=$(MACOSX_DEPLOYMENT_TARGET) $(WARN) $(INC) -c $$f -o $$(echo $$f | sed 's|.*/gfx/nvn/||; s|/|_|g').o || exit 1; done) \
 	  && ar rcs $@.$$$$ "$$d"/*.o && { $(LIBCHK); } && mv -f $@.$$$$ $@
 
-$(OUT)/ios/libnvn.a: $(SRCS) $(HDRS) Makefile $(SRCSTAMP)
+$(OUT)/ios/libnvn.a: $(SRCS) $(HDRS) Makefile $(SRCSTAMP) $(PGO_STAMP) $(PGO_DEP)
 	@mkdir -p $(OUT)/ios
 	d=$$(mktemp -d $@.o.XXXXXX) && trap 'rm -rf "$$d" "$@.$$$$"' EXIT \
-	  && (cd "$$d" && for f in $(addprefix $(ROOT)/graphics/nvn/,$(SRCS)); do clang $(PFX) -std=gnu11 -Os -g -fobjc-arc $(IOS_FLAGS) $(WARN) $(INC) -c $$f -o $$(echo $$f | sed 's|.*/gfx/nvn/||; s|/|_|g').o || exit 1; done) \
+	  && (cd "$$d" && for f in $(addprefix $(ROOT)/graphics/nvn/,$(SRCS)); do clang $(PFX) -std=gnu11 -Os -g $(PGO_CF) -fobjc-arc $(IOS_FLAGS) $(WARN) $(INC) -c $$f -o $$(echo $$f | sed 's|.*/gfx/nvn/||; s|/|_|g').o || exit 1; done) \
 	  && ar rcs $@.$$$$ "$$d"/*.o && { $(LIBCHK); } && mv -f $@.$$$$ $@
 
 # GL 层运行时兜底的 GLSL 翻译（gfx/gl/gl_xlate.c，含改写层 gl_glsl_es.c）+ glslang 静态库 → libglx.a：只链进宿主与 iOS App（graphics/build.mk）。
