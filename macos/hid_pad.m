@@ -66,7 +66,7 @@ uint8_t s2a_pro_player_lights(int slot) { return slot < 0 ? 0x1 : slot >= 3 ? 0x
 typedef struct { IOHIDDeviceRef dev; uint32_t buttons, hat; int16_t ax[4]; char name[96];
     int pro, vid, gc_hint, joined; uint64_t entry, attach_us; s2a_hidg g;   // pro：走 Switch Pro 协议那一支；g：通用手柄的状态（hid_generic.h）；joined：通用手柄按过键
     int full; uint8_t cnt, rep[64]; s2a_pro_cal cl, cr;
-    s2a_pad_motion motion; uint64_t motion_us; int imu_said; } hp_dev;   // motion：0x30 报告里的最后一组 IMU（motion_us = 收到时刻，0 = 没有）   // full：已收到 0x30 报告（之后不再用 HID 元素那一路）；cnt：子命令包序号
+    s2a_pad_motion motion; uint64_t motion_us; int imu_said; uint32_t logged; } hp_dev;   // motion：0x30 报告里的最后一组 IMU（motion_us = 收到时刻，0 = 没有）   // full：已收到 0x30 报告（之后不再用 HID 元素那一路）；cnt：子命令包序号
 static hp_dev g_dev[S2A_HID_PAD_MAX];
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
@@ -91,7 +91,7 @@ static void value_cb(void *ctx, IOReturn r, void *sender, IOHIDValueRef value) {
     pthread_mutex_unlock(&g_mu);
 }
 
-static int g_hid_log;   // S2A_HID_LOG=1：通用手柄每按下一颗键记一行它的 HID 按键号（玩家照着写 S2A_HID_MAP）
+static int g_hid_log;   // S2A_HID_LOG=1（开发用）：每次按下都记；缺省每颗键只记第一次（进诊断，玩家不用设变量）
 // 通用手柄（hid_generic.h）：按位置映射，首次按下才算加入（joined，front_mac.m 才给它玩家位）
 static void generic_value_cb(void *ctx, IOReturn r, void *sender, IOHIDValueRef value) {
     (void)sender;
@@ -104,7 +104,12 @@ static void generic_value_cb(void *ctx, IOReturn r, void *sender, IOHIDValueRef 
     if (d->dev && !d->pro) {
         uint32_t was = d->g.held;
         s2a_hidg_value(&d->g, page, usage, v, min, max);
-        if (g_hid_log && page == kHIDPage_Button && (d->g.held & ~was)) fprintf(stderr, "[输入] 通用手柄 %s：按下 HID 按键号 %u\n", d->name, usage);
+        if (page == kHIDPage_Button && usage >= 1 && usage <= 32 && (d->g.held & ~was)) {   // 每颗键第一次按下记一行（量小、缺省就进诊断）：按键号 → 映射到的 Switch 键，按错键时照这行改按键设置
+            uint32_t bit = 1u << (usage - 1);
+            if (g_hid_log || !(d->logged & bit)) { d->logged |= bit; static const char *const nm[S2A_HIDG_BUTTONS] = {"A", "B", "X", "Y", "左摇杆按下", "右摇杆按下", "L", "R", "ZL", "ZR", "+", "−", "左", "上", "右", "下"};
+                const char *to = "没映射"; for (int b = 0; b < S2A_HIDG_BUTTONS; b++) if (d->g.map[b] == usage) { to = nm[b]; break; }
+                fprintf(stderr, "[输入] 通用手柄 %s：按下 HID 按键号 %u → Switch %s\n", d->name, usage, to); }
+        }
         int joined = s2a_hidg_joined(d->joined, 0, s2a_hidg_buttons(&d->g));
         if (joined && !d->joined) fprintf(stderr, "[输入] 通用手柄 %s：第一次按键，加入玩家\n", d->name);
         d->joined = joined;
@@ -193,8 +198,8 @@ static void attach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
     if (!pro) {
         IOHIDDeviceRegisterInputValueCallback(dev, generic_value_cb, d);
         fprintf(stderr, "[输入] 通用手柄：接上 %s（厂商 / 产品号 0x%x / 0x%x，系统%s认得）：按位置映射直读（缺省八位堂 D-input 编号%s），第一次按键才占玩家位；"
-                "键位不对可设 S2A_HID_MAP=A=2,B=1,…，S2A_HID_LOG=1 记每颗键的编号\n", name[0] ? name : "（没名字）", vid, pid, gc_hint ? "说" : "不",
-                getenv("S2A_HID_MAP") || getenv("DM_HID_MAP") ? "，已按 S2A_HID_MAP 覆盖" : "");
+                "键位不对在启动器的按键设置里改（每颗键第一次按下会记一行它的编号和映射到哪个键）\n", name[0] ? name : "（没名字）", vid, pid, gc_hint ? "说" : "不",
+                getenv("S2A_HID_MAP") || getenv("DM_HID_MAP") ? "，已按 S2A_HID_MAP 覆盖（开发 / 对照用：玩家从启动器起游戏时这个变量带不进来）" : "");
         return;
     }
     s2a_pro_cal_default(&d->cl); s2a_pro_cal_default(&d->cr);
