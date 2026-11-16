@@ -231,6 +231,9 @@ def main():
              'if (0) { memcpy(buf + n, k->c1[st], 0x100); n += 0x100; }', 1, 'different c1 is not merged'),
             ('alias-fact-registration-omitted', 'if (reusable && ae->fact_ok) fact_cache_keep_mask(&id, fact_base, ae->fact_mask, &ae->prog);',
              '(void)ae->fact_mask;', 1, 'reuses the program (no live compile'),
+            # 预热线程建的那份也要算事实掩码：撤掉后，合并命中它的前台身份登记不上事实复用（真机现编 3 → 198 次的另一半）
+            ('alias-bg-fact-mask-omitted', 'if (e && !e->failed && alias_on()) e->fact_ok = (uint8_t)fact_cache_mask(bytes, len, &e->prog, e->fact_mask);',
+             '(void)0;', 1, 'alias fact-bg[on] s2: identity differing only in an unread texture fact reuses the program'),
             # 开关关闭态（--alias-off 另起进程）：开关读了不用，关闭态下 B 就会被合并，「B 读自己的文件」必须变红
             ('alias-flag-ignored', 'if (v < 0) v = nvn_plat_flag("nvk_alias", 1) ? 1 : 0; return v;',
              'if (v < 0) { (void)nvn_plat_flag("nvk_alias", 1); v = 1; } return v;', 1, 'alias[off] s2: B reads its own file', ('--alias-off',)),

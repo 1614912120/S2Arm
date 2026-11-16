@@ -21,6 +21,7 @@
 #include "../../runtime/include/s2a_direct_host.h"
 #include "direct/jv.h"
 #include "direct/program_cache.h"
+#include "nvn/nvn_vk_prog_warm.h"
 #include "tbuf_spirv_fixtures.h"
 
 // 实现在 nvk_shader.c，声明在 nvk_session.h。这里不包 nvk_session.h：nvk_compile_stop_test.py 拿本文件当夹具，
@@ -780,6 +781,42 @@ static void graphics_alias_fact_test(int flag_on) {
     fixture_depth_zero = fixture_origin_lower_left = 0; fake_gs_success = fake_gs_fact_deps = 0; separate_fixture = 0; fake_reg_changes = 1;
     rp_shader_reset(); rp_state_reset();
 }
+// 同上，但常驻的那份是预热线程（nvk_prog_warm_build）从缓存文件建出来的：真机上被合并的程序绝大多数是预热线程建的，
+// 它们也要带着「编译器读了哪些绑定事实」的掩码（warm_work_run），合并命中的前台身份才能登记事实复用。
+static void graphics_alias_fact_bg_test(int flag_on) {
+    const char *tag = flag_on ? "on" : "off";
+    char dir[] = "/tmp/s2a-alias-factbg-XXXXXX";
+    if (!mkdtemp(dir)) { CHECK(0, "alias fact-bg[%s]: temp cache dir", tag); return; }
+    setenv("S2A_DIRECT_CACHE_DIR", dir, 1);
+    uint8_t k1[3][8];
+    rp_shader_reset(); s2a_source_clear(); rp_state_reset(); nvn_unimpl_reset();
+    for (unsigned st = 0; st < 3; st++) gs_source_ex(st, 0, 0x11, k1[st]);
+    fake_gs_success = 1; fake_gs_fact_deps = 1; fake_gs_result_tag = 0; separate_fixture = 1; fake_reg_changes = 0;
+    fixture_depth_zero = fixture_origin_lower_left = 0;
+    alias_bind(k1); bind_pools(100);
+    struct rp_shader_req q = {0}; q.prim = 4;
+    const struct rp_prog *f = NULL, *g = NULL, *h = NULL;
+    compiler_calls = 0;
+    CHECK(!rp_shader_resolve(&q, &f) && f && compiler_calls == 1, "alias fact-bg[%s] s1: F compiles live", tag);
+    struct nvk_prog_rec rec; memset(&rec, 0, sizeof rec);   // 清单里 F 的那一条（身份、阶段掩码、源键、c1），预热线程照它建
+    if (!f || !rp_shader_prog_identity(f, rec.identity)) { CHECK(0, "alias fact-bg[%s] s1: F has an identity", tag); goto done; }   // F 没建出来：别往下解引用（变异体下的夹具会走到这里）
+    rec.stage_mask = 7u; rec.c1_ok = f->c1_ok;
+    for (unsigned st = 0; st < 3; st++) { memcpy(rec.keys[st], k1[st], 8); memcpy(rec.c1[st], f->c1[st], NVK_PROG_REC_C1_BYTES); }
+    fixture_depth_zero = 1;
+    CHECK(!rp_shader_resolve(&q, &g) && g && compiler_calls == 2, "alias fact-bg[%s] s1: G (only the depth mode differs) compiles live", tag);
+    CHECK(s2a_program_cache_drain(5000) == 0, "alias fact-bg[%s] s1: cache writes drained", tag);
+    rp_shader_reset(); compiler_calls = 0; alias_bind(k1); fixture_depth_zero = 0;
+    CHECK(nvk_prog_warm_build(&rec) == 0 && compiler_calls == 0, "alias fact-bg[%s] s2: the warm thread builds F from its cache file", tag);
+    fixture_depth_zero = 1;
+    CHECK(!rp_shader_resolve(&q, &g) && g && compiler_calls == 0, "alias fact-bg[%s] s2: G resolves without a live compile", tag);
+    rp_S.tex[0][2] = 77;   // 编译器没读的贴图事实：只差它的新身份，盘上没有它的文件
+    CHECK(!rp_shader_resolve(&q, &h) && h && compiler_calls == 0 && h == g,
+          "alias fact-bg[%s] s2: identity differing only in an unread texture fact reuses the program (no live compile, calls=%d)", tag, compiler_calls);
+done:
+    unsetenv("S2A_DIRECT_CACHE_DIR"); alias_rmdir(dir);
+    fixture_depth_zero = fixture_origin_lower_left = 0; fake_gs_success = fake_gs_fact_deps = 0; separate_fixture = 0; fake_reg_changes = 1;
+    rp_shader_reset(); rp_state_reset();
+}
 
 /* The compiler request contains only stages in this graphics program. Inactive
  * UBO state (including compute) must not create new graphics identities. */
@@ -849,7 +886,7 @@ int main(int argc, char **argv) {
     if (argc == 2 && !strcmp(argv[1], "--alias-off")) {
         // 结果合并开关关闭（debug.s2a.nvk_alias=0）：alias_on() 进程内只读一次，关闭态单独起一个进程
         fixture_alias_flag = 0;
-        graphics_alias_test(0); graphics_alias_fact_test(0);
+        graphics_alias_test(0); graphics_alias_fact_test(0); graphics_alias_fact_bg_test(0);
         printf("nvk shader pool (alias off): %d checks, %d failures\n", checks, failures);
         return failures ? 1 : 0;
     }
@@ -858,6 +895,7 @@ int main(int argc, char **argv) {
     graphics_active_ubo_test();
     graphics_alias_test(1);
     graphics_alias_fact_test(1);
+    graphics_alias_fact_bg_test(1);
     unsetenv("S2A_SHADER_REVISION_ROOT"); unsetenv("S2A_DIRECT_CACHE_DIR"); rp_state_reset(); source();
     for (int cs = 0; cs < 2; cs++) {
         run_case(cs, 0, 0, "texture_pool_missing");
