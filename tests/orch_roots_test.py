@@ -20,6 +20,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pack.orch import dirrename, roots
 
 
+
+def writable(path):
+    """真去以写方式打开一下（不写）：Windows 的封存是拒写的访问控制项，os.access 只看只读位、判不出来"""
+    try:
+        with open(path, 'r+b'):
+            return True
+    except PermissionError:
+        return False
+
+
 class _Os:
     """只给 roots 模块看的 os：name 换成 nt，其余转给真 os（不改全进程 os.name，见 pack/jobs/tests/jobcase.py OsView）"""
     def __init__(self, name): self.name = name
@@ -304,6 +314,11 @@ class RootsTest(unittest.TestCase):
         base = tx.commit()
         tx = self.store.begin('原创', 'aoc1')
         linked = os.path.samefile(tx.path / 'aoc/d1/a.bin', base / 'aoc/d1/a.bin')   # Windows 上是硬链接（_copy_tree hardlink），别处是克隆 / 实拷
+        if linked and roots.sealing():   # 开发 / 门禁机上它已封存（Transaction._seal_shared）：原地写在第一下就失败，另见 test_shared_tree_sealed_on_dev_machines_only
+            with self.assertRaises(PermissionError):
+                (tx.path / 'aoc/d1/a.bin').write_bytes(b'dlc a changed in place')
+            tx.abort()
+            return
         (tx.path / 'aoc/d1/a.bin').write_bytes(b'dlc a changed in place')
         with self.assertRaises(roots.Conflict) as cm:
             tx.commit()
@@ -335,7 +350,7 @@ class RootsTest(unittest.TestCase):
             tx = self.store.begin('原创', 'seal0')
             (tx.path / 'aoc').mkdir(); (tx.path / 'aoc/a.bin').write_bytes(b'dlc a')
             base = tx.commit()
-            self.assertEqual((os.access(base / 'aoc/a.bin', os.W_OK), os.access(base / 'exefs/main', os.W_OK)), (False, True))
+            self.assertEqual((writable(base / 'aoc/a.bin'), writable(base / 'exefs/main')), (False, True))
             tx = self.store.begin('原创', 'seal1')
             if os.name == 'nt':
                 self.assertTrue(os.path.samefile(tx.path / 'aoc/a.bin', base / 'aoc/a.bin'))
@@ -345,12 +360,12 @@ class RootsTest(unittest.TestCase):
             roots.remove_owned(tx.path / 'aoc'); tx.replaced('aoc'); (tx.path / 'aoc').mkdir(); (tx.path / 'aoc/b.bin').write_bytes(b'dlc b')
             two = tx.commit()
             self.assertEqual(sorted(p.name for p in (two / 'aoc').iterdir()), ['b.bin'])
-            self.assertEqual(((base / 'aoc/a.bin').read_bytes(), os.access(base / 'aoc/a.bin', os.W_OK)), (b'dlc a', False))
+            self.assertEqual(((base / 'aoc/a.bin').read_bytes(), writable(base / 'aoc/a.bin')), (b'dlc a', False))
         with patch.dict(os.environ, {'S2A_ROMFS_SEAL': ''}):
             tx = self.store.begin('原创', 'seal2')
             (tx.path / 'aoc/c.bin').write_bytes(b'dlc c')
             tx.replaced('aoc')
-            self.assertTrue(os.access(tx.commit() / 'aoc/c.bin', os.W_OK))
+            self.assertTrue(writable(tx.commit() / 'aoc/c.bin'))
 
     def test_shared_trees_hardlinked_on_windows_and_fall_back_to_copy(self):
         # 11-16 出包轻阶段：追加内容（aoc）各版本共用、不原地改，阶段事务克隆现行时 Windows 上逐个建硬链接，不逐个块克隆。
