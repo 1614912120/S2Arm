@@ -169,6 +169,11 @@ int s2a_gfx_mode(void) {
     const struct s2a_direct_selection *selection = s2a_direct_selection_current();
     return selection && selection->mode == 1 ? 1 : 0;  // 1 = S2A_GFX_DIRECT
 }
+// The selection is frozen before relocation; until then the mode is not settled (direct_prompt.c waits on it).
+int s2a_gfx_mode_settled(void) { return s2a_direct_selection_current() != NULL; }
+// hle_nvn.c reports each present to Android's CPU-floor controller (android/native/cpu_floor.c); OHOS has no
+// CPU floor, the system schedules from QoS / Game Service Kit hints (host/performance_ohos.cpp).
+void s2a_android_frame_note(void) {}
 
 // The shared NVN frontend's bootstrap (hle_nvn.c HLE_FORCE); NULL when the frontend is not linked.
 extern void *h_nvnBootstrapLoader(const char *name) __attribute__((weak));

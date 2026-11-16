@@ -16,6 +16,7 @@ add_library(s2arm_ohos_native STATIC
     "${S2A_ROOT}/android/native/guest_signal.c"
     "${S2A_ROOT}/android/native/module.c"
     "${S2A_ROOT}/android/native/screen_metrics.c"
+    "${S2A_ROOT}/android/native/system_tuning.c"   # frame-period cap / present note used by hle_nvn.c
     "${S2A_ROOT}/android/native/game_touch.c"
     "${S2A_ROOT}/runtime/src/fps.c"   # upstream 60 FPS table runtime (same as iOS host)
     fps_ohos.c guest_read.c plat_ohos.c tsd_ohos.c runtime_ohos.c signed_module.c ohos_h264.c upstream_glue_ohos.c)

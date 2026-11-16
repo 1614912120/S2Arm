@@ -52,8 +52,26 @@ static int probe_thread(pthread_key_t key, int64_t *out) {
     int matches = 0;
     int64_t found = 0;
     uintptr_t tp = thread_pointer();
+    // musl places a new thread's TCB right above its stack, so the scan window also covers that
+    // thread's stack, where dead frames of pthread_setspecific and this probe still hold copies of
+    // the table pointer (OpenHarmony 7.0.0.39 emulator: four matches in the worker, ENOTSUP).
+    // The TCB field is never inside the thread's own stack mapping: skip that range.
+    uintptr_t stack_lo = 0, stack_hi = 0;
+    pthread_attr_t attr;
+    if (!e) e = pthread_getattr_np(pthread_self(), &attr);
+    if (!e) {
+        void *addr = NULL; size_t size = 0;
+        e = pthread_attr_getstack(&attr, &addr, &size);
+        if (!e) {
+            stack_lo = (uintptr_t)addr;
+            if (!size || size > UINTPTR_MAX - stack_lo) e = EINVAL;
+            else stack_hi = stack_lo + size;
+        }
+        pthread_attr_destroy(&attr);
+    }
     for (int64_t offset = -4096; !e && offset <= 256; offset += 8) {
         uintptr_t table, value;
+        if (tp + (uintptr_t)offset >= stack_lo && tp + (uintptr_t)offset < stack_hi) continue;
         if (read_word(pipefd, tp + (uintptr_t)offset, &table)) continue;
         if (table < 4096 || (table & 7) || table > UINTPTR_MAX - ((uint64_t)key + 1) * 8) continue;
         uintptr_t slot = table + (uint64_t)key * 8;

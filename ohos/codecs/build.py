@@ -7,10 +7,25 @@ Only public sources are downloaded. Versions/hashes come from the shared service
 build scripts; downloaded code, object files and archives stay outside the repo.
 """
 from pathlib import Path
-import argparse,ctypes,hashlib,json,os,re,shlex,shutil,subprocess,tarfile,time,urllib.request
+import sys,argparse,ctypes,hashlib,json,os,re,shlex,shutil,subprocess,tarfile,time,urllib.request
+EXE='.exe' if sys.platform=='win32' else ''
 
 ROOT=Path(__file__).resolve().parents[2]
 def sha(path):return hashlib.sha256(path.read_bytes()).hexdigest()
+
+def ensure_patch(source, patch_file):
+    # Check the complete patch, not one header: partial/stale applications fail.
+    def apply(*args):
+        return subprocess.run(['git', 'apply', *args, str(patch_file)], cwd=source,
+                              capture_output=True, text=True)
+    if apply('--reverse', '--check').returncode == 0:
+        return
+    check = apply('--check')
+    if check.returncode:
+        raise RuntimeError('Codec patch does not match source: ' + check.stderr)
+    result = apply('--whitespace=nowarn')
+    if result.returncode:
+        raise RuntimeError('Codec patch failed: ' + result.stderr)
 def source_pin(name):
     source=ROOT/'services'/name/'build.sh'
     match=re.search(r'^VER=([0-9.]+); SHA=([a-f0-9]{64})$',source.read_text(encoding="utf-8"),re.M)
@@ -88,16 +103,16 @@ def short_path(path):
 
 def build_all(args,sources):
     llvm=args.native_sdk/'llvm/bin'
-    cmake=args.native_sdk/'build-tools/cmake/bin/cmake.exe'
-    ninja=args.native_sdk/'build-tools/cmake/bin/ninja.exe'
+    cmake=args.native_sdk/('build-tools/cmake/bin/cmake'+EXE)
+    ninja=args.native_sdk/('build-tools/cmake/bin/ninja'+EXE)
     toolchain=args.native_sdk/'build/cmake/ohos.toolchain.cmake'
     sdk_meta=args.native_sdk/'oh-uni-package.json'
-    tool_names=['clang.exe','llvm-ar.exe','llvm-ranlib.exe','llvm-nm.exe','llvm-strip.exe']
+    tool_names=['clang'+EXE,'llvm-ar'+EXE,'llvm-ranlib'+EXE,'llvm-nm'+EXE,'llvm-strip'+EXE]
     for tool in [cmake,ninja,toolchain,sdk_meta,*[llvm/n for n in tool_names]]:
         if not tool.exists():raise RuntimeError('Missing installed tool '+str(tool))
     args.out.mkdir(parents=True,exist_ok=True)
     identity={'script_sha256':sha(Path(__file__)),'sdk':json.loads(sdk_meta.read_text()),
-              'clang_sha256':sha(llvm/'clang.exe'),'target':'aarch64-linux-ohos'}
+              'clang_sha256':sha(llvm/('clang'+EXE)),'target':'aarch64-linux-ohos'}
     report={'identity':identity,'sources':sources,'libraries':[],'commands':[]}
     def run(argv,cwd,log,env=None):
         print('Running '+log.name,flush=True)
@@ -111,7 +126,7 @@ def build_all(args,sources):
         for pin in sources:
             name=pin['name'];source=Path(pin['path'])
             shim=ROOT/'services'/name/('s2a_opus.c' if name=='opus' else 's2a_vp8.c')
-            key_data=dict(identity,source_sha256=pin['sha256'],shim_sha256=sha(shim))
+            key_data=dict(identity,source_sha256=pin['sha256'],shim_sha256=sha(shim),patch_sha256=(sha(ROOT/'services/vpx/patches/0001-s2a-vp9-nvdec-hook.patch') if name=='vpx' else ''))
             key=hashlib.sha256(json.dumps(key_data,sort_keys=True).encode()).hexdigest()[:12]
             work=args.out/(name+'-'+pin['version']+'-'+key);work.mkdir(exist_ok=True)
             obj=work/'obj';obj.mkdir(exist_ok=True)
@@ -132,14 +147,22 @@ def build_all(args,sources):
                 original=obj/'libopus.a';includes=source/'include';licenses=['COPYING']
             else:
                 if not args.bash.exists() or not args.make.exists():raise RuntimeError('Git bash and GNU make required for official libvpx build')
+                # Same S2Arm libvpx patch as services/vpx/build.sh: s2a_vp9.c needs vpx/s2a_vp9_nvdec.h from it.
+                patch_file=ROOT/'services/vpx/patches/0001-s2a-vp9-nvdec-hook.patch'
+                # prepare() verifies pristine source receipts on every invocation.
+                # Patch a build-owned copy so a second invocation still verifies.
+                patched = work/'source'
+                if not patched.exists():shutil.copytree(source,patched)
+                source = patched
+                ensure_patch(source,patch_file)
                 for path in [source,obj]:
                     if any(c.isspace() for c in str(path)):raise RuntimeError('libvpx configure/make requires source/build paths without spaces')
                 sdk=short_path(args.native_sdk);tool=short_path(llvm)
-                cc=tool+'/clang.exe --target=aarch64-linux-ohos --sysroot='+sdk+'/sysroot'
+                cc=tool+'/clang'+EXE+' --target=aarch64-linux-ohos --sysroot='+sdk+'/sysroot'
                 env=os.environ.copy()
-                env.update(CC=cc,CXX=tool+'/clang++.exe --target=aarch64-linux-ohos --sysroot='+sdk+'/sysroot',
-                           AS=cc,LD=cc,AR=tool+'/llvm-ar.exe',NM=tool+'/llvm-nm.exe',STRIP=tool+'/llvm-strip.exe',
-                           RANLIB=tool+'/llvm-ranlib.exe',CFLAGS='-O2 -fPIC',CXXFLAGS='-O2 -fPIC')
+                env.update(CC=cc,CXX=tool+'/clang++'+EXE+' --target=aarch64-linux-ohos --sysroot='+sdk+'/sysroot',
+                           AS=cc,LD=cc,AR=tool+'/llvm-ar'+EXE,NM=tool+'/llvm-nm'+EXE,STRIP=tool+'/llvm-strip'+EXE,
+                           RANLIB=tool+'/llvm-ranlib'+EXE,CFLAGS='-O2 -fPIC',CXXFLAGS='-O2 -fPIC')
                 env['PATH']=str(args.bash.parent.parent/'usr/bin')+os.pathsep+str(llvm)+os.pathsep+env.get('PATH','')
                 flags=['--target=arm64-linux-gcc','--disable-vp9-encoder','--enable-vp9-decoder','--disable-vp8-encoder','--enable-vp8-decoder',
                        '--disable-examples','--disable-tools','--disable-docs','--disable-unit-tests',
@@ -150,7 +173,7 @@ def build_all(args,sources):
                 original=obj/'libvpx.a';includes=source;licenses=['LICENSE','PATENTS']
             if not original.is_file():raise RuntimeError('Official build produced no archive: '+str(original))
             shim_object=work/(shim.stem+'.o')
-            run([llvm/'clang.exe','--target=aarch64-linux-ohos','--sysroot='+str(args.native_sdk/'sysroot'),
+            run([llvm/('clang'+EXE),'--target=aarch64-linux-ohos','--sysroot='+str(args.native_sdk/'sysroot'),
                  '-O2','-fPIC','-I'+str(includes),'-c',shim,'-o',shim_object],work,work/'shim.log')
             combined=work/('libs2a_'+name+'.a')
             # Always create a fresh temporary archive; q must never append a
@@ -160,14 +183,14 @@ def build_all(args,sources):
             if name=='vpx':
                 # Switch 2 video decoders need VP9 as well (graphics/nvn/gfx/nvn/nvn2_codec.c).
                 vp9_object=work/'s2a_vp9.o'
-                run([llvm/'clang.exe','--target=aarch64-linux-ohos','--sysroot='+str(args.native_sdk/'sysroot'),
+                run([llvm/('clang'+EXE),'--target=aarch64-linux-ohos','--sysroot='+str(args.native_sdk/'sysroot'),
                      '-O2','-fPIC','-I'+str(includes),'-c',ROOT/'services'/'vpx'/'s2a_vp9.c','-o',vp9_object],work,work/'shim-vp9.log')
                 extra_objects.append(vp9_object)
-            run([llvm/'llvm-ar.exe','qcL',temp,original,shim_object,*extra_objects],work,work/'archive.log')
-            run([llvm/'llvm-ranlib.exe',temp],work,work/'ranlib.log')
+            run([llvm/('llvm-ar'+EXE),'qcL',temp,original,shim_object,*extra_objects],work,work/'archive.log')
+            run([llvm/('llvm-ranlib'+EXE),temp],work,work/'ranlib.log')
             temp.replace(combined)  # generated output in this script-owned directory
             linked=work/('libs2a_'+name+'-link-check.so')
-            run([llvm/'clang.exe','--target=aarch64-linux-ohos','--sysroot='+str(args.native_sdk/'sysroot'),
+            run([llvm/('clang'+EXE),'--target=aarch64-linux-ohos','--sysroot='+str(args.native_sdk/'sysroot'),
                  '-shared','-Wl,--no-undefined','-Wl,--whole-archive',combined,'-Wl,--no-whole-archive','-lm','-o',linked],work,work/'link.log')
             license_dir=work/'licenses';license_dir.mkdir(exist_ok=True)
             license_records=[]
