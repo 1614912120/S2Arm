@@ -97,7 +97,7 @@ char *s2a_shell_save_request(const char *json) {
     return copy;
 }
 // 测试开关 S2A_TEST_SAVE_OP（真机验收「导出存档 → 删除重装 S2Arm → 导回存档」，jhz 11-15 定的 #569 处理要求这条路真能走通；无人点存档页）：
-//   export:<绝对路径> = 把本款当前存档导出成 .s2asave；restore:<绝对路径> = 先 inspect 再按它给的指纹 restore（同界面「检查 → 确认」两步）。
+//   export:<路径> = 把本款当前存档导出成 .s2asave；restore:<路径>（相对路径按 App 容器根） = 先 inspect 再按它给的指纹 restore（同界面「检查 → 确认」两步）。
 //   起局前（ios/settings.m s2a_ios_load_graphics_settings 末尾，服务层还没起）跑一次，走与存档页同一个服务层入口；结果一行进日志。只认环境变量，玩家从图标打开不带
 static NSString *test_save_call(NSDictionary *extra) {
     char *ctx = s2a_shell_save_context(); if (!ctx) return @"no save context (no game selected or no service layer)";
@@ -111,6 +111,7 @@ void s2a_ios_test_save_op(void) {
     @autoreleasepool {
         NSString *op = @(e); NSRange c = [op rangeOfString:@":"]; if (c.location == NSNotFound) { fprintf(stderr, "[S2A 测试存档] 开关格式不对：%s\n", e); return; }
         NSString *kind = [op substringToIndex:c.location], *path = [op substringFromIndex:c.location + 1];
+        if (![path hasPrefix:@"/"]) path = [NSHomeDirectory() stringByAppendingPathComponent:path];   // 相对路径按 App 容器根（电脑端经 devicectl 推拉用的就是容器内相对路径）
         if ([kind isEqualToString:@"export"]) { fprintf(stderr, "[S2A 测试存档] 导出 → %s：%s\n", path.UTF8String, test_save_call(@{@"operation": @"export", @"path": path}).UTF8String); return; }
         if (![kind isEqualToString:@"restore"]) { fprintf(stderr, "[S2A 测试存档] 不认识的操作：%s\n", e); return; }
         NSString *ins = test_save_call(@{@"operation": @"inspect", @"path": path});
