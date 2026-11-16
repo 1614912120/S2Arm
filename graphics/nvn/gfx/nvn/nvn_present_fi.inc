@@ -288,7 +288,7 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
             fx.colorTexture = f->in_tex[k]; fx.prevColorTexture = f->in_tex[(k + 2) % 3]; fx.outputTexture = f->mid_tex;
             fx.depthTexture = f->depth; fx.motionTexture = f->motion; fx.motionVectorScaleX = fx.motionVectorScaleY = (float)f->motion.width / (float)f->w;   // 矢量按全尺寸像素算；按 1/4 尺寸交时换成输入像素
             fx.deltaTime = period > 0 ? (float)period : 1.f / 30; fx.nearPlane = .1f; fx.farPlane = 1000; fx.fieldOfView = 60; fx.aspectRatio = (float)f->w / f->h;
-            fx.jitterOffsetX = fx.jitterOffsetY = 0; fx.depthReversed = NO; fx.shouldResetHistory = last_pair_seq == UINT64_MAX || seq - 1 != last_pair_seq;   // 断开过（不补的帧 / 跳过）就重置历史
+            fx.jitterOffsetX = fx.jitterOffsetY = 0; fx.depthReversed = NO; fx.shouldResetHistory = last_pair_seq == UINT64_MAX || seq - 1 != last_pair_seq;   // 断开过（不补的帧、输入图被占没写）就重置历史；重置那一次 MetalFX 只出这一帧原样（评测读数：补出帧 = 复制真帧）
             id<MTLCommandBuffer> c = [f->mq commandBuffer]; c.label = @"present frame interpolation (MetalFX)";
             if (fi_mv_mode()) fi_mv_encode(f, c, f->in_tex[k], f->in_tex[(k + 2) % 3], fi_mv_mode() < 0 ? -1.f : 1.f);
             [fx encodeToCommandBuffer:c]; fx.outputTexture = fx.prevColorTexture = fx.colorTexture = nil;
@@ -297,11 +297,11 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
             int kp = (k + 2) % 3; pthread_mutex_lock(&g_pq_mu); f->in_busy[k]++; f->in_busy[kp]++; pthread_mutex_unlock(&g_pq_mu);   // 这两张输入图被这次插值读着
             [c addCompletedHandler:^(id<MTLCommandBuffer> x) { pthread_mutex_lock(&g_pq_mu); f->in_busy[k]--; f->in_busy[kp]--; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu);
                                                                cbt = CACurrentMediaTime(); gstart = x.GPUStartTime; gend = x.GPUEndTime; ok = x.error == nil; gms = (x.GPUEndTime - x.GPUStartTime) * 1000; if (x.error) MLOG("【红】 MetalFX frame interpolation failed: %s", x.error.description.UTF8String); dispatch_semaphore_signal(done); }];
-            [c commit];
+            [c commit]; last_pair_seq = seq;   // 编进去了就算接上：超预算的那次照样在 GPU 上做完、历史照常更新（原先只在预算内做完才记，跳过一次连带下一对也被重置成复制真帧）
             // 预算内做完才上补出的帧；超时就不再等（审计 P1-189：原先超时后再等最多 1 秒才上真帧、才记票，30 帧款的上屏节拍被拖长）——直接往下上真帧、记票。
             //   迟到的那次接着在 GPU 上跑完：它读的两张输入图由 in_busy 护着（出图线程见到被占就这一帧不写不补，fi_input_free），写的 mid_tex 下一次插值在同一命令队列上排在它后面
             int in_time = !dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(g_fi_budget_ms * 1e6)));
-            if (in_time && ok) { have_mid = 1; last_pair_seq = seq; f->gpu_sum += gms; }
+            if (in_time && ok) { have_mid = 1; f->gpu_sum += gms; }
             if (in_time && gstart > 0 && gend >= gstart && cbt >= gend) { f->bd_enc += tenc; f->bd_queue += (gstart - tcommit) * 1000; f->bd_cb += (cbt - gend) * 1000; f->bd_n++; }   // 拆账只算预算内做完的（迟到的那次不等它，回调里的时刻这时还没写）
         }
         f->last_seq = seq;
