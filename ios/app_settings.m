@@ -4,6 +4,7 @@ NSDictionary *s2a_ios_sgrade_state(NSString *gid);   // ios/game_options.m：S �
 // 正在跑的这款（同 settings.m current_gid）：自动关记录按款存，传 nil 会读到 App 级那份
 static NSString *sgrade_running_gid(void) { const char *g = getenv("S2A_LAUNCH_GAME_ID"); return g && *g ? @(g) : nil; }
 #import "vpad_cheats.h"
+#import "vpad_mods.h"   // 资源 Mod 页（组 11）
 void s2a_ios_sgrade_counts(NSString *gid, NSInteger *cheatOn, NSInteger *cheatAll, NSInteger *patchOn, NSInteger *patchAll);   // ios/game_options.m
 #import "app_settings.h"
 #import "s2a_l10n.h"
@@ -87,6 +88,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
     if (g == 8 || g == 10) return nil;   // S 级优化：金色头（viewForHeaderInSection）；10：开发与诊断入口一行，不要组头
     if (g == 6) return S2AL(@"play.group");
     if (g == 7) return S2AL(@"settings.group.language");
+    if (g == 11) return S2AL(@"mods.group");
     return g == 2 ? nil : S2AL(@"cpatch.group.gfx");   // 2：开发者页，标题在导航栏
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
@@ -99,6 +101,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
         }
         case 0: return S2AL(@"settings.footer.graphics");
         case 10: return nil;
+        case 11: return S2AL(@"mods.group.footer");
         default: return S2AL(@"settings.footer.dev");   // 2：开发者页
     }
 }
@@ -191,8 +194,8 @@ static UILabel *textLabel(UIFontTextStyle style) {
     //   宽屏（安全区宽 ≥ 900 点、不是辅助功能大字号）分两栏（#1160，同 0.3.9 自适应）：左 屏幕 / 画面，右 S 级优化 / 语言 / 开发与诊断入口；
     //   iPhone 横屏扣掉安全区不到 900 点，仍单栏
     BOOL wide = self.view.safeAreaLayoutGuide.layoutFrame.size.width >= 900 && !UIContentSizeCategoryIsAccessibilityCategory(self.traitCollection.preferredContentSizeCategory);
-    NSArray *groups = wide ? @[@6, @0] : @[@6, @0, @8, @7, @10];
-    NSArray *right = wide ? @[@8, @7, @10] : @[];
+    NSArray *groups = wide ? @[@6, @0] : @[@6, @0, @8, @11, @7, @10];
+    NSArray *right = wide ? @[@8, @11, @7, @10] : @[];   // 11：资源 Mod（下次进游戏生效，属低频、要重启的一类）
     _maxWidth.constant = wide ? 1240 : 620;
     if (![_left.groups isEqual:groups] || ![_right.groups isEqual:right]) {
         _left.groups = groups; _right.groups = right; _right.view.hidden = !wide;
@@ -412,6 +415,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
     if (group == 8) return 1 + (_patchGroups.count > 0);   // S 级优化：社区补丁（这款有才列）+ 金手指
     if (group == 2) return 5;   // 开发者页：打开时导出 / 诊断局 / 触屏诊断 / S2Arm 浮层 / Metal 浮层
     if (group == 10) return 1;   // 主页面末尾「开发与诊断」入口（#1160）
+    if (group == 11) return 1;   // 资源 Mod 入口（vpad_mods.m）
     return group == 0 ? (NSInteger)[self graphicsRows].count : 0;
 }
 // 画面组的行（11-13 维护者撤掉我方 60 帧与通用满屏，只用社区补丁）：画质四项 → 满屏（这款有宽屏补丁才列）→ 帧率（有帧率补丁才列）→ 运行模式；
@@ -484,6 +488,14 @@ static UILabel *textLabel(UIFontTextStyle style) {
             [weakSelf.navigationController.topViewController presentViewController:alert animated:YES completion:nil]; [weakSelf refresh];
         } identifier:@"settings.uiLanguage"];
     }
+    if (group == 11) {   // 资源 Mod：右边写已有几份，点进 mod 页
+        UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
+        cell.textLabel.text = S2AL(@"mods.title"); cell.textLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody]; cell.textLabel.adjustsFontForContentSizeCategory = YES;
+        cell.detailTextLabel.text = [NSString stringWithFormat:S2AL(@"mods.count"), (long)s2a_mods_count()];
+        cell.imageView.image = [UIImage systemImageNamed:@"shippingbox"];
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator; cell.accessibilityIdentifier = @"settings.mods";
+        return cell;
+    }
     if (group == 8) {   // S 级优化：社区补丁 → 补丁页；金手指 → 金手指页（都推进本设置的导航里）
         BOOL patches = _patchGroups.count > 0 && row == 0;
         UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
@@ -529,6 +541,15 @@ static UILabel *textLabel(UIFontTextStyle style) {
 }
 - (void)selectGroup:(NSInteger)group row:(NSInteger)row {
     if (group == 10) { [self openDeveloper]; return; }
+    if (group == 11) {
+        UIViewController *mods = s2a_mods_controller();
+        NSMutableArray *bar = [NSMutableArray array];   // 右上：设置页自己的关闭键 + mod 页的「导入文件夹」（同金手指页）
+        if (self.navigationItem.rightBarButtonItem) [bar addObject:self.navigationItem.rightBarButtonItem];
+        if (mods.navigationItem.rightBarButtonItem) [bar addObject:mods.navigationItem.rightBarButtonItem];
+        mods.navigationItem.rightBarButtonItems = bar;
+        [self.navigationController pushViewController:mods animated:YES];
+        return;
+    }
     if (group == 8 && !(_patchGroups.count > 0 && row == 0)) {
         UIViewController *cheats = s2a_cheats_controller(YES);
         NSMutableArray *bar = [NSMutableArray array];   // 右上：设置页自己的关闭键 + 金手指的「导入」

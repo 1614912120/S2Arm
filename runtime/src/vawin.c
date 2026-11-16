@@ -84,7 +84,7 @@ int s2a_guest_file_wanted6(const char *e, uint64_t pool, uint64_t room, uint64_t
     if (!room) return 0;
     if (seen == UINT64_MAX) return 1;
     // 安全阀收窄（#2f79dd，11-15）：上局前台死掉本为兜「判了不开、实际超单进程上限被杀」——心跳 10 秒一次，最后那段涨幅可能没记进实测。
-    //   本款有实测、且实测 + 两份余量（多一份给漏记的涨幅）仍不超剩余：那次死掉不是超上限（切换游戏 _exit 漏删标记、别的原因），不强制开，按实测判关。
+    //   本款有实测、且实测 + 两份余量（多一份给漏记的涨幅）仍不超剩余：那次死掉不是超上限（标记被别的原因留下，D-C73M 那次原因未定），不强制开，按实测判关。
     //   D-C73M 6 GB iPhone：实测 2372 + 1024 ≤ 4093 却被强制开，开局写盘 2.6 GB 后卡死在缺页
     if (died && !(seen && seen + 2 * margin <= room)) return 1;
     if (seen) return seen + margin > room;
@@ -159,6 +159,9 @@ static int mem_peak_path(char *out, size_t n) {
     uint64_t (*pidf)(void) = (uint64_t (*)(void))dlsym(RTLD_DEFAULT, "s2a_npdm_program_id"); const char *ov = getenv("S2A_GUEST_MEM_PEAK");
     if (ov && *ov) { snprintf(out, n, "%s", ov); return 1; }   // 单测 / 诊断指定
     uint64_t pid = g_attach_phase ? g_ctor_pid : pidf ? pidf() : 0;   // 构造期只认 npdm 直读的；局中（心跳记峰值）照旧按当前程序号
+    // 局中当前程序号还取不到（iOS 图形模式没放行时恒 0）→ 退回构造期从本款 main.npdm 读到的号（多款容器构造期没选游戏，那个号也是 0，不变）。
+    //   开发乙 11-15 Duo 读数：启动上下文直接起容器里的一款，App 到前台写「在跑」标记时这里取不到号、整局没写标记，真被内存上限杀了下一局也认不出
+    if (!pid) pid = g_ctor_pid;
     if (!pid) return 0;
     s2a_docs_path(out, n, "wire/%016llX/mem_peak_anon", (unsigned long long)pid); return 1;
 }

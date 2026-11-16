@@ -1264,6 +1264,25 @@ import S2ArmAppleAdapter
         }
     }
 
+    func testModActionsRemainControllerReachable() async throws {
+        let fixture = try SettingsFixture()
+        fixture.runner.modsResponse = [["name": "Original Mod", "files": 1, "bytes": 3]]
+        defer { fixture.remove() }
+        for language in [Lang.zh, .en] {
+            let (_, window) = try await render(AnyView(LaunchSettingsSheet(model: fixture.model, gameID: "fixture")),
+                                              fixture: fixture, language: language)
+            fixture.navigation.source.controllers = { [] }
+            fixture.navigation.attach(window)
+            defer { fixture.navigation.detach(); window.close() }
+            for id in ["launch.mods.import", "launch.mods.remove.Original Mod"] {
+                fixture.navigation.focus(id)
+                try await Task.sleep(for: .milliseconds(60))
+                XCTAssertTrue(fixture.navigation.controlTargets(in: window).contains { $0.id == id },
+                              "\(language.code)：主线新增 Mod 操作应保留手柄登记，\(id)")
+            }
+        }
+    }
+
     func testLaunchChoicesAndActionsHaveTheSameTrailingEdge() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
@@ -1569,6 +1588,11 @@ private final class SettingsRunner: JobProcessRunner {
     private var needsPreparation = false
     private var cover = ""
     private var storage: [String: Any] = [:]
+    private var mods: [[String: Any]] = []
+    var modsResponse: [[String: Any]] {
+        get { lock.withLock { mods } }
+        set { lock.withLock { mods = newValue } }
+    }
     var storageResponse: [String: Any] {
         get { lock.withLock { storage } }
         set { lock.withLock { storage = newValue } }
@@ -1609,7 +1633,7 @@ private final class SettingsRunner: JobProcessRunner {
                 options[item.id] = ["available": true, "hidden": item.group != "controls",
                                     "value": item.type == "choice" ? (item.options.first?.value ?? "") : true]
             }
-            result = ["mac": options, "graphics": [], "cheats": ["items": []]]
+            result = ["mac": options, "graphics": [], "cheats": ["items": []], "mods": modsResponse]
         }
         if request["operation"] as? String == "installMode" { result = ["mode": "device"] }
         if request["operation"] as? String == "installCheck" {

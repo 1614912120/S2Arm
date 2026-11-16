@@ -107,6 +107,8 @@ final class NativeBridge {
     static native int configureProfileFreeze(boolean enabled);
     /** 拆线程：GAL 套 ThreadedRenderer，GPU 模拟与 Vulkan 录制提交分两条线程。mode = "0"（单线程基线）| "1" | "auto"（按本游戏上局记录）；只能在宿主创建前设置。 */
     static native int configureThreadedRenderer(String mode);
+    /** 玩家画质选项：true = 高画质（上屏 EASU 放大等），false = 更省电。只能在宿主创建前设置。 */
+    static native int configureHighQuality(boolean on);
     /** 游戏宿主只提供 lease；不会启动诊断 presenter 或执行诊断自测。 */
     static native long createGame();
     /** 返回 0 表示启动 worker 已接收冻结输入，不代表 guest 已运行。 */

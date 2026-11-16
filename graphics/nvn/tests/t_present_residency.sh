@@ -100,6 +100,7 @@ for backend in mtl4 mtl3; do
             S2A_INPUT_GUIDE_PREFS="$runtime/input-guide.json" DM_PRESENT_LINK="$link" \
             MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=assert)
         if [[ "$backend" == mtl3 ]]; then run_env+=(NXGAL_BE=mtl3); fi
+        run_env+=(S2A_FRONT_BACKGROUND="${S2A_FRONT_BACKGROUND:-1}")  # 静默跑：不进 Dock、不激活、不抢焦点（macos/front_mac.m front_background；对照时外面给 0 = 原样激活）
         if [[ "$shader_validation" == 1 ]]; then run_env+=(MTL_SHADER_VALIDATION=1); fi
         status=0
         "${run_env[@]}" "$out/t_present_residency" > "$log" 2>&1 || status=$?
