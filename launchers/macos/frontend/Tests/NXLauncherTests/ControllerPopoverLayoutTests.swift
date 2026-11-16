@@ -32,28 +32,22 @@ import NXLauncher
         for zh in [true, false] {
             for phase in [NS2LauncherController.Phase.off, .scanning, .connecting, .failed] {
                 controller.setPhaseForTesting(phase)
-                let view = Switch2ProConnectionPopover(controller: controller, systems: systems, lang: zh ? "zh" : "en")
-                XCTAssertEqual(view.connectionSections, [.init(source: .system, title: "DualSense Wireless Controller", status: .connected)],
-                               "Switch 的 \(phase) 不能在 DualSense 上显示失败或生成第二个连接卡片")
+                // Switch 2 区块与蓝牙区块常驻、各讲各的通道：Switch 的失败只落在 Switch 2 区块，不借 DualSense 的名字
+                XCTAssertNotEqual(controller.switch2Title(lang: zh ? "zh" : "en"), "DualSense Wireless Controller",
+                                  "Switch 的 \(phase) 不能借用 DualSense 的名字")
                 XCTAssertEqual(controller.title(lang: zh ? "zh" : "en"), "DualSense Wireless Controller")
                 XCTAssertEqual(controller.buttonStatus, "已连接")
             }
             controller.apply(status: 4, ["status": 4, "kind": 1, "players": 1, "devices": [["kind": 1, "id": "fixture-switch"]]])
-            let mixed = Switch2ProConnectionPopover(controller: controller, systems: systems, lang: zh ? "zh" : "en")
-            XCTAssertEqual(mixed.connectionSections, [.init(source: .switchRelay, title: "Switch 2 Pro", status: .connected),
-                .init(source: .system, title: "DualSense Wireless Controller", status: .connected)], "混连时分别显示真实来源")
+            XCTAssertEqual(controller.switch2Title(lang: zh ? "zh" : "en"), "Switch 2 Pro", "混连时 Switch 2 区块写自己的手柄")
+            XCTAssertEqual(controller.status, .connected)
             controller.setPhaseForTesting(.handedOff)
-            XCTAssertEqual(Switch2ProConnectionPopover(controller: controller, systems: systems, lang: zh ? "zh" : "en").connectionSections.first?.status, .inUse)
+            XCTAssertEqual(controller.status, .inUse)
             controller.apply(status: 0, ["status": 0, "kind": 0, "devices": []])
             controller.setPhaseForTesting(.off)
             let another = NSObject()
             let two = SystemControllers(pads: systems.pads + [.init(id: ObjectIdentifier(another), name: "DualSense Wireless Controller", family: .playstation)])
-            let multiple = Switch2ProConnectionPopover(controller: controller, systems: two, lang: zh ? "zh" : "en")
-            XCTAssertEqual(multiple.connectionSections, [.init(source: .system,
-                title: zh ? "2 个蓝牙手柄" : "2 Bluetooth controllers", status: .connected)], "两只同名设备不能按名字误合并")
-            let empty = Switch2ProConnectionPopover(controller: controller, systems: SystemControllers(pads: []), lang: zh ? "zh" : "en")
-            XCTAssertEqual(empty.connectionSections, [.init(source: .switchRelay,
-                title: zh ? "Switch 手柄" : "Switch Controller", status: .notConnected)], "空闲的 Switch 卡片不能借用系统手柄名称")
+            XCTAssertEqual(controller.switch2Title(lang: zh ? "zh" : "en"), "Joy-Con 2 · Pro 2", "空闲的 Switch 2 区块不能借用系统手柄名称")
         }
     }
 
@@ -81,11 +75,11 @@ import NXLauncher
                 }
                 host.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(80))
                 let frames = navigation.controlTargets(in: window).map { window.convertFromScreen($0.frame) }
-                XCTAssertEqual(Set(navigation.controlTargets(in: window).map(\.id)), ["controller.system.settings", "controller.switch-options", "controller.player.0",
+                XCTAssertEqual(Set(navigation.controlTargets(in: window).map(\.id)), ["controller.main-action", "controller.settings", "controller.system.settings", "controller.player.0", "controller.assign",
                     "controller.face.0", "controller.face.1", "controller.face.2", "controller.face.3", "controller.face.switch", "controller.face.reset"],
-                               "系统手柄提供连接设置、玩家选择和共享四键映射，不能出现伪装成 DualSense 的重连按钮")
+                               "Switch 2 区块（主按钮 + 齿轮）与蓝牙区块常驻；玩家选择、四键映射与分配玩家")
                 XCTAssertEqual(host.bounds.width, 380, accuracy: 0.5)
-                XCTAssertGreaterThanOrEqual(frames.count, 2, "必须测到 Switch 入口和蓝牙设置按钮")
+                XCTAssertGreaterThanOrEqual(frames.count, 2, "必须测到 Switch 2 主按钮和蓝牙设置按钮")
                 print("popover-insets name=\(name) zh=\(zh) width=\(host.bounds.width) frames=\(frames)")
                 for frame in frames {
                     XCTAssertGreaterThanOrEqual(frame.minX, 19.5, "\(name): 内容左侧必须保留 20 pt，不能被长标题挤出")
@@ -98,16 +92,9 @@ import NXLauncher
                         .write(to: URL(fileURLWithPath: output).appendingPathComponent("controller-popover.png"))
                 }
                 if name == "DualSense Wireless Controller", zh {
-                    _ = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "controller.switch-options" })
                     navigation.source.controllers = { [] }
                     navigation.attach(window)
                     defer { navigation.detach() }
-                    navigation.focus("controller.switch-options"); navigation.handle(.confirm)
-                    try await Task.sleep(for: .milliseconds(80))
-                    let expanded = Set(navigation.controlTargets(in: window).map(\.id))
-                    XCTAssertTrue(expanded.contains("controller.main-action"), "手柄 A 能展开 Switch 选项并保留实际连接操作")
-                    XCTAssertTrue(expanded.contains("controller.system.settings"))
-                    XCTAssertFalse(expanded.contains("controller.switch-options"))
                     controller.setAssignmentForTesting(.init())
                     try await Task.sleep(for: .milliseconds(100))
                     let shortcuts = navigation.shortcutTargets(in: window)

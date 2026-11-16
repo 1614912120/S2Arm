@@ -503,16 +503,21 @@ private struct ControllerToolbarButton: View {
     let lang: String   // 界面语言代码（Lang.code）
 
     private var toolbarStatus: String {
-        NS2LauncherController.statusText(controller.hasSystemController ? .connected : controller.status, lang: lang)
+        NS2LauncherController.statusText(controller.hasSystemController ? .connected : controller.status, lang: lang, bluetoothDenied: controller.bluetoothDenied)
+    }
+    /// 开面板：还没问过蓝牙权限就先弹系统授权框（不开面板，免得授权框抢焦点把面板关掉），选完再开、按钮已是对应状态
+    private func toggle() {
+        if show { show = false; return }
+        if controller.shouldAskBluetoothFirst { controller.askBluetoothPermission { show = true } } else { show = true }
     }
     var body: some View {
-        Button { show.toggle() } label: {
+        Button { toggle() } label: {
             Image(systemName: "gamecontroller").overlay(alignment: .topTrailing) {
                 Circle().fill(Color(nsColor: controller.buttonColor)).frame(width: 5, height: 5).offset(x: 5, y: -3)
             }
         }
         .controllerButtonStyle(ConsoleIconButtonStyle())
-        .help(controller.title(lang: lang) + "：" + toolbarStatus)   // #901：顶栏提示写实际手柄名
+        .help(controller.title(lang: lang) + "：" + toolbarStatus)   // #901：顶栏提示写实际连着的手柄名（两条通道合并看）
         .accessibilityLabel(controller.title(lang: lang) + "：" + toolbarStatus)
         .controllerID("top.controller")
         .popover(isPresented: $show, arrowEdge: .bottom) {
@@ -522,6 +527,6 @@ private struct ControllerToolbarButton: View {
         .onReceive(systems.$pads) { pads in controller.updateSystem(SystemControllers.keys(for: pads)) }
         .onReceive(systems.$gen1) { controller.updateGen1($0) }   // 一代 Joy-Con 按设备（D2）   // 用送来的新值（@Published 在改之前就送，读属性还是旧的）
         // 游戏打开了系统的手柄设置画面：面板自己弹出来（已进分配玩家）
-        .onChange(of: controller.panelRequested) { wanted in if wanted { show = true; controller.panelRequested = false } }
+        .onChange(of: controller.panelRequested) { wanted in if wanted { controller.panelRequested = false; if !show { toggle() } } }
     }
 }
