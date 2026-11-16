@@ -176,10 +176,9 @@ public static class PackCases
             "request: devCert needs no game and never carries the password");
         // 装到 iPhone 的方式 / 更新 iPhone 上的 S2Arm（v0.3.0，install.install_mode_job / update_phone）：属于这台电脑 / 这台手机，不带 gameId；
         //   都带随包资源（Impactor），installUpdate 还要组装容器，同 install 带预编壳
-        var mode = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "installMode", "",
-            new Dictionary<string, object?> { ["mode"] = "device" }), "win-5");
-        check((string?)mode["mode"] == "device" && !mode.ContainsKey("gameId") && !mode.ContainsKey("shellDir") &&
-              (string?)mode["resources"] == Path.GetFullPath(AppContext.BaseDirectory), "request: installMode needs no game, carries mode and resources");
+        var mode = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "installMode", "", null), "win-5");   // 只读签名身份（11-15 起不带 mode）
+        check(!mode.ContainsKey("mode") && !mode.ContainsKey("gameId") && !mode.ContainsKey("shellDir") &&
+              (string?)mode["resources"] == Path.GetFullPath(AppContext.BaseDirectory), "request: installMode needs no game, carries resources");
         var update = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "installUpdate", "",
             new Dictionary<string, object?> { ["acceptStale"] = true }), "win-6");
         check(update["acceptStale"] is true && !update.ContainsKey("gameId") && (string?)update["shellDir"] == Path.GetFullPath(paths.Shell) &&

@@ -211,11 +211,16 @@ public sealed partial class EnvironmentWindow
             var heroBusy = BusyFor(hero) || hero.LocationState is "missing" or "offline";
             if (hero.IphoneReady)
             {
-                var install = Primary(T(installMode == "export" ? "export.done.export" : "library.hero.install"),
-                    () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; readinessFor = null; Navigate("install"); }, !BusyFor(hero));
+                var install = Primary(T("library.hero.install"),
+                    () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; readinessFor = null; if (!installBusy) installExport = false; Navigate("install"); }, !BusyFor(hero));
                 AutomationId(install, "library.hero.install");
                 heroActions.Children.Add(install);
             }
+            // 导出自签包（11-15 维护者：导出不是装法，常驻一个看得见的次按钮；没出过包的点了先出包再导出）
+            var selfSign = Action("library.hero.selfSign", () => ExportSelfSign(hero), !heroBusy && !installBusy);
+            selfSign.VerticalAlignment = VerticalAlignment.Center;
+            AutomationId(selfSign, "library.hero.selfSign");
+            heroActions.Children.Add(selfSign);
             var build = Action("nav.build", () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; OpenBuild(); }, !heroBusy);
             build.VerticalAlignment = VerticalAlignment.Center;
             heroActions.Children.Add(build);
@@ -272,9 +277,9 @@ public sealed partial class EnvironmentWindow
                 detail.Children.Add(Muted(T("library.location.at").Replace("{0}", where.Folder.Length > 0 ? where.Folder : where.Path), 12));
             Grid.SetColumn(detail, 1); line.Children.Add(detail);
             // Primary button: if iPhone pack is ready → install; otherwise export (storage not connected → disabled, game files missing → relink / remove)
-            var primaryKey = game.IphoneReady ? (installMode == "export" ? "export.done.export" : "library.hero.install") : "library.select";   // 导出模式：主按钮写导出（两路分开）
+            var primaryKey = game.IphoneReady ? "library.hero.install" : "library.select";
             var primaryAction = game.IphoneReady
-                ? (Action)(() => { libraryFolder = libraryFolderBox.Text ?? ""; selectedGame = game.Id; readinessFor = null; Navigate("install"); })
+                ? (Action)(() => { libraryFolder = libraryFolderBox.Text ?? ""; selectedGame = game.Id; readinessFor = null; if (!installBusy) installExport = false; Navigate("install"); })
                 : game.LocationState == "missing" ? () => _ = MissingAsync(game)
                 : () => { libraryFolder = libraryFolderBox.Text ?? ""; selectedGame = game.Id; OpenBuild(); };
             // 装机在跑时别的游戏照常能选、看详情、出包（只锁正在装的那款；同时只装一款：点别的「装到 iPhone」进装机页提示「另一款正在装 · 查看那一款」）
