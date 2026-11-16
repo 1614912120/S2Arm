@@ -217,7 +217,7 @@ def layout_source_identity(original):
     walker = _own_romfs_list()
     h = hashlib.sha256()
     for name in ('Layout', 'UI', 'Pack'):
-        if (Path(original) / name).is_dir():
+        if walker.is_dir(Path(original) / name):   # 同 Path.is_dir；原版只有镜像 romfs.std 时看镜像里有没有这个目录
             identity = walker.scan(Path(original) / name).identity
             if identity is None:
                 raise StageError('布局盘点不了原版romfs的' + name)
@@ -408,11 +408,18 @@ def romfsidx_key(current):
     kt = digest('\n'.join(oids) + '\n')
     h = hashlib.sha256()
     base = current / 'romfs'
-    for directory, dirs, files in romfs_walk(base):
+    # 一次盘点（romfs_list.scan：每个条目 lstat 一次；镜像形态从镜像文件表取长度）拿大小，不再逐个文件 stat（11-16 实测：4.2 万个文件的款 3.4–4 秒 → 0.09 秒）；
+    #   遍历顺序与每行字节同原先（walk 同一棵盘点、目录名 / 文件名排序；普通文件 lstat 大小 = stat 大小），键逐字节不变（tests/romfsidx_key_test.py 对拍）。
+    #   不是普通文件的条目（软链等，产物根里本来没有）照旧按路径跟随取大小
+    lister = module('graphics/nvn/tools/romfs_list.py', '_orch_romfs_list')
+    tree = lister.scan(base)
+    sizes = {e.rel: e.lstat.st_size for e in tree.entries if e.lstat is not None and stat.S_ISREG(e.lstat.st_mode)}
+    for directory, dirs, files in tree.walk():
         dirs.sort()
         for name in sorted(files):
             p = Path(directory) / name
-            h.update(f'{p.relative_to(base).as_posix()}\t{p.stat().st_size}\n'.encode())
+            rel = p.relative_to(base).as_posix()
+            h.update(f'{rel}\t{sizes[rel] if rel in sizes else lister.file_size(p)}\n'.encode())
     over = overlay_sizes(current)
     if over:   # 界面布局覆盖层（_uilayout）：覆盖文件的大小也进键（没有覆盖层的版本键与原先相同）
         h.update(''.join(f'ui_overlay\t{n}\t{over[n]}\n' for n in sorted(over)).encode())
@@ -628,7 +635,8 @@ class Stages:
         if stage not in ENTRY:
             raise ValueError('仅支持 rewrite,romfsidx,direct_profile')
         current = self.roots.cur(game)
-        if not current or not (current / 'exefs').is_dir() or not (current / 'romfs').is_dir():
+        # RomFS 是目录 romfs/ 或镜像 romfs.std 都行（romfs_list.is_dir：目录不在、旁边有 .std 也算）
+        if not current or not (current / 'exefs').is_dir() or not module('graphics/nvn/tools/romfs_list.py', '_orch_romfs_list').is_dir(current / 'romfs'):
             raise StageError('缺现行 exefs/romfs；先 --from-extract 播种')
         self.roots._validate(current, game)
         deps = Dependencies(stage, current)
@@ -864,7 +872,8 @@ class Stages:
         source = next((line[4:] for line in read(current / 'seed.txt').splitlines() if line.startswith('src=')), '')
         original = Path(source) / 'romfs' if source else None
         theirs, ours = _title_id(Path(source)) if source else '', _title_id(current)
-        if original is None or not original.is_dir() or (theirs and ours and theirs != ours):
+        lister = _own_romfs_list()   # RomFS 在不在、有没有 Layout / UI / Pack：目录或镜像 romfs.std 都认（romfs_list.is_dir）
+        if original is None or not lister.is_dir(original) or (theirs and ours and theirs != ours):
             print(f'【黄】布局原版改用现行产物根的 RomFS（seed.txt 记的解包目录{"是另一款 " + theirs + " 的" if theirs and ours and theirs != ours else "不在或已失效"}）', file=sys.stderr)
             original = current / 'romfs'
         # 散文件目录要核没有链接 / 特殊文件；镜像 romfs.std 里只有文件和目录，没有可核的。
@@ -886,7 +895,7 @@ class Stages:
         overlay = Path(os.environ.get('S2A_WIDEN_DIR', self._run_root() / 's2arm/widen')) / (game + '_' + bid) / f'ui_w{width}_{tv}_{layout_source_identity(original)}'
         if is_link(overlay) or is_link(overlay.parent):
             raise StageError('布局覆盖缓存不能是链接')
-        if not overlay.is_dir() and any((original / p).is_dir() for p in ('Layout', 'UI', 'Pack')):
+        if not overlay.is_dir() and any(lister.is_dir(original / p) for p in ('Layout', 'UI', 'Pack')):
             overlay.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix=overlay.name + '.tmp.', dir=overlay.parent) as temporary:
                 work = Path(temporary)

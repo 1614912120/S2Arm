@@ -10,7 +10,8 @@ OUT=$H/build/ns2_nup_test; mkdir -p "$OUT"; T=$(mktemp -d); trap 'rm -rf "$T"' E
 timeout 500 dotnet build "$H/pack/nx_unpack/nx_unpack.csproj" -c Release --artifacts-path "$OUT/art" -v quiet -nologo > "$OUT/build.log" 2>&1 || { tail -20 "$OUT/build.log"; echo "✗ nx_unpack 编译（期望编过）"; exit 1; }
 NXD=$(find "$OUT/art/bin" -name nx_unpack.dll | head -1); [ -n "$NXD" ] || { echo "✗ 没找到 nx_unpack.dll"; exit 1; }
 printf '#!/bin/bash\nexec dotnet "%s" "$@"\n' "$NXD" > "$T/nxu"; chmod +x "$T/nxu"
-S2A_TEST_NXU=$T/nxu S2A_TEST_ROMFS_INDEX=$H/services/romfs_index.sh "$PY" "$H/tests/ns2_nup_test.py"; r=$?
+# ①–⑩ 按目录形态（romfs/ 散文件）写期望：显式 S2A_ROMFS_IMAGE=0；缺省（镜像形态）见 ⑪
+S2A_ROMFS_IMAGE=0 S2A_TEST_NXU=$T/nxu S2A_TEST_ROMFS_INDEX=$H/services/romfs_index.sh "$PY" "$H/tests/ns2_nup_test.py"; r=$?
 grep -q '"$PY" "$P/ns2_nup.py" "$NUPF" "$B/ns2_dump/$ND"' "$H/pack/oneclick/oneclick.sh" \
   && grep -q 'NS2D=$B/ns2_dump/$ND' "$H/pack/oneclick/oneclick.sh" || { echo "✗ oneclick.sh 没接 ns2_nup.py"; r=1; }
 [ $r = 0 ] && echo "✓ t_ns2_nup"

@@ -292,8 +292,9 @@ class JobsTests(unittest.TestCase):
         logs = self.root / "logs"; logs.mkdir()
         ms.plan(self.c, 1, "build_dual")
         self.assertFalse(self.c.keys.exists())
+        # 读取器是桩（reader.dll 不在）：RomFS 镜像形态（缺省）要真 nx_unpack 建 romfs.std，这里按目录形态（S2A_ROMFS_IMAGE=0）核分流与产物形状
         with um.patch.object(toolchain, "reader", return_value=self.root / "reader.dll"), um.patch.object(self.c, "run", run):
-            x = build.ensure_extract(self.c, game, build.selected_packages(game), {}, logs)
+            x = build.ensure_extract(self.c, game, build.selected_packages(game), {"S2A_ROMFS_IMAGE": "0"}, logs)
         self.assertEqual([c[4:6] for c in calls if "--npdm-isa" not in c], [["--to-extract", str(src)]])
         self.assertTrue(calls[0][3].endswith("pack/ns2_nup.py") and calls[0][6] == str(x), calls[0])
         self.assertFalse(any(str(self.c.keys) in c for c in calls), "NUP 不调读取器解密")
@@ -1189,7 +1190,7 @@ class JobsTests(unittest.TestCase):
         du = collections.namedtuple("du", "total used free")
         d = self.root / "dc"; root, cache, out = d / "root", d / "cache", d / "out"
         for x in (root / "romfs", root / "exefs", root / "aoc", cache, out): x.mkdir(parents=True)
-        sizes = {str(root / "romfs"): int(2.5e9), str(root / "exefs"): int(0.4e9), str(root / "aoc"): int(0.2e9), str(cache): 0}   # 内容 3.1e9 → 大档
+        sizes = {str(root / "romfs"): int(2.5e9), str(root / "romfs.std"): 0, str(root / "exefs"): int(0.4e9), str(root / "aoc"): int(0.2e9), str(cache): 0}   # 内容 3.1e9 → 大档（romfs.std：镜像形态的 RomFS，这里是目录形态 = 0）
         with unittest.mock.patch("space_rule.tree_bytes", side_effect=lambda p: sizes[str(p)]):
             self.assertIsNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(15e9))))
             why = space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(15e9) - 1))
@@ -1222,7 +1223,7 @@ class JobsTests(unittest.TestCase):
             (root / "extract" / "split" / "shader_map.tsv").write_text("\n".join(rows) + "\n", encoding="utf-8")
             return root, cache, out
         root, cache, out = make("sb_big", 99084, 3)
-        sizes = {str(root / "romfs"): int(6.0e9), str(root / "exefs"): int(0.5e9), str(root / "aoc"): int(0.2e9), str(cache): 0}
+        sizes = {str(root / "romfs"): int(6.0e9), str(root / "romfs.std"): 0, str(root / "exefs"): int(0.5e9), str(root / "aoc"): int(0.2e9), str(cache): 0}
         self.assertEqual(space_rule.shader_count(root), 99084)
         with unittest.mock.patch("space_rule.tree_bytes", side_effect=lambda p: sizes[str(p)]):
             self.assertIsNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, 51948552192)))
@@ -1230,7 +1231,7 @@ class JobsTests(unittest.TestCase):
             self.assertIn("磁盘空间不足", why); self.assertIn("着色器 99084 个", why)
             self.assertIsNotNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(15e9))))   # 修前按原件那一档 15e9 就放行了
         root, cache, out = make("sb_small", 1000, 0)
-        sizes = {str(root / "romfs"): int(0.3e9), str(root / "exefs"): int(0.1e9), str(root / "aoc"): 0, str(cache): 0}
+        sizes = {str(root / "romfs"): int(0.3e9), str(root / "romfs.std"): 0, str(root / "exefs"): int(0.1e9), str(root / "aoc"): 0, str(cache): 0}
         with unittest.mock.patch("space_rule.tree_bytes", side_effect=lambda p: sizes[str(p)]):
             self.assertIsNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(5e9))))
             self.assertIsNotNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(5e9) - 1)))
