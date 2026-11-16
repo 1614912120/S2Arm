@@ -73,9 +73,12 @@ static NSString *work_root(void) {
 // 这款的存档身份：多款容器在本款随行目录 games/<游戏号>/save-identity.json（pack/ship_ext.py 放的），单款包在 App 包根。
 //   原先一律读包根：容器里读不到，存档管理页报「缺少游戏身份」，容器玩家没有存档入口（审计 P2-170 壳那一半）
 static NSDictionary *game_identity(void) {
-    const s2a_launch_ctx *c = s2a_launch_ctx_container() ? s2a_launch_ctx_get() : NULL;
-    NSURL *url = c && c->module_dir[0] ? [NSURL fileURLWithPath:[@(c->module_dir) stringByAppendingPathComponent:@"save-identity.json"]]
-                                       : [NSBundle.mainBundle URLForResource:@"save-identity" withExtension:@"json"];
+    // 启动上下文里有本款模块目录、且目录里有 save-identity.json 就用它：多款容器选了游戏，或直接按 S2A_LAUNCH_CTX 起的那一款（那时 s2a_launch_ctx_container()
+    //   判「不是容器」，原先就去包根找、多款容器包根没有，存档页 / iCloud 同步 / 测试开关都取不到本款身份）；单款包模块目录里没有它，照旧取包根那份
+    const s2a_launch_ctx *c = s2a_launch_ctx_get();
+    NSString *mod = c && c->module_dir[0] ? [@(c->module_dir) stringByAppendingPathComponent:@"save-identity.json"] : nil;
+    NSURL *url = mod && [NSFileManager.defaultManager fileExistsAtPath:mod] ? [NSURL fileURLWithPath:mod]
+                                                                         : [NSBundle.mainBundle URLForResource:@"save-identity" withExtension:@"json"];
     NSData *data = url ? [NSData dataWithContentsOfURL:url] : nil;
     id game = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     return [game isKindOfClass:NSDictionary.class] ? game : nil;
