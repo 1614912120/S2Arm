@@ -9,7 +9,7 @@ set -u
 R=$(cd "$(dirname "$0")/.." && pwd)
 W=$(mktemp -d "${TMPDIR:-/tmp}/s2a-pgo.XXXXXX") || exit 2
 trap 'git -C "$R" worktree remove --force "$W/tree" > /dev/null 2>&1; rm -rf "$W"' EXIT
-fail() { trap - EXIT; echo "🔴 $1（临时目录留着看日志：$W；看完 git -C $R worktree remove --force $W/tree && rm -rf $W）"; exit 1; }
+fail() { trap - EXIT; echo "🔴 $1（临时目录留着看日志：${W}；看完 git -C $R worktree remove --force $W/tree && rm -rf $W）"; exit 1; }
 git -C "$R" worktree add --detach "$W/tree" HEAD > /dev/null || fail "建临时工作树失败"
 echo "插桩版：$(git -C "$R" rev-parse --short HEAD)（$W/tree）"
 S2A_PGO_GEN=1 bash "$W/tree/tools/host_build.sh" > "$W/build.log" 2>&1 || { tail -5 "$W/build.log"; fail "插桩版宿主编不过（见 $W/build.log）"; }
