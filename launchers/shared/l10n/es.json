@@ -322,6 +322,7 @@
   "install.description": "Conecta el iPhone con un cable y desbloquéalo. Puedes instalar cuando la versión para iPhone esté lista; los elementos sin marcar son recordatorios, y cualquier problema se explica durante la instalación.",
   "install.container_note": "Todos tus juegos van en una sola app S2Arm: ocupa solo 1 de los espacios para apps de un Apple ID gratuito, y agregar juegos mantiene los que tienes y sus partidas guardadas.",
   "install.legacy_note": "Las partidas guardadas de juegos instalados anteriormente como apps separadas no se transfieren a la nueva app S2Arm.",
+  "install.queued": "En cola: se instala en cuanto termine la tarea actual del teléfono o en cuanto este juego termine de compilarse",
   "install.restore": "Restaurar el S2Arm anterior",
   "install.restore_title": "¿Restaurar el S2Arm anterior en el iPhone?",
   "install.restore_body": "S2Arm en tu iPhone acaba de cambiar al nuevo entorno de ejecución. Si no funciona bien, restaura la versión anterior. Los datos del juego y las partidas guardadas se mantienen; los juegos agregados después del cambio no aparecerán en la versión anterior por ahora.",

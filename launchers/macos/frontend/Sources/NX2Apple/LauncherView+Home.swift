@@ -88,7 +88,7 @@ extension LauncherView {
                 HStack(spacing: 10) {
                     Text(txt("library.hostUpdate.incompatible")).font(.manrope(12.5)).foregroundStyle(.white.opacity(0.75)).fixedSize(horizontal: false, vertical: true)
                     Button(txt("library.hostUpdate.prepare")) { model.exportFor = game.id }
-                        .buttonStyle(.link).disabled(model.busy).controllerID("hero.hostUpdate")
+                        .buttonStyle(.link).disabled(model.mainBusy).controllerID("hero.hostUpdate")
                 }
             }
             if let error = model.actionError(for: game.id) {
@@ -108,17 +108,18 @@ extension LauncherView {
                 }
                 .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.selfSign")
                 .help(txt("library.hero.selfSign")).accessibilityLabel(txt("library.hero.selfSign"))
-                .disabled(game.iphoneReady ? model.busy : model.busy && model.session?.export == nil)
+                // 能直接导出的走手机槽（出包在跑也行，手机槽忙就排队）；要先出 iPhone 包的，主槽在跑非出包作业时等（出包在跑会排队）
+                .disabled(game.iphoneExportable ? model.phoneQueued(game.id) : model.mainBusy && model.session?.export == nil)
                 // 主按钮是「开始游戏」时，出过 iPhone 包的款照样要能一键装到 iPhone（主线游戏库两个都在）
                 if game.playable, game.iphoneReady {
                     Button { model.selfSigning = false; model.targetInstalledDevice(of: game); installFor = game.id } label: {
                         fitLabel(txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"), "iphone")
                     }
-                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.install").disabled(model.busy)
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.install")   // 只开装机窗：别的作业在跑，窗里点装机会排队
                     .help(txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"))
                 }
                 // 这款上次出包 / 装机 / 导出的结果页（主线游戏库「查看结果」）
-                if model.finishedExports[game.id] != nil, !(model.busy && model.session?.gameID == game.id) {
+                if model.finishedExports[game.id] != nil, !(model.mainBusy && model.session?.gameID == game.id) {
                     Button { model.viewingResult = model.finishedExports[game.id] } label: { Image(systemName: "checkmark.seal") }
                         .controllerButtonStyle(ConsoleIconButtonStyle(size: 52)).controllerID("hero.results")
                         .help(txt("library.hero.results")).accessibilityLabel(txt("library.hero.results"))
@@ -277,14 +278,15 @@ extension LauncherView {
     private func homeHint(_ shortcut: PadShortcut, _ title: String) -> some View {
         HomeControllerHint(presentation: navigation.presentation, shortcut: shortcut, title: title)
     }
+    // 主按钮只在主槽有作业（出包 / 一局 / 导入…）时变成「回到当前任务」；手机作业在顶栏胶囊里看，不占主按钮
     private func homePrimarySymbol(_ game: GameSummary) -> String {
-        if model.busy { return "arrow.up.forward.app" }
+        if model.mainBusy { return "arrow.up.forward.app" }
         if game.playable { return model.cloudSyncing ? "arrow.triangle.2.circlepath" : "play.fill" }
         if game.iphoneReady { return "iphone.and.arrow.forward" }
         return "shippingbox"
     }
     func homePrimaryTitle(_ game: GameSummary) -> String {
-        if model.busy { return loc.t("home.currentTask") }
+        if model.mainBusy { return loc.t("home.currentTask") }
         if game.playable { return loc.t(model.cloudSyncing ? "s2arm.cloud.syncing" : "library.play") }
         if game.iphoneReady {
             return txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install")
@@ -292,7 +294,7 @@ extension LauncherView {
         return loc.t("home.prepare")
     }
     func homePrimary(_ game: GameSummary) {
-        if model.busy {
+        if model.mainBusy {
             model.sessionHidden = false
             if model.batchRunning { model.batchShown = true }
             return

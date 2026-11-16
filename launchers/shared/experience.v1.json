@@ -1024,6 +1024,7 @@
       {"id": "install.description", "zh-Hans": "用数据线连接并解锁 iPhone 即可安装已出好的包，清单仅作提醒，安装遇到问题时会显示原因", "en": "Connect and unlock your iPhone to install a prepared game; checklist items are reminders and any installation problem is explained when it occurs"},
       {"id": "install.container_note", "zh-Hans": "所有游戏都装进同一个 S2Arm App：免费 Apple ID 的 App 额度只占 1 个，再加游戏不影响已有游戏和存档", "en": "All your games go into one S2Arm app: it uses just 1 of a free Apple ID's app slots, and adding games keeps the ones you have and their saves"},
       {"id": "install.legacy_note", "zh-Hans": "以前一款一个 App 装的游戏，存档不会搬进新的 S2Arm", "en": "Saves from games installed earlier as separate apps do not move into the new S2Arm app"},
+      {"id": "install.queued", "zh-Hans": "已排队：手机上前一个作业完成、或这款出完包后接着装", "en": "Queued: it installs right after the phone's current job finishes, or after this game finishes building"},
       {"id": "install.restore", "zh-Hans": "装回上一版 S2Arm", "en": "Restore the previous S2Arm"},
       {"id": "install.restore_title", "zh-Hans": "把手机上的 S2Arm 装回上一版？", "en": "Restore the previous S2Arm on iPhone?"},
       {"id": "install.restore_body", "zh-Hans": "可装回上一版运行层，游戏数据与存档保留，换版后安装的游戏需再次更新运行层才能显示", "en": "Restore the previous runtime without changing game data or saves; games installed after the update remain unavailable until you update again"},

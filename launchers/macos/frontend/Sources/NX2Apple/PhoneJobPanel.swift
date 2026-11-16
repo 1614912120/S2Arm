@@ -235,7 +235,7 @@ struct PhoneJobPanel: View {
             HStack(spacing: 12) {
                 if session.kind == .installUpdate {
                     Button { model.retryPhoneUpdate() } label: { LauncherHeroActionLabel(title: t("phone.retry"), symbol: "arrow.clockwise") }
-                        .controllerButtonStyle(.plain).disabled(model.busy).controllerID("phone.retry").controllerShortcut(.rightTrigger)
+                        .controllerButtonStyle(.plain).disabled(model.phoneBusy).controllerID("phone.retry").controllerShortcut(.rightTrigger)
                 }
                 CopyReportButton(model: model, gameID: session.gameID, operations: [session.kind.rawValue], fallback: session.message)
             }
@@ -259,7 +259,7 @@ struct PhoneJobPanel: View {
             HStack(spacing: 12) {
                 Button { if let d = model.dropConfirm { model.confirmDrop(d) } } label: { LauncherHeroActionLabel(title: t("install.drop_confirm"), symbol: "arrow.right") }
                     .controllerButtonStyle(.plain).controllerID("phone.drop.confirm").controllerShortcut(.rightTrigger)
-                Button(t("phone.drop.cancel")) { model.dropConfirm = nil; model.backToLibrary() }
+                Button(t("phone.drop.cancel")) { model.dropConfirm = nil; model.backFromPhone() }
                     .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("phone.drop.cancel")
             }
         }

@@ -322,6 +322,7 @@
   "install.description": "用資料線連上手機並解鎖。iPhone 版做好就能開始裝；沒打勾的項只是提醒，裝的時候出問題會告訴你原因。",
   "install.container_note": "所有遊戲都裝進同一個 S2Arm App：免費 Apple ID 的 App 額度只佔 1 個，再加遊戲不影響已有遊戲和存檔。",
   "install.legacy_note": "以前一款一個 App 裝的遊戲，存檔不會搬進新的 S2Arm。",
+  "install.queued": "已排隊：手機上前一個作業完成、或這款出完包後接著裝",
   "install.restore": "裝回上一版 S2Arm",
   "install.restore_title": "把手機上的 S2Arm 裝回上一版？",
   "install.restore_body": "手機上的 S2Arm 剛換了新版執行層。新版不好用就裝回上一版；遊戲資料和存檔不動，換完之後才裝的遊戲在上一版裡暫時看不到。",
