@@ -8888,7 +8888,9 @@ static void c1072_msaa_red(const char *dir) {
         printf("C1072 request=%u expect=%u support=%#x\n", want, expected, (unsigned)ip.sampleCounts);
         ran++;
     }
-    CHECK(ran == 2, "C1072 requires host missing both 2x and 8x; exercised=%u", ran);
+    // 宿主缺哪档就练哪档：有的 Mesa 版本 lavapipe 缺 2x 与 8x（练两档），CI 镜像的 lavapipe 报 1/4/8x（只缺 2x、练一档）。
+    // 两档都支持的宿主练不到降档：照样报红，不静默跳过（换缺档的宿主或模拟档）。
+    CHECK(ran >= 1, "C1072 requires host missing 2x or 8x; exercised=%u", ran);
     VkImageFormatProperties r8 = {0};
     VkResult r8rc = vkGetPhysicalDeviceImageFormatProperties(g_dev.physical, VK_FORMAT_R8_UNORM,
         VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, usage, 0, &r8);
