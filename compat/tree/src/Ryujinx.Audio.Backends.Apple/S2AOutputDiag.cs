@@ -125,7 +125,7 @@ namespace Ryujinx.Audio.Backends.Apple
 
             if (string.IsNullOrEmpty(d))
             {
-                d = (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : Directory.GetCurrentDirectory();
+                d = (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : Directory.GetCurrentDirectory();   // 平台例外：tvOS 与 iOS 走同一分支
             }
 
             return Path.Combine(d, p);

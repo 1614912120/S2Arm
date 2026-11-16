@@ -1,5 +1,5 @@
 diff --git a/src/ARMeilleure/Signal/NativeSignalHandlerGenerator.cs b/src/ARMeilleure/Signal/NativeSignalHandlerGenerator.cs
-index 0b90252bc33352a9e0db5241d1fabe30591d67c5..bab3ea824e3e3f62dc18b5df5bbcc41bd189499a 100644
+index 0b90252bc33352a9e0db5241d1fabe30591d67c5..1e9672b8369af98448be1531a9ea474d6a2605e6 100644
 --- a/src/ARMeilleure/Signal/NativeSignalHandlerGenerator.cs
 +++ b/src/ARMeilleure/Signal/NativeSignalHandlerGenerator.cs
 @@ -276,7 +276,7 @@ namespace ARMeilleure.Signal
@@ -7,7 +7,7 @@ index 0b90252bc33352a9e0db5241d1fabe30591d67c5..bab3ea824e3e3f62dc18b5df5bbcc41b
                          baseRegsOffset = 184UL;
                      }
 -                    else if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+                    else if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++                    else if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
                      {
                          ucontextPtr = context.Load(OperandType.I64, context.Add(ucontextPtr, Const(48UL)));
  
@@ -16,12 +16,12 @@ index 0b90252bc33352a9e0db5241d1fabe30591d67c5..bab3ea824e3e3f62dc18b5df5bbcc41b
          private static bool SupportsFaultAddressPatchingForHostOs()
          {
 -            return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS();
-+            return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS());
++            return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS());   // 平台例外：tvOS 与 iOS 走同一分支
          }
      }
  }
 diff --git a/src/Ryujinx.Audio.Backends.Apple/AppleHardwareDeviceDriver.cs b/src/Ryujinx.Audio.Backends.Apple/AppleHardwareDeviceDriver.cs
-index 8cd151be6166ac6bc3a9b66e2a839ddf2597bc82..eb558463982ccc2b1a98ac316d7072c72b2ed271 100644
+index 8cd151be6166ac6bc3a9b66e2a839ddf2597bc82..1bbd77a7bc7cdb9b74d44d1a574b4644725f95df 100644
 --- a/src/Ryujinx.Audio.Backends.Apple/AppleHardwareDeviceDriver.cs
 +++ b/src/Ryujinx.Audio.Backends.Apple/AppleHardwareDeviceDriver.cs
 @@ -49,7 +49,7 @@ namespace Ryujinx.Audio.Backends.Apple
@@ -29,7 +29,7 @@ index 8cd151be6166ac6bc3a9b66e2a839ddf2597bc82..eb558463982ccc2b1a98ac316d7072c7
          private static unsafe void S2AConfigureSession(bool solo, bool io20)
          {
 -            if (!OperatingSystem.IsIOS())
-+            if (!(OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            if (!(OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  Console.Error.WriteLine("[S2A 声音] 非 iOS，不设音频会话");
                  return;
@@ -38,7 +38,7 @@ index 8cd151be6166ac6bc3a9b66e2a839ddf2597bc82..eb558463982ccc2b1a98ac316d7072c7
          internal unsafe bool S2AReactivateSession()
          {
 -            if (!OperatingSystem.IsIOS())
-+            if (!(OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            if (!(OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  return true;
              }
@@ -47,12 +47,12 @@ index 8cd151be6166ac6bc3a9b66e2a839ddf2597bc82..eb558463982ccc2b1a98ac316d7072c7
          }
  
 -        public static bool IsSupported => OperatingSystem.IsMacOSVersionAtLeast(10, 5) || OperatingSystem.IsIOS();
-+        public static bool IsSupported => OperatingSystem.IsMacOSVersionAtLeast(10, 5) || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS());
++        public static bool IsSupported => OperatingSystem.IsMacOSVersionAtLeast(10, 5) || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS());   // 平台例外：tvOS 与 iOS 走同一分支
  
          public ManualResetEvent GetUpdateRequiredEvent()
              => _updateRequiredEvent;
 diff --git a/src/Ryujinx.Audio.Backends.Apple/AppleHardwareDeviceSession.cs b/src/Ryujinx.Audio.Backends.Apple/AppleHardwareDeviceSession.cs
-index 682d70de69ea61637baad5951100d07e26fa4045..7224b6654caab06d860bab73d33b4318f58cf9ff 100644
+index 682d70de69ea61637baad5951100d07e26fa4045..a38603978152b6e383e1b24ea88a7de38f23cc62 100644
 --- a/src/Ryujinx.Audio.Backends.Apple/AppleHardwareDeviceSession.cs
 +++ b/src/Ryujinx.Audio.Backends.Apple/AppleHardwareDeviceSession.cs
 @@ -329,7 +329,7 @@ namespace Ryujinx.Audio.Backends.Apple
@@ -69,12 +69,12 @@ index 682d70de69ea61637baad5951100d07e26fa4045..7224b6654caab06d860bab73d33b4318
  
                  Console.Error.WriteLine($"[声] {(red ? "【红】" : "")}输出 #{_diag.Index}：{why}（在途 {inFlightFrames} 帧）→ {(rebuild ? "重建" : "重启")}输出队列（第 {++_heals} 次）：" +
 -                    $"{(OperatingSystem.IsIOS() ? $"重新激活音频会话 {(active ? "成功" : "失败")}、" : "")}停队列 rc={stopRc}、收回 {reclaimed / _bytesPerFrame} 帧" +
-+                    $"{((OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) ? $"重新激活音频会话 {(active ? "成功" : "失败")}、" : "")}停队列 rc={stopRc}、收回 {reclaimed / _bytesPerFrame} 帧" +
++                    $"{((OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) ? $"重新激活音频会话 {(active ? "成功" : "失败")}、" : "")}停队列 rc={stopRc}、收回 {reclaimed / _bytesPerFrame} 帧" +   // 平台例外：tvOS 与 iOS 走同一分支
                      $"{(rebuild ? $"、新建队列 rc={newRc}" : "")}、重新开播 rc={startRc}{(startRc == 0 ? "" : "（没开播：游戏停着或开播失败，下一笔声音到时再试）")}");
              }
          }
 diff --git a/src/Ryujinx.Audio.Backends.Apple/S2AOutputDiag.cs b/src/Ryujinx.Audio.Backends.Apple/S2AOutputDiag.cs
-index e623bdc925904e15da9c355112ee05fd638199d6..9a8022d4e40f835df6f49563a0a292676480b9c6 100644
+index e623bdc925904e15da9c355112ee05fd638199d6..6ac168114dc22044840170cfbbe79d12e1f1cfa6 100644
 --- a/src/Ryujinx.Audio.Backends.Apple/S2AOutputDiag.cs
 +++ b/src/Ryujinx.Audio.Backends.Apple/S2AOutputDiag.cs
 @@ -125,7 +125,7 @@ namespace Ryujinx.Audio.Backends.Apple
@@ -82,12 +82,12 @@ index e623bdc925904e15da9c355112ee05fd638199d6..9a8022d4e40f835df6f49563a0a29267
              if (string.IsNullOrEmpty(d))
              {
 -                d = OperatingSystem.IsIOS() ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : Directory.GetCurrentDirectory();
-+                d = (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : Directory.GetCurrentDirectory();
++                d = (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) ? Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments) : Directory.GetCurrentDirectory();   // 平台例外：tvOS 与 iOS 走同一分支
              }
  
              return Path.Combine(d, p);
 diff --git a/src/Ryujinx.Common/PreciseSleep/Nanosleep.cs b/src/Ryujinx.Common/PreciseSleep/Nanosleep.cs
-index fd6490f42bb8e9c9f0875ddf012b9d55d143a71c..f76ce6a3c40098bd262f7ac6fa7fba6758be7b0e 100644
+index fd6490f42bb8e9c9f0875ddf012b9d55d143a71c..1accd2af2f1c9fadda4dd0e815c0f570e4d1dc50 100644
 --- a/src/Ryujinx.Common/PreciseSleep/Nanosleep.cs
 +++ b/src/Ryujinx.Common/PreciseSleep/Nanosleep.cs
 @@ -44,7 +44,7 @@ namespace Ryujinx.Common.PreciseSleep
@@ -95,7 +95,7 @@ index fd6490f42bb8e9c9f0875ddf012b9d55d143a71c..f76ce6a3c40098bd262f7ac6fa7fba67
          public static long GetBias(long timeoutNs)
          {
 -            if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  long biasNs = Math.Min(timeoutNs, MacosBiasMaxNanoseconds);
                  return MacosBaseNanosleepBias + biasNs * MacosBiasPerMillisecond / 1_000_000;
@@ -104,7 +104,7 @@ index fd6490f42bb8e9c9f0875ddf012b9d55d143a71c..f76ce6a3c40098bd262f7ac6fa7fba67
          public static long GetStrictBias(long timeoutNs)
          {
 -            if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  return GetBias(timeoutNs) + MacosStrictBiasOffset;
              }
@@ -113,12 +113,12 @@ index fd6490f42bb8e9c9f0875ddf012b9d55d143a71c..f76ce6a3c40098bd262f7ac6fa7fba67
          private static MachTimebaseInfo GetTimebase()
          {
 -            if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsIOS())
-+            if (!OperatingSystem.IsMacOS() && !(OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            if (!OperatingSystem.IsMacOS() && !(OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  return default;
              }
 diff --git a/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs b/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs
-index c5d5f60a9de1e509afb6ba83653e18c24b77211d..06cc02fbdc8b1372a1805c97059ccead0dac330d 100644
+index c5d5f60a9de1e509afb6ba83653e18c24b77211d..73eee1cd405d1ad060f516c6ddec481b9228d71a 100644
 --- a/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs
 +++ b/src/Ryujinx.Common/PreciseSleep/PreciseSleepHelper.cs
 @@ -12,7 +12,7 @@ namespace Ryujinx.Common.PreciseSleep
@@ -126,7 +126,7 @@ index c5d5f60a9de1e509afb6ba83653e18c24b77211d..06cc02fbdc8b1372a1805c97059ccead
          public static IPreciseSleepEvent CreateEvent()
          {
 -            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
-+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) || OperatingSystem.IsAndroid())
++            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) || OperatingSystem.IsAndroid())   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  return new NanosleepEvent();
              }
@@ -135,7 +135,7 @@ index c5d5f60a9de1e509afb6ba83653e18c24b77211d..06cc02fbdc8b1372a1805c97059ccead
                  }
  
 -                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
-+                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) || OperatingSystem.IsAndroid())
++                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) || OperatingSystem.IsAndroid())   // 平台例外：tvOS 与 iOS 走同一分支
                  {
                      // Do a nanosleep.
                      now = PerformanceCounter.ElapsedTicks;
@@ -144,12 +144,12 @@ index c5d5f60a9de1e509afb6ba83653e18c24b77211d..06cc02fbdc8b1372a1805c97059ccead
                  long ns = (timePoint - now) * 1_000_000 / PerformanceCounter.TicksPerMillisecond;
  
 -                if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+                if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++                if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
                  {
                      Nanosleep.SleepAbsolute(ns);
                  }
 diff --git a/src/Ryujinx.Common/S2ARealtime.cs b/src/Ryujinx.Common/S2ARealtime.cs
-index 5ea4892fbce58363ec3b5f01f39bbce9c91b2c71..6bf9d7149227f37c06fb4d38cc1b63bc90b4aa43 100644
+index 5ea4892fbce58363ec3b5f01f39bbce9c91b2c71..f0adead1bc6e9f724c2fee506eb4d4ad38658f81 100644
 --- a/src/Ryujinx.Common/S2ARealtime.cs
 +++ b/src/Ryujinx.Common/S2ARealtime.cs
 @@ -67,7 +67,7 @@ namespace Ryujinx.Common
@@ -157,12 +157,12 @@ index 5ea4892fbce58363ec3b5f01f39bbce9c91b2c71..6bf9d7149227f37c06fb4d38cc1b63bc
          public static int Promote(string who, long periodNs, long computationNs, long constraintNs)
          {
 -            if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsIOS())
-+            if (!OperatingSystem.IsMacOS() && !(OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            if (!OperatingSystem.IsMacOS() && !(OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  return -1;
              }
 diff --git a/src/Ryujinx.Cpu/LightningJit/Arm64/Target/Arm64/InstEmitSystem.cs b/src/Ryujinx.Cpu/LightningJit/Arm64/Target/Arm64/InstEmitSystem.cs
-index 3c1f1a246966ab044390d5606f0fee1b4010bb22..e3d0cd1fc8e2274dd807419e25ab35371ce11a01 100644
+index 3c1f1a246966ab044390d5606f0fee1b4010bb22..815fbcd3a1767f7db4ef824073d3bae79cf57375 100644
 --- a/src/Ryujinx.Cpu/LightningJit/Arm64/Target/Arm64/InstEmitSystem.cs
 +++ b/src/Ryujinx.Cpu/LightningJit/Arm64/Target/Arm64/InstEmitSystem.cs
 @@ -131,7 +131,7 @@ namespace Ryujinx.Cpu.LightningJit.Arm64.Target.Arm64
@@ -170,12 +170,12 @@ index 3c1f1a246966ab044390d5606f0fee1b4010bb22..e3d0cd1fc8e2274dd807419e25ab3537
          {
              // Only Linux allows accessing CTR_EL0 from user mode.
 -            return OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS();
-+            return OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS());
++            return OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS());   // 平台例外：tvOS 与 iOS 走同一分支
          }
  
          public static bool IsCacheInstForbidden(uint encoding)
 diff --git a/src/Ryujinx.Cpu/LightningJit/Cache/NoWxCache.cs b/src/Ryujinx.Cpu/LightningJit/Cache/NoWxCache.cs
-index 65d297c28e2c93005159ea46e0e363333b6f5c71..fca9f7b8eff8e8762da0de5a578655c378bcd835 100644
+index 65d297c28e2c93005159ea46e0e363333b6f5c71..260b847336fcf379b8b75ee7f3921a4a61e49c66 100644
 --- a/src/Ryujinx.Cpu/LightningJit/Cache/NoWxCache.cs
 +++ b/src/Ryujinx.Cpu/LightningJit/Cache/NoWxCache.cs
 @@ -68,7 +68,7 @@ namespace Ryujinx.Cpu.LightningJit.Cache
@@ -183,12 +183,12 @@ index 65d297c28e2c93005159ea46e0e363333b6f5c71..fca9f7b8eff8e8762da0de5a578655c3
                  _region.Block.MapAsRx((ulong)offset, (ulong)size);
  
 -                if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+                if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++                if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
                  {
                      JitSupportDarwin.SysIcacheInvalidate(_region.Block.Pointer + offset, size);
                  }
 diff --git a/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LanDiscovery.cs b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LanDiscovery.cs
-index 05963e4387cd19af1cb09027583625b310a0221c..8efee6dbd63b909c4bd88073f5c0994e3defdcdc 100644
+index 05963e4387cd19af1cb09027583625b310a0221c..7eb2436240efe81615e3207a8ec6c5a357bbe82b 100644
 --- a/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LanDiscovery.cs
 +++ b/src/Ryujinx.HLE/HOS/Services/Ldn/UserServiceCreator/LdnMitm/LanDiscovery.cs
 @@ -321,7 +321,7 @@ namespace Ryujinx.HLE.HOS.Services.Ldn.UserServiceCreator.LdnMitm
@@ -196,12 +196,12 @@ index 05963e4387cd19af1cb09027583625b310a0221c..8efee6dbd63b909c4bd88073f5c0994e
                  //       Windows only works if bound to localhost or the local address.
                  //       See this discussion: https://stackoverflow.com/questions/13666789/receiving-udp-broadcast-packets-on-linux
 -                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
                  {
                      _udp2 = new LdnProxyUdpServer(_protocol, LocalBroadcastAddr, DefaultPort);
                  }
 diff --git a/src/Ryujinx.HLE/HOS/Services/Nifm/StaticService/Types/IpAddressSetting.cs b/src/Ryujinx.HLE/HOS/Services/Nifm/StaticService/Types/IpAddressSetting.cs
-index 359c9b75e20cf5136ff65184ef1cf65700da937b..941b70d9f1174fd8a876faaa3bcc6ed2f9001dce 100644
+index 359c9b75e20cf5136ff65184ef1cf65700da937b..b4a01eda2e662384a14f577435663fc7bd6255a6 100644
 --- a/src/Ryujinx.HLE/HOS/Services/Nifm/StaticService/Types/IpAddressSetting.cs
 +++ b/src/Ryujinx.HLE/HOS/Services/Nifm/StaticService/Types/IpAddressSetting.cs
 @@ -15,7 +15,7 @@ namespace Ryujinx.HLE.HOS.Services.Nifm.StaticService.Types
@@ -209,12 +209,12 @@ index 359c9b75e20cf5136ff65184ef1cf65700da937b..941b70d9f1174fd8a876faaa3bcc6ed2
          public IpAddressSetting(IPInterfaceProperties interfaceProperties, UnicastIPAddressInformation unicastIPAddressInformation)
          {
 -            IsDhcpEnabled = OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || interfaceProperties.DhcpServerAddresses.Count != 0;
-+            IsDhcpEnabled = OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) || interfaceProperties.DhcpServerAddresses.Count != 0;
++            IsDhcpEnabled = OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) || interfaceProperties.DhcpServerAddresses.Count != 0;   // 平台例外：tvOS 与 iOS 走同一分支
              Address = new IpV4Address(unicastIPAddressInformation.Address);
              IPv4Mask = new IpV4Address(unicastIPAddressInformation.IPv4Mask);
              GatewayAddress = (interfaceProperties.GatewayAddresses.Count == 0) ? new IpV4Address() : new IpV4Address(interfaceProperties.GatewayAddresses[0].Address);
 diff --git a/src/Ryujinx.HLE/HOS/Services/Sockets/Bsd/Impl/WinSockHelper.cs b/src/Ryujinx.HLE/HOS/Services/Sockets/Bsd/Impl/WinSockHelper.cs
-index 87d9e5a1c4d9e8f8d8861093e08934c4905f383c..bd6e965c60cfc84c3e2c5371f0e7274d1a834ee7 100644
+index 87d9e5a1c4d9e8f8d8861093e08934c4905f383c..0d616c054051959991deb69fc2ec671e23b79fee 100644
 --- a/src/Ryujinx.HLE/HOS/Services/Sockets/Bsd/Impl/WinSockHelper.cs
 +++ b/src/Ryujinx.HLE/HOS/Services/Sockets/Bsd/Impl/WinSockHelper.cs
 @@ -284,7 +284,7 @@ namespace Ryujinx.HLE.HOS.Services.Sockets.Bsd.Impl
@@ -222,12 +222,12 @@ index 87d9e5a1c4d9e8f8d8861093e08934c4905f383c..bd6e965c60cfc84c3e2c5371f0e7274d
          public static LinuxError ConvertError(WsaError errorCode)
          {
 -            if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  if (_errorMapMacOs.TryGetValue((int)errorCode, out LinuxError errno))
                  {
 diff --git a/src/Ryujinx.Memory/MemoryBlock.cs b/src/Ryujinx.Memory/MemoryBlock.cs
-index b49081f19e5be695f5e92e6b8e0d49ea0a17cbe4..d406680e58c0c3cfa5def7be25927f7f4ac9baee 100644
+index b49081f19e5be695f5e92e6b8e0d49ea0a17cbe4..d24d840c7567ceca755cee00690187ba38fb4e4c 100644
 --- a/src/Ryujinx.Memory/MemoryBlock.cs
 +++ b/src/Ryujinx.Memory/MemoryBlock.cs
 @@ -443,7 +443,7 @@ namespace Ryujinx.Memory
@@ -235,12 +235,12 @@ index b49081f19e5be695f5e92e6b8e0d49ea0a17cbe4..d406680e58c0c3cfa5def7be25927f7f
                  }
  
 -                return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS();
-+                return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS());
++                return OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS());   // 平台例外：tvOS 与 iOS 走同一分支
              }
  
              return true;
 diff --git a/src/Ryujinx.Memory/MemoryManagement.cs b/src/Ryujinx.Memory/MemoryManagement.cs
-index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be628b7a00f9 100644
+index d659a81a848a6ae981e51e9a1c9601140b4c1376..dcabb21b2cb53006c34b8b59648fd8caf98fc240 100644
 --- a/src/Ryujinx.Memory/MemoryManagement.cs
 +++ b/src/Ryujinx.Memory/MemoryManagement.cs
 @@ -10,7 +10,7 @@ namespace Ryujinx.Memory
@@ -248,7 +248,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  return MemoryManagementWindows.Allocate((nint)size);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  return MemoryManagementUnix.Allocate(size, forJit);
              }
@@ -257,7 +257,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  return MemoryManagementWindows.Reserve((nint)size, viewCompatible);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  return MemoryManagementUnix.Reserve(size, forJit);
              }
@@ -266,7 +266,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
          public static nint ReserveShared(ulong size)
          {
 -            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  return MemoryManagementUnix.ReserveShared(size);
              }
@@ -275,7 +275,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  MemoryManagementWindows.Commit(address, (nint)size);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  MemoryManagementUnix.Commit(address, size, forJit);
              }
@@ -284,7 +284,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  MemoryManagementWindows.Decommit(address, (nint)size);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  MemoryManagementUnix.Decommit(address, size);
              }
@@ -293,7 +293,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  MemoryManagementWindows.MapView(sharedMemory, srcOffset, address, (nint)size, owner);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  MemoryManagementUnix.MapView(sharedMemory, srcOffset, address, size);
              }
@@ -302,7 +302,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  MemoryManagementWindows.UnmapView(sharedMemory, address, (nint)size, owner);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  MemoryManagementUnix.UnmapView(address, size);
              }
@@ -311,7 +311,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  result = MemoryManagementWindows.Reprotect(address, (nint)size, permission, forView);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  result = MemoryManagementUnix.Reprotect(address, size, permission);
              }
@@ -320,7 +320,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  return MemoryManagementWindows.Free(address, (nint)size);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  return MemoryManagementUnix.Free(address);
              }
@@ -329,7 +329,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  return MemoryManagementWindows.CreateSharedMemory((nint)size, reserve);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  return MemoryManagementUnix.CreateSharedMemory(size, reserve);
              }
@@ -338,7 +338,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  MemoryManagementWindows.DestroySharedMemory(handle);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  MemoryManagementUnix.DestroySharedMemory(handle);
              }
@@ -347,7 +347,7 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  return MemoryManagementWindows.MapSharedMemory(handle);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  return MemoryManagementUnix.MapSharedMemory(handle, size);
              }
@@ -356,12 +356,12 @@ index d659a81a848a6ae981e51e9a1c9601140b4c1376..2e48a3037ca7097e4d17083f6f72be62
                  MemoryManagementWindows.UnmapSharedMemory(address);
              }
 -            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  MemoryManagementUnix.UnmapSharedMemory(address, size);
              }
 diff --git a/src/Ryujinx.Memory/MemoryManagementUnix.Platform.cs b/src/Ryujinx.Memory/MemoryManagementUnix.Platform.cs
-index 58bac44fd9e065ad48dbe1f9a64962ec0c3ffebf..9580af8607d365e72a7efffdad638df78c422250 100644
+index 58bac44fd9e065ad48dbe1f9a64962ec0c3ffebf..8673f6440ce05fbca8cb17ad66a7805862780977 100644
 --- a/src/Ryujinx.Memory/MemoryManagementUnix.Platform.cs
 +++ b/src/Ryujinx.Memory/MemoryManagementUnix.Platform.cs
 @@ -39,7 +39,7 @@ namespace Ryujinx.Memory
@@ -369,12 +369,12 @@ index 58bac44fd9e065ad48dbe1f9a64962ec0c3ffebf..9580af8607d365e72a7efffdad638df7
              int fd;
  
 -            if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+            if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++            if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
              {
                  byte[] memName = "Ryujinx-XXXXXX"u8.ToArray();
  
 diff --git a/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs b/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs
-index 01294d6f040d5affa82f68a5536eb7af527edbb5..99e8504ddf95db19f56cfb7bc735e2ecdab21e4c 100644
+index 01294d6f040d5affa82f68a5536eb7af527edbb5..e8132c362e0d31590b1f50ced62b7d64b212e678 100644
 --- a/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs
 +++ b/src/Ryujinx.Memory/MemoryManagerUnixHelper.cs
 @@ -115,7 +115,7 @@ namespace Ryujinx.Memory
@@ -382,7 +382,7 @@ index 01294d6f040d5affa82f68a5536eb7af527edbb5..99e8504ddf95db19f56cfb7bc735e2ec
                      result |= MAP_ANONYMOUS_LINUX_GENERIC;
                  }
 -                else if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+                else if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++                else if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
                  {
                      result |= MAP_ANONYMOUS_DARWIN;
                  }
@@ -391,7 +391,7 @@ index 01294d6f040d5affa82f68a5536eb7af527edbb5..99e8504ddf95db19f56cfb7bc735e2ec
                      result |= MAP_NORESERVE_LINUX_GENERIC;
                  }
 -                else if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+                else if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++                else if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
                  {
                      result |= MAP_NORESERVE_DARWIN;
                  }
@@ -400,7 +400,7 @@ index 01294d6f040d5affa82f68a5536eb7af527edbb5..99e8504ddf95db19f56cfb7bc735e2ec
                      result |= MAP_UNLOCKED_LINUX_GENERIC;
                  }
 -                else if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
-+                else if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
++                else if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))   // 平台例外：tvOS 与 iOS 走同一分支
                  {
                      // FIXME: Doesn't exist on Darwin
                  }
