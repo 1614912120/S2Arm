@@ -82,17 +82,21 @@ class PendingTests(unittest.TestCase):
     def test_pending_ignores_known_missing_original(self):
         import install, rewrite_refresh
         info = {"0100A": {"ios": {"sgradeKey": "old"}}, "0100B": {"ios": {"sgradeKey": "old", "sgradeMissing": "new"}}}
-        c = types.SimpleNamespace(); kept = {}
+        import sgrade_bf
+        c = types.SimpleNamespace(); kept = {}; bf_due = set()
         with patch.object(rewrite_refresh, "rewriter_id", return_value="rid"), \
              patch.object(rewrite_refresh, "pending_ios", side_effect=lambda c, gs, rid: [g for g in gs if info[g]["ios"]["sgradeKey"] != "new"]), \
              patch.object(rewrite_refresh, "ios_key", return_value="new"), patch.object(layout, "game_info", side_effect=lambda c, g: info[g]), \
-             patch.object(rewrite_refresh, "kept_todo", side_effect=lambda c, g, base: kept.get(g, [])), patch.object(layout, "ios_kit", return_value=None):
+             patch.object(rewrite_refresh, "kept_todo", side_effect=lambda c, g, base: kept.get(g, [])), patch.object(layout, "ios_kit", return_value=None), \
+             patch.object(sgrade_bf, "due", side_effect=lambda c, g: g in bf_due):   # 缺可读瓦片版（_bf）那条判据：这里的假游戏库没有资源包，按 bf_due 给（判据本身另有单测 test_sgrade_bf）
             self.assertTrue(install.sgrade_pending(c, ["0100A", "0100B"]), "甲要补（记号 old → new）")
             self.assertFalse(install.sgrade_pending(c, ["0100B"]), "乙在 new 这一版下已确认缺原件：不因它重组")
             info["0100B"]["ios"]["sgradeMissing"] = "older"
             self.assertTrue(install.sgrade_pending(c, ["0100B"]), "记号又变了（补丁库更新 / 导入了金手指）：再试")
             info["0100B"]["ios"]["sgradeMissing"] = "new"; kept["0100B"] = ["x.nro"]
             self.assertTrue(install.sgrade_pending(c, ["0100B"]), "乙有运行时留下、还没进 iPhone 件的 NRO（#8be819）：要重组补上")
+            kept.pop("0100B"); self.assertFalse(install.sgrade_pending(c, ["0100B"]), "乙回到「已确认缺原件、没有留下的 NRO」：不重组")
+            bf_due.add("0100B"); self.assertTrue(install.sgrade_pending(c, ["0100B"]), "乙的直连库缺可读瓦片版（_bf）、这一代没因缺原料试过：要重组补上")
 
 
 if __name__ == "__main__":
