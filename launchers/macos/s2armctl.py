@@ -47,7 +47,7 @@ USAGE = """s2armctl —— 让 AI 助手操作 S2Arm（每条命令 = 玩家点�
   customize <游戏号> [--name 名字] [--cover 图片] [--reset-name] [--reset-cover]   改显示名 / 封面（JPG、PNG），下次装到 iPhone 时带上
   delete <游戏号>                    删除这款游戏（IPA / 资源包 / 中间产物 / 缓存；存档与原始游戏文件保留），等删完再返回
   wait <游戏号> [--op build|ipa] [--timeout 秒]
-                                    等该游戏的任务结束：build = Mac 编译（缺省），ipa = iPhone 包；逐段打印进度，失败退出码 1
+                                    等该游戏的任务结束：build = Mac 编译（缺省），ipa = iPhone 包；逐段打印进度，失败退出码 1；接在 build 后面时只等这次 build 起的那个（不拿库里以前的结果）
   targets [--models|--json]         打 iPhone 包的目标设备：当前目标、连着的设备（含设备名）、可选系统；--models 列可选机型
   target probe | target <机型号> <系统大版本>   重新检测连着的设备 / 没连时选机型
   update [restart|retry]            新版后台下载的状态；restart = 重启并换上已下载好的新版，retry = 重试下载（出包中不能重启）
@@ -511,6 +511,25 @@ def wait(game, op, limit, before=None):   # before：发命令前已有的任务
         time.sleep(2)
     sys.exit(f'{limit} 秒内没结束（任务 {tid}）')
 
+# build → wait 是两条命令（两个进程）：build 发出前把这款已有的同类任务号记到数据目录，wait 读走后只等之后新起的那个。
+#   原先 wait 不知道发命令前有哪些任务，升级后库里留着老版已完成的出包任务，build 后 wait 立刻拿到它退 0、等于没等（11-16 合入运维 0.5.0 候选升级验收被骗出假绿）
+def build_op(target): return 'build' if target == 'mac' else 'ipa'
+def pending_path(game, op): return os.path.join(ROOT, 'ctl-pending', f'{game}.{op}.json')
+def remember_before(game, op):
+    before = [t['id'] for t in call('GET', '/state')['tasks'] if t.get('gameId') == game and t['operation'] == op]
+    p = pending_path(game, op); os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p + '.tmp', 'w', encoding='utf-8') as f: json.dump({'before': before, 'at': time.time()}, f)
+    os.replace(p + '.tmp', p)
+def take_before(game, op):
+    """build 记下的任务号（读一次就删：下一次 build 另记）；没有记录（如游戏里点的出包）→ None，照旧取最新一个"""
+    p = pending_path(game, op)
+    try:
+        with open(p, encoding='utf-8') as f: before = set(json.load(f)['before'])
+    except (OSError, ValueError, KeyError, TypeError): return None
+    try: os.remove(p)
+    except OSError: pass
+    return before
+
 def show_task(t, t0, last):
     """打一行进度（状态 / 里程碑 / 每 5% 变一次才打）；终态打各里程碑用时后按结果退出。返回新的 last"""
     cur = (t['state'], t.get('milestone'), int(t.get('done') or 0) // max(1, int((t.get('total') or 1) // 20)))
@@ -746,6 +765,7 @@ def main():
     if cmd == 'build':
         args = [a for a in rest if a != '--space-override']
         target = args[1] if len(args) > 1 else 'ios'
+        remember_before(args[0], build_op(target))
         print(json.dumps(call('POST', '/build', {'gameId': args[0], 'target': target, **space_flag(rest)}), ensure_ascii=False)); return
     if cmd == 'diag':
         body = diag_body(rest)
@@ -797,7 +817,7 @@ def main():
     if cmd == 'wait':
         op = rest[rest.index('--op') + 1] if '--op' in rest else 'build'
         lim = float(rest[rest.index('--timeout') + 1]) if '--timeout' in rest else 14400
-        wait(rest[0], op, lim); return
+        wait(rest[0], op, lim, take_before(rest[0], op)); return
     simple = {
               'fonts': ('/fonts', lambda r: {'path': os.path.abspath(r[0]) if r and r[0] else ''}),
               'prepare': ('/prepare', lambda r: {'gameId': r[0], **space_flag(r)}), 'ipa': ('/ipa', lambda r: {'gameId': r[0], **space_flag(r)}), 'install': ('/install', lambda r: simple_body('install', r)), 'uninstall': ('/uninstall', lambda r: {'gameId': r[0], **accept_flags(r)}), 'restore-iphone': ('/restore-iphone', lambda r: {'gameId': r[0]}), 'launch': ('/launch', lambda r: {'gameId': r[0]}),
