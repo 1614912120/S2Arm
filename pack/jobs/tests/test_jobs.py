@@ -1088,6 +1088,38 @@ class JobsTests(unittest.TestCase):
             self.assertEqual(archive.read(f"pso/{A}.tsv"), b"S\t0123456789abcdef_b\t1\nC\t1111222233334444_b\n")
             self.assertIn(f"pso/{A}.tsv", json.loads(archive.read("manifest.json"))["files"])
 
+    def test_diagnostics_carries_shader_salvage(self):
+        # 着色器补料（dsh_salvage.inc）：各款 temp/<号>/wire/<号>/shader_miss/ 的 index.tsv 与成对的 <键>.ctl / .code 原样进 shader_miss/<号>/；
+        #   不认的文件名、缺 .code 的半对、链接不放；每款超上限时索引先放、成对放不下整对不放。期望按规则手写
+        import zipfile
+        A, B = "0100AAAA00000000", "0100BBBB00000000"
+        atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=g, name=g) for g in (A, B)]))
+        def put(g, name, data):
+            f = self.c.library / "temp" / g / "wire" / g / "shader_miss" / name; f.parent.mkdir(parents=True, exist_ok=True); f.write_bytes(data); return f
+        put(A, "index.tsv", b"# key\n1111111111111111\t2\t1\t1\t4\t3\t-\t-\n")
+        put(A, "1111111111111111.ctl", b"CTL1"); put(A, "1111111111111111.code", b"COD")
+        put(A, "2222222222222222.ctl", b"CTL2")   # 半对：缺 .code
+        put(A, "notes.txt", b"x")                  # 不认的名字
+        (self.c.library / "temp" / A / "wire" / A / "shader_miss" / "3333333333333333.ctl").symlink_to("/etc/hosts")
+        put(A, "3333333333333333.code", b"C3")
+        # B：超每款上限——索引放，4444（小）放，5555（大）整对不放
+        put(B, "index.tsv", b"# key\n")
+        put(B, "4444444444444444.ctl", b"a"); put(B, "4444444444444444.code", b"b")
+        put(B, "5555555555555555.ctl", b"c"); put(B, "5555555555555555.code", b"d" * library.DIAG_SALVAGE_GAME_LIMIT)
+        destination = self.root / "diag-salvage.zip"; destination.unlink(missing_ok=True); self.c.r["path"] = str(destination)
+        library.diagnostics(self.c)
+        import io, tarfile
+        with zipfile.ZipFile(destination) as archive:
+            names = sorted(n for n in archive.namelist() if n.startswith("shader_miss/"))
+            self.assertEqual(names, [f"shader_miss/{A}.tar", f"shader_miss/{B}.tar"])   # 每款一个成员（诊断包成员数有上限）
+            def members(g):
+                with tarfile.open(fileobj=io.BytesIO(archive.read(f"shader_miss/{g}.tar"))) as t:
+                    return {m.name: t.extractfile(m).read() for m in t.getmembers()}
+            a = members(A)
+            self.assertEqual(sorted(a), ["1111111111111111.code", "1111111111111111.ctl", "index.tsv"])
+            self.assertEqual((a["1111111111111111.ctl"], a["1111111111111111.code"]), (b"CTL1", b"COD"))
+            self.assertEqual(sorted(members(B)), ["4444444444444444.code", "4444444444444444.ctl", "index.tsv"])
+
     def test_diagnostics_player_note(self):
         # 故障报修的可选文本框（11-13 维护者）：请求带 note 就原样（去首尾空白）进 manifest.json 的 note，收件服务与 iOS 同字段；不填 / 空白不写
         import zipfile
