@@ -307,6 +307,7 @@ def rewrite_plan(game, current, deps):
                      and len(line.split('\t')) >= 4 and line.split('\t')[0].upper() == pid
                      and line.split('\t')[1].lower() == bid and line.split('\t')[3].lower() == 'apple'), '')   # F7 #1574：苹果路线只取 apple 行
     fps = REPO / f'runtime/fps/{bid[:16]}.tsv'
+    fix = REPO / f'runtime/fix/{bid[:16]}.tsv'   # 游戏缺陷修补表（改写器 fix_rows）：仓库源表，改写器直接读，不进产物根
     dirs, selection, on = community_selection(env, pid, bid)
     if env.get('S2A_COMMUNITY_SELECT'):
         deps.record(env['S2A_COMMUNITY_SELECT'])
@@ -348,12 +349,13 @@ def rewrite_plan(game, current, deps):
         patch = None
     key = digest(f'{key} backend={rk.strip()}{ck}{code}' +
                  (f' fps={digest(fps.read_bytes())}' if fps.is_file() else '') +
+                 (f' fix={digest(fix.read_bytes())}' if fix.is_file() else '') +
                  (f' verified={digest(verified)}' if verified else ''), 10)
     key = digest(f'{key} inputs={rewrite_inputs(current)}', 10)
     tag = f'rw-{key}' + (f'-{target}' if target != 'apple' else '') + ('-spin' if spin else '')
     deps.record('graphics/nvn/tools/romfs_list.py')
     return dict(key=key, tag=tag, bid=bid, tables=tables, verified=verified,
-                fps=fps if fps.is_file() else None, patch=patch, addr=addr,
+                fps=fps if fps.is_file() else None, fix=fix if fix.is_file() else None, patch=patch, addr=addr,
                 addr_log=ad / 'log', community=bool(ck), dirs=dirs, selection=selection)
 
 
@@ -466,6 +468,10 @@ class Stages:
             env['S2A_FPS_TSV'] = str(w / 'fps.tsv')
         else:
             env.pop('S2A_FPS_TSV', None)
+        if plan.get('fix'):
+            env['S2A_FIX_TSV'] = str(plan['fix'])
+        else:
+            env.pop('S2A_FIX_TSV', None)
         if plan['patch']:
             env.update(S2A_CODE_PATCH=str(plan['patch']), S2A_CODE_BUILD=plan['bid'])
         else:

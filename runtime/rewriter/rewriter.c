@@ -681,41 +681,52 @@ static int wconst(A at, int* reg, uint32_t* value) {
 static uint32_t movz_hi(int reg, uint32_t value) {
   return 0x52a00000 | ((value >> 16) << 5) | reg;
 }
-/* 游戏自身缺陷的按构建号修补（11-16）。改写器别处只认代码形状、不认具体游戏；这里是例外：缺陷在游戏自己的代码里、宿主调度挡不住，
- * 只能按「模块构建号 + 偏移 + 原字」精确改一个字，原字不符（不是这一版）就记一行、不改。参考 nxnative（MIT）dm/games/01006BB00C6F0000/patches.py CUTS。
- * 01006BB00C6F0000（一款 Switch 1 动作冒险，引擎带 PhysX）：物理步（主线程）每步在原地重建世界的完成任务（PxLightCpuTask，world+0xc8）；工作线程跑完它
- *   （fetchResults、done = 1、通知、解锁）后再调它的 release，release 调任务自己的析构（虚表退回基类、mTm = 0）。30 帧时一帧两步：解锁把世界锁交给被唤醒的主线程，
- *   工作线程这时被调度走，主线程下一步已把任务重建好，迟到的析构再把新任务清掉；下一次模拟读到 mTm = 0，读空指针崩（玩家 iPhone 22 份诊断，
- *   1.1.0 崩在 main+0x10ccf28、1.0.0 崩在 main+0x10cce58）。release 改成 ret：析构只复位虚表和 mTm（不放资源），物理步每步重建全部字段；
- *   这个 release 只被这一张虚表的第 7 槽用（1.0.0：虚表 main+0x1c51308，第 7 槽 0x1c51340 是唯一指向 0x10ccfa0 的重定位） */
-typedef struct {
-  const char* bid; /* 模块构建号前 16 字节，小写十六进制（g->id） */
-  A at;            /* 模块映像偏移 */
-  uint32_t orig, word;
-} GameFix;
-static const GameFix k_game_fix[] = {
-    {"909e904af78ac1b8deefe97ab2ccdb51", 0x10cd070, 0xf9400008, 0xd65f03c0}, /* 1.1.0：物理完成任务 release（ldr x8,[x0] → ret） */
-    {"ae16f71e002af8cb059a9a74c4d90f34", 0x10ccfa0, 0xf9400008, 0xd65f03c0}, /* 1.0.0：同一个 release */
-};
-static void game_fixes(void) {
-  for (size_t i = 0; i < sizeof(k_game_fix) / sizeof(*k_game_fix); i++) {
-    const GameFix* f = &k_game_fix[i];
-    if (!eq(g->id, f->bid))
-      continue;
-    uint32_t w = 0;
-    if (f->at < 0 || f->at + 4 > (A)g->text) {
-      msg("游戏缺陷修补：%s+%#llx 不在代码段里，不改\n", f->bid, (unsigned long long)f->at);
-      continue;
-    }
-    memcpy(&w, g->img + f->at, 4);
-    if (w != f->orig) {
-      msg("游戏缺陷修补：%s+%#llx 原字 %08x 不是登记的 %08x，不改\n", f->bid, (unsigned long long)f->at, w, f->orig);
-      continue;
-    }
-    memcpy(g->img + f->at, &f->word, 4);
-    bump("game_fix");
-    msg("游戏缺陷修补：%s+%#llx %08x → %08x\n", f->bid, (unsigned long long)f->at, w, f->word);
+/* 游戏缺陷修补表（S2A_FIX_TSV = 仓库 runtime/fix/<main 构建号前 16 位>.tsv，11-16）：游戏自己代码里的缺陷、宿主调度挡不住的，按构建号精确改字。
+ * 改写器别处只认代码形状、不认具体游戏；这里是例外，所以只许最窄的一种：行格式同帧率表 c 行，只收 word 种类——
+ *   c <模块> <偏移> word <原字> <新字>    # 理由
+ * 原字不符（不是这一版）、点不在代码段 → 记缺口不改。分析前改（后面的分析看到的就是改好的代码）。与帧率表分开放：帧率表的存在本身有含义
+ * （「本款已有我方帧率表」→ 社区帧率补丁不收，pack/cpatch.py），修补表不该带上它。以后与按款旋钮表并成一套时按同一格式合并 */
+static void fix_rows(void) {
+  const char* path = g->r.fix_tsv;
+  if (!path || !*path)
+    return;
+  FILE* f = fopen(path, "rb");
+  if (!f) {
+    int error = errno;
+    if (error != ENOENT)
+      fail("无法打开游戏缺陷修补表：%s", strerror(error));
+    msg("[黄] %s 游戏缺陷修补表不存在，跳过\n", g->r.module);
+    return;
   }
+  char line[512];
+  while (fgets(line, sizeof(line), f)) {
+    char* h = strchr(line, '#');
+    if (h)
+      *h = 0;
+    char *t0 = strtok(line, " \t\r\n"), *mod = strtok(NULL, " \t\r\n"), *offs = strtok(NULL, " \t\r\n"), *kind = strtok(NULL, " \t\r\n"),
+         *origs = strtok(NULL, " \t\r\n"), *news = strtok(NULL, " \t\r\n");
+    if (!t0 || !eq(t0, "c") || !mod || !eq(mod, g->r.module))
+      continue;
+    if (!offs || !kind || !eq(kind, "word") || !origs || !news) {
+      gap(0, "fix", "游戏缺陷修补表行不全或不是 word 种类");
+      continue;
+    }
+    A off = strtoll(offs, NULL, 16);
+    uint32_t orig = (uint32_t)strtoul(origs, NULL, 16), nw = (uint32_t)strtoul(news, NULL, 16), w = 0;
+    if (off < 0 || off % 4 || off + 4 > (A)g->text) {
+      gap(off, "fix", "修补点不在代码段");
+      continue;
+    }
+    memcpy(&w, g->img + off, 4);
+    if (w != orig) {
+      gap(off, "fix", "修补点原字 0x%x，表里写的是 0x%x（不是这一版）", w, orig);
+      continue;
+    }
+    memcpy(g->img + off, &nw, 4);
+    bump("game_fix");
+    msg("游戏缺陷修补：%s+%#llx %08x → %08x\n", g->r.module, (unsigned long long)off, w, nw);
+  }
+  fclose(f);
 }
 /* Recognize the SDK code shape, never a game identity or fixed address. Scan
  * and collect every constructor before changing any instruction, as Python does. */
@@ -5392,7 +5403,7 @@ static int attempt(const s2a_rewrite_request* r, const s2a_rewrite_options* opti
     g->one = cs_malloc(g->cs);
     REQUIRE(g->one);
     load();
-    game_fixes();
+    fix_rows();
     fps_rows(0);
     cpatch_rows(0);
     code_rows();

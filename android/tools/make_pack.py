@@ -146,10 +146,14 @@ def rewrite(exefs, staging):
     #   改写器按它打的读槽指令要 runtime/src/fps.c 往键页槽里写值（槽没人写游戏就读到 0），所以交给改写器的必须是
     #   同一份随包进游戏数据根、由 fps.c 起局读的表（entries_from_root 收 fps.tsv；android/native/runtime/runtime.c 起表）
     # 社区补丁行（S2A_CPATCH_TSV）同理不从环境继承：只交本次按安卓改写器出的那份（下面 cpatch 轮），它和进包的 cpatch.tsv 是同一次 plan 出的
-    env = {k: v for k, v in os.environ.items() if k not in ('S2A_FPS_TSV', 'S2A_CPATCH_TSV')}
+    env = {k: v for k, v in os.environ.items() if k not in ('S2A_FPS_TSV', 'S2A_CPATCH_TSV', 'S2A_FIX_TSV')}
     fps_table = Path(exefs).parent / 'fps.tsv'
     if fps_table.is_file():
         env['S2A_FPS_TSV'] = str(fps_table)
+    # 游戏缺陷修补表（同 pack/orch/stages.py）：仓库 runtime/fix/<main 构建号前 16 位>.tsv
+    fix_table = Path(REPO) / 'runtime/fix' / (Path(exefs, 'main').read_bytes()[0x40:0x48].hex() + '.tsv') if Path(exefs, 'main').is_file() else None
+    if fix_table and fix_table.is_file():
+        env['S2A_FIX_TSV'] = str(fix_table)
     env.update(S2A_TARGET='android',
                S2A_REWRITE_SPIN=os.environ.get('S2A_REWRITE_SPIN', '0'),
                S2A_SDK_ADDR_CUT=os.environ.get('S2A_SDK_ADDR_CUT', '1'))
