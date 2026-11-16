@@ -96,6 +96,6 @@ int main(void) {
       s2a_hidg_value(&h, 2, 0xC4, 255, 0, 255); joined = s2a_hidg_joined(joined, 0, s2a_hidg_buttons(&h)); CHECK(joined, "扳机过半算按键，占位");
       s2a_hidg_value(&h, 2, 0xC4, 0, 0, 255); joined = s2a_hidg_joined(joined, 0, s2a_hidg_buttons(&h)); CHECK(joined, "松开照占"); }
 
-    printf("t_hid_generic: %d/%d 过\n", checks - fails, checks);
+    if (fails) printf("✗ t_hid_generic：%d 项里 %d 项不通\n", checks, fails); else printf("✓ t_hid_generic：%d 项全过（通用 HID 手柄映射 / 让位 / 首次按键占位）\n", checks);
     return fails ? 1 : 0;
 }
