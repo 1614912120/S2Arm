@@ -12,7 +12,7 @@ namespace Ryujinx.Common.PreciseSleep
         /// <returns>A precise sleep event</returns>
         public static IPreciseSleepEvent CreateEvent()
         {
-            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) || OperatingSystem.IsAndroid())
             {
                 return new NanosleepEvent();
             }
@@ -52,7 +52,7 @@ namespace Ryujinx.Common.PreciseSleep
                     evt.WaitOne((int)ms);
                 }
 
-                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS() || OperatingSystem.IsAndroid())
+                if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()) || OperatingSystem.IsAndroid())
                 {
                     // Do a nanosleep.
                     now = PerformanceCounter.ElapsedTicks;
@@ -75,7 +75,7 @@ namespace Ryujinx.Common.PreciseSleep
             {
                 long ns = (timePoint - now) * 1_000_000 / PerformanceCounter.TicksPerMillisecond;
 
-                if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+                if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
                 {
                     Nanosleep.SleepAbsolute(ns);
                 }

@@ -49,7 +49,7 @@ namespace Ryujinx.Audio.Backends.Apple
 
         private static unsafe void S2AConfigureSession(bool solo, bool io20)
         {
-            if (!OperatingSystem.IsIOS())
+            if (!(OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 Console.Error.WriteLine("[S2A 声音] 非 iOS，不设音频会话");
                 return;
@@ -88,7 +88,7 @@ namespace Ryujinx.Audio.Backends.Apple
 
         internal unsafe bool S2AReactivateSession()
         {
-            if (!OperatingSystem.IsIOS())
+            if (!(OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 return true;
             }
@@ -213,7 +213,7 @@ namespace Ryujinx.Audio.Backends.Apple
             }
         }
 
-        public static bool IsSupported => OperatingSystem.IsMacOSVersionAtLeast(10, 5) || OperatingSystem.IsIOS();
+        public static bool IsSupported => OperatingSystem.IsMacOSVersionAtLeast(10, 5) || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS());
 
         public ManualResetEvent GetUpdateRequiredEvent()
             => _updateRequiredEvent;

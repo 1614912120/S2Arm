@@ -10,7 +10,7 @@ namespace Ryujinx.Memory
             {
                 return MemoryManagementWindows.Allocate((nint)size);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 return MemoryManagementUnix.Allocate(size, forJit);
             }
@@ -26,7 +26,7 @@ namespace Ryujinx.Memory
             {
                 return MemoryManagementWindows.Reserve((nint)size, viewCompatible);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 return MemoryManagementUnix.Reserve(size, forJit);
             }
@@ -39,7 +39,7 @@ namespace Ryujinx.Memory
         // Explicit Unix anonymous backing for native aliases, not fd-based mirroring.
         public static nint ReserveShared(ulong size)
         {
-            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 return MemoryManagementUnix.ReserveShared(size);
             }
@@ -53,7 +53,7 @@ namespace Ryujinx.Memory
             {
                 MemoryManagementWindows.Commit(address, (nint)size);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 MemoryManagementUnix.Commit(address, size, forJit);
             }
@@ -69,7 +69,7 @@ namespace Ryujinx.Memory
             {
                 MemoryManagementWindows.Decommit(address, (nint)size);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 MemoryManagementUnix.Decommit(address, size);
             }
@@ -85,7 +85,7 @@ namespace Ryujinx.Memory
             {
                 MemoryManagementWindows.MapView(sharedMemory, srcOffset, address, (nint)size, owner);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 MemoryManagementUnix.MapView(sharedMemory, srcOffset, address, size);
             }
@@ -101,7 +101,7 @@ namespace Ryujinx.Memory
             {
                 MemoryManagementWindows.UnmapView(sharedMemory, address, (nint)size, owner);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 MemoryManagementUnix.UnmapView(address, size);
             }
@@ -119,7 +119,7 @@ namespace Ryujinx.Memory
             {
                 result = MemoryManagementWindows.Reprotect(address, (nint)size, permission, forView);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 result = MemoryManagementUnix.Reprotect(address, size, permission);
             }
@@ -140,7 +140,7 @@ namespace Ryujinx.Memory
             {
                 return MemoryManagementWindows.Free(address, (nint)size);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 return MemoryManagementUnix.Free(address);
             }
@@ -156,7 +156,7 @@ namespace Ryujinx.Memory
             {
                 return MemoryManagementWindows.CreateSharedMemory((nint)size, reserve);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 return MemoryManagementUnix.CreateSharedMemory(size, reserve);
             }
@@ -172,7 +172,7 @@ namespace Ryujinx.Memory
             {
                 MemoryManagementWindows.DestroySharedMemory(handle);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 MemoryManagementUnix.DestroySharedMemory(handle);
             }
@@ -188,7 +188,7 @@ namespace Ryujinx.Memory
             {
                 return MemoryManagementWindows.MapSharedMemory(handle);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 return MemoryManagementUnix.MapSharedMemory(handle, size);
             }
@@ -204,7 +204,7 @@ namespace Ryujinx.Memory
             {
                 MemoryManagementWindows.UnmapSharedMemory(address);
             }
-            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            else if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 MemoryManagementUnix.UnmapSharedMemory(address, size);
             }

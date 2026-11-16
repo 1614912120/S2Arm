@@ -39,7 +39,7 @@ namespace Ryujinx.Memory
         {
             int fd;
 
-            if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+            if (OperatingSystem.IsMacOS() || (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 byte[] memName = "Ryujinx-XXXXXX"u8.ToArray();
 

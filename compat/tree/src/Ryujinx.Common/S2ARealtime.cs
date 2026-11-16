@@ -67,7 +67,7 @@ namespace Ryujinx.Common
         /// </summary>
         public static int Promote(string who, long periodNs, long computationNs, long constraintNs)
         {
-            if (!OperatingSystem.IsMacOS() && !OperatingSystem.IsIOS())
+            if (!OperatingSystem.IsMacOS() && !(OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()))
             {
                 return -1;
             }
