@@ -120,5 +120,6 @@
     <string name="touch_appearance_opacity">Control opacity</string>
     <string name="touch_appearance_smaller">Smaller</string>
     <string name="touch_appearance_larger">Larger</string>
+    <string name="touch_appearance_opacity_value">%1$d%%</string>
 </resources>
 

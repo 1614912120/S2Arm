@@ -1199,6 +1199,12 @@ public class MainActivity extends Activity
 
     private void showTouchOpacity() {
         int original = touchPad.opacityPercent();
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        android.widget.TextView value = new android.widget.TextView(this);
+        value.setGravity(android.view.Gravity.CENTER_HORIZONTAL);
+        value.setText(getString(R.string.touch_appearance_opacity_value, original));
+        content.addView(value);
         android.widget.SeekBar slider = new android.widget.SeekBar(this);
         slider.setMax(100);
         slider.setProgress(original);
@@ -1206,12 +1212,14 @@ public class MainActivity extends Activity
         slider.setOnSeekBarChangeListener(new android.widget.SeekBar.OnSeekBarChangeListener() {
             public void onProgressChanged(android.widget.SeekBar bar, int progress, boolean fromUser) {
                 touchPad.setOpacityPercent(progress);
+                value.setText(getString(R.string.touch_appearance_opacity_value, progress));
             }
             public void onStartTrackingTouch(android.widget.SeekBar bar) { }
             public void onStopTrackingTouch(android.widget.SeekBar bar) { }
         });
+        content.addView(slider);
         new android.app.AlertDialog.Builder(this)
-            .setTitle(R.string.touch_appearance_opacity).setView(slider)
+            .setTitle(R.string.touch_appearance_opacity).setView(content)
             .setPositiveButton(android.R.string.ok, (dialog, which) ->
                 getSharedPreferences(PREFS, MODE_PRIVATE).edit()
                     .putInt("touch_opacity_percent", slider.getProgress()).apply())

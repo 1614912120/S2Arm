@@ -120,4 +120,5 @@
     <string name="touch_appearance_opacity">按键不透明度</string>
     <string name="touch_appearance_smaller">缩小</string>
     <string name="touch_appearance_larger">放大</string>
+    <string name="touch_appearance_opacity_value">%1$d%%</string>
 </resources>
