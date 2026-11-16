@@ -26,11 +26,24 @@ static char g_untar_err[2400];
 static int g_untar_trunc;   // 本次解包碰到截短（读到的少于条目 / 包尾结束块）
 static int g_fail_errno;   // 最近一次失败的 errno（只用来判「空间满」给码，s2a_install_code）
 static void untar_err(const char *step, const char *path, int e) { g_fail_errno = e; snprintf(g_untar_err, sizeof g_untar_err, "%s %s：errno %d %s", step, path, e, strerror(e)); }
+#include <ftw.h>
 static int mkdirs(char *p) {   // 建 p 的各级父目录（p 是文件路径）；已存在但不是目录（同名文件挡路）也算失败
     for (char *s = p + 1; *s; s++) if (*s == '/') { *s = 0; int r = mkdir(p, 0755), e = errno; struct stat st;
         if (r && e == EEXIST && (stat(p, &st) || !S_ISDIR(st.st_mode))) { r = -1; e = ENOTDIR; }
         if (r && e != EEXIST) { untar_err("建目录", p, e); *s = '/'; return -1; } *s = '/'; }
     return 0;
+}
+// 资源包根 root 下解文件到 p 之前清掉旧布局挡路的东西（「0.3.10 → 0.4.3 重装装不上」：同一位置旧版是文件、新版要目录，或反过来，
+//   每次重解都在同一步 -4，点重试没用）：p 的上级里在 root 之下、同名却是文件 / 链接的 → 删掉；p 自己是目录（新版要放文件）→ 整棵删掉。
+//   只动 root 之下、只在解包时动：这些都是资源包的旧内容，新清单不要它们。删不掉照旧走后面的报错（errno 原文进 host.log）
+static int rm_tree_one(const char *f, const struct stat *st, int flag, struct FTW *w) { (void)st; (void)w; return flag == FTW_DP ? rmdir(f) : unlink(f); }
+static void clear_stale(const char *root, char *p) {
+    size_t rl = strlen(root); if (strncmp(p, root, rl) || p[rl] != '/') return;
+    struct stat st;
+    for (char *s = p + rl + 1; *s; s++) if (*s == '/') { *s = 0;
+        if (!lstat(p, &st) && !S_ISDIR(st.st_mode)) { int r = unlink(p); LOG("资源包：旧布局的文件 %s 挡着新目录，%s", p + rl + 1, r ? strerror(errno) : "已删"); }
+        *s = '/'; }
+    if (!lstat(p, &st) && S_ISDIR(st.st_mode)) { int r = nftw(p, rm_tree_one, 16, FTW_DEPTH | FTW_PHYS); LOG("资源包：旧布局的目录 %s 占着新文件的位置，%s", p + rl + 1, r ? strerror(errno) : "已整棵删掉"); }
 }
 static uint64_t oct(const char *s, int n) { uint64_t v = 0; for (int i = 0; i < n && s[i]; i++) if (s[i] >= '0' && s[i] <= '7') v = v * 8 + (uint64_t)(s[i] - '0'); return v; }
 static int safe(const char *p) { return *p && *p != '/' && !strstr(p, "../") && strcmp(p, "..") && !(strlen(p) >= 3 && !strcmp(p + strlen(p) - 3, "/..")); }
@@ -83,6 +96,7 @@ int s2a_untar(const char *tar, const char *root, unsigned *nf, uint64_t *nb) {
         }
         if (!safe(name)) { LOG("【红】解包：路径不安全 %s", name); untar_err("路径不安全", name, EINVAL); rc = -3; break; }
         char p[8192], tmp[8300]; snprintf(p, sizeof p, "%s/%s", root, name); snprintf(tmp, sizeof tmp, "%s.part", p);
+        clear_stale(root, p);
         if (mkdirs(p)) { rc = -4; break; }
         int of = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (of < 0) { untar_err("建临时文件", tmp, errno); rc = -4; break; }
         for (uint64_t left = size; left;) {
@@ -153,7 +167,8 @@ static int img_extract(const char *root, unsigned *nf, uint64_t *nb) {
     for (size_t i = 0; i < n && !rc; i++) {
         if (!safe(e[i].rel)) { untar_err("IMG 路径不安全", e[i].rel, EINVAL); rc = -3; break; }
         char p[2400], tmp[2500]; struct stat st; snprintf(p, sizeof p, "%s/%s", root, e[i].rel);
-        if (!stat(p, &st) && (uint64_t)st.st_size == e[i].len) { got += e[i].len; PHASE(2, got, all); continue; }
+        if (!stat(p, &st) && S_ISREG(st.st_mode) && (uint64_t)st.st_size == e[i].len) { got += e[i].len; PHASE(2, got, all); continue; }
+        clear_stale(root, p);
         if (mkdirs(p)) { rc = -4; break; }
         snprintf(tmp, sizeof tmp, "%s.img.tmp", p); int o = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (o < 0) { untar_err("建", tmp, errno); rc = -4; break; }
@@ -352,7 +367,7 @@ int s2a_pack_apply(const char *docs) {
         else fprintf(lf, "%s 解开 %u 个包 %u 个文件 %llu MB，.applied = %s（%.1f 秒）\n", ts, ntar, nf, (unsigned long long)(nb >> 20), sha, (now_ns() - t0) / 1e9);
         fclose(lf);
     }
-    if (rc) LOG("资源包收推送：失败（%s）：%s", g_apply_code, g_apply_fail); else LOG("资源包收推送：完成");
+    if (rc) LOG("资源包收推送：失败（%s）：%s%s%s", g_apply_code, g_apply_fail, g_untar_err[0] ? "；现场：" : "", g_untar_err); else LOG("资源包收推送：完成");   // 现场 = 哪一步、哪个路径、errno 原文（原先只进 unpack.log / 诊断包）
     return rc ? 1 : 0;
 }
 
