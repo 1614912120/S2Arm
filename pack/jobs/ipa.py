@@ -376,6 +376,8 @@ def _build(c):
     cache_result = trim(c.work_root, current_gid=gid, **compiler_policy)
     from cache_retention import engine_installed_at, prune_tool_keys
     prune_tool_keys(c.work_root, engine_installed_at(c.engine))   # 当前引擎用不到的工具缓存旧键（NativeAOT / libvpx / opus / dav1d）
+    from cache_retention import trim_build_caches
+    trim_build_caches(c.work_root / "run" / "s2arm", current_gid=gid)   # 出包可重建缓存（aoc / unpack / bake / srcver）总量上限，按盘剩余算比例
     if not cache_result['accountingComplete'] or cache_result['evictionErrors'] or cache_result['diskErrors'] or cache_result['pressureRemaining']:
         c.diagnostic("编库缓存清理未完整完成：盘余量未恢复/未知或条目未能删除；扫描错误 %d，删除错误 %d，盘量错误 %d，未扫描根 %d，保护链接 %d，变化条目 %d。已完成的 IPA 保留，详见 compilerCache。" %  # 非玩家句
                      (cache_result['scanErrors'], cache_result['evictionErrors'], cache_result['diskErrors'],
