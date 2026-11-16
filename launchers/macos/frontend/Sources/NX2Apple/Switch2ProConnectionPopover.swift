@@ -272,18 +272,10 @@ extension Switch2ProConnectionPopover {
         controller.onAssignNavigate = { navigation?.handle($0) }
         systems.watchPress { name, index, key in controller.flashPlayer(key: key) { $0 == .system(name: name, index: index) } }
         systems.watchGen1Press { id, key in
-            if controller.assigning, let key, let navigation {
-                var side = -1, sideways = true
-                for unit in controller.assignment.units {
-                    if case let .gen1(unitID, s) = unit, unitID == id { side = s }
-                    if case let .gen1Pair(l, r) = unit, l == id || r == id { side = l == id ? 0 : 1; sideways = false }
-                }
-                if side < 0 { side = systems.gen1.first { $0.id == id }?.side ?? 1 }
-                // 系统已把这一侧当整只手柄读（如系统合成的「Joy-Con (L/R)」）：导航走系统手柄那一路（LauncherPadInput），这里不再换算——
-                //   否则按一下导航两次，没登记的竖握一对也会被当横握、左只按「下」直接「完成」
-                let systemPads = GCController.controllers().map { (name: $0.vendorName ?? $0.productCategory, extended: $0.extendedGamepad != nil) }
-                if !Self.gen1ReadBySystem(side: side, systemPads: systemPads),
-                   let action = NS2LauncherController.padAction(gen1Key: key, side: side, sideways: sideways) { navigation.handle(action) }
+            if controller.assigning, let key, let navigation,
+               let action = Self.gen1AssignAction(id: id, key: key, units: controller.assignment.units, gen1: systems.gen1,
+                   systemPads: GCController.controllers().map { (name: $0.vendorName ?? $0.productCategory, extended: $0.extendedGamepad != nil) }) {
+                navigation.handle(action)
             }
             controller.flashPlayer(key: key) { unit in
                 switch unit {
@@ -300,6 +292,19 @@ extension Switch2ProConnectionPopover {
                 return event
             }
         }
+    }
+    /// 分配中一代 Joy-Con 的一下按键（HID 直读）→ 界面导航：已登记的照登记方式（单只横握、一对竖握），没登记的按这只的侧当横握；
+    ///   系统已当整只手柄读的那一侧返回 nil（导航交给系统手柄那一路 LauncherPadInput，见 gen1ReadBySystem）
+    nonisolated static func gen1AssignAction(id: String, key: String, units: [PlayerAssignment.Unit], gen1: [PlayerAssignment.Gen1Device],
+                                             systemPads: [(name: String, extended: Bool)]) -> LauncherPadAction? {
+        var side = -1, sideways = true
+        for unit in units {
+            if case let .gen1(unitID, s) = unit, unitID == id { side = s }
+            if case let .gen1Pair(l, r) = unit, l == id || r == id { side = l == id ? 0 : 1; sideways = false }
+        }
+        if side < 0 { side = gen1.first { $0.id == id }?.side ?? 1 }
+        guard !gen1ReadBySystem(side: side, systemPads: systemPads) else { return nil }
+        return NS2LauncherController.padAction(gen1Key: key, side: side, sideways: sideways)
     }
     /// 一代 Joy-Con 这一侧（0 左只 / 1 右只）是否已被系统当整只手柄读（GameController 有 extendedGamepad 的「Joy-Con (L/R)」「Joy-Con (L)」等）：
     ///   是 = 分配中的导航交给系统手柄那一路，HID 直读只认手、亮行，不再换算导航

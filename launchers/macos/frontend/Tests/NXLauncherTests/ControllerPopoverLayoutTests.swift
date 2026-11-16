@@ -176,6 +176,88 @@ import NXLauncher
     }
 }
 
+@MainActor final class ControllerAcceptanceGen1Tests: XCTestCase {
+    /// 分配画面 + 注入：HID 直读那一路走生产换算（gen1AssignAction），系统手柄那一路注入假 GCController（名字照系统给一代 Joy-Con 的名字），
+    ///   两路都接到同一个 LauncherPadNavigation，数「完成」被按了几次
+    private func assignScreen() async throws -> (NS2LauncherController, LauncherPadNavigation, NSWindow, NSView, () -> Void) {
+        _ = NSApplication.shared
+        let suite = "s2arm-acceptance-gen1-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let order = FileManager.default.temporaryDirectory.appendingPathComponent(suite + ".json")
+        let controller = NS2LauncherController(socketURL: URL(fileURLWithPath: "/tmp/" + suite + ".sock"), store: defaults,
+            orderFile: order, systemControllers: { [] }, notifications: NotificationCenter())
+        let navigation = LauncherPadNavigation()
+        let host = NSHostingView(rootView: Switch2ProConnectionPopover(controller: controller, systems: SystemControllers(pads: []), lang: "zh")
+            .environment(\.padControls, navigation))
+        let window = NSWindow(contentRect: CGRect(origin: CGPoint(x: 100, y: 100), size: host.fittingSize), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        navigation.source.controllers = { [] }
+        navigation.attach(window); navigation.source.stop(); navigation.source.isActive = { true }
+        host.layoutSubtreeIfNeeded(); try await Task.sleep(for: .milliseconds(100))
+        controller.setAssignmentForTesting(.init())
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(navigation.focusedID, "controller.assign.done")
+        return (controller, navigation, window, host, { navigation.detach(); window.close(); defaults.removePersistentDomain(forName: suite); try? FileManager.default.removeItem(at: order) })
+    }
+    private func shot(_ host: NSView, _ name: String) throws {
+        guard let output = ProcessInfo.processInfo.environment["S2A_SETTINGS_SHOTS"] else { return }
+        let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        try XCTUnwrap(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: output).appendingPathComponent(name + ".png"))
+    }
+
+    /// v0.5.0 手柄验收 B8：单只一代 Joy-Con 横握（系统没把它当整只手柄读）：按「确认」（左只横握的下）只完成一次
+    func testAcceptanceSingleGen1SidewaysConfirmsOnce() async throws {
+        let (controller, navigation, _, host, close) = try await assignScreen(); defer { close() }
+        try shot(host, "acceptance-B8-assign")
+        let left = PlayerAssignment.Gen1Device(id: "gen1-left", side: 0)
+        let system = AcceptanceGen1Controller("Joy-Con (L)", extended: false)   // 系统给的单只：无 extendedGamepad，LauncherPadInput 不读
+        navigation.source.controllers = { [system] }; navigation.source.tick(now: 0)
+        let systemPads = [(name: "Joy-Con (L)", extended: false)]
+        let action = Switch2ProConnectionPopover.gen1AssignAction(id: left.id, key: NS2LauncherController.keyDown, units: [], gen1: [left], systemPads: systemPads)
+        XCTAssertEqual(action, .confirm, "左只横握：下 = 确认")
+        if let action { navigation.handle(action) }
+        navigation.source.tick(now: 0.01)
+        XCTAssertFalse(controller.assigning, "完成被按了一次：分配结束")
+        // 同一下没有第二路：系统手柄那一路没读这只（无 extendedGamepad）
+        XCTAssertTrue(navigation.source.controllers().allSatisfy { $0.extendedGamepad == nil })
+    }
+
+    /// v0.5.0 手柄验收 B9：一对一代 Joy-Con 竖握（系统合成「Joy-Con (L/R)」整只读）：左只按「下」不会完成分配，只往下走；按 A 完成一次
+    func testAcceptanceGen1PairVerticalDownDoesNotFinish() async throws {
+        let (controller, navigation, _, host, close) = try await assignScreen(); defer { close() }
+        let left = PlayerAssignment.Gen1Device(id: "gen1-left", side: 0), right = PlayerAssignment.Gen1Device(id: "gen1-right", side: 1)
+        let system = AcceptanceGen1Controller("Joy-Con (L/R)", extended: true)
+        let pad = try XCTUnwrap(system.extendedGamepad)
+        navigation.source.controllers = { [system] }; navigation.source.tick(now: 0)
+        let systemPads = [(name: "Joy-Con (L/R)", extended: true)]
+        // 同一下「下」：HID 那一路交给系统（nil），系统那一路是方向键下
+        XCTAssertNil(Switch2ProConnectionPopover.gen1AssignAction(id: left.id, key: NS2LauncherController.keyDown, units: [], gen1: [left, right], systemPads: systemPads),
+                     "系统已整只读：HID 不再把左只的下换算成确认")
+        pad.dpad.setValueForXAxis(0, yAxis: -1); navigation.source.tick(now: 0.01)
+        pad.dpad.setValueForXAxis(0, yAxis: 0); navigation.source.tick(now: 0.02)
+        try await Task.sleep(for: .milliseconds(80))
+        XCTAssertTrue(controller.assigning, "竖握按下不会点到「完成」")
+        try shot(host, "acceptance-B9-after-down")
+        // 回到「完成」再按 A：只完成一次（HID 同一下也是 nil）
+        navigation.focus("controller.assign.done")
+        XCTAssertNil(Switch2ProConnectionPopover.gen1AssignAction(id: right.id, key: "A", units: [], gen1: [left, right], systemPads: systemPads))
+        pad.buttonA.setValue(1); navigation.source.tick(now: 0.03)
+        XCTAssertFalse(controller.assigning, "A 完成分配")
+    }
+}
+
+/// 假的系统手柄：名字照系统给一代 Joy-Con 的名字；extended = 系统是否当整只手柄读
+private final class AcceptanceGen1Controller: GCController {
+    private let name: String
+    private let extended: Bool
+    private let gamepadSnapshot = GCController.withExtendedGamepad()
+    init(_ name: String, extended: Bool) { self.name = name; self.extended = extended; super.init() }
+    override var vendorName: String? { name }
+    override var productCategory: String { name }
+    override var extendedGamepad: GCExtendedGamepad? { extended ? gamepadSnapshot.extendedGamepad : nil }
+}
+
 private final class PopoverLayoutController: GCController {
     private let name: String
     private let gamepadSnapshot = GCController.withExtendedGamepad()
