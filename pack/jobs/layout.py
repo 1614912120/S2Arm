@@ -369,6 +369,8 @@ def game_info(c, gid):
 def update_info(c, gid, **fields):
     d = game_dir(c, gid)
     atomic(d / GAME_JSON, dict(read(d / GAME_JSON, {}), **fields))
+    if "ios" in fields:   # 程序件的兼容记录（壳号 / 宿主约定号 / 直连链号…）同存一份到专用文件夹：游戏文件夹被删了，更新手机照样判得出能不能带这款
+        atomic(program_store(c, gid, create=True) / PROGRAM_INFO, fields["ios"])
 
 
 def read_sizes(c, gid):
@@ -433,8 +435,45 @@ def image_ios(c, gid, create=True):
     return path(c, gid, "image", "ios", create=create)
 
 
+# ---- 游戏程序专用文件夹（11-16 维护者：玩家打完包常删输出目录、之后不碰电脑，更新 S2Arm 时组容器要的游戏程序跟着丢了）----
+# 默认位置根 .programs/<程序号>/：kit/（组容器的程序件）、original-exefs/（原始程序，S 级升级用，sgrade.py）、ios.json（程序件的兼容记录，同 game.json 的 ios）。
+#   按程序号分、不在游戏文件夹里：删游戏文件夹、换存放位置删旧位置、「释放空间」都不碰它；只有「删除游戏」（library.delete：从库里删掉、也从各台手机记录摘掉）才删。
+#   旧库的 image/ios/kit、original-exefs 第一次用到时搬过来（同卷改名，跨卷拷后删）。一款约 56–238 MB（11-16 常驻库 14 款实测合计 1971 MB）
+PROGRAMS, PROGRAM_INFO, PROGRAM_EXEFS = ".programs", "ios.json", "original-exefs"
+
+
+def program_store(c, gid, create=False):
+    d = c.library / PROGRAMS / gid.upper()
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+        hide(c.library / PROGRAMS)
+    return d
+
+
+def _adopt(c, gid, name, legacy):
+    """专用文件夹里还没有 name、游戏文件夹里的旧位置 legacy 有 → 搬过来；搬不动（盘只读 / 被占用）就先用旧位置，下次再搬"""
+    new = program_store(c, gid) / name
+    if os.path.lexists(new) or not os.path.isdir(legacy):
+        return new
+    try:
+        program_store(c, gid, create=True)
+        _move_any(legacy, new)
+    except OSError:
+        return legacy
+    return new
+
+
 def ios_kit(c, gid):
-    return image_ios(c, gid, create=False) / IOS_KIT
+    return _adopt(c, gid, IOS_KIT, image_ios(c, gid, create=False) / IOS_KIT)
+
+
+def program_exefs(c, gid):
+    return _adopt(c, gid, PROGRAM_EXEFS, path(c, gid, PROGRAM_EXEFS, create=False))
+
+
+def program_info(c, gid):
+    """程序件的兼容记录：游戏文件夹 game.json 的 ios 优先，没有（游戏文件夹被删了）读专用文件夹的那份"""
+    return game_info(c, gid).get("ios") or read(program_store(c, gid) / PROGRAM_INFO, {}) or {}
 
 
 def ios_pack(c, gid):

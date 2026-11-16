@@ -1079,12 +1079,13 @@ class AssembleTests(unittest.TestCase):
         self.c.catalog = lambda: {"games": [{"id": g, "name": n} for g, n in games]}
 
     def _run(self, runs):
-        """ship_ext container / app_bundle write_ipa 的替身：按 --game 容器件所在游戏文件夹的 game.json 认出各款，出真 zip ipa（带 s2a_catalogue.json）"""
+        """ship_ext container / app_bundle write_ipa 的替身：按 --game 容器件所在的程序专用文件夹认出各款，出真 zip ipa（带 s2a_catalogue.json）"""
         def run(args, log=None, env=None, cwd=None, on_line=None):
             args = [str(a) for a in args]; runs.append(args)
             if any(a.endswith("ship_ext.py") for a in args) and "container" in args:
                 o = Path(args[args.index("--out") + 1]); o.mkdir(parents=True, exist_ok=True)
-                gs = [json.loads((Path(args[i + 1]).parents[2] / "game.json").read_text())["id"] for i, x in enumerate(args) if x == "--game"]
+                # 容器件在游戏程序专用文件夹 .programs/<程序号>/kit：上一级目录名就是游戏号
+                gs = [Path(args[i + 1]).resolve().parent.name for i, x in enumerate(args) if x == "--game"]
                 (o / "s2a_catalogue.json").write_text(json.dumps({"schema": 1, "shell_id": self.sid, "games": [{"title_id": g} for g in gs]}))
             if "write_ipa" in args:
                 cat = json.loads((Path(args[-2]) / "s2a_catalogue.json").read_text())
@@ -1112,7 +1113,7 @@ class AssembleTests(unittest.TestCase):
     @staticmethod
     def _games_arg(runs):
         cmd = next(a for a in runs if any(x.endswith("ship_ext.py") for x in a))
-        return [json.loads((Path(cmd[i + 1]).parents[2] / "game.json").read_text())["id"] for i, x in enumerate(cmd) if x == "--game"], cmd
+        return [Path(cmd[i + 1]).resolve().parent.name for i, x in enumerate(cmd) if x == "--game"], cmd   # 容器件在 .programs/<游戏号>/kit
 
     def test_assemble_this_game_only(self):
         """第一次装：只组这一款，不带 --base；→ (ipa, [这款], 本壳号)"""

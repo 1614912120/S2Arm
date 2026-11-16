@@ -2591,7 +2591,7 @@
   "下次出包会重新翻译着色器（大游戏要多花较长时间）": "La prochaine compilation retraduit les shaders (un gros jeu prend beaucoup plus de temps)",
   "Mac 运行版本": "Version Mac",
   "下次在 Mac 上玩之前会重新准备": "Elle est préparée à nouveau avant de jouer la prochaine fois sur Mac",
-  "删了要重新出包才能再装到 iPhone；已装好的游戏不受影响": "Vous devrez recompiler avant d'installer sur un iPhone ; les jeux déjà installés ne sont pas affectés",
+  "只删资源包：手机上已装的不受影响，以后更新 S2Arm 也照样带上这款；要装到别的手机或重新推资源时再出一次包": "Supprime seulement le paquet de ressources : les jeux déjà installés sur le téléphone continuent de fonctionner et restent inclus quand vous mettez S2Arm à jour ; recompilez seulement pour installer sur un autre téléphone ou recopier les ressources.",
   "统计各游戏占用的空间": "Mesurer l'espace utilisé par chaque jeu",
   "释放空间": "Libérer de l'espace",
   "要删除的部件不对：只能选{0}。": "Éléments à supprimer invalides : seul {0} peut être choisi.",

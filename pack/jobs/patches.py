@@ -407,7 +407,8 @@ def boost(c, game, image, result=None):
     result（record 记的这次打入结果）给了：再带 applied / failed（逐条名字；没打上的带原因文案键），完成页列「没打上」（11-14）"""
     import cheats
     out = dict(cheats=sum(1 for it in cheats.listing(c, game)["items"] if it["ok"]), fps=0, widescreen=0, gfx=0)
-    tsv = next((p for p in (Path(image) / "cpatch.tsv", Path(image) / "kit" / "cpatch.tsv") if p.is_file()), None)   # Mac 运行版本根 / iPhone kit（ship_ext 拷进去的）
+    import layout
+    tsv = next((p for p in (Path(image) / "cpatch.tsv", layout.ios_kit(c, game["id"]) / "cpatch.tsv") if p.is_file()), None)   # Mac 运行版本根 / iPhone 程序件（ship_ext 拷进去的）
     seen = set()
     for line in (tsv.read_text(encoding="utf-8", errors="replace").splitlines()[1:] if tsv else []):
         uid = line.split("\t", 1)[0]

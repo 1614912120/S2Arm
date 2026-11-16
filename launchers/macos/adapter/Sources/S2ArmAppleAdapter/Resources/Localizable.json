@@ -6328,10 +6328,6 @@
   "en": "It is prepared again before you next play on the Mac"
  },
  {
-  "source": "删了要重新出包才能再装到 iPhone；已装好的游戏不受影响",
-  "en": "You will need to build again before installing on an iPhone; games already installed are not affected"
- },
- {
   "source": "统计各游戏占用的空间",
   "en": "Measure the space each game uses"
  },
@@ -9790,5 +9786,9 @@
  {
   "source": "这款选了下游深度方案（独立 App），它的资源要由电脑推进手机，导出的自签包里装不下。",
   "en": "This game uses a dedicated port (a separate app). Its resources are copied to the phone from your computer, so they can't go into an exported self-sign package."
+ },
+ {
+  "source": "只删资源包：手机上已装的不受影响，以后更新 S2Arm 也照样带上这款；要装到别的手机或重新推资源时再出一次包",
+  "en": "Removes only the resource pack: games already on your phone keep working and still come along when you update S2Arm; make the package again only to install on another phone or copy the resources again."
  }
 ]

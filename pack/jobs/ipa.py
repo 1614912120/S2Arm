@@ -453,6 +453,7 @@ def deliver(c, gid, root, pack_dir, ipa):
     if not want:
         raise Failure(f"资源包缺清单或清单没有 index_sha256（{pack_dir}）：请重新打 iPhone 包。", code="package_failed")
     image = layout.image_ios(c, gid)
+    image.mkdir(parents=True, exist_ok=True)   # 程序件改存专用文件夹（layout.program_store）后，image/ios 不再由存程序件时顺带建
     managed = layout.root_of(c, gid)
     dest, old = image / layout.IOS_PACK, image / (layout.IOS_PACK + ".old")
     if old.exists():
@@ -550,7 +551,7 @@ def usable_kit(c, gid, sid, failed=()):
     kit = layout.ios_kit(c, gid)
     if not (kit / "main.npdm").is_file():
         return None
-    ios = layout.game_info(c, gid).get("ios") or {}
+    ios = layout.program_info(c, gid)   # 游戏文件夹被删了也读得到（专用文件夹的那份）
     if ios.get("shellId") == sid:
         return resolve_path(kit)
     want = host_update.engine_compat(c)

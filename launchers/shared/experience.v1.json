@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "contract": "s2a.experience.v1",
-  "revision": 72,
+  "revision": 73,
   "languages": ["zh-Hans", "en"],
   "source_language": "zh-Hans",
   "note": "四端（Mac / iOS / Android / 鸿蒙）启动器的「一套体验」规格。状态、文案、错误码、任务事件到界面的映射只在这里定义一次；各端只负责画，不另写一套措辞。错误码的「下一步」不在本文件里写第二份：一律指向 pack/jobs/errors.py 的 RECOVERY（口径见 README.md）。口径号 revision 改动规则见 README.md。",
@@ -1488,7 +1488,7 @@
       {"id": "space.part.mac", "zh-Hans": "Mac 运行版本", "en": "Mac version"},
       {"id": "space.part.mac.rebuild", "zh-Hans": "下次在 Mac 上玩之前会重新准备", "en": "Prepared again before the next time it is played on a Mac"},
       {"id": "space.part.ipa", "zh-Hans": "已出好的 iPhone 包", "en": "Finished iPhone package"},
-      {"id": "space.part.ipa.rebuild", "zh-Hans": "删了要重新出包才能再装到 iPhone；已装好的游戏不受影响", "en": "Make the package again before installing to an iPhone; games already installed are not affected"},
+      {"id": "space.part.ipa.rebuild", "zh-Hans": "只删资源包：手机上已装的不受影响，以后更新 S2Arm 也照样带上这款；要装到别的手机或重新推资源时再出一次包", "en": "Removes only the resource pack: games already on your phone keep working and still come along when you update S2Arm; make the package again only to install on another phone or copy the resources again."},
       {"id": "space.kept", "zh-Hans": "保留", "en": "Kept"},
       {"id": "space.kept.saves", "zh-Hans": "存档", "en": "Saves"},
       {"id": "space.kept.logs", "zh-Hans": "日志", "en": "Logs"},
