@@ -435,7 +435,7 @@ def ratio_text(a):
 
 def choice(chosen, uid):
     """玩家对这条补丁的明确选择（启动设置只存玩家点过的那一项：没有记录 = 没选过，按缺省）。11-15 分类改正后，原先误判成画面的补丁编号
-    从 gfx:<哈希> 变成 other:<哈希>（哈希不变）：玩家在旧编号上手动开 / 关过的照旧算数（jhz「玩家自行选择优先」），只有没选过的按新缺省（other 默认关）"""
+    从 gfx:<哈希> 变成 other:<哈希>（哈希不变）：玩家在旧编号上手动开 / 关过的照旧算数（玩家自己的选择优先），只有没选过的按新缺省（other 默认关）"""
     v = chosen.get(uid)
     if v is None and uid.startswith("other:"):
         v = chosen.get("gfx:" + uid[len("other:"):])
