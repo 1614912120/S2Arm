@@ -62,7 +62,7 @@ def save_program(c, gid, exefs):
                 dirrename.rename_dir(backup, dest)
             except BaseException as restore_error:
                 if hasattr(e, "add_note"):
-                    e.add_note(f"恢复旧 original-exefs 失败，旧数据仍在 {backup}：{restore_error}")
+                    e.add_note(f"恢复旧 original-exefs 失败，旧数据仍在 {backup}：{restore_error}")   # 非玩家句：挂在异常上进日志 / 回溯，不进界面
             raise
         shutil.rmtree(backup, ignore_errors=True)
     else:
