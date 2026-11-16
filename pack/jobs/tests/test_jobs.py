@@ -631,7 +631,7 @@ class JobsTests(unittest.TestCase):
         self.assertEqual(r["buildId"], "abc-123")
         image = gdir / "image" / "ios"
         self.assertEqual((r["ipa"], r["outputPath"]), ("", str(image)))   # 不再交付单款 ipa：装机时现组容器
-        self.assertTrue((image / "kit" / "main.npdm").is_file()); self.assertTrue((image / ".pack" / "manifest.json").is_file())
+        self.assertTrue((layout.ios_kit(self.c, "0100000000000000") / "main.npdm").is_file()); self.assertTrue((image / ".pack" / "manifest.json").is_file())
         self.assertFalse((gdir / "build" / "ios" / "x.ipa").exists())
         man = json.loads((image / ".pack" / "manifest.json").read_text())   # 交付转成单一 IMG 形态：game.json 记的资源包号 = 新清单的
         self.assertEqual((man["format"], man["imgFile"], (image / ".pack" / "game.img").is_file()), ("img", "game.img", True))
@@ -1937,8 +1937,8 @@ class JobsTests(unittest.TestCase):
         library.prune_build(self.c, game["id"])
         self.assertEqual([f for f in keep + other if not f.exists()], [])
         self.assertEqual([f for f in gone if f.exists()], [])
-        # 有了容器件（image/ios/kit）：现行产物根也不用留，build/ 只剩出包日志 build/ios/logs
-        kit = layout.image_ios(self.c, game["id"]) / "kit" / "main.npdm"; kit.parent.mkdir(parents=True); kit.write_bytes(b"META")
+        # 有了容器件（游戏程序专用文件夹 .programs/<程序号>/kit）：现行产物根也不用留，build/ 只剩出包日志 build/ios/logs
+        kit = layout.program_store(self.c, game["id"], create=True) / "kit" / "main.npdm"; kit.parent.mkdir(parents=True); kit.write_bytes(b"META")
         library.prune_build(self.c, game["id"])
         build = layout.build_dir(self.c, game["id"], create=False)
         self.assertEqual(sorted(str(q.relative_to(build)) for q in build.rglob("*")), ["ios", "ios/logs", "ios/logs/a.log"])
@@ -1986,6 +1986,17 @@ class JobsTests(unittest.TestCase):
         self.assertEqual(save.read_text(), "keep")
         self.assertTrue((self.c.library / package["path"]).exists())
         self.assertTrue(all(f.exists() for f in other))
+
+    def test_delete_removes_the_program_store_too(self):
+        # 期望（手写）：「删除游戏」= 从库里删、也从手机记录摘掉，这款在游戏程序专用文件夹 .programs/<程序号>/ 的 kit / 原始程序 / 兼容记录一并删；别款的不动
+        package = self.package(); game = self.game(packages=[package]); self.catalogue([game])
+        mine, other = layout.program_store(self.c, game["id"], create=True), layout.program_store(self.c, "0100AAAA00000000", create=True)
+        for d in (mine, other):
+            (d / "kit").mkdir(); (d / "kit" / "main.npdm").write_bytes(b"n")
+        self.c.r["gameId"] = game["id"]
+        library.delete(self.c)
+        self.assertFalse(mine.exists())
+        self.assertTrue((other / "kit" / "main.npdm").is_file())
 
     def test_delete_retry_after_half_done_delete_removes_the_leftover_folder(self):
         # #433：上次删到一半（目录删不空、Errno 66）时 game.json 已被删掉，文件夹和出包中止留下的临时目录还在、索引还指着它。
@@ -2757,10 +2768,11 @@ class JobsTests(unittest.TestCase):
         c = self.stop_context(gid)
         library.clean_after_stop(c)
         image = layout.image_ios(self.c, gid)
-        self.assertEqual(sorted(p.name for p in image.iterdir()), [".pack", "kit"])
+        self.assertEqual(sorted(p.name for p in image.iterdir()), [".pack"])
+        self.assertTrue((layout.ios_kit(self.c, gid) / "main.npdm").is_file())   # 程序件在专用文件夹，照样留着
         self.assertEqual(sorted(p.name for p in layout.build_dir(self.c, gid).iterdir()), ["ios"])   # 只剩出包日志
         self.assertEqual(sorted(p.name for p in out.iterdir()), ["logs"])
-        self.assertEqual((image / "kit" / "main.npdm").read_bytes(), b"old")
+        self.assertEqual((layout.ios_kit(self.c, gid) / "main.npdm").read_bytes(), b"old")   # 旧位置的程序件已搬进专用文件夹，内容不变
         self.assertEqual(save.read_bytes(), b"save")
         self.assertEqual((c.logs / (c.task + "-stages") / "stage.log").read_text(), "阶段日志")
 

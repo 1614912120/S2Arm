@@ -213,12 +213,13 @@ public sealed partial class EnvironmentWindow
             if (hero.IphoneReady)
             {
                 var install = Primary(T("library.hero.install"),
-                    () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; readinessFor = null; if (!installBusy) installExport = false; Navigate("install"); }, !BusyFor(hero));
+                    () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; readinessFor = null; if (!installBusy) installExport = false; Navigate("install"); }, !PhoneBlockedFor(hero));   // 出包在跑也能去装（装机页里排队）
                 AutomationId(install, "library.hero.install");
                 heroActions.Children.Add(install);
             }
             // 导出自签包（11-15 维护者：导出不是装法，常驻一个看得见的次按钮；没出过包的点了先出包再导出）
-            var selfSign = Action("library.hero.selfSign", () => ExportSelfSign(hero), !heroBusy && !installBusy);
+            var selfSign = Action("library.hero.selfSign", () => ExportSelfSign(hero),   // 能直接导出的走手机作业（出包在跑也行）；要先出包的照旧
+                hero.IphoneExportable ? !PhoneBlockedFor(hero) && hero.LocationState is not ("missing" or "offline") : !heroBusy && !installBusy);
             selfSign.VerticalAlignment = VerticalAlignment.Center;
             AutomationId(selfSign, "library.hero.selfSign");
             heroActions.Children.Add(selfSign);
@@ -284,7 +285,7 @@ public sealed partial class EnvironmentWindow
                 : game.LocationState == "missing" ? () => _ = MissingAsync(game)
                 : () => { libraryFolder = libraryFolderBox.Text ?? ""; selectedGame = game.Id; OpenBuild(); };
             // 装机在跑时别的游戏照常能选、看详情、出包（只锁正在装的那款；同时只装一款：点别的「装到 iPhone」进装机页提示「另一款正在装 · 查看那一款」）
-            var select = Action(primaryKey, primaryAction, !BusyFor(game) && (game.IphoneReady || game.LocationState != "offline"));
+            var select = Action(primaryKey, primaryAction, (game.IphoneReady ? !PhoneBlockedFor(game) : !BusyFor(game)) && (game.IphoneReady || game.LocationState != "offline"));   // 装到 iPhone：出包在跑也能去（排队）
             select.VerticalAlignment = VerticalAlignment.Center;
             // secondary: show past result if one exists and game is not currently running
             if (finishedPacks.TryGetValue(game.Id, out _) && !(packRunning && packGame?.Id == game.Id))
@@ -398,7 +399,7 @@ public sealed partial class EnvironmentWindow
         Add(T("library.menu.clearCache"), "clearCache", () => BeginGameJob("clean", game, new() { ["kind"] = "cache" }), idle && game.Reachable);
         menu.Items.Add(new Separator());
         Add(T("install.remove_game"), "remove", () => { libraryFolder = libraryFolderBox.Text ?? ""; selectedGame = game.Id; Navigate("install"); _ = ConfirmRemoveAsync(game); },
-            !libraryBusy && !installBusy && !packRunning);
+            !libraryBusy && !PhoneQueued(game.Id));
         Add(T("game.diag"), "diag", () => _ = UploadDiagnosticsAsync(game.Id, null, () => ""), idle);   // 同 Mac「更多 → 上传给开发者」；上传没成在弹窗里退回导出
         Add(T("game.delete"), "delete", () => _ = ConfirmDeleteAsync(game), idle);
         return menu;

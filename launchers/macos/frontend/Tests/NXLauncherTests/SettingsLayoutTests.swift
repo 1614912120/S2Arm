@@ -23,19 +23,25 @@ import S2ArmAppleAdapter
                 navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
                 window.makeKeyAndOrderFront(nil)
                 defer { navigation.detach(); window.close() }
+                try await settle(window, navigation, fixture.model.gamepad)
                 let players = navigation.controlTargets(in: window).filter { abs($0.frame.height - 30) < 0.5 }
                     .sorted { $0.frame.minX < $1.frame.minX }
                 XCTAssertEqual(players.count, 4)
                 let playerRect = window.convertFromScreen(players[player].frame)
                 try click(CGPoint(x: playerRect.midX, y: playerRect.midY), in: window)
-                try await Task.sleep(for: .milliseconds(180))
-                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-                host.cacheDisplay(in: host.bounds, to: bitmap)
+                // 等选中态真画出来再判：固定等 180 ms 在整套负载下偶发取到旧色。每 50 ms 截一次取色，选中即停，最多等 3 秒
                 let point = host.convert(CGPoint(x: playerRect.minX + 5, y: playerRect.midY), from: nil)
-                let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
-                let sampleY = host.isFlipped ? point.y : host.bounds.maxY - point.y
-                let color = try XCTUnwrap(bitmap.colorAt(x: Int(point.x * scale), y: Int(sampleY * scale))?.usingColorSpace(.deviceRGB))
-                XCTAssertGreaterThan(color.redComponent, 0.8, "必须实际选中玩家\(player + 1)，不能重复验证玩家 1")
+                var red: CGFloat = 0
+                let deadline = Date().addingTimeInterval(3)
+                repeat {
+                    try await Task.sleep(for: .milliseconds(50))
+                    let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+                    let sampleY = host.isFlipped ? point.y : host.bounds.maxY - point.y
+                    red = try XCTUnwrap(bitmap.colorAt(x: Int(point.x * scale), y: Int(sampleY * scale))?.usingColorSpace(.deviceRGB)).redComponent
+                } while red <= 0.8 && Date() < deadline
+                XCTAssertGreaterThan(red, 0.8, "必须实际选中玩家\(player + 1)，不能重复验证玩家 1")
                 for target in ["A", "B", "Y", "X", "L"] {
                     navigation.focus("input.map." + target)
                     let key = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "input.map." + target })
@@ -53,7 +59,7 @@ import S2ArmAppleAdapter
                     if player == 3 && target == "X" { try snapshot(host, "input-shared-faces-" + language.code) }
                 }
                 navigation.focus("input.gamepad"); navigation.handle(.confirm)
-                try await Task.sleep(for: .milliseconds(80))
+                try await waitUntil { navigation.controlTargets(in: window).contains { $0.id == "dropdown.leftShoulder" } }
                 let ids = navigation.controlTargets(in: window).map(\.id)
                 for code in InputConfig.padCodes.prefix(4) {
                     XCTAssertFalse(ids.contains("dropdown." + code), "所有玩家都不能用逐游戏配置覆盖实体四键")
@@ -263,6 +269,7 @@ import S2ArmAppleAdapter
                 location: GameLocation(catalog: ["state": "ok", "path": first]))
             for stage in 0..<4 {
                 let model = stage < 2 ? fixture.model : S2ArmLauncherModel(client: fixture.model.provider.client)
+                fixture.quiet(model)
                 if stage >= 2 {
                     if stage == 3 { fixture.runner.storageResponse = ["locations": [], "last": ""] }
                     model.loadLocations()
@@ -380,6 +387,70 @@ import S2ArmAppleAdapter
         XCTAssertEqual(fixture.runner.requests.filter { $0["operation"] as? String == "export" }.count, 1, "长按不能重复开始出包")
     }
 
+    /// #1272：选过方案后出包页看得到选的是哪套、能「更改」（弹同一个确认页，不顺带开出包）；没选过不出这一行（导出 iPhone 时确认页会问）
+    func testExportPageShowsDownstreamChoiceWithChange() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        for choice in [nil, ""] as [String?] {
+            fixture.runner.catalogDownstreamChoice = choice
+            fixture.model.refresh()
+            for _ in 0..<200 where fixture.model.games.first?.downstream?.choice != choice || fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+            let game = try XCTUnwrap(fixture.model.games.first)
+            XCTAssertEqual(game.downstream?.choice, choice)
+            let padFocus = PadFocus()
+            let page = AnyView(ExportView(model: fixture.model, covers: CoverCache(), game: game, install: {})
+                .environmentObject(padFocus).padScope("main", padFocus).frame(width: 1120, height: 900))
+            let (host, window) = try await render(page, fixture: fixture, language: .zh)
+            let navigation = fixture.navigation
+            navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
+            defer { navigation.detach(); window.close() }
+            let has = navigation.controlTargets(in: window).contains { $0.id == "export.downstream.change" }
+            XCTAssertEqual(has, choice != nil, "选过才出「更改」（choice \(String(describing: choice))）")
+            if choice != nil {
+                try snapshot(host, "export-downstream-change-zh")
+                let before = fixture.runner.requests.count
+                navigation.focus("export.downstream.change"); navigation.handle(.confirm)
+                for _ in 0..<100 where fixture.model.downstreamPromptFor == nil { try await Task.sleep(for: .milliseconds(10)) }
+                XCTAssertEqual(fixture.model.downstreamPromptFor, game.id, "「更改」弹确认页")
+                XCTAssertFalse(fixture.runner.requests.dropFirst(before).contains { $0["operation"] as? String == "export" }, "更改不顺带开出包")
+                fixture.model.downstreamPromptFor = nil
+            }
+        }
+    }
+
+    /// 11-16 维护者「出包的时候没办法同时安装其他游戏到 iPhone 上，这个控制纯属多余」：手机作业走独立的手机槽。期望按规则手写：
+    ///   A 在出包（主槽）时装 B → 立刻发 install、主槽那单不动；装 A → 排队不发；手机槽忙时再装 B → 排队；主槽 A 结束 → A 的装机接上
+    func testInstallRunsWhileAnotherGameExportsAndQueuesRealConflicts() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.runner.catalogGameCount = 2
+        fixture.model.refresh()
+        for _ in 0..<200 where fixture.model.games.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        let a = try XCTUnwrap(fixture.model.games.first { $0.id == "fixture" }), b = try XCTUnwrap(fixture.model.games.first { $0.id == "fixture-1" })
+        func installs(_ id: String) -> Int { fixture.runner.requests.filter { $0["operation"] as? String == "install" && $0["gameId"] as? String == id }.count }
+        var export = JobSession(kind: .export, gameID: a.id, name: a.name); export.export = ExportRun(platforms: [.ios])
+        fixture.model.session = export   // A 正在出包（主槽）
+        XCTAssertTrue(fixture.model.mainBusy && !fixture.model.phoneBusy)
+
+        fixture.model.install(b, device: "dev-1")
+        XCTAssertEqual(fixture.model.phoneSession?.gameID, b.id, "A 出包时装 B：手机槽立刻起")
+        XCTAssertEqual(fixture.model.session?.gameID, a.id, "主槽那单不动")
+        fixture.model.install(a, device: "dev-1")
+        XCTAssertTrue(fixture.model.phoneQueued(a.id), "装正在出包的 A：排队")
+        fixture.model.install(b, device: "dev-1")
+        XCTAssertEqual(fixture.model.phoneQueue.map(\.gameID), [a.id, b.id], "手机槽忙时再装 B：排在后面")
+        for _ in 0..<200 where installs(b.id) < 1 || fixture.model.phoneBusy { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(installs(a.id), 0, "A 还在出包：A 的装机不发")
+        for _ in 0..<200 where installs(b.id) < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(installs(b.id), 2, "手机槽空了：排着的 B 接上（A 被主槽占着跳过它）")
+        XCTAssertEqual(fixture.model.phoneQueue.map(\.gameID), [a.id])
+
+        fixture.model.finish(.completed, message: "")   // A 出包结束
+        for _ in 0..<200 where installs(a.id) < 1 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(installs(a.id), 1, "A 出完：A 的装机接上")
+        XCTAssertTrue(fixture.model.phoneQueue.isEmpty)
+    }
+
     func testExportNameControllerOpensKeyboardWithoutRenameAlert() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
@@ -456,7 +527,7 @@ import S2ArmAppleAdapter
                 XCTAssertTrue(platforms.contains { $0.id == navigation.focusedID }, "向下应离开复选框进入可选平台")
                 let before = fixture.model.sgradeOn(game.id)
                 navigation.focus(checkbox.id); navigation.handle(.confirm)
-                try await Task.sleep(for: .milliseconds(100))
+                try await waitUntil { fixture.model.sgradeOn(game.id) != before }
                 XCTAssertEqual(fixture.model.sgradeOn(game.id), !before)
                 XCTAssertEqual(navigation.focusedID, checkbox.id, "切换勾选后仍保持有效焦点")
                 navigation.handle(.down)
@@ -562,8 +633,12 @@ import S2ArmAppleAdapter
                     pad.rightShoulder.setValue(1); navigation.source.tick(now: time)
                     pad.rightShoulder.setValue(0); navigation.source.tick(now: time + 0.01)
                     time += 0.1
-                    try await Task.sleep(for: .milliseconds(100))
                     let id = "home.group." + expected.rawValue
+                    try await waitUntil {
+                        guard fixture.model.home.group == expected, navigation.focusedID == id,
+                              let tab = navigation.controlTargets(in: window).first(where: { $0.id == id }) else { return false }
+                        return navigation.focusRingFrame(in: window) == tab.frame
+                    }
                     XCTAssertEqual(fixture.model.home.group, expected)
                     XCTAssertEqual(navigation.focusedID, id, "肩键切页后焦点应与新 tab 同步，包括空分组")
                     let tab = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == id })
@@ -572,7 +647,7 @@ import S2ArmAppleAdapter
                 navigation.focus("card.fixture")
                 pad.leftShoulder.setValue(1); navigation.source.tick(now: time)
                 pad.leftShoulder.setValue(0); navigation.source.tick(now: time + 0.01)
-                try await Task.sleep(for: .milliseconds(100))
+                try await waitUntil { fixture.model.home.group == .favorites && navigation.focusedID == "home.group.favorites" }
                 XCTAssertEqual(fixture.model.home.group, .favorites)
                 XCTAssertEqual(navigation.focusedID, "home.group.favorites", "从卡片切页也应聚焦新 tab")
                 navigation.source.controllers = { [] }
@@ -804,6 +879,12 @@ import S2ArmAppleAdapter
         }
     }
 
+    /// 屏幕键盘已出现且面板上的按键已登记（可以按键 / 提交）
+    private func keyboardReady(_ navigation: LauncherPadNavigation) -> Bool {
+        guard let k = navigation.keyboard else { return false }
+        return navigation.activeWindow === k.panel && navigation.controlTargets(in: k.panel).contains { $0.id == "pad.key.q" }
+    }
+
     private func waitUntil(_ ready: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
         for _ in 0..<100 {
             if ready() { return }
@@ -920,7 +1001,8 @@ import S2ArmAppleAdapter
             navigation.focus("home.search")
             pad.buttonA.setValue(1); navigation.source.tick(now: 0.01)
             pad.buttonA.setValue(0); navigation.source.tick(now: 0.02)
-            try await Task.sleep(for: .milliseconds(350))
+            // 键盘出来还不够：要等键盘面板上的按键已登记（面板布局完），否则按键 / 提交落在半成品面板上，关键盘时焦点回不到输入框
+            try await waitUntil { keyboardReady(navigation) && navigation.controlTargets(in: window).contains { $0.id == "home.search.field" } }
             let keyboard = try XCTUnwrap(navigation.keyboard, "手柄确认展开搜索时应自动弹出屏幕键盘")
             XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" }, "键盘不能使搜索框失焦收起")
             XCTAssertTrue(navigation.activeWindow === keyboard.panel)
@@ -929,25 +1011,25 @@ import S2ArmAppleAdapter
             XCTAssertEqual(keyboard.value, "Originalq")
             try snapshot(try XCTUnwrap(keyboard.panel.contentView), "search-keyboard-" + language.code)
             navigation.handle(.submit)
-            try await Task.sleep(for: .milliseconds(350))
+            try await waitUntil { navigation.keyboard == nil && navigation.focusedID == "home.search.field" && window.firstResponder is NSTextView }
             XCTAssertNil(navigation.keyboard)
             XCTAssertEqual(fixture.model.home.search, "Originalq")
             XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" })
             XCTAssertEqual(navigation.focusedID, "home.search.field", "关闭键盘后，手柄焦点应回到输入框")
             XCTAssertTrue(window.firstResponder is NSTextView, "关闭键盘后恢复原生文本焦点")
             navigation.handle(.confirm)
-            try await Task.sleep(for: .milliseconds(100))
+            try await waitUntil { keyboardReady(navigation) }
             let cancelled = try XCTUnwrap(navigation.keyboard)
             cancelled.value = "discarded"
             navigation.handle(.back)
-            try await Task.sleep(for: .milliseconds(150))
+            try await waitUntil { navigation.keyboard == nil && window.firstResponder is NSTextView }
             XCTAssertEqual(fixture.model.home.search, "Originalq", "B 取消不改变查询")
             XCTAssertTrue(window.firstResponder is NSTextView)
             navigation.handle(.back)
-            try await Task.sleep(for: .milliseconds(300))
+            try await waitUntil { !navigation.controlTargets(in: window).contains { $0.id == "home.search.field" } }
             XCTAssertFalse(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" })
             navigation.handle(.search)
-            try await Task.sleep(for: .milliseconds(150))
+            try await waitUntil { keyboardReady(navigation) }
             let shortcutKeyboard = try XCTUnwrap(navigation.keyboard, "搜索快捷键与搜索按钮共用屏幕键盘入口")
             let key = try XCTUnwrap(navigation.controlTargets(in: shortcutKeyboard.panel).first { $0.id == "pad.key.q" })
             let rect = shortcutKeyboard.panel.convertFromScreen(key.frame)
@@ -1564,10 +1646,24 @@ import S2ArmAppleAdapter
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderBack(nil)
-        host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(250))
-        host.layoutSubtreeIfNeeded()
+        try await settle(window, fixture.navigation, fixture.model.gamepad)
         return (host, window)
+    }
+
+    /// 等页面布局稳定再量：手柄可操作的控件已登记、位置连续 3 次采样（约 90 ms）不变；一个控件都没有的页面，空着连续约 300 ms 也算稳。
+    /// 设置类页面的控件登记在 fixture.navigation，首页（LauncherView）登记在 model.gamepad，两张表都看。
+    /// 固定等 250 ms 在整套 / 门禁高负载下会量到还没登记的控件（XCTUnwrap 落空）或还在挪的位置（点歪、焦点框差几 pt）。最多等 5 秒，超时交给后面的断言报真实状态
+    private func settle(_ window: NSWindow, _ registries: LauncherPadNavigation...) async throws {
+        var last = "", same = 0
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            window.contentView?.layoutSubtreeIfNeeded()
+            let now = registries.flatMap { $0.controlTargets(in: window) }.map { "\($0.id)@\($0.frame)" }.joined(separator: ";")
+            same = now == last ? same + 1 : 0
+            if same >= (now.isEmpty ? 10 : 3) { return }
+            last = now
+            try await Task.sleep(for: .milliseconds(30))
+        }
     }
 
     /// 常显滚动条占掉的宽度（浮层滚动条为 0）。
@@ -1613,6 +1709,8 @@ private struct SearchControlPreview: View {
     let model: S2ArmLauncherModel
     let navigation = LauncherPadNavigation()
     let runner = SettingsRunner()
+    /// 模型想弹的提示框（标题：内容）：走记录不走真 NSAlert（runAlert 注入）
+    private(set) var alerts: [String] = []
     init() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("s2arm-settings-layout-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Jobs"), withIntermediateDirectories: true)
@@ -1620,7 +1718,10 @@ private struct SearchControlPreview: View {
         try Data().write(to: root.appendingPathComponent("Jobs/main.py"))
         model = S2ArmLauncherModel(client: JobClient(environment: JobEnvironment(privateRoot: root, resources: root,
             library: root.appendingPathComponent("library").path, libraryId: "layout-fixture"), runner: runner))
+        quiet(model)
     }
+    /// 这个夹具里建的模型（含重启后新建的）一律接上：提示框记下来，不弹真窗
+    func quiet(_ m: S2ArmLauncherModel) { m.runAlert = { [weak self] a in self?.alerts.append(a.messageText + "：" + a.informativeText); return .alertSecondButtonReturn } }
     func remove() { try? FileManager.default.removeItem(at: root) }
 }
 
@@ -1648,6 +1749,12 @@ private final class SettingsRunner: JobProcessRunner {
         get { lock.withLock { gameCount } }
         set { lock.withLock { gameCount = newValue } }
     }
+    private var downstreamChoice: String? = nil
+    /// 夹具款上次选的下游方案（nil = 没选过；"" = 仍用原版）
+    var catalogDownstreamChoice: String? {
+        get { lock.withLock { downstreamChoice } }
+        set { lock.withLock { downstreamChoice = newValue } }
+    }
     private var playtime: [String: Any]? = nil
     var catalogPlaytime: [String: Any]? {
         get { lock.withLock { playtime } }
@@ -1670,6 +1777,7 @@ private final class SettingsRunner: JobProcessRunner {
                 var game: [String: Any] = ["id": index == 0 ? "fixture" : "fixture-\(index)", "name": "Original UI fixture \(index)", "cover": catalogCover, "ready": true, "needsPreparation": catalogNeedsPreparation, "missing": [],
                  "downstream": ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy]]
                 if index == 0, let playtime = catalogPlaytime { game["playtime"] = playtime }
+                if let choice = catalogDownstreamChoice { game["downstream"] = ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy, "choice": choice] }
                 return game
             }]
         }

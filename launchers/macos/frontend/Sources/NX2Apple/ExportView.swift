@@ -28,6 +28,7 @@ struct ExportView: View {
                     // S 级优化（Beta，11-13）：这款这个版本命中了哪些社区补丁，命中的出包时自动打入。11-15 起总是出：卡片里有「导入 Mod」入口
                     //   （维护者「打包页增加 mod 导入，S 级优化又升级了」；原「没匹配就整张不出」时玩家找不到入口，没匹配时只剩一句「没有这个版本的补丁」+ 导入 Mod）
                     SGradeCard(model: model, gameID: game.id)
+                    downstream
                     platforms
                 }
                 .frame(maxWidth: 1120, alignment: .leading)
@@ -42,6 +43,22 @@ struct ExportView: View {
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             LauncherView.fileURLs(providers) { urls in model.batchSeed = game.id; model.importGames(urls, partialResults: true) }
             return true
+        }
+    }
+
+    // ---- 下游深度方案（#1272）：选过之后在这里看得到选的是哪套、能改。没选过不出（导出 iPhone 时确认页会问）----
+    //   「更改」弹同一个确认页（DownstreamConfirmSheet）；没有待出的单，选完只记下选择，下次导出 iPhone 按新选择走
+    @ViewBuilder private var downstream: some View {
+        if let offer = game.downstream, let choice = offer.choice {
+            let lang = loc.lang.sharedCode
+            let current = choice.isEmpty ? (offer.text(lang)?.original ?? "") : offer.name
+            CardGroup(BackendText.launcherText("export.downstream.group", language: lang), footnote: BackendText.launcherText("export.downstream.note", language: lang)) {
+                CardRow(current) {
+                    Button(BackendText.launcherText("export.downstream.change", language: lang)) { model.downstreamPromptFor = game.id }
+                        .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy).controllerID("export.downstream.change")
+                }
+                .accessibilityIdentifier("export.downstream")
+            }
         }
     }
 
@@ -227,7 +244,7 @@ struct ExportView: View {
         }
         .controllerButtonStyle(.plain)
         .controllerID("export.platform." + platform.rawValue)
-        .disabled(!open || model.busy)
+        .disabled(!open || model.mainBusy)
         .busyHint(model, disabled: open)
         .padTarget("export." + platform.rawValue, scope: "main", radius: 16) { model.toggleExport(platform) }
         .accessibilityLabel(loc.t("s2arm.export.platform." + platform.rawValue))
@@ -284,7 +301,7 @@ struct ExportView: View {
                 .controllerButtonStyle(LauncherSecondaryButtonStyle(prominent: true))
                 .keyboardShortcut(.cancelAction).controllerID("export.cancel").controllerShortcut(.back)
             Button { model.export(game, location: location.isEmpty ? nil : location) } label: {
-                Label(model.busy ? x("action.queue") : count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"), systemImage: "shippingbox.fill")
+                Label(model.mainBusy || model.phoneHolds(game.id) ? x("action.queue") : count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"), systemImage: "shippingbox.fill")
             }
             .controllerButtonStyle(LauncherPrimaryButtonStyle(prominent: true))
             .disabled(blocker?.stopsStart == true)   // 缺文件 / 缺 keys 只在左边提示，不置灰（作业层核实）

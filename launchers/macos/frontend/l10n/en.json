@@ -1837,6 +1837,7 @@
   "s2arm.controller.autoConnect": "Auto-connect Switch 2 controllers",
   "s2arm.controller.disconnectOnClose": "Disconnect when game closes",
   "s2arm.controller.openBluetooth": "Open Bluetooth Settings",
+  "s2arm.controller.thirdPartyMotion": "Xbox-style controllers such as 8BitDo or GameSir only have motion controls in Switch mode.",
   "s2arm.controller.assignPlayers": "Assign players",
   "s2arm.controller.howPair": "Pair two / Full pad",
   "s2arm.controller.howPairKeys": "Press L + R together",

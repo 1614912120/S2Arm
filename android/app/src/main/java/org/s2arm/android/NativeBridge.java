@@ -229,6 +229,8 @@ final class NativeBridge {
     static native void setHostBuild(String build);
     /** 存档原子提交判定（共用 direct_prompt.c）：每秒轮询，正数 = 服务层报出原因位（只报一次），负数 = 状态未知（服务层缺导出，不提示）。 */
     static native int pollSaveAtomic();
+    /** 游玩时间落盘（共用 runtime/src/playtime.c）：游戏在前台时每 10 秒、onPause 与收局前各一次；没攒够 1 秒不写。 */
+    static native void flushPlaytime();
 
     static native String checkModules(String modulesDir);
     /** Maps exactly these rewritten module images (load check; nothing runs). Any thread. */

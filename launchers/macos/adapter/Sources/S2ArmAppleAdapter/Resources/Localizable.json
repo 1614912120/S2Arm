@@ -5212,10 +5212,6 @@
   "en": "Preparation continued from the unpacked game data, so this export still finishes, only a little slower. When the game library is on an APFS disk (the Mac's internal disk or an external disk formatted as APFS), exports for different platforms can share the prepared game data."
  },
  {
-  "source": "用 Xcode（免费 Apple ID 即可）或 AltStore Classic v2.3 重新签名安装这款游戏；SideStore 0.7.0 免费账号重签会丢这项权限。已装的也可以用 GetMoreRam 给 App ID 补上权限后重装。",
-  "en": "Re-sign with Xcode (a free Apple ID works) or AltStore Classic v2.3. SideStore 0.7.0 free signing loses this entitlement; GetMoreRam can repair the App ID before reinstalling."
- },
- {
   "source": "资源包已经在手机上，不用重推：在 iPhone 上打开 S2Arm，选这款游戏，保持在前台别锁屏，等它导入完就能玩。",
   "en": "The resource pack is already on your iPhone, so there is no need to send it again. Open S2Arm on your iPhone, choose this game, keep it in the foreground with the screen on, and it will be ready once the import finishes."
  },
@@ -6328,10 +6324,6 @@
   "en": "It is prepared again before you next play on the Mac"
  },
  {
-  "source": "删了要重新出包才能再装到 iPhone；已装好的游戏不受影响",
-  "en": "You will need to build again before installing on an iPhone; games already installed are not affected"
- },
- {
   "source": "统计各游戏占用的空间",
   "en": "Measure the space each game uses"
  },
@@ -7082,6 +7074,10 @@
  {
   "source": "从电脑重新装到 iPhone，会接着已传的部分续传。",
   "en": "Install to iPhone from the computer again; it resumes from what was already sent."
+ },
+ {
+  "source": "在游戏库里长按这款，选「删除游戏…」，再把电脑上导出的这款 .img 重新放进「放这里导入」。",
+  "en": "In the library, press and hold this game and choose “Delete game…”, then put this game's .img exported on the computer into Import Here again."
  },
  {
   "source": "重新连电脑推送，会自动补齐。",
@@ -9388,6 +9384,10 @@
   "en": "Update S2Arm on iPhone"
  },
  {
+  "source": "准备更新 iPhone 上的 S2Arm",
+  "en": "Preparing the S2Arm update for iPhone"
+ },
+ {
   "source": "这台 Mac 没装 Xcode 的设备组件（CoreDevice），读不到连着的设备：打开一次 Xcode、按提示装附加组件后再试；也可以在出包页直接选机型",
   "en": "This Mac doesn't have Xcode's device components (CoreDevice), so connected devices can't be read. Open Xcode once and install the additional components when prompted, then try again; or pick the model directly on the build page"
  },
@@ -9762,5 +9762,37 @@
  {
   "source": "再开一次一般能接着玩（存档停在游戏上次保存的地方）；同一处反复这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上。",
   "en": "Starting again usually lets you keep playing (your save is as of the last time the game saved). If it keeps happening at the same spot, export a diagnostics package from Environment Check and attach it to a GitHub issue."
+ },
+ {
+  "source": "读不到 Impactor 当前选中的 Apple ID：在 Impactor 里登录并选中你的 Apple ID 后再装。",
+  "en": "Can't read the Apple ID selected in Impactor: sign in to Impactor, select your Apple ID, then install again."
+ },
+ {
+  "source": "写进 App 要申请的权限",
+  "en": "Adding the permissions the app requests"
+ },
+ {
+  "source": "这款选的下游方案是独立 App，资源要由电脑推进去：连上手机后点「装到 iPhone」；想导出自签包就在确认页改选「仍用原版方案」。",
+  "en": "The port chosen for this game is a separate app whose resources are copied over from your computer: connect your phone and click Install on iPhone. To export a self-sign package instead, choose Keep the standard route on the confirmation page."
+ },
+ {
+  "source": "这款用的是 {0} 方案（独立 App），现在只能「装到 iPhone」，还不能导出自签包。",
+  "en": "This game uses {0} (a separate app): for now it can only be installed with Install on iPhone, not exported as a self-sign package."
+ },
+ {
+  "source": "下游方案只能装到 iPhone",
+  "en": "This port can only be installed on iPhone"
+ },
+ {
+  "source": "这款选了下游深度方案（独立 App），它的资源要由电脑推进手机，导出的自签包里装不下。",
+  "en": "This game uses a dedicated port (a separate app). Its resources are copied to the phone from your computer, so they can't go into an exported self-sign package."
+ },
+ {
+  "source": "只删资源包：手机上已装的不受影响，以后更新 S2Arm 也照样带上这款；要装到别的手机或重新推资源时再出一次包",
+  "en": "Removes only the resource pack: games already on your phone keep working and still come along when you update S2Arm; make the package again only to install on another phone or copy the resources again."
+ },
+ {
+  "source": "在电脑上的 S2Arm 点「装到 iPhone」重新安装（免费 Apple ID 也会带上这项权限）；自己签名的话用 Xcode 或 AltStore Classic v2.3，SideStore 0.7.0 重签会丢；已经装好的也可以用 GetMoreRam 给 App ID 补上权限后重装。",
+  "en": "Reinstall with “Install on iPhone” in S2Arm on your computer (a free Apple ID keeps this permission too). If you sign it yourself, use Xcode or AltStore Classic v2.3; re-signing with SideStore 0.7.0 drops it. For an existing install, you can also add the permission to the App ID with GetMoreRam and reinstall."
  }
 ]

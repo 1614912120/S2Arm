@@ -109,7 +109,8 @@
 "settings.fps.patchTitle" = "Velocidad de fotogramas";
 "settings.fps.patchNote" = "Parche de la comunidad · hasta %ld fps";
 "settings.fps.pick" = "Nivel de velocidad de fotogramas";
-"settings.fps.pick.auto" = "Automático (coincidir con pantalla)";
+"settings.fps.pick.auto" = "Automático (60 FPS)";
+"settings.fps.pick.note" = "120 FPS necesita un dispositivo que realmente los alcance; si no, el juego se ralentiza.";
 "settings.fps.pick.level" = "%ld fps";
 "settings.patchNote" = "Parche de la comunidad";
 "settings.fullscreen.patchNote" = "Parche de pantalla completa de la comunidad";
@@ -229,6 +230,7 @@
 "vpad.menu.face.xbox" = "Botones: Diseño Xbox";
 "vpad.menu.face.xbox.note" = "Posiciones de botones Xbox; el botón inferior confirma";
 "vpad.menu.gyro" = "Giroscopio del teléfono";
+"vpad.menu.gyro.note" = "Los mandos con forma de Xbox, como los de 8BitDo o GameSir, solo tienen controles de movimiento en modo Switch.";
 "vpad.menu.haptic.note" = "Una vibración ligera al presionar un botón";
 "vpad.menu.holdLock.note" = "Mantén 2 s para bloquear; solo para este juego";
 "vpad.menu.hud" = "Información de rendimiento";
@@ -336,6 +338,7 @@
 "diag.error.zip" = "No se pudo crear el paquete (falló al escribir el zip; el teléfono puede estar sin espacio)";
 "diag.export" = "Exportar diagnóstico";
 "diag.prompt.abnormalExit" = "S2Arm no se cerró normalmente la última vez (se bloqueó, se congeló o fue cerrado por el sistema)";
+"diag.prompt.imlLost" = "S2Arm no se cerró normalmente la última vez. Esta instalación perdió el permiso «Límite de memoria ampliado», así que si un juego grande se cerró, lo más probable es que se quedara sin memoria. Vuelve a instalar con «Instalar en el iPhone» en S2Arm en tu ordenador (un Apple ID gratuito también conserva este permiso). Si lo firmas tú, usa Xcode o AltStore Classic v2.3; al volver a firmar con SideStore 0.7.0 se pierde. Si ya está instalado, también puedes añadir el permiso al App ID con GetMoreRam y reinstalar";
 "diag.prompt.crash" = "El sistema informó que S2Arm se bloqueó o congeló la última vez";
 "diag.prompt.message" = "%@. Esto sube registros de ejecución, informes de bloqueo y la lista de canales gráficos que usaron los juegos (solo ID de sombreadores), sin partidas guardadas, claves ni archivos de juego, y te da un código corto.";
 "diag.prompt.no" = "No, gracias";
@@ -382,7 +385,7 @@
 "gfx.fpsLimit" = "Límite de velocidad de fotogramas";
 "gfx.fpsLimit.none" = "Sin límite";
 "gfx.resolution" = "Resolución de renderizado";
-"iml.lost.body" = "Es posible que los juegos grandes se queden sin memoria o se ralenticen. Vuelve a firmar con Xcode o AltStore Classic v2.3 y reinstala, o usa GetMoreRam para añadir el permiso al App ID y reinstala.";
+"iml.lost.body" = "Los juegos grandes pueden quedarse sin memoria y cerrarse o ralentizarse. Vuelve a instalar con «Instalar en el iPhone» en S2Arm en tu ordenador (un Apple ID gratuito también conserva este permiso). Si lo firmas tú, usa Xcode o AltStore Classic v2.3; al volver a firmar con SideStore 0.7.0 se pierde. Si ya está instalado, también puedes añadir el permiso al App ID con GetMoreRam y reinstalar.";
 "iml.lost.title" = "Esta instalación perdió el permiso «Límite de memoria ampliado»";
 "lan.denied.later" = "Ahora no";
 "lan.denied.message" = "El sistema no ha permitido que «%@» detecte dispositivos en tu red local, por lo que el modo multijugador no puede encontrar a otros jugadores.\n\nVe a Ajustes › Privacidad y seguridad › Red local, activa «%@» y vuelve a unirte al multijugador.";

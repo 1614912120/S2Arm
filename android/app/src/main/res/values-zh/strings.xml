@@ -96,6 +96,11 @@
     <string name="library_position">第 %1$d 个，共 %2$d</string>
     <string name="library_empty">还没有游戏</string>
     <string name="library_empty_hint">用电脑上的 S2Arm 安装游戏。</string>
+    <string name="library_playtime_minutes">玩了 {0} 分钟</string>
+    <string name="library_playtime_hours">玩了 {0} 小时</string>
+    <string name="library_playtime_today">今天</string>
+    <string name="library_playtime_yesterday">昨天</string>
+    <string name="library_playtime_days_ago">{0} 天前</string>
     <string name="mods_title">Mod（资源替换）</string>
     <string name="mods_for_game">当前游戏：%1$s</string>
     <string name="mods_no_game">先安装游戏：mod 按游戏存放。</string>
@@ -117,4 +122,8 @@
     <string name="mods_note_exefs">里面的代码补丁（exefs 的 pchtxt / IPS）这里不收：只导入资源替换（romfs）</string>
     <string name="mods_note_empty">「%1$s」的 romfs 是空的，没收</string>
     <string name="mods_note">mod 下次起局生效，按文件夹名顺序叠，后面的覆盖前面的；取消勾选即关闭。改 mod 前先结束游戏。</string>
+    <string name="touch_appearance_opacity">按键不透明度</string>
+    <string name="touch_appearance_smaller">缩小</string>
+    <string name="touch_appearance_larger">放大</string>
+    <string name="touch_appearance_opacity_value">%1$d%%</string>
 </resources>
