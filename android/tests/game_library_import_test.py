@@ -90,7 +90,8 @@ STUBS = {
  public static Intent createChooser(Intent intent,CharSequence title){throw new AssertionError("diagnostic share unexpectedly called");}
  public Intent addCategory(String category){throw new AssertionError("diagnostic save unexpectedly called");} }''',
 'android/view/View.java': '''package android.view; public class View { public static final int VISIBLE=0, GONE=8; public void setBackgroundColor(int c){} public void setPadding(int a,int b,int c,int d){} private int vis; public void setVisibility(int v){vis=v;} public int getVisibility(){return vis;} public interface OnClickListener {void onClick(View v);} public void setEnabled(boolean enabled){throw new AssertionError("diagnostic export unexpectedly called");}
- private static int nextId=1; private int id; public static int generateViewId(){return nextId++;} public void setId(int v){id=v;} public int getId(){return id;} }''',
+ private static int nextId=1; private int id; public static int generateViewId(){return nextId++;} public void setId(int v){id=v;} public int getId(){return id;}
+ public Object layoutParams; public void setLayoutParams(Object p){layoutParams=p;} }''',
 'android/widget/TextView.java': '''package android.widget; import android.view.View; import android.content.Context; import java.util.concurrent.*;
  public class TextView extends View { public static final BlockingQueue<String> messages=new LinkedBlockingQueue<>();
  public TextView(Context c){} public void setText(String s){messages.add(s);} public void setText(int i){} public void setTextSize(float f){} public void setTextColor(int c){} }''',
@@ -103,7 +104,9 @@ STUBS = {
  public void setOnCheckedChangeListener(OnCheckedChangeListener value){listener=value;} }''',
 'android/widget/CheckBox.java': '''package android.widget; import android.content.Context; public class CheckBox extends CompoundButton { public CheckBox(Context c){super(c);} }''',
 'android/widget/LinearLayout.java': '''package android.widget; import android.content.Context; import android.view.View; public class LinearLayout extends View {
- public static final int HORIZONTAL=0, VERTICAL=1; public LinearLayout(Context c){} public void setOrientation(int x){} public void setPadding(int a,int b,int c,int d){} public void addView(View v){} public void removeAllViews(){} }''',
+ public static final int HORIZONTAL=0, VERTICAL=1; public LinearLayout(Context c){} public void setOrientation(int x){} public void setPadding(int a,int b,int c,int d){}
+ public final java.util.List<View> children=new java.util.ArrayList<>(); public void addView(View v){children.add(v);} public void addView(View v,LayoutParams p){children.add(v);v.layoutParams=p;} public void removeAllViews(){children.clear();}
+ public static class LayoutParams { public final int width,height; public final float weight; public int marginEnd; public LayoutParams(int w,int h){this(w,h,0);} public LayoutParams(int w,int h,float g){width=w;height=h;weight=g;} public void setMarginEnd(int m){marginEnd=m;} } }''',
 'android/widget/RadioButton.java': '''package android.widget; import android.content.Context; public class RadioButton extends CompoundButton { public RadioButton(Context c){super(c);} }''',
 'android/widget/RadioGroup.java': '''package android.widget; import android.content.Context; import android.view.View;
  public class RadioGroup extends LinearLayout { public interface OnCheckedChangeListener {void onCheckedChanged(RadioGroup group,int checkedId);}
@@ -113,7 +116,7 @@ STUBS = {
 'android/view/Gravity.java': '''package android.view; public class Gravity { public static final int END=8388613, BOTTOM=80; }''',
 'android/widget/FrameLayout.java': '''package android.widget; import android.content.Context; import android.view.View; public class FrameLayout extends View {
  public static class LayoutParams { public LayoutParams(int w,int h){} public LayoutParams(int w,int h,int g){} }
- public FrameLayout(Context c){} public void addView(View v){} public void addView(View v,LayoutParams p){} }''',
+ public FrameLayout(Context c){} public final java.util.List<View> children=new java.util.ArrayList<>(); public void addView(View v){children.add(v);} public void addView(View v,LayoutParams p){children.add(v);} }''',
 'org/s2arm/android/LibraryShelf.java': '''package org.s2arm.android; import android.content.Context; import android.view.View; import java.io.File;
  final class LibraryShelf extends View { interface Listener { void play(String titleId); void openGameSettings(); void openControllers(); void openSettings(); }
  static final java.util.List<String> added=new java.util.ArrayList<>();
