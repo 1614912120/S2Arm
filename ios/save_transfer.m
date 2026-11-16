@@ -96,6 +96,31 @@ char *s2a_shell_save_request(const char *json) {
     if (raw) S2A_SaveTransferFree(raw);
     return copy;
 }
+// 测试开关 S2A_TEST_SAVE_OP（真机验收「导出存档 → 删除重装 S2Arm → 导回存档」，jhz 11-15 定的 #569 处理要求这条路真能走通；无人点存档页）：
+//   export:<绝对路径> = 把本款当前存档导出成 .s2asave；restore:<绝对路径> = 先 inspect 再按它给的指纹 restore（同界面「检查 → 确认」两步）。
+//   起局前（ios/settings.m s2a_ios_load_graphics_settings 末尾，服务层还没起）跑一次，走与存档页同一个服务层入口；结果一行进日志。只认环境变量，玩家从图标打开不带
+static NSString *test_save_call(NSDictionary *extra) {
+    char *ctx = s2a_shell_save_context(); if (!ctx) return @"no save context (no game selected or no service layer)";
+    NSMutableDictionary *req = [[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:ctx length:strlen(ctx)] options:NSJSONReadingMutableContainers error:nil] mutableCopy]; free(ctx);
+    [req addEntriesFromDictionary:extra];
+    NSData *json = [NSJSONSerialization dataWithJSONObject:req options:0 error:nil]; NSString *js = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+    char *raw = s2a_shell_save_request(js.UTF8String); NSString *r = raw ? @(raw) : @"(no response)"; free(raw); return r;
+}
+void s2a_ios_test_save_op(void) {
+    const char *e = getenv("S2A_TEST_SAVE_OP"); if (!e || !*e) return;
+    @autoreleasepool {
+        NSString *op = @(e); NSRange c = [op rangeOfString:@":"]; if (c.location == NSNotFound) { fprintf(stderr, "[S2A 测试存档] 开关格式不对：%s\n", e); return; }
+        NSString *kind = [op substringToIndex:c.location], *path = [op substringFromIndex:c.location + 1];
+        if ([kind isEqualToString:@"export"]) { fprintf(stderr, "[S2A 测试存档] 导出 → %s：%s\n", path.UTF8String, test_save_call(@{@"operation": @"export", @"path": path}).UTF8String); return; }
+        if (![kind isEqualToString:@"restore"]) { fprintf(stderr, "[S2A 测试存档] 不认识的操作：%s\n", e); return; }
+        NSString *ins = test_save_call(@{@"operation": @"inspect", @"path": path});
+        NSDictionary *r = [NSJSONSerialization JSONObjectWithData:[ins dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+        NSDictionary *res = [r isKindOfClass:NSDictionary.class] && [r[@"ok"] boolValue] ? r[@"result"] : nil;
+        if (!res) { fprintf(stderr, "[S2A 测试存档] 导回 %s：检查没过：%s\n", path.UTF8String, ins.UTF8String); return; }
+        fprintf(stderr, "[S2A 测试存档] 导回 %s：%s\n", path.UTF8String,
+                test_save_call(@{@"operation": @"restore", @"path": path, @"archiveSha256": res[@"archiveSha256"] ?: @"", @"targetFingerprint": res[@"targetFingerprint"] ?: @""}).UTF8String);
+    }
+}
 // 列不出事务目录时记下原因（审计 P2-9：原先读不到也当「有未完成事务」，恢复再失败时提示说的是事务，玩家无从下手）。
 //   仍进存档页、仍先试恢复（服务层能读到就照常恢复）；恢复失败时提示写明是「读不到操作记录目录」及系统原因
 static NSString *g_journal_error;
