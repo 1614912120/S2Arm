@@ -6,7 +6,6 @@ import json
 import os
 from pathlib import Path
 import plistlib
-import shlex
 import shutil
 import stat
 import subprocess
@@ -348,6 +347,7 @@ def launch(c):
                 kept_nros_mac(c, game["id"], runtime)   # 收局就补上（#8be819），玩家再点开始就能玩，不用判断要重出什么
             import cheats   # 停帧救场：局内画面停住时帧率补丁已被运行时关掉、留了标记 → 这款「帧率」写关，下次开始时通知（正常退出 / 崩溃都要读）
             cheats.note_stall(c, game, env["S2A_DOCS"])
+            cheats.note_widen(c, game, env["S2A_DOCS"])   # 我方通用满屏自检退回：满屏写关、下次开始时通知
             # Context.run waits for the host, including failure/cancellation.
             # Do not accumulate per-run snapshots after the process exits.
             if env.get("S2A_INPUT_CONFIG"):
@@ -507,15 +507,13 @@ def extract_valid(c, game):
         return False
 
 
-def reader_program(c, where):
+def reader_program(c):
     """读取器（nx_unpack）的可直接执行的程序，给要自己调它的脚本（ns2_dump 解 ZBIC 压缩的 NSO：S2A_NX_UNPACK）：
-    Windows 发版预编件 dll 旁边就有 nx_unpack.exe；Mac 是 dll，包一层 dotnet 壳（同 prepare / ipa.py）"""
-    dll = Path(toolchain.reader(c))
+    Windows 发版预编件 dll 旁边就有 nx_unpack.exe；Mac 的读取器本身就是自包含可执行文件（发版件 NativeAOT 单文件 / 源码树 prepare 照同一配方编）"""
+    exe = Path(toolchain.reader(c))
     if os.name == "nt":
-        return dll.with_suffix(".exe")
-    shim = where / "nx_unpack"
-    shim.write_text("#!/bin/sh\nexec dotnet " + shlex.quote(str(dll)) + ' "$@"\n'); shim.chmod(0o755)
-    return shim
+        return exe.with_suffix(".exe")
+    return exe
 
 
 def warn_offline_empty(c, root):
@@ -583,8 +581,21 @@ def extract_nup(c, game, packages, extraction, env, logs):
         c.diagnostic("追加内容 %d 份在另一个 NUP 里，包里不含（%s）：同一款只留一个包含全部内容的 NUP" % (len(left), "、".join(left[:5])),
                      code="aoc_missing", severity="warning")
     # --name：没有控制分区时 ns2_dump 拿它当标题，用游戏库里的名字（导入时同样取自文件名）；S2A_NX_UNPACK：ns2_dump 解 ZBIC 压缩的 NSO 用
-    c.run([sys.executable, "-X", "utf8", c.engine / "pack/ns2_nup.py", "--to-extract", source, extraction, "--name", game["name"]],
-          logs / "ns2_nup.log", dict(env, S2A_NX_UNPACK=str(reader_program(c, logs))))
+    c.run(
+        [
+            sys.executable,
+            "-X",
+            "utf8",
+            c.engine / "pack/ns2_nup.py",
+            "--to-extract",
+            source,
+            extraction,
+            "--name",
+            game["name"],
+        ],
+        logs / "ns2_nup.log",
+        dict(env, S2A_NX_UNPACK=str(reader_program(c))),
+    )
 
 
 EXTRACTED_FORMATS = ("dump", "extract", "loose")
@@ -623,7 +634,7 @@ def extract_folder(c, game, packages, extraction, env, logs):
         if fmt == "loose":
             _dir_link(source, Path(stage) / "base")
         c.run([sys.executable, "-X", "utf8", c.engine / "pack/ns2_dump.py", stage if fmt == "loose" else source, extraction, "--name", game["name"]],
-              logs / "ns2_dump.log", dict(env, S2A_NX_UNPACK=str(reader_program(c, logs))))
+              logs / "ns2_dump.log", dict(env, S2A_NX_UNPACK=str(reader_program(c))))
 
 
 def ensure_extract(c, game, packages, env, logs, valid=None):
@@ -647,13 +658,34 @@ def ensure_extract(c, game, packages, env, logs, valid=None):
         elif any(p.get("format") in EXTRACTED_FORMATS for p in packages):
             extract_folder(c, game, packages, extraction, env, logs)
         else:
-            c.run(["dotnet", toolchain.reader(c), c.keys, extraction, "--aoc-index", "--title-id=" + game["id"], *paths], logs / "extract.log", env)
-        c.emit("message", "解包已完成，正在校验合并结果并写入缓存")   # 解包读满 100% 后还要校验、写缓存：说明在做什么，进度不停在「解包 100%」（社区贡献者补丁 #8）
-        if not (extraction / "exefs/main.npdm").is_file() or not (extraction / "ctl/control.nacp").is_file():
+            c.run(
+                [
+                    toolchain.reader(c),
+                    c.keys,
+                    extraction,
+                    "--aoc-index",
+                    "--title-id=" + game["id"],
+                    *paths,
+                ],
+                logs / "extract.log",
+                env,
+            )
+        c.emit(
+            "message", "解包已完成，正在校验合并结果并写入缓存"
+        )  # 解包读满 100% 后还要校验、写缓存：说明在做什么，进度不停在「解包 100%」（社区贡献者补丁 #8）
+        if (
+            not (extraction / "exefs/main.npdm").is_file()
+            or not (extraction / "ctl/control.nacp").is_file()
+        ):
             raise Failure("解包结果缺少 NPDM 或 NACP。")
         # 程序位数只走 nx_unpack --npdm-isa（全仓唯一判法，pack/nx_unpack/Inspect.cs NpdmIsa）：读不了 / unknown 退 3，同样拒
         isa_log = logs / "npdm_isa.log"
-        c.run(["dotnet", toolchain.reader(c), "--npdm-isa", extraction / "exefs/main.npdm"], isa_log, env, ok_codes=(0, 3))
+        c.run(
+            [toolchain.reader(c), "--npdm-isa", extraction / "exefs/main.npdm"],
+            isa_log,
+            env,
+            ok_codes=(0, 3),
+        )
         isa = (isa_log.read_text(encoding="utf-8", errors="replace").strip().splitlines() or [""])[-1].strip()
         if c.last_rc != 0 or isa != "aarch64":
             raise Failure("合并后的游戏程序不是有效的 AArch64 NPDM（nx_unpack --npdm-isa：" + (isa or "无输出") + "）。")  # 非玩家句
@@ -777,12 +809,13 @@ def prepare(c):
         if c.r.get("engineBundle"):
             artifact(c, "Prepare")
         versions = {}
-        for name, command in (("sdk", ["xcrun", "--sdk", "macosx", "--show-sdk-version"]),
-                              ("metal", ["xcrun", "--sdk", "macosx", "metal", "--version"]),
-                              ("dotnet", ["dotnet", "--list-runtimes"] if c.r.get("engineBundle") else ["dotnet", "--version"])):
+        for name, command in (
+            ("sdk", ["xcrun", "--sdk", "macosx", "--show-sdk-version"]),
+            ("metal", ["xcrun", "--sdk", "macosx", "metal", "--version"]),
+        ):
             ok, version = toolchain.probe(c, command)
             if not ok:
-                code = {"sdk": "xcode_unavailable", "metal": "metal_unavailable", "dotnet": "dotnet_unavailable"}[name]
+                code = {"sdk": "xcode_unavailable", "metal": "metal_unavailable"}[name]
                 raise Failure("构建工具不可用：" + name, code=code)  # 非玩家句
             versions[name] = version
         identity = dict(schema=1, target="macos-arm64", source=fingerprint, tools=versions,
@@ -817,12 +850,12 @@ def prepare(c):
         env.update(S2A_PACK_PLAT="macos", S2A_WIDEN_AUTO_RUN="0", S2A_WIDEN_PKG="0")   # 宽屏自动出表按 iPhone 屏幕比例补画面、要占 Mac 局槽跑闭环；Mac 窗口按 16:9（同 --target mac）
         # refresh.sh 链上的追加内容 / 原件核对要原始包、密钥和 nx_unpack（同一键出包：pack/oneclick/oneclick.sh 设 S2A_GAME_SRC / S2A_KEYS）：
         #   原始包 = 这款选中的原件软链进临时目录（stage_sources；不设就去扫 ~/Downloads：玩家机上弹「访问下载文件夹」授权框，10-26 侍魂晓日志实测扫了）；
-        #   nx_unpack = 应用自带的读取工具（toolchain.reader，dotnet 跑 dll）包一层可执行壳——不给就按源码现编，启动器只带运行时、没有 SDK，编不出（10-26 侍魂晓停在 aoc）
+        #   nx_unpack = 应用自带的读取工具（toolchain.reader，自包含单文件：发版件 NativeAOT 预编，源码树 prepare 照同一配方编），直接可执行
         src = root / "src"; shutil.rmtree(src, ignore_errors=True)
         stage_sources(c, packages, src)
-        nxu = root / "nx_unpack"
-        nxu.write_text("#!/bin/sh\nexec dotnet " + shlex.quote(str(toolchain.reader(c))) + ' "$@"\n'); nxu.chmod(0o755)
-        env.update(S2A_GAME_SRC=str(src), S2A_KEYS=str(c.keys), S2A_NX_UNPACK=str(nxu))
+        env.update(
+            S2A_GAME_SRC=str(src), S2A_KEYS=str(c.keys), S2A_NX_UNPACK=str(toolchain.reader(c))
+        )
         try:
             with ms.DirectWatcher(c, root / "roots", game["id"]):
                 c.run(["bash", c.engine / "pack/refresh.sh", game["id"]], logs / "refresh.log", env)

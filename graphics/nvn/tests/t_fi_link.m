@@ -45,16 +45,14 @@ int main(void) { @autoreleasepool {
         g_fi_state = 1; g_dm_present_link = 2; s2a_fi_set_live(0); (void)fi_wanted(); int l3 = g_dm_present_link; s2a_fi_set_live(1); g_fi_state = 0; g_dm_present_link = 0;
         CHECK(r0 == 0 && l0 == 1 && r1 == 1 && l1 == 0 && l2 == 1 && l3 == 2, "④ 显示链跟补帧：局中关 → 不补、链 %d（期望 1）；再开 → 补、链 %d（期望 0）；回退 → 链 %d（期望 1）；120 Hz 链不动 → %d（期望 2）", l0, l1, l2, l3);
     }
-    // ⑤ 补帧超时不等（审计 P1-189）：迟到的插值读着的输入图由 in_busy 护着，出图线程写之前才等。期望手写：没人读 → 立即返回（< 5 ms）；
-    //   有 1 个读者、50 ms 后读完 → 等约 50 ms（40–500 ms）。旧实现没有这层（迟到时补帧任务自己多等最多 1 秒才记票）
+    // ⑤ 补帧超时不等（审计 P1-189）：迟到的插值读着的输入图由 in_busy 护着，出图线程见到被占就这一帧不写不补，不等。期望手写：
+    //   没人读 → 能写（1）；有 1 个读者 → 不能写（0），且立即返回（< 5 ms）。旧实现（fi_in_wait）在有读者时等到读完、最多 1 秒
     if (@available(macOS 26.0, iOS 26.0, *)) {
         NvPresentFI *f = [NvPresentFI new];
-        double t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6; fi_in_wait(f, 1); double idle = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6 - t0;
+        int idle = fi_input_free(f, 1);
         pthread_mutex_lock(&g_pq_mu); f->in_busy[1] = 1; pthread_mutex_unlock(&g_pq_mu);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 50 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-            pthread_mutex_lock(&g_pq_mu); f->in_busy[1] = 0; pthread_cond_broadcast(&g_pq_cv); pthread_mutex_unlock(&g_pq_mu); });
-        t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6; fi_in_wait(f, 1); double busy = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6 - t0;
-        CHECK(idle < 5 && busy >= 40 && busy < 500, "⑤ 写输入图前：没人读 %.1f ms 返回（期望 < 5）；有迟到的插值读着、50 ms 后读完 → 等 %.1f ms（期望 40–500）", idle, busy);
+        double t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6; int busy = fi_input_free(f, 1); double ms = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1e6 - t0;
+        CHECK(idle == 1 && busy == 0 && ms < 5, "⑤ 写输入图前：没人读 → %d（期望 1）；迟到的插值读着 → %d（期望 0）、用时 %.2f ms（期望 < 5，不等）", idle, busy, ms);
     }
     printf("%s t_fi_link：%u 项，%u 项不符\n", failures ? "✗" : "✓", checks, failures);
     return failures != 0;

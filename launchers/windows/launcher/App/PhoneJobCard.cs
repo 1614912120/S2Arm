@@ -123,8 +123,8 @@ public sealed partial class EnvironmentWindow
         var device = tr.Device.Length > 0 ? tr.Device : T("phone.device.unknown");
         var panel = new StackPanel { Spacing = 22, HorizontalAlignment = HorizontalAlignment.Stretch };   // 撑满卡片、贴左（同别的卡片对齐）：进度条、详细过程不被压窄
         AutomationId(panel, "phone." + state);
-        // 导出模式：装机 / 更新作业不连手机、出到文件夹。完成后看结果，进行中看当前装法
-        var exporting = tr.Kind is "install" or "installUpdate" && (tr.ExportFolder.Length > 0 || state == "running" && installMode == "export");
+        // 导出自签包：装机 / 更新作业不连手机、出到文件夹。完成后看结果，进行中看这次会话
+        var exporting = tr.Kind is "install" or "installUpdate" && (tr.ExportFolder.Length > 0 || state == "running" && (tr.Kind == "install" ? installExport : lastUpdateMode == "export"));
         var title = Label(T(exporting ? "phone.title.export" : "phone.title." + tr.Kind), 18); title.FontWeight = FontWeight.Bold;   // 这是什么操作（维护者：只看得到「更新中 · …」一小行）
         AutomationId(title, "phone.operation");
         panel.Children.Add(title);
@@ -270,7 +270,7 @@ public sealed partial class EnvironmentWindow
         else
         {
             panel.Children.Add(Seal("!", "#E05C5C"));
-            panel.Children.Add(Headline(T("phone.failed." + tr.Kind)));
+            panel.Children.Add(Headline(T(exporting ? "phone.failed.export" : "phone.failed." + tr.Kind)));
             if (message.Length > 0) panel.Children.Add(WrappedMuted(B(message), 17));
             if (tr.Suggestion.Length > 0)
             {
