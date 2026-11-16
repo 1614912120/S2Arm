@@ -10,6 +10,12 @@
 extern "C" {
 #endif
 
+// Shared production policy for direct runtime, captured facts and offline identity.
+// Historical decoder re-encoding retains the policy stored in its wire version.
+static inline int s2a_direct_requires_linked_varying_interface(uint32_t stage_mask) {
+    return stage_mask == 3u;
+}
+
 // provider 在 Prepare 时合成、在 Activate 后可供 Draw 读取的请求身份半（profile 原文 + session/generation）。
 struct s2a_direct_compile_context {
     uint64_t session;

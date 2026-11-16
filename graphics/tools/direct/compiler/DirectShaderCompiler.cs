@@ -65,8 +65,6 @@ namespace S2A.DirectCompiler
             if (linked && (program.Kind != "graphics" || program.Stages.Length != 2 ||
                 program.StageOf("vs") == null || program.StageOf("fs") == null))
                 throw new DirectCompileException("UNSUPPORTED_PROGRAM", "linked varyings require exactly VS and FS");
-            if (linked && (profile.Caps.MaximumVertexOutputComponents <= 0 || profile.Caps.MaximumFragmentInputComponents <= 0))
-                throw new DirectCompileException("UNSUPPORTED_PROFILE", "linked varyings require both measured component limits");
             if (program.StageOf("gs") is DirectStage gs)
             {
                 if (!profile.Caps.SupportsGeometryShader)

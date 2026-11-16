@@ -62,7 +62,7 @@ int main(void) {
     in.translator_closure = "closure-5";
     for (int i = 0; i < 32; i++) in.profile_sha[i] = (uint8_t)(i * 3 + 1);
     in.stage_mask = 0x3;
-    in.requires_linked_varying_interface = 1;
+    in.requires_linked_varying_interface = s2a_direct_requires_linked_varying_interface(in.stage_mask);
     for (int s = 0; s < 2; s++) for (int b = 0; b < 8; b++) in.keys[s][b] = (uint8_t)(0x10 * s + b);
     // F4.3 修订：短 key 只是完整摘要的前 8 字节，身份必须带完整源摘要与真实长度。
     // 反例基线：只改 code、强制同短 key 时，旧编码完全相同（canonical_equal=1）。

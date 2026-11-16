@@ -211,7 +211,7 @@ namespace S2A.DirectCompiler
             if (parsed.SupportsGeometryShaderPassthrough ||
                 parsed.SupportsTransformFeedback || parsed.SupportsLayerVertexTessellation ||
                 parsed.SupportsViewportIndexVertexTessellation || parsed.SupportsViewportMask ||
-                parsed.S2AVertexPull)
+                parsed.S2AVertexPull || parsed.RequiresLinkedVaryingInterface)
                 throw new DirectCompileException("UNSUPPORTED_PROFILE",
                     cw + " enables a stage/feature the first direct backend does not implement");
             return new DirectProfile(hash, closure, compilerAbi, directAbi, parsed);

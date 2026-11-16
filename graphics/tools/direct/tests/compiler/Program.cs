@@ -1250,18 +1250,43 @@ internal static unsafe class Program
             Throws("INVALID_JSON", () => DirectShaderCompiler.Compile(Encoding.UTF8.GetBytes(malformed.ToJsonString())),
                 "linked request rejects nonboolean " + invalid);
         }
-        Throws("UNSUPPORTED_PROFILE", () => DirectShaderCompiler.Compile(RequestJson(
-            profile, "graphics", 1, 1, "linked-unknown-limits", vs, fs, linked: true)), "linked rejects unknown limits");
-        foreach (string field in new[] { "maximumVertexOutputComponents", "maximumFragmentInputComponents" })
+        // Unknown limits do not prevent linking; measured positive limits still constrain it.
+        using (JsonDocument unknown = ParseResult(DirectShaderCompiler.Compile(RequestJson(
+            profile, "graphics", 1, 1, "linked-unknown-limits", vs, fs, linked: true))))
+            Check(unknown.RootElement.GetProperty("content").GetProperty("stages").GetArrayLength() == 2,
+                "linked accepts legacy profile with both limits unknown");
+        foreach (string field in new[] { "maxVertexOutputComponents", "maxFragmentInputComponents" })
         foreach (bool missing in new[] { true, false })
         {
-            // Consumer-only malformed profile fixture; not a valid generated hash.
-            var partial = System.Text.Json.Nodes.JsonNode.Parse(pairedProfile);
-            if (missing) partial["capabilities"].AsObject().Remove(field);
-            else partial["capabilities"][field] = 0;
-            Throws("UNSUPPORTED_PROFILE", () => DirectShaderCompiler.Compile(RequestJson(
-                Encoding.UTF8.GetBytes(partial.ToJsonString()), "graphics", 1, 1, "linked-partial", vs, fs, linked: true)),
-                "linked request rejects unknown or zero limit " + field + "; missing=" + missing);
+            var partial = pairedCaps.DeepClone();
+            if (missing) partial["limits"].AsObject().Remove(field);
+            else partial["limits"][field] = 0;
+            byte[] partialProfile = DirectProfileComposer.Compose(Encoding.UTF8.GetBytes(partial.ToJsonString()),
+                DirectBuildIdentity.TranslatorClosure);
+            using JsonDocument result = ParseResult(DirectShaderCompiler.Compile(RequestJson(
+                partialProfile, "graphics", 1, 1, "linked-partial", vs, fs, linked: true)));
+            Check(result.RootElement.GetProperty("content").GetProperty("stages").GetArrayLength() == 2,
+                "linked accepts unknown/zero limit " + field + "; missing=" + missing);
+        }
+        foreach (string field in new[] { "maxVertexOutputComponents", "maxFragmentInputComponents" })
+        {
+            var constrained = pairedCaps.DeepClone();
+            constrained["limits"][field] = 1;
+            byte[] constrainedProfile = DirectProfileComposer.Compose(Encoding.UTF8.GetBytes(constrained.ToJsonString()),
+                DirectBuildIdentity.TranslatorClosure);
+            bool rejectedByBudget = false;
+            try
+            {
+                DirectShaderCompiler.Compile(RequestJson(constrainedProfile, "graphics", 1, 1, "linked-over-budget",
+                    Guest(false, new[] { Ast(0), Ast(1) }),
+                    Guest(true, new[] { Ald(0), Ald(1, reg: 1), FaddR(0, 0, 1) }, new[] { 0, 1 }), linked: true));
+            }
+            catch (DirectCompileException error)
+            {
+                rejectedByBudget = error.Code == "TRANSLATION" &&
+                    error.Message.Contains("interface requires") && error.Message.Contains("host limit 1");
+            }
+            Check(rejectedByBudget, "known positive limit still rejects actual over-budget interface " + field);
         }
         Throws("UNSUPPORTED_PROGRAM", () => DirectShaderCompiler.Compile(RequestJson(
             pairedProfile, "graphics", 1, 1, "linked-vs-only", vs, linked: true)), "linked rejects VS-only");

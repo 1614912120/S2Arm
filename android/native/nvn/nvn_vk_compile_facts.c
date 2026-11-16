@@ -442,6 +442,7 @@ int nvk_input_identity(const struct s2a_record_draw_state *state,
     if (!env || !env->have_profile) return -1;
     memcpy(in.profile_sha, env->profile_sha, 32);
     in.stage_mask = state->stages;
+    in.requires_linked_varying_interface = s2a_direct_requires_linked_varying_interface(in.stage_mask);
     memcpy(in.keys, state->keys, sizeof in.keys);
     // 完整源摘要来自 SetShaders/Bind 捕获时算定的那份快照（不逐笔重哈希）。
     // 缺任何一条都准确失败：拿短 key 当内容证明就是允许误命中。

@@ -216,15 +216,19 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Opt-in is explicit: legacy paired callers send no field, while malformed
-    // opt-ins fail instead of silently changing single-stage or GS semantics.
+    // Production pair policy is derived once from stages; old zero-initialized
+    // producers must agree. Malformed opt-ins cannot change non-pair semantics.
     {
         struct s2a_compile_request_input u = in;
         char *j = NULL; size_t n = 0; char g[512] = {0};
         u.requires_linked_varying_interface = 0;
-        CHECK(s2a_compile_request_build(&u, &j, &n, g, sizeof g) == 0 && j, "legacy VS+FS builds");
-        CHECK(j && !contains(j, "\"requiresLinkedVaryingInterface\""), "legacy pair omits linked flag");
+        CHECK(s2a_compile_request_build(&u, &j, &n, g, sizeof g) == 0 && j, "zero-initialized VS+FS producer builds");
+        CHECK(j && contains(j, "\"requiresLinkedVaryingInterface\":true"), "pair derives linked policy without per-caller opt-in");
         free(j); j = NULL;
+        u.stages[0].stage = "fs"; u.stages[1].stage = "vs";
+        CHECK(s2a_compile_request_build(&u, &j, &n, g, sizeof g) != 0 && !j,
+              "reverse pair is rejected even without explicit opt-in");
+        u.stages[0].stage = "vs"; u.stages[1].stage = "fs";
         u.stage_count = 1;
         CHECK(s2a_compile_request_build(&u, &j, &n, g, sizeof g) == 0 && j, "single VS builds");
         CHECK(j && !contains(j, "\"requiresLinkedVaryingInterface\""), "single VS omits linked flag");
