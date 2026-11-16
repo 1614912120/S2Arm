@@ -96,5 +96,26 @@
     <string name="library_position">%1$d of %2$d</string>
     <string name="library_empty">No games yet</string>
     <string name="library_empty_hint">Install a game with S2Arm on your computer.</string>
+    <string name="mods_title">Mods (asset replacement)</string>
+    <string name="mods_for_game">For: %1$s</string>
+    <string name="mods_no_game">Install a game first: mods are kept per game.</string>
+    <string name="mods_import_zip">Import mod (zip)…</string>
+    <string name="mods_import_folder">Import mod folder…</string>
+    <string name="mods_none">No mods for this game yet.</string>
+    <string name="mods_item">%1$s · %2$d files · %3$s</string>
+    <string name="mods_remove">Delete</string>
+    <string name="mods_working">Working on mods…</string>
+    <string name="mods_imported">Mods imported: %1$s</string>
+    <string name="mods_failed">Mod action failed: %1$s</string>
+    <string name="mods_err_not_archive">A mod must be a zip archive or a folder (extract 7z / rar into a folder first): %1$s</string>
+    <string name="mods_err_too_many">This archive has too many files (more than %1$d): %2$s</string>
+    <string name="mods_err_too_large">This archive unpacks to more than 16 GB: %1$s</string>
+    <string name="mods_err_no_romfs">No romfs folder in “%1$s”: an asset replacement mod must contain romfs/ (for example atmosphere/contents/%2$s/romfs).</string>
+    <string name="mods_err_missing">No such mod: %1$s.</string>
+    <string name="mods_err_name_taken">A mod with this name already exists: %1$s.</string>
+    <string name="mods_note_other_game">“%1$s” is for another game (%2$s); skipped</string>
+    <string name="mods_note_exefs">Code patches inside (exefs pchtxt / IPS) are not imported here: only asset replacement (romfs)</string>
+    <string name="mods_note_empty">The romfs of “%1$s” is empty; skipped</string>
+    <string name="mods_note">Mods apply from the next launch, stacked by folder name (later ones win). Uncheck to turn one off. Change mods while the game is not running.</string>
 </resources>
 
