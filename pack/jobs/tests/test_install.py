@@ -922,6 +922,76 @@ class KeptNroTests(unittest.TestCase):
             self.assertEqual(install.pull_kept_nros(self.c, "C891", "s2arm.z", self.G), 0)   # 机上没有：0、不报错
 
 
+    def test_windows_pull_via_devpush(self):
+        # Windows 没有 devicectl：经 s2a-devpush 列 <文档根>/wire/<号>/nro、逐个拉回（期望手写，同 iPhone 口径）：只收名 = 内容 SHA-256 的；
+        #   列不出（目录还没建 / 锁屏，ls → None）、没记过包名、连不上（client 抛 Failure）都按 0、不报错
+        import hashlib
+        good = b"NRO-W" * 11; sg = hashlib.sha256(good).hexdigest(); bad = "2" * 64
+        rel = f"{install.game_docs(self.G)}/wire/{self.G.upper()}/nro"
+        files = {f"{sg}.nro": good, f"{bad}.nro": b"content differs from its name", "notes.txt": b"x"}
+        got = []
+        class Dp:
+            def call(_, op, r):
+                self.assertEqual((op, r), ("ls", rel)); return 0, "\n".join([".", "..", *files])
+            def get(_, r, dst):
+                got.append(r); Path(dst).write_bytes(files[r.rsplit("/", 1)[-1]]); return True
+        ph = object.__new__(install.WinPhone); ph.c, ph.bid = self.c, "s2arm.z"
+        ph.client = lambda work: Dp()
+        msgs = self._msgs()
+        noted = []
+        um.patch.object(install, "note", lambda c, text: noted.append(text)).start(); self.addCleanup(um.patch.stopall)
+        self.assertEqual(ph.pull_kept([self.G]), 1)
+        self.assertEqual(ph.pull_kept([self.G]), 0)   # 已收：不重复
+        kept = self.c.library / f"games/{self.G}/nro_kept"
+        self.assertEqual(sorted(p.name for p in kept.iterdir()), [f"{sg}.nro"])
+        self.assertEqual((kept / f"{sg}.nro").read_bytes(), good)
+        self.assertEqual(got, [f"{rel}/{bad}.nro", f"{rel}/{sg}.nro", f"{rel}/{bad}.nro"])
+        self.assertEqual(len(msgs), 1)
+        # 名不符那个两次都拉回、核摘要丢掉：各记一行（看得见，不静默）
+        self.assertEqual(len(noted), 2); self.assertTrue(all("摘要" in t for t in noted))
+        # 失败都按 0、不挡装机，但除「目录不在」（这款没留下，常态）外都记一行
+        for ls_out, logged in (((1, "S2A_AFC_ERR 8 ObjectNotFound"), False), ((1, "device socket io failed"), True)):
+            noted.clear()
+            class Fail:
+                def call(_, op, r, out=ls_out): return out
+            ph.client = lambda work: Fail()
+            self.assertEqual(ph.pull_kept([self.G]), 0)
+            self.assertEqual(bool(noted), logged, ls_out)
+        def down(work): raise install.Failure("找不到 s2a-devpush", code="tool_missing")
+        def broken(work): raise ModuleNotFoundError("No module named 'push_pack'")   # 装机前也调：工具起不来不挡装机
+        for bad_client in (down, broken):
+            noted.clear(); ph.client = bad_client
+            self.assertEqual(ph.pull_kept([self.G]), 0)
+            self.assertEqual(len(noted), 1); self.assertIn("起不来", noted[0])
+        ph.bid = None
+        self.assertEqual(ph.pull_kept([self.G]), 0)
+
+    def test_clear_kept_after_install_only_what_is_in_the_pack(self):
+        # 装好后（put_game 末尾 clear_kept）：期望手写——收回过的 A、B 里只有 A 已进程序件（nro_modules.tsv 有它的摘要）→ 只删手机上的 A；
+        #   B 还没补进包，留在手机上（「手机上还有 .nro = 没补好」的提示照旧）；手机类没有 drop_kept 不报错；删失败记一行不挡
+        kept = install.layout.nro_kept(self.c, self.G, create=True); kept.mkdir(parents=True, exist_ok=True)
+        a, b = "a" * 64, "b" * 64
+        for n in (a, b):
+            (kept / f"{n}.nro").write_bytes(b"x")
+        kit = Path(self.c.private) / "kit"; kit.mkdir(parents=True)
+        (kit / "nro_modules.tsv").write_text(f"nro0\t{a}\tx\ty\tz\n")
+        dropped, noted = [], []
+        um.patch.object(install.layout, "ios_kit", lambda c, g: kit).start()
+        um.patch.object(install, "note", lambda c, text: noted.append(text)).start(); self.addCleanup(um.patch.stopall)
+        install.clear_kept(self.c, types.SimpleNamespace(drop_kept=lambda g, names: dropped.append((g, names))), [self.G])
+        self.assertEqual(dropped, [(self.G, [f"{a}.nro"])])
+        install.clear_kept(self.c, types.SimpleNamespace(), [self.G])   # 没有 drop_kept 的手机类：跳过
+        def boom(g, names): raise install.Failure("断开", code="device_not_ready")
+        install.clear_kept(self.c, types.SimpleNamespace(drop_kept=boom), [self.G])
+        self.assertEqual(len(noted), 1)
+        # Windows：经 s2a-devpush rm 机上 <文档根>/wire/<号>/nro/<名>
+        rms = []
+        class Dp:
+            def rm(_, rel): rms.append(rel); return True, ""
+        ph = object.__new__(install.WinPhone); ph.c, ph.bid = self.c, "s2arm.z"; ph.client = lambda work: Dp()
+        ph.drop_kept(self.G, [f"{a}.nro"])
+        self.assertEqual(rms, [f"{install.game_docs(self.G)}/wire/{self.G.upper()}/nro/{a}.nro"])
+
 class PullSeenTests(unittest.TestCase):
     setUp = tj.JobsTests.setUp; tearDown = tj.JobsTests.tearDown
 
