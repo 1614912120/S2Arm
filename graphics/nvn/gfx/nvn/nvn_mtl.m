@@ -5052,6 +5052,20 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
                      t->d.width, t->d.height, t->d.depth, t->d.levels, t->d.stride, t->d.pkg_layout, (unsigned long long)t->L.size, (unsigned long long)nz); }
         }
     }
+    {   // 稀疏贴图普查（11-16，马车世界 Mac 9 张 NVN SPARSE 贴图数组按全尺寸建成 Metal 贴图、约 26 GB）：带 NVN_TEXTURE_FLAGS_SPARSE 的贴图
+        //   每种形状（宽 / 高 / 深 / 格式 / mip / 目标）第一次解析记一行标称字节与所在池，供各款普查「谁用稀疏贴图、标称多大」；全程至多 32 种
+        static uint64_t seen[32]; static int ns; static pthread_mutex_t mu = PTHREAD_MUTEX_INITIALIZER;
+        if (t->d.flags & NVN_TEXTURE_FLAGS_SPARSE) {
+            uint64_t k = ((uint64_t)t->d.width * 2654435761u) ^ ((uint64_t)t->d.height << 20) ^ ((uint64_t)t->d.depth << 40) ^ ((uint64_t)t->d.format << 52) ^ ((uint64_t)t->d.levels << 8) ^ (uint64_t)t->d.target;
+            int fresh = 0; pthread_mutex_lock(&mu);
+            if (ns < 32) { fresh = 1; for (int i = 0; i < ns; i++) if (seen[i] == k) { fresh = 0; break; } if (fresh) seen[ns++] = k; }
+            pthread_mutex_unlock(&mu);
+            if (fresh) MLOG("sparse texture census: ser=%llu target %d format %#x %ux%ux%u levels %u, nominal %llu MB, pool flags %#x (%s), treated as %s",
+                            (unsigned long long)t->serial, t->d.target, t->d.format, t->d.width, t->d.height, t->d.depth, t->d.levels, (unsigned long long)(t->L.size >> 20),
+                            t->pool ? t->pool->flags : 0, t->pool && (t->pool->flags & NVN_MEMORY_POOL_FLAGS_VIRTUAL) ? "virtual" : "physical",
+                            t->pool && nvn_sparse_pool(t->pool) ? "sparse pool (levels from the first mapped one)" : "full-size Metal texture");
+        }
+    }
     id have = tex_get(t->serial);
     if (!packaged && !have && DM_GAME_TEX_DIRTY_UPLOAD && t->mem && on_sub_thread()) { int nvn_ft_written(const tex_t *); packaged = nvn_ft_written(t); }   // first use of a texture the CPU wrote since init without a flush (hle_nvn.c)
     if (!packaged && !have && on_sub_thread() && tex_cpu_content(t)) { nvn_be_tex_cpu_written(t); packaged = 1; }
