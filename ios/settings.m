@@ -341,7 +341,7 @@ void s2a_ios_apply_graphics_settings(NSUserDefaults *defaults) {
         apply_environment("S2A_DOCKED", @(docked));
         fprintf(stderr, "[S2A 画面设置] S2A_DOCKED=%s（本 App 设置）\n", docked);
     }
-    // 帧率档位（11-13 维护者：60 / 120 帧补丁都带进去，玩家自己选）：存 S2AFpsPick（0 = 自动：不超过屏幕刷新率的最高一档），运行时 runtime/src/cpatch.c fps_pick 读
+    // 帧率档位（11-13 维护者：60 / 120 帧补丁都带进去，玩家自己选）：存 S2AFpsPick（0 = 自动：不超过 60 帧的最高一档），运行时 runtime/src/cpatch.c fps_pick 读
     if (!getenv("S2A_FPS_PICK")) {
         NSInteger pick = [defaults integerForKey:@"S2AFpsPick"];
         if (pick > 0) { apply_environment("S2A_FPS_PICK", [NSString stringWithFormat:@"%ld", (long)pick]); fprintf(stderr, "[S2A 画面设置] S2A_FPS_PICK=%ld（本 App 设置）\n", (long)pick); }
