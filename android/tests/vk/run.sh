@@ -41,7 +41,11 @@ if [ "$(uname -s)" = Linux ]; then
 else
     echo "窄 shim wrap 直通用例：$(uname -s) 的链接器不支持 -Wl,--wrap，改在 Linux / 离线容器里跑（本机跳过）" >&2
 fi
-if { [ "$mode" = "--tbuf-compiler-core" ] || [ -z "$mode" ]; } && [ -z "${S2A_VULKAN_IMAGE_ID:-}" ]; then
+# TBUF 真编译器链（build/tbuf-real-red）只给 --tbuf-compiler-core 出料；默认档在末尾会递归进这一档，不在这里先出一遍（原来每次默认档跑两遍）。
+# 出料口径同 GS 链：macOS 每次重出；Linux 缺产物才出（模拟机型档一轮十几次 run.sh 共用基线出的那份；要强制重出就删掉 build/tbuf-real-red）。
+# 链本身的断言在 android/test.sh 的门禁里照跑，这里只要它的产物。
+if [ "$mode" = "--tbuf-compiler-core" ] && [ -z "${S2A_VULKAN_IMAGE_ID:-}" ] &&
+   { [ "$(uname -s)" = Darwin ] || [ ! -f "$repo/build/tbuf-real-red/production.json" ] || [ ! -f "$repo/build/tbuf-real-red/profile.json" ]; }; then
     python3 "$repo/android/tests/tbuf_compiler_chain_test.py"
 fi
 if { [ "$mode" = "--shown-only" ] || [ -z "$mode" ] || [[ "$mode" == --tbuf-* ]]; } && [ -z "${S2A_VULKAN_IMAGE_ID:-}" ]; then
@@ -658,6 +662,10 @@ if ! grep -q "C205 图形管线散列表：增长 / 多次翻倍 / 增长失败�
 fi
 if ! grep -q "C204 描述符组按布局回收：A…N 十四个臂已核对" "$out/log"; then
     echo "【红】没跑到 C204（描述符组按布局回收，十四个臂）" >&2
+    exit 1
+fi
+if ! grep -q "C208 close 不等满时限：.*已核对" "$out/log"; then
+    echo "【红】没跑到 C208（close 不等满时限：退休队列清空后 worker 要唤醒 close）" >&2
     exit 1
 fi
 if ! grep -q "C207 诊断读数互不清零：近 300 帧读数与逐笔读数各自读增量、不清零共享累加器，已核对" "$out/log"; then

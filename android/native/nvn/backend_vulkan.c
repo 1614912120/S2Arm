@@ -1551,6 +1551,9 @@ static void *worker_main(void *arg) {
             pthread_mutex_unlock(&g_mu);
             retire_one(vk, b);
             pthread_mutex_lock(&g_mu);
+            // 退休队列清空要广播：close 在 g_cv 上等 rhead 变空（它先销毁视图，视图放下引用后缓冲才进退休队列）。
+            // 原来这里不发信号，close 只能睡到截止时间才醒——每次关会话白等满时限（测试里 5 秒，C208）。
+            if (!vk->rhead) pthread_cond_broadcast(&g_cv);
             continue;
         }
         if (vk->qhead) {
