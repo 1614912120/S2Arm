@@ -175,6 +175,15 @@ os.remove(cd10 + '/AABBCCDD00112233.txt'); cpatch.plan(r10, '', []); left10 = [f
 del os.environ['S2A_CHEATS_DIRS']
 ck(f'⑩ 金手指原文随包：版本对的那份照原文进产物根、对不上的不带、重跑先清（实得 {sh10}、原文一致 {bool(same10)}、重跑后剩 {left10}）',
    sh10 == ['cheat-src.AABBCCDD00112233.txt'] and same10 and left10 == [])
+# ⑩b 没写构建号的金手指（#1321）：文件名不是 16 位构建号、首行也没 BID= → 不随包、不编；计划日志单独一行「不收 cheat:<文件名> … 没写构建号」（结果页逐份列出），
+#    不再混在「版本不对」里被当成库里别的版本静默略过。期望按构造手写
+r10b = T + '/root10b'; shutil.copytree(root, r10b, ignore=shutil.ignore_patterns('cpatch*', 'cheat-src*')); cd10b = T + '/cheats10b'; os.makedirs(cd10b)
+open(cd10b + '/mine.txt', 'wb').write(good)
+os.environ['S2A_CHEATS_DIRS'] = cd10b; cpatch.plan(r10b, '', []); del os.environ['S2A_CHEATS_DIRS']
+log10b = [l for l in open(r10b + '/cpatch_plan.log', encoding='utf-8').read().splitlines() if 'mine.txt' in l]
+sh10b = [f for f in os.listdir(r10b) if f.startswith('cheat-src.')]
+ck(f'⑩b 没写构建号的金手指：不随包、日志单列「没写构建号」（实得 {log10b}、随包 {sh10b}）',
+   len(log10b) == 1 and log10b[0].startswith('不收\tcheat:mine.txt\tmain\tmine.txt\t没写构建号') and sh10b == [])
 # ⑪ 跨版本移植（11-13，只做画幅）：主程序构建号 AABB…，补丁库里只有别的版本（1111…）的一份 21:9：0x100 fmov s0,#2.375（= 0x1E207000，imm8 0x03）、数据 0x5100 = 2.3333。
 #    新版程序里那条挪到 0x140、原值 fmov s0,#1.75（16:9 那档，imm8 0x7C → 0x1E2F9000）；数据挪到 0x5180、原值 1.7778。
 #    期望（手算）：移植成 0x140 / 0x5180（log「移植」），再单份参数化（宽侧 21:9，窄侧外推）→ p 140 1e2f9000 → ldr s0,[x16,#1016×8] = bd5fc200「@k」，数据 5180:<1.7778 原字节>:@a4 k1016::@a4

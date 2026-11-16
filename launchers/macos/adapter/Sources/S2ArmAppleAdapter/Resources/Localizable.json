@@ -9818,5 +9818,9 @@
  {
   "source": "用你自己的开发者证书签名只有主程序一份描述文件，签不了小组件",
   "en": "Signing with your own developer certificate has a provisioning profile for the main app only, so the widget can't be signed"
+ },
+ {
+  "source": "没写构建号：文件名改成「<16 位构建号>.txt」或首行加 BID=<构建号> 才能编进 iPhone 包。",
+  "en": "No build ID: rename the file to “<16-digit build ID>.txt” or add BID=<build ID> as the first line so it can go into the iPhone package."
  }
 ]
