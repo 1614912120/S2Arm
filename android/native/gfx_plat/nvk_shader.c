@@ -1104,16 +1104,18 @@ static uint64_t input_sig(const struct rp_shader_req *q, const struct s2a_direct
 static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **out, const struct s2a_direct_compile_context *pcp,
                         uint32_t stages, int nst, uint64_t group);
 
-// ---------- 身份粒度诊断（开关 nvk_ident_diag，本轮测量包缺省 1；只读计数，不改变任何语义） ----------
+// ---------- 身份粒度诊断（开关 nvk_ident_diag，缺省 0；调试包里 debug.s2a.nvk_ident_diag=1 打开；只读计数，不改变任何语义） ----------
 // 要回答的问题：同一份着色器（阶段键 + gfx 块 + 池级事实 + cbo 使用位，「同一组」）在本局被拆成了多少份
 // 程序身份？拆出来的每一份都要单独读盘/解析/编译，所以「身份数 / 组数」就是重复量。删诊断时整块删掉。
+// 缺省 0 的原因（#1328）：玩家包里 nvn_plat_flag 恒返回缺省值，缺省 1 就意味着玩家包每笔绘制多算一遍 input_sig（分组键）、
+// 慢路径多记账、每 5 秒多打一行日志；「续 36」那轮测量已经出了结论（身份粒度不是主因），不该再留在玩家包的热路径上。
 static int g_ident_diag = -1;
 enum { IDG_SLOTS = 1024, IDG_SET = 16384 };
 static struct { uint64_t key; uint32_t compiles, loads; } g_idg[IDG_SLOTS];
 static uint64_t g_idg_set[IDG_SET];          // 身份集合（sha 折叠成 64 位；0 = 空）
 static uint64_t g_idg_groups, g_idg_idents, g_idg_resolves, g_idg_compiles, g_idg_loads, g_idg_multi;
 static uint64_t g_idg_last_ns;
-static int idg_on(void) { if (g_ident_diag < 0) g_ident_diag = nvn_plat_flag("nvk_ident_diag", 1); return g_ident_diag; }
+static int idg_on(void) { if (g_ident_diag < 0) g_ident_diag = nvn_plat_flag("nvk_ident_diag", 0); return g_ident_diag; }
 static void idg_work(uint64_t group, int compiled) {
     if (!group) return;
     if (compiled) g_idg_compiles++; else g_idg_loads++;
@@ -1161,6 +1163,14 @@ static void idg_log(void) {
              (unsigned long long)g_idg_resolves, (unsigned long long)g_idg_loads,
              (unsigned long long)g_idg_compiles, (unsigned long long)g_idg_multi);
     nvn_plat_log(NVN_PLAT_LOG_INFO, "shader", b);
+}
+// 用例钩子（#1328，宿主单测 nvk_shader_prog_lease_test.c 用）：返回身份粒度诊断此刻开没开；force_log 非 0 时先把
+// 「上次打日志的时刻」拨到很早，再调一次 idg_log——诊断开着就会立刻打一行「身份粒度」，缺省（关）一行都不打。
+// 平台替身的 nvn_plat_flag 取缺省值，所以读到的就是玩家包的状态。
+int nvk_shader_ident_diag_test(int force_log);
+int nvk_shader_ident_diag_test(int force_log) {
+    if (force_log) { g_idg_last_ns = 1; idg_log(); }
+    return idg_on();
 }
 
 static int shader_resolve_graphics(const struct rp_shader_req *q, const struct rp_prog **out) {
