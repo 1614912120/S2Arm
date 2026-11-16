@@ -9384,10 +9384,6 @@
   "en": "Update S2Arm on iPhone"
  },
  {
-  "source": "准备更新 iPhone 上的 S2Arm",
-  "en": "Preparing the S2Arm update for iPhone"
- },
- {
   "source": "这台 Mac 没装 Xcode 的设备组件（CoreDevice），读不到连着的设备：打开一次 Xcode、按提示装附加组件后再试；也可以在出包页直接选机型",
   "en": "This Mac doesn't have Xcode's device components (CoreDevice), so connected devices can't be read. Open Xcode once and install the additional components when prompted, then try again; or pick the model directly on the build page"
  },
@@ -9794,5 +9790,33 @@
  {
   "source": "在电脑上的 S2Arm 点「装到 iPhone」重新安装（免费 Apple ID 也会带上这项权限）；自己签名的话用 Xcode 或 AltStore Classic v2.3，SideStore 0.7.0 重签会丢；已经装好的也可以用 GetMoreRam 给 App ID 补上权限后重装。",
   "en": "Reinstall with “Install on iPhone” in S2Arm on your computer (a free Apple ID keeps this permission too). If you sign it yourself, use Xcode or AltStore Classic v2.3; re-signing with SideStore 0.7.0 drops it. For an existing install, you can also add the permission to the App ID with GetMoreRam and reinstall."
+ },
+ {
+  "source": "App 已装好、游戏照常玩。想要主屏小组件：用 Apple ID 签名（不是自己的开发者证书）再装一次；免费 Apple ID 包名额度满了就等几天再装。",
+  "en": "The app is installed and games play as usual. For the Home Screen widget, install again with Apple ID signing (not your own developer certificate); if a free Apple ID has used up its app ID quota, wait a few days and install again."
+ },
+ {
+  "source": "这次没装主屏小组件",
+  "en": "Home Screen widget not installed this time"
+ },
+ {
+  "source": "S2Arm 已照常装好，只是这次没带主屏小组件，原因见上。",
+  "en": "S2Arm is installed as usual; only the Home Screen widget was left out this time. The reason is shown above."
+ },
+ {
+  "source": "准备更新 iPhone 上的 S2Arm",
+  "en": "Preparing the S2Arm update for iPhone"
+ },
+ {
+  "source": "这个免费 Apple ID 7 天内注册的包名已满 10 个，小组件要多注册一个（App 照常装上，额度恢复后再装一次就带上）",
+  "en": "This free Apple ID has registered 10 app IDs in the last 7 days; the widget needs one more (the app is installed as usual; install again after the quota recovers to get the widget)"
+ },
+ {
+  "source": "这次没装小组件：{0}",
+  "en": "Home Screen widget not installed this time: {0}"
+ },
+ {
+  "source": "用你自己的开发者证书签名只有主程序一份描述文件，签不了小组件",
+  "en": "Signing with your own developer certificate has a provisioning profile for the main app only, so the widget can't be signed"
  }
 ]
