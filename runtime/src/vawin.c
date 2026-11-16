@@ -82,7 +82,11 @@ int s2a_guest_file_wanted6(const char *e, uint64_t pool, uint64_t room, uint64_t
     *low = 0;
     if (e && *e) return strcmp(e, "0") != 0;
     if (!room) return 0;
-    if (died || seen == UINT64_MAX) return 1;
+    if (seen == UINT64_MAX) return 1;
+    // 安全阀收窄（#2f79dd，11-15）：上局前台死掉本为兜「判了不开、实际超单进程上限被杀」——心跳 10 秒一次，最后那段涨幅可能没记进实测。
+    //   本款有实测、且实测 + 两份余量（多一份给漏记的涨幅）仍不超剩余：那次死掉不是超上限（标记被别的原因留下，D-C73M 那次原因未定），不强制开，按实测判关。
+    //   D-C73M 6 GB iPhone：实测 2372 + 1024 ≤ 4093 却被强制开，开局写盘 2.6 GB 后卡死在缺页
+    if (died && !(seen && seen + 2 * margin <= room)) return 1;
     if (seen) return seen + margin > room;
     if (pool <= room) return 0;
     if (phys && phys >= pool + host) return 1;
@@ -91,7 +95,7 @@ int s2a_guest_file_wanted6(const char *e, uint64_t pool, uint64_t room, uint64_t
 static uint64_t phys_mem(void) { uint64_t ph = 0; size_t n = sizeof ph; return sysctlbyname("hw.memsize", &ph, &n, NULL, 0) ? 0 : ph; }
 // 三档判定的一句理由（日志用）
 static const char *tier_why(int on, int low, uint64_t seen, int died) {
-    return died ? "上一局在前台时死掉，这一局开" : seen == UINT64_MAX ? "实测记录读不出（坏记录），保守开"
+    return died && on ? "上一局在前台时死掉，这一局开" : died ? "上一局在前台时死掉，但本款实测峰值 + 两份余量远不到上限（那次不是超上限），保持匿名内存" : seen == UINT64_MAX ? "实测记录读不出（坏记录），保守开"
          : seen ? (on ? "实测峰值 + 余量大于剩余，装不下" : "实测峰值 + 余量不大于剩余，装得下、保持匿名内存")
          : low ? "池大于剩余、物理内存也装不下池 + 宿主估计：照样开（能玩下去优先），提示玩家内存可能不够"
          : on ? "池大于剩余、物理内存装得下：开" : "池不大于剩余：装得下、保持匿名内存";
@@ -332,7 +336,7 @@ static void guest_file_attach_(void) {
     char pp[1024]; int late = !on && !(e && *e) && room && !mem_peak_path(pp, sizeof pp);   // 多款容器还没选游戏：装游戏前按本款再判
     const char *why = e && *e ? "按 S2A_GUEST_FILE 显式设定" : !room ? "自动：不知道单进程上限（Mac 会换页），缺省关"
                     : late ? "自动：还没选游戏（多款容器），先用匿名内存，装游戏前按本款实测再判"
-                    : died ? "自动：上一局在前台时死掉（「在跑」标记还在：被内存上限杀 / 崩溃 / 测试局在前台被 devicectl 结束），这一局开"
+                    : died && on ? "自动：上一局在前台时死掉（「在跑」标记还在：被内存上限杀 / 崩溃 / 测试局在前台被 devicectl 结束），这一局开"
                     : seen == UINT64_MAX ? "自动：本款实测峰值记录读不出（坏记录），保守开"
                     : tier_why(on, low, seen, died);
     LOG("客体内存文件后备：%s——%s；本款应用内存池 %llu MB、离单进程内存上限还剩 %llu MB%s、物理内存 %llu MB、宿主估计 %llu MB、本机本款实测峰值 %llu MB（0 = 没有）%s", on ? "开" : "关", why,
