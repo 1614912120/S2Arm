@@ -102,6 +102,9 @@
     <string name="library_playtime_today">today</string>
     <string name="library_playtime_yesterday">yesterday</string>
     <string name="library_playtime_days_ago">{0} days ago</string>
+    <!-- Stall watch (runtime/src/ap_host.c) notices in the game; stall_wait is verbatim S2A_UI_STALL_WAIT_EN (runtime/include/s2a_ui_text.h) -->
+    <string name="stall_patch_off">The picture barely moved for about %1$d seconds, so this game\'s frame-rate patch was turned off. It stays off when you start this game again.</string>
+    <string name="stall_wait">The game picture is stuck\n\nIt may still be loading, so you can wait a little longer. If nothing changes, swipe this app away in the app switcher and open it again.</string>
     <string name="mods_title">Mods (asset replacement)</string>
     <string name="mods_for_game">For: %1$s</string>
     <string name="mods_no_game">Install a game first: mods are kept per game.</string>

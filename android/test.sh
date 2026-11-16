@@ -435,6 +435,11 @@ s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" \
     "$android_dir/app/src/main/java/org/s2arm/android/Playtime.java" \
     "$android_dir/tests/PlaytimeTest.java"
 s2a_gate_step java -cp "$out/java" org.s2arm.android.PlaytimeTest "$android_dir/app/src/main/res"
+# 停帧看门屏上提示（StallNotice：救场横幅定时收、「可能还在加载」等清除才收），文案对 s2a_ui_text.h
+s2a_gate_step javac -encoding UTF-8 -d "$out/java" \
+    "$android_dir/app/src/main/java/org/s2arm/android/StallNotice.java" \
+    "$android_dir/tests/StallNoticeTest.java"
+s2a_gate_step java -cp "$out/java" org.s2arm.android.StallNoticeTest "$android_dir/app/src/main/res" "$android_dir/../runtime/include/s2a_ui_text.h"
 # The shell's BootSpec against boot-spec.v1.schema.json (with and without a region).
 s2a_gate_step "$PY" - "$android_dir/contracts" "$out/boot-spec" <<'PY'
 import importlib.util, os, sys

@@ -101,6 +101,8 @@
     <string name="library_playtime_today">今天</string>
     <string name="library_playtime_yesterday">昨天</string>
     <string name="library_playtime_days_ago">{0} 天前</string>
+    <string name="stall_patch_off">画面约 %1$d 秒几乎没有动，已关掉这款游戏的帧率补丁。之后再启动这款也保持关闭。</string>
+    <string name="stall_wait">游戏画面卡住了\n\n可能还在加载，可以再等一会儿；一直不动的话，请从后台划掉本 App，再重新打开。</string>
     <string name="mods_title">Mod（资源替换）</string>
     <string name="mods_for_game">当前游戏：%1$s</string>
     <string name="mods_no_game">先安装游戏：mod 按游戏存放。</string>

@@ -310,6 +310,11 @@ else()
     target_compile_options(dguard_android_test PRIVATE -Wall -Wextra -Werror)
     target_link_libraries(dguard_android_test PRIVATE pthread)
     add_test(NAME android_dguard_android COMMAND dguard_android_test)
+    # 停帧救场「这款下次也关」：起局读 S2A_DOCS/cpatch_stall_off → S2A_FPS60=0（docs_android.c s2a_android_stall_off_apply）
+    add_executable(stall_off_test tests/stall_off_test.c native/docs_android.c)
+    target_include_directories(stall_off_test PRIVATE native)
+    target_compile_options(stall_off_test PRIVATE -Wall -Wextra -Werror)
+    add_test(NAME android_stall_off COMMAND stall_off_test)
     find_package(Threads REQUIRED)
     # Linux errno/fd/filesystem contracts; reached by linux_ctest.sh, including
     # Darwin's Linux VM route. These are not Android device durability evidence.
