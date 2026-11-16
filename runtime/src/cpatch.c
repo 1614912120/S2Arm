@@ -230,11 +230,12 @@ static int cp_mod_on(const char *src) {
     struct stat st;
     return n > 0 && n < (int)sizeof dir && !stat(dir, &st) && S_ISDIR(st.st_mode);
 }
-static int cp_ios_blocked(const char *id) {   // iOS 上不开的类：画面类（见上面 en 的说明）
+static int cp_ios_blocked(const char *id, const char *dir) {   // iOS 上不开的类（见下面 en 的说明）；dir = 表第 14 列方向（旧表没有 = NULL）
 #if defined(__APPLE__) && TARGET_OS_IPHONE
-    return !strncmp(id, "gfx:", 4) || !strncmp(id, "other:", 6);   // other：认不出是画面的（声音 / 玩法等，11-15），iPhone 一律不开
+    // 画面类只开降负载的（11-16 维护者：方向 load，pack/cpatch.py 第 14 列）；提画质 / 认不出 / 旧表没写方向的照旧不开。other：认不出是画面的（声音 / 玩法等，11-15），一律不开
+    return (!strncmp(id, "gfx:", 4) && !(dir && !strcmp(dir, "load"))) || !strncmp(id, "other:", 6);
 #else
-    (void)id; return 0;
+    (void)id; (void)dir; return 0;
 #endif
 }
 // 随包金手指原文（11-13，见文件头 cheat-src 那行声明）：出包把版本对得上的金手指 txt 以 cheat-src.<原文件名> 放进 App（pack/cpatch.py CHEAT_SHIP），
@@ -289,13 +290,13 @@ static void cpatch_load_stream(module_t *m, FILE *f) {
             LOG("【红】社区补丁 %s：表行过长，不开", m->name); continue;
         }
         line[strcspn(line, "\r\n")] = 0;
-        char *c[13] = {0}; char *s = line; for (int i = 0; i < 13 && s; i++) { c[i] = s; s = strchr(s, '\t'); if (s) *s++ = 0; }   // 第 10 列目标帧率、第 11 列画幅、第 13 列组（pack/cpatch.py，旧表没有）
+        char *c[14] = {0}; char *s = line; for (int i = 0; i < 14 && s; i++) { c[i] = s; s = strchr(s, '\t'); if (s) *s++ = 0; }   // 第 10 列目标帧率、第 11 列画幅、第 13 列组、第 14 列方向（pack/cpatch.py，旧表没有）
         if (!c[8] || strcmp(c[1], m->name)) continue;
         char *end; long bit = strtol(c[2], &end, 10);
         // 玩家没选过（没有 S2A_CPATCH_ON）= 默认开（11-13 维护者：S 级优化命中的补丁出包时打入并默认开，用户少做选择）；表里「缺省开」列现在只表示我方验过（界面标签）。
-        //   画面类（gfx:，提分辨率 / 画质）在 iOS 上一律不开（维护者：iOS 默认不打——手机内存更紧，Switch 上没事的提分辨率可能被系统杀），Mac 照常默认开
+        //   画面类（gfx:）在 iOS 上只开降负载的（第 14 列方向 load，11-16 维护者），提分辨率 / 画质的不开（手机内存更紧，Switch 上没事的提分辨率可能被系统杀），Mac 照常默认开
         // other（认不出是画面的：声音 / 玩法等，tools/patch_index.py classify，11-15）不默认开：只有开关列表点名才开（没选过也不开）
-        int en = !strncmp(c[0], "mod:", 4) ? cp_mod_on(c[6]) : cp_ios_blocked(c[0]) ? 0 : on ? (strcmp(on, "none") && in_list(on, c[0])) : strncmp(c[0], "other:", 6) != 0,
+        int en = !strncmp(c[0], "mod:", 4) ? cp_mod_on(c[6]) : cp_ios_blocked(c[0], c[13]) ? 0 : on ? (strcmp(on, "none") && in_list(on, c[0])) : strncmp(c[0], "other:", 6) != 0,
             fps = !strncmp(c[0], "fps:", 4);
         n++;
         // 帧率补丁里最高的目标帧率（s2a_cpatch_fps_follow 按它定出图上限、出图节拍与服务层 vsync）。帧率类的开关位本来就跟 60 帧开关走、不看开关列表，
@@ -363,7 +364,7 @@ static void cpatch_load_stream(module_t *m, FILE *f) {
                 LOG("【红】社区补丁 %s %s：帧率跟随表容量已满，整份不开", m->name, c[0]); st_put(c[0], "表不认"); continue;
             }
             struct cp_fu *u = &g_fu[g_nfu++]; memset(u, 0, sizeof *u);
-            u->m = m; u->bits = 1ull << bit; u->target = c[9] ? atoi(c[9]) : 0; u->allow = !cp_ios_blocked(c[0]); u->def = c[8] && c[8][0] == '1';
+            u->m = m; u->bits = 1ull << bit; u->target = c[9] ? atoi(c[9]) : 0; u->allow = !cp_ios_blocked(c[0], c[13]); u->def = c[8] && c[8][0] == '1';
             snprintf(u->id, sizeof u->id, "%s", c[0]); snprintf(u->grp, sizeof u->grp, "%s", c[12] ? c[12] : "");
             if (c[7][0] && !(u->spec = strdup(c[7]))) die("社区帧率补丁数据分配失败");
             if (c[7][0]) g_nfud++;

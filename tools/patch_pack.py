@@ -15,7 +15,7 @@
 包：{schema: 2, key, items: [条目]}；条目：
   id（内容 sha256 前 16 位，同 pack/cpatch.py 编号口径）、kind（pchtxt | ips | fpsl | cheat | pso）、cat（fps | widescreen | gfx | cheat | pso）、
   name（文件名：ips / FPSLocker / 金手指靠文件名认构建号，原样保留；pchtxt 取原文件名）、bids、gids、target_fps、aspect、
-  source {repo, commit, path, member}（上游原处，致谢与追溯用；金手指汇总库的 member 是构建号）、license、author、sha256（内容）、data（内容 base64，字节与上游原文件一致，不转格式：
+  dir（只画面类有：load 降负载 / quality 提画质，tools/patch_index.py gfx_dir；认不出不写）、source {repo, commit, path, member}（上游原处，致谢与追溯用；金手指汇总库的 member 是构建号）、license、author、sha256（内容）、data（内容 base64，字节与上游原文件一致，不转格式：
   编号按内容算，转了格式编号就变，玩家已开的选择与验证记录会对不上）。"""
 import base64
 import gzip
@@ -49,7 +49,8 @@ def item(row, data):
     return dict(id=row['sha256'][:16], kind=row['kind'], cat=row['cat'], name=os.path.basename(row.get('member') or row['path']),
                 bids=row['bids'], gids=row['gids'], target_fps=row['target_fps'], aspect=row['aspect'],
                 source=dict(repo=row['repo'], commit=row['commit'], path=row['path'], member=row.get('member', '')),
-                license=row['license'], author=row.get('author', ''), sha256=row['sha256'], data=base64.b64encode(data).decode())
+                license=row['license'], author=row.get('author', ''), sha256=row['sha256'], data=base64.b64encode(data).decode(),
+                **({'dir': row['dir']} if row.get('dir') else {}))   # 画面类方向（load / quality，patch_index.gfx_dir；认不出不写，旧包同样没有）
 
 
 def gz(obj):
