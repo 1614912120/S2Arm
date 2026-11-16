@@ -415,6 +415,7 @@ import S2ArmAppleAdapter
                 fixture.model.downstreamPromptFor = nil
             }
         }
+    }
 
     /// 11-16 维护者「出包的时候没办法同时安装其他游戏到 iPhone 上，这个控制纯属多余」：手机作业走独立的手机槽。期望按规则手写：
     ///   A 在出包（主槽）时装 B → 立刻发 install、主槽那单不动；装 A → 排队不发；手机槽忙时再装 B → 排队；主槽 A 结束 → A 的装机接上
