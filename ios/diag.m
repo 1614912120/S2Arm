@@ -27,8 +27,10 @@ NSUserDefaults *s2a_ios_settings_defaults(void);   // settings.m：诊断局开�
 #include "s2a_sesdiag.h"
 #include "diag_upload.h"   // 上传给开发者：结果判断（纯 C，单测 t_diag_upload）
 
-unsigned s2a_foreign_scan(const char *home, uint64_t *bytes, char *line, size_t n);   // pack_apply.c
+// 弱链接[lab]：s2a_foreign_scan（runtime/src/pack_apply.c 容器里属主不是 App 的条目清点；输入工作台不链原生核，取不到就不写这一项）
+unsigned s2a_foreign_scan(const char *home, uint64_t *bytes, char *line, size_t n) __attribute__((weak_import));
 static NSDictionary *container_foreign(void) {
+    if (!s2a_foreign_scan) return nil;
     uint64_t bytes = 0; char line[1600] = ""; unsigned n = s2a_foreign_scan(NSHomeDirectory().fileSystemRepresentation, &bytes, line, sizeof line);
     return @{@"count": @(n), @"bytes": @(bytes), @"summary": @(line)};
 }
@@ -317,7 +319,7 @@ static NSURL *build_zip(NSUInteger cap, BOOL slim, NSString **err) {
                      @"gpu_family": gpu_family(), @"low_power": @(NSProcessInfo.processInfo.lowPowerModeEnabled)},
         @"settings": @{@"language": NSLocale.preferredLanguages.firstObject ?: @""},
         // 容器里属主不是 App 的条目（#569：App 改不了删不掉、只有卸载能清；pack_apply.c s2a_foreign_scan）：个数、文件实占、最早那条的路径 / 时间 / 属主——定是哪种安装方式或迁移造成的
-        @"container_foreign": container_foreign(),
+        @"container_foreign": container_foreign() ?: (id)NSNull.null,
         @"sessions": sessions, @"metrickit": @{@"crash": @(crash), @"hang": @(hang), @"exit": @(exits)}, @"files": files };
     [[NSJSONSerialization dataWithJSONObject:manifest options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil]
         writeToFile:[W stringByAppendingPathComponent:@"manifest.json"] atomically:NO];
