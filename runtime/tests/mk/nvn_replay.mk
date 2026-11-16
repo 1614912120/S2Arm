@@ -41,7 +41,7 @@ TEST_TARGETS += native-test-nvn_res
 native-test-nvn_tm:
 	@mkdir -p $(BUILD)/tests
 	$(CC) $(CFLAGS) -std=c11 -D_DEFAULT_SOURCE -Wall -Wextra -Werror -I. -Igraphics/nvn/gfx/nvn -Igraphics/nvn/gfx/nvn/include -Igraphics/nvn/gfx/tex -I$(NVN_REPLAY_DIR) \
-	  -o $(BUILD)/tests/t_nvn_tm graphics/nvn/tests/t_nvn_tm.c graphics/nvn/tests/nvn_clear_view_unused.c $(NVN_REPLAY_CORE) -lm
+	  -o $(BUILD)/tests/t_nvn_tm graphics/nvn/tests/t_nvn_tm.c graphics/nvn/tests/nvn_clear_view_unused.c $(NVN_REPLAY_CORE) $(NVN_REPLAY_WEAK) -lm
 	timeout 30 $(BUILD)/tests/t_nvn_tm
 	@echo '✓ t_nvn_tm：逐步计时按帧抽样（开关缺省每 32 帧计 1 帧 / 夹取 / nvk_tm_full 压过 / 会话重开重读；采样帧数数得对；非采样帧不取时钟；抽样与全量打出的三行读数逐字相同）'
 TEST_TARGETS += native-test-nvn_tm
