@@ -580,7 +580,8 @@ import S2ArmAppleAdapter
         }
     }
 
-    func testHomeRightTriggerPreparesTheGameWhileConfirmOnlySelectsItsCard() async throws {
+    /// 首页：左右移动就是选中；焦点所在的卡片按 A = 主操作（同 R2 / ZR）。确认键界面一律显示 A（单只 Joy-Con 没有 ZR），按住不连发
+    func testHomeConfirmOnFocusedCardRunsThePrimaryActionLikeRightTrigger() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
         fixture.runner.catalogNeedsPreparation = true
@@ -596,18 +597,15 @@ import S2ArmAppleAdapter
         let controller = GCController.withExtendedGamepad(), pad = try XCTUnwrap(controller.extendedGamepad)
         navigation.source.controllers = { [controller] }; navigation.source.tick(now: 0)
         navigation.focus("card." + game.id)
-        pad.buttonA.setValue(1); navigation.source.tick(now: 0.01)
-        pad.buttonA.setValue(0); navigation.source.tick(now: 0.02)
-        XCTAssertEqual(fixture.model.selectedID, game.id)
-        XCTAssertNil(fixture.model.exportFor, "确认键选中封面，不应同时打开准备页")
+        fixture.model.selectedID = game.id
         XCTAssertEqual(navigation.shortcutTargets(in: window)[.rightTrigger], ["hero.export"])
         try snapshot(host, "home-r2-prepare")
-        pad.rightTrigger.setValue(1); navigation.source.tick(now: 0.03)
-        XCTAssertEqual(fixture.model.exportFor, game.id, "R2 才执行准备游戏")
+        pad.buttonA.setValue(1); navigation.source.tick(now: 0.01)
+        XCTAssertEqual(fixture.model.exportFor, game.id, "卡片按 A 执行主操作（准备游戏），同 R2")
         try await Task.sleep(for: .milliseconds(150))
         navigation.source.tick(now: 0.8)
         XCTAssertFalse(fixture.runner.requests.contains { $0["operation"] as? String == "export" },
-            "按住 R2 从首页进入出包页，不能再触发新页面的开始出包")
+            "按住 A 从首页进入出包页，不能再触发新页面的开始出包")
     }
 
     func testTitlebarActionsAlignWithTheHomeControls() async throws {

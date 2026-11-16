@@ -333,6 +333,9 @@ extension LauncherView {
                 navigation.focus("home.group." + home.group.rawValue)
                 return true
             case .details: if let game = homeSelected { moreFor = game.id }; return true
+            // 左右移动就是选中；焦点所在的卡片按 A = 主操作（同 ZR）。提示列确认键统一显示 A，单只 Joy-Con 没有 ZR
+            case .confirm:
+                if let game = homeSelected, navigation.focusedID == "card." + game.id { navigation.handle(.submit); return true }
             case .search:
                 navigation.focus("home.search")
                 navigation.activateFocused(); return true
@@ -376,7 +379,7 @@ private struct HomeControllerHint: View {
     let title: String
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: presentation.symbols[shortcut] ?? shortcut.symbol).font(.system(size: 19))
+            Image(systemName: presentation.symbols[shortcut.displayed] ?? shortcut.displayed.symbol).font(.system(size: 19))
             Text(title).font(.manrope(11.5))
         }.fixedSize()
     }
