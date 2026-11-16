@@ -200,6 +200,11 @@ static void sv_spinner(uint64_t arg) { (void)arg;   // ㉙：3 次 SignalToAddre
     for (int i = 0; i < 3; i++) { uint64_t r[31] = {(uint64_t)&g_sv, 0, 7, 1}; svc_thread(0x35, r); }
     atomic_store(&g_sv_done, 1); while (!atomic_load(&g_sv_go)) { }
     atomic_store(&g_sv_exit, 1); uint64_t e[31] = {0}; svc_thread(0x0A, e); }
+// 短超时等待轮询退避（真线程）：睡 250 ms 后对事件发信号，记下发信号时刻
+static uint32_t g_wbo_evw; static _Atomic uint64_t g_wbo_sig_t; static _Atomic int g_wbo_sig_done;
+static void wbo_signaller(uint64_t arg) { (void)arg; uint64_t sl[31] = {250000000}; svc_thread(0x0B, sl);
+    atomic_store(&g_wbo_sig_t, now_ns()); uint64_t sg[31] = {g_wbo_evw}; svc_thread(0x11, sg);
+    atomic_store(&g_wbo_sig_done, 1); uint64_t e[31] = {0}; svc_thread(0x0A, e); }
 static void spawn(void (*f)(uint64_t), uint64_t arg, uint32_t *h) {
     uint64_t r[31] = {0, (uint64_t)f, arg, 0, 44, 0}; svc_thread(0x08, r); if (h) *h = (uint32_t)r[1];
     uint64_t s_[31] = {r[1]}; svc_thread(0x09, s_);
@@ -1482,8 +1487,16 @@ int main(void) {
         CHECK(a4b == 0, "x19 每次都变、每次 +30 µs（> 20 µs，循环在干活）：不应睡，实 %llu", (unsigned long long)a4b);
         uint64_t a5 = YLOOP(400, { uint64_t g[31] = {0}; svc_thread(0x25, g); });
         CHECK(a5 == 200, "让步之间夹不阻塞的系统调用（GetThreadId）、寄存器不变：仍是同一轮轮询，应睡 200 次，实 %llu", (unsigned long long)a5);
+        // 11-16 短超时等待轮询退避（S2A_WAIT_BACKOFF 缺省开）：< 1 ms 且以超时返回的等待不算真阻塞 → 夹「等未触发的事件 1 µs」仍是同一轮、恰 200；
+        //   夹 1 ms 的等待（≥ 1 ms 是真等）→ 每次新一轮、0；退避关 → 回到原口径（1 µs 等待也算真阻塞）、0
         uint64_t a7 = YLOOP(400, { uint64_t w[31] = {0}; w[1] = (uint64_t)&yevr; w[2] = 1; w[3] = 1000; svc_thread(0x18, w); });
-        CHECK(a7 == 0, "让步之间真阻塞过（等未触发的事件 1 µs）：每次新一轮，不应睡，实 %llu", (unsigned long long)a7);
+        CHECK(a7 == 200, "让步之间夹短超时等待（等未触发的事件 1 µs、超时返回）：不算真阻塞，仍是同一轮，应睡 200 次，实 %llu", (unsigned long long)a7);
+        uint64_t a7b = YLOOP(400, { uint64_t w[31] = {0}; w[1] = (uint64_t)&yevr; w[2] = 1; w[3] = 1000000; svc_thread(0x18, w); });
+        CHECK(a7b == 0, "让步之间真阻塞过（等未触发的事件 1 ms）：每次新一轮，不应睡，实 %llu", (unsigned long long)a7b);
+        { void s2a_test_wait_bo(int); s2a_test_wait_bo(0);
+          uint64_t a7c = YLOOP(400, { uint64_t w[31] = {0}; w[1] = (uint64_t)&yevr; w[2] = 1; w[3] = 1000; svc_thread(0x18, w); });
+          s2a_test_wait_bo(1);
+          CHECK(a7c == 0, "S2A_WAIT_BACKOFF=0：短超时等待照旧算真阻塞，不应睡，实 %llu", (unsigned long long)a7c); }
         // 短睡按让出（10-29，照 the reference port）：SleepThread(100 ns) 与 SleepThread(0) 同走退避 → 400 次寄存器不变、每次 +10 µs 恰睡 200 次，短睡计数 +400；
         //   SleepThread(20 µs) 是真睡，短睡计数不变
         uint64_t s2a_test_sleep_short(void);
@@ -1561,6 +1574,77 @@ int main(void) {
         uint64_t c5 = TLOOP(400, 10000, 0x200, (void)0);
         CHECK(c5 == 0, "开关关：不应睡，实 %llu", (unsigned long long)c5);
         #undef TLOOP
+    }
+    {   // 短超时等待轮询退避（S2A_WAIT_BACKOFF，11-16）。判轮纯函数（wbo_step）期望按设计手算：同调用点、两次之间无别的系统调用 / 真阻塞、
+        //   上次超时返回到这次进入 ≤ 20 µs 连成一轮；第 k 次（从 0 数）进入时已连续 k × 步长，满 2 ms 后超时 = min(已等 / 8, 250 µs)，且不小于原超时。
+        //   步长 10 µs、400 次：k ≥ 200 的放长（k × 1.25 µs ≥ 250 µs，全封顶 250 µs），恰 200 次；
+        //   k = 300 那次被信号叫醒 → k = 200..300 放长 101 次，301 起新一轮、到 399 只连了 0.98 ms，不再放长；
+        //   换调用点交替 / 步长 30 µs / 每次中间夹别的系统调用 / 每次中间真阻塞过 → 0；步长恰 20 µs（= 上限）→ 0..399 里 k ≥ 100 的放长，300 次
+        g_case = "短超时等待轮询退避";
+        int64_t s2a_test_wbo_step(uint64_t, uint64_t, uint64_t, uint64_t, int64_t); void s2a_test_wbo_done(int, uint64_t); void s2a_test_wbo_reset(void);
+        #define WLOOP(n, step, lr, blk, oth, sigk) ({ s2a_test_wbo_reset(); uint64_t ext_ = 0; int64_t last_ = 0; \
+            for (uint64_t k = 0; k < (n); k++) { uint64_t t_ = k * (step); last_ = s2a_test_wbo_step((lr), (blk), (oth), t_, 500); ext_ += last_ > 500; \
+                s2a_test_wbo_done(k != (uint64_t)(sigk), t_); } (void)last_; ext_; })
+        uint64_t w1 = WLOOP(400, 10000, 0x100, 0, 0, -1);
+        int64_t wl; { s2a_test_wbo_reset(); for (uint64_t k = 0; k < 400; k++) { wl = s2a_test_wbo_step(0x100, 0, 0, k * 10000, 500); s2a_test_wbo_done(1, k * 10000); } }
+        printf("  短超时等待：同点 500 ns × 400（每次 +10 µs、超时返回）放长 %llu 次，末次超时 %lld ns\n", (unsigned long long)w1, (long long)wl);
+        CHECK(w1 == 200 && wl == 250000, "同点 + 短间隔 + 超时返回：应放长 200 次、末次 250000 ns，实 %llu 次、%lld ns", (unsigned long long)w1, (long long)wl);
+        uint64_t w2 = WLOOP(400, 10000, 0x100, 0, 0, 300);
+        CHECK(w2 == 101, "k = 300 被信号叫醒：之前放长 101 次（k = 200..300）、之后新一轮不再放长，实 %llu", (unsigned long long)w2);
+        uint64_t w3 = WLOOP(400, 10000, 0x100 + (k & 1) * 0x10, 0, 0, -1);
+        uint64_t w4 = WLOOP(400, 30000, 0x100, 0, 0, -1);
+        uint64_t w5 = WLOOP(400, 10000, 0x100, 0, k, -1);
+        uint64_t w6 = WLOOP(400, 10000, 0x100, k, 0, -1);
+        uint64_t w7 = WLOOP(400, 20000, 0x100, 0, 0, -1);
+        CHECK(w3 == 0 && w4 == 0 && w5 == 0 && w6 == 0 && w7 == 300, "不进轮：换调用点 %llu / 间隔 30 µs %llu / 夹别的系统调用 %llu / 夹真阻塞 %llu（都应 0）；间隔恰 20 µs %llu（应 300）",
+              (unsigned long long)w3, (unsigned long long)w4, (unsigned long long)w5, (unsigned long long)w6, (unsigned long long)w7);
+        { s2a_test_wbo_reset(); int64_t a = s2a_test_wbo_step(0x100, 0, 0, 0, 900000); s2a_test_wbo_done(1, 0);
+          for (uint64_t k = 1; k <= 300; k++) { a = s2a_test_wbo_step(0x100, 0, 0, k * 10000, 900000); s2a_test_wbo_done(1, k * 10000); }
+          CHECK(a == 900000, "原超时 900 µs 大于封顶 250 µs：不缩短，应仍 900000，实 %lld", (long long)a); }
+        #undef WLOOP
+        // B'：两次短睡（50 µs）之间夹 GetSystemTick（0x1E）不切轮 → 同短睡退避 400 次恰拉长 200 次（夹 GetThreadId 切轮的 0 次在「让步退避」块里）
+        { uint64_t s2a_test_sleep_bo(void); void s2a_test_yield_bo(int); void s2a_test_mono_set(int64_t); s2a_test_yield_bo(1);
+          { uint64_t g_[31] = {0}; svc_thread(0x25, g_); }
+          uint64_t q0 = s2a_test_sleep_bo();
+          for (uint64_t k = 0; k < 400; k++) { s2a_test_mono_set((int64_t)(k * 10000)); uint64_t r[31] = {50000}; svc_thread(0x0B, r); uint64_t t_[31] = {0}; svc_thread(0x1E, t_); }
+          s2a_test_mono_set(-1); uint64_t qb = s2a_test_sleep_bo() - q0;
+          s2a_test_yield_bo(0);
+          CHECK(qb == 200, "短睡之间夹 GetSystemTick：不切轮，应拉长 200 次，实 %llu", (unsigned long long)qb); }
+        // 真线程：本线程 WaitSynchronization(事件, 30 ns) 轮询，另一条线程 250 ms 时发信号。期望（开）：头 2 ms 按让出、之后每次等 250 µs，
+        //   本线程 CPU 时间不到关时的 1/4；发信号到本线程返回 < 1 ms（放长的是超时，信号照样立刻叫醒）。关：每次起 30 ns 定时器，CPU 接近墙钟
+        { void s2a_test_wait_bo(int); void s2a_test_yield_bo(int); uint64_t s2a_test_wait_bo_ext(void); void s2a_core_leave(void);
+          s2a_test_yield_bo(1);
+          double cpu[2] = {0}, lat[2] = {0}; uint64_t polls[2] = {0}, ext[2] = {0}; int got[2] = {0}, tries = 0; struct kevent64_s ktm = {0};
+          for (int on = 1; on >= 0; on--) {
+              tries++;
+              s2a_test_wait_bo(on);
+              uint64_t ev[31] = {0}; svc_thread(0x45, ev); g_wbo_evw = (uint32_t)ev[1]; uint32_t evr = (uint32_t)ev[2];
+              atomic_store(&g_wbo_sig_done, 0); atomic_store(&g_wbo_sig_t, 0);
+              uint64_t e0 = s2a_test_wait_bo_ext();
+              spawn(wbo_signaller, 0, NULL); s2a_core_leave();
+              struct timespec c0, c1; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c0); uint64_t t0 = now_ns(), tr = 0;
+              for (;;) { uint64_t w[31] = {0}; w[1] = (uint64_t)&evr; w[2] = 1; w[3] = 30; w[30] = 0x4000; svc_thread(0x18, w); polls[on]++;
+                  if (w[0] == 0) { tr = now_ns(); got[on] = 1; break; }
+                  if (now_ns() - t0 > 1500000000ull) break; }
+              clock_gettime(CLOCK_THREAD_CPUTIME_ID, &c1);
+              cpu[on] = (c1.tv_sec - c0.tv_sec) * 1e3 + (c1.tv_nsec - c0.tv_nsec) / 1e6;
+              lat[on] = got[on] ? (double)(tr - atomic_load(&g_wbo_sig_t)) / 1e6 : -1; ext[on] = s2a_test_wait_bo_ext() - e0;
+              if (on) s2a_test_kq_timer(&ktm);   // 开时最后一次挂的定时器 = 被信号叫醒的那次轮询（发信号线程的 250 ms 睡挂得更早）
+              wait_flag(&g_wbo_sig_done, 2000);
+              { uint64_t c[31] = {evr}; svc_thread(0x16, c); uint64_t d[31] = {g_wbo_evw}; svc_thread(0x16, d); }
+              // 唤醒延迟含宿主调度排队（门禁机满载时可到毫秒级，10-26 两次假红）：开的那轮不到 1 ms 就重跑，最多 3 次取最好的一次
+              if (on && got[1] && lat[1] >= 1.0 && tries < 3) on = 2;
+          }
+          s2a_test_wait_bo(1); s2a_test_yield_bo(0);
+          printf("  短超时等待（真线程）：开 CPU %.1f ms、轮询 %llu 次、放长 %llu、被叫醒延迟 %.3f ms；关 CPU %.1f ms、轮询 %llu 次、延迟 %.3f ms\n",
+                 cpu[1], (unsigned long long)polls[1], (unsigned long long)ext[1], lat[1], cpu[0], (unsigned long long)polls[0], lat[0]);
+          CHECK(got[1] && got[0], "两轮都应等到信号：开 %d 关 %d", got[1], got[0]);
+          CHECK(cpu[1] * 4 < cpu[0], "开时轮询线程 CPU 应不到关时的 1/4：开 %.1f ms、关 %.1f ms", cpu[1], cpu[0]);
+          CHECK(lat[1] >= 0 && lat[1] < 1.0, "开时发信号到返回应 < 1 ms：实 %.3f ms", lat[1]);
+          CHECK(ext[1] > 0 && ext[0] == 0, "开时应有放长、关时 0：开 %llu 关 %llu", (unsigned long long)ext[1], (unsigned long long)ext[0]);
+          // 我们代码决定的部分（与机器忙不忙无关）：放长后向内核要的是按时一次性定时器、时长 ≤ 250 µs 且 > 200 µs（挂时已过去的几微秒扣掉）
+          CHECK(ktm.filter == EVFILT_TIMER && (ktm.fflags & NOTE_CRITICAL) && ktm.data <= 250000 && ktm.data > 200000,
+                "开时被叫醒那次轮询应挂 250 µs 按时定时器：过滤器 %d fflags %#x 时长 %lld", ktm.filter, ktm.fflags, (long long)ktm.data); }
     }
     {   // 宿主栈回收（10-24 宿主栈放窗口尾部，自己映射、自己还）：线程退出后，下一次建线程把它汇合并还栈；建一个还一个
         g_case = "宿主栈回收";

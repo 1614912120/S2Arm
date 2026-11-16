@@ -81,6 +81,8 @@ void s2a_thread_stop_point(void);
 
 // G 内采样的唤醒目标身份；不跨锁保留 thr 指针，id 防句柄代际回绕后误认新线程。
 typedef struct { uint32_t handle; uint64_t id, nsvc; } peer_wait_t;
+// 短超时等待轮询退避的一轮（见 wbo_step）：上次以超时返回的那次等待的调用点、当时的真阻塞计数 / 非轮询系统调用计数、这一轮起点、返回时刻
+typedef struct { uint64_t lr, blk, other, t0, ret; int live, hit; } wbo_t;
 
 typedef struct thr {
     uint32_t handle; uint64_t id;
@@ -129,6 +131,10 @@ typedef struct thr {
     uint64_t nsl, nsl_bo, sl_bo_ns, sl_up[2]; int is_main;   // sl_up：抽样记的上两层返回地址（帧指针回溯，定游戏哪段代码在轮询）   // 本线程短睡次数、被退避拉长次数、多睡纳秒（收局按线程列，s2a_yield_stat_log）；is_main = 游戏主线程   // 短睡轮询退避：上一次短睡的调用点、当时的 nsvc_all、这一轮起点、上一次醒来时刻
     uint64_t srun_seq, srun_t0, spin_ret;   // 自旋闸：上一次过闸时的 nsvc_all、这一轮等待的起点、上一次出闸的时刻
     uint64_t trun_key, trun_seq, trun_t0, tick_ret;   // 读时钟闸：上一次读时钟的调用点、当时的 nsvc_all、这一轮等待的起点、上一次读完的时刻
+    // 只本线程写读（svc_thread 入口计）：nsvc_tick = GetSystemTick（0x1E）次数，短睡判轮不算它；
+    //   nsvc_poll = 轮询类系统调用（0x0B / 0x18 / 0x1C / 0x34 / 0x1E）次数，短超时等待判轮只看「这几种以外」的有没有（真阻塞另由 nblk 切）
+    uint64_t nsvc_tick, nsvc_poll;
+    wbo_t wbo;                         // 短超时等待轮询退避的判轮状态（wbo_step）
     int base_prio;                     // S2A_SCHED_HZ：基础优先级（SetThreadPriority 设的）；prio = 生效优先级（含锁的优先级继承、钉核抬升）
     int pinned, pin_core; uint64_t pin_mask;   // S2A_SCHED_HZ：0x36 禁止抢占——被钉在当前核（钉前的理想核 / 掩码存这里）
     uint64_t wake_t;                   // 诊断：被 wake() 唤醒的时刻（mach 时基），回到游戏前算交接延迟
@@ -477,12 +483,11 @@ static void cvl_note(uint64_t key, uint64_t sig_id, int woken, int left) {   // 
     g_cvl[i].t = thread_clock(); g_cvl[i].sig_id = sig_id; g_cvl[i].woken = woken; g_cvl[i].left = left; g_cvl[i].n++;
 }
 static double mach_ms(uint64_t d) { return (double)thread_clock_ns(d) / 1e6; }
-static int64_t block(thr_t *t, int kind, int64_t ns) {
+static int64_t block_raw(thr_t *t, int kind, int64_t ns) {
     if (atomic_load(&g_session_stop)) return R_CANCELLED;
     t->wkind = kind; t->woke = 0; t->next = g_wait; g_wait = t; t->wseq = ++g_wseq; t->wait_t0 = thread_clock();
     t->nsig = 0;   // 每次新挂上去重新数被发过几次信号（S2A_WAIT_TRACE）
     if (ns == 0) { wait_diag_block_locked(t, kind, ns, NULL); wait_unlink(t); t->wkind = 0; return R_TIMEOUT; }
-    t->nblk++; // Zero-timeout polling above is not a blocking wait.
 #ifndef S2A_UNIT_TEST
     if (s2a_det_mode()) return block_det(t, ns);
 #endif
@@ -508,6 +513,14 @@ static int64_t block(thr_t *t, int kind, int64_t ns) {
         if (rc == ETIMEDOUT && !t->woke) { wait_unlink(t); t->wkind = 0; return R_TIMEOUT; }
     }
     return t->wres;
+}
+// 真阻塞计数（nblk：让步退避据此切轮）。超时 0 的轮询不算；11-16 起（S2A_WAIT_BACKOFF 开时）短于 1 ms 且以超时返回的也不算——
+//   那是拿等待当睡眠轮询（同 < 1 ms 的 SleepThread 不切轮），原先每次 nblk++ 把夹着它的让步 / 短睡轮切断，两道退避都失效（见 wbo_step）
+static int wb_on(void);
+static int64_t block(thr_t *t, int kind, int64_t ns) {
+    int64_t r = block_raw(t, kind, ns);
+    if (ns != 0 && !(r == R_TIMEOUT && ns > 0 && ns < 1000000 && wb_on())) t->nblk++;
+    return r;
 }
 
 // ---------- 锁 ----------
@@ -1868,7 +1881,8 @@ static int64_t sleep_bo(thr_t *me, const uint64_t *regs, int64_t ns) {
     me->nsl++;
 #endif
     if (!yb_on()) return ns;
-    uint64_t now = (uint64_t)now_mono_ns(), seq = atomic_load_explicit(&me->nsvc_all, memory_order_relaxed);
+    // 11-16：两次短睡之间的 GetSystemTick（0x1E）不切轮——只读计数器、不改状态，和 mrs cntpct 同义（老 SDK 限帧器「睡一下、读一次 tick」每圈都有）
+    uint64_t now = (uint64_t)now_mono_ns(), seq = atomic_load_explicit(&me->nsvc_all, memory_order_relaxed) - me->nsvc_tick;
     if (me->sl_lr != regs[30] || me->sl_seq + 1 != seq || now - me->sl_ret > SPIN_GAP_NS) me->sl_t0 = now;
     me->sl_lr = regs[30]; me->sl_seq = seq;
     uint64_t run = now - me->sl_t0;
@@ -1879,6 +1893,94 @@ static int64_t sleep_bo(thr_t *me, const uint64_t *regs, int64_t ns) {
     me->nsl_bo++; me->sl_bo_ns += sl - (uint64_t)ns;
     return (int64_t)sl;
 }
+// ---------- 短超时等待轮询退避（11-16 起缺省开，S2A_WAIT_BACKOFF=0 关；借鉴上游 703acd69「short timed waits as polls」，MIT，见 docs/第三方说明；上游只管 < 20 µs，这里放到 < 1 ms 同短睡）----------
+// 「等一个对象、极短超时、超时返回、马上再等」= 拿等待当睡眠轮询（0x18 WaitSynchronization / 0x1C 条件变量 / 0x34 WaitForAddress）。原先每次起一个
+//   NOTE_CRITICAL 定时器、不退避：上游实测同类轮询（TimedWaitEvent 30–500 ns 夹 1 µs 睡）计入退避后 CPU 102% → 27% 一核、4.6 → 1.5 W；
+//   等事件超时 16 µs 的渲染线程唤醒 53,000 → 1,450 次 / 秒。
+// 判轮同短睡退避（复用 SPIN_GAP_NS、g_yb_start、sl_cap，不新增常数）：只看 0 < 超时 < 1 ms 的等待；同调用点（x30）、两次之间除轮询类系统调用
+//   （短睡 / 让步 / 等待 / 读 tick）外没有别的、没有真阻塞（nblk）、上次超时返回到这次进入游戏代码 ≤ 20 µs，连成一轮；被发信号醒的一次切轮（真等待）。
+//   分时干活的线程两次等待之间游戏代码 > 20 µs，每次都是新一轮。
+// 头 2 ms 原样，之后本次超时 = max(原超时, 已等 / 8)，封顶 sl_cap（缺省 250 µs）。放长的是超时不是睡：对象一被发信号照样立刻醒，只有「没等到」的那次晚返回；
+//   Horizon 只保证至少等这么久，超时晚到是合法行为。超时 < 20 µs（SLEEP_YIELD_NS）且没被放长的：不起定时器（每个就是一次硬件唤醒），按超时 0 查一次对象，
+//   没满足就回 TIMEOUT、放 G 后 sched_yield（同 SleepThread < 20 µs 按让出；不走 yield_bo 的退避睡——那段睡不在等待链上，信号来了醒不了；
+//   头 2 ms 之后由放长的超时接手，照样被信号立刻叫醒）。确定性档不动
+static int g_wb_on = -1;
+static int wb_on(void) {
+    if (g_wb_on < 0) { const char *e = getenv("S2A_WAIT_BACKOFF"); g_wb_on = !(e && !strcmp(e, "0"));
+        LOG("短超时等待轮询退避：%s", g_wb_on ? "开（缺省，S2A_WAIT_BACKOFF=0 关；同调用点连续超时满 2 ms 后超时放长到 已等/8、封顶同短睡退避）" : "关（S2A_WAIT_BACKOFF=0）"); }
+    return g_wb_on;
+}
+// 判轮（纯函数，单测直接喂）：本次等待进入时调。lr = 调用点、blk = 真阻塞计数、other = 非轮询类系统调用计数、ns = 游戏给的超时（0 < ns < 1 ms）。
+//   返回本次该用的超时（≥ ns）；*hit = 本轮第一次满 2 ms（收局数「成轮」）
+static int64_t wbo_step(wbo_t *s, uint64_t lr, uint64_t blk, uint64_t other, uint64_t now, int64_t ns, uint64_t start, uint64_t cap, int *hit) {
+    int fresh = !s->live || s->lr != lr || s->blk != blk || s->other != other || now - s->ret > SPIN_GAP_NS;
+    if (fresh) { s->t0 = now; s->hit = 0; }
+    s->lr = lr; s->blk = blk; s->other = other; s->live = 0;   // live 由这次以超时返回（wbo_done）置回：被信号叫醒 = 切轮
+    *hit = 0;
+    uint64_t run = now - s->t0;
+    if (run < start) return ns;
+    if (!s->hit) { s->hit = 1; *hit = 1; }
+    uint64_t sl = run / 8; if (sl > cap) sl = cap;
+    return sl > (uint64_t)ns ? (int64_t)sl : ns;
+}
+static void wbo_done(wbo_t *s, int timed_out, uint64_t now) { s->live = timed_out; s->ret = now; }
+// 收局统计：次数 / 超时返回 / 不起定时器按让出 / 成轮 / 放长 / 放长那几次实际多等（实际等的减原超时，被信号提前叫醒的不算多等）；按调用点（x30）记前几名
+static _Atomic uint64_t g_wb_n, g_wb_to, g_wb_yield, g_wb_rounds, g_wb_ext, g_wb_ext_ns;
+enum { WBS_N = 64 };
+static struct { _Atomic uint64_t lr, n, ext, up; } g_wbs[WBS_N];
+static void wbs_note(uint64_t lr, uint64_t fp, int ext) {
+    unsigned h = (unsigned)((lr >> 2) * 0x9E3779B97F4A7C15ull >> 58);
+    for (unsigned k = 0; k < 8; k++) { unsigned i = (h + k) % WBS_N; uint64_t cur = atomic_load_explicit(&g_wbs[i].lr, memory_order_relaxed);
+        if (!cur && atomic_compare_exchange_strong(&g_wbs[i].lr, &cur, lr)) {
+            // 新调用点第一次：沿 x29 取上一层返回地址（x30 多半落在 SDK 的等待封装里，上一层才是游戏哪段在轮询）
+#if defined(__APPLE__)
+            uint64_t fr[2]; vm_size_t got = 0;
+            if (fp && !(fp & 7) && vm_read_overwrite(mach_task_self(), (vm_address_t)fp, 16, (vm_address_t)fr, &got) == KERN_SUCCESS && got == 16)
+                atomic_store_explicit(&g_wbs[i].up, fr[1] & 0x0000007fffffffffull, memory_order_relaxed);
+#else
+            (void)fp;
+#endif
+        } else if (cur != lr) continue;
+        atomic_fetch_add_explicit(&g_wbs[i].n, 1, memory_order_relaxed); if (ext) atomic_fetch_add_explicit(&g_wbs[i].ext, 1, memory_order_relaxed); return; }
+}
+// 等待入口（持 G 前后都可）：返回本次该用的超时；*yield = 1：超时 < 20 µs 没放长，调用方按超时 0 查一次、回 TIMEOUT 后 sched_yield
+static int64_t wait_bo_enter(thr_t *me, const uint64_t *regs, int64_t ns, int *yield) {
+    *yield = 0;
+    if (ns <= 0 || ns >= 1000000) return ns;
+#ifndef S2A_UNIT_TEST
+    if (s2a_det_mode()) return ns;
+#endif
+    atomic_fetch_add_explicit(&g_wb_n, 1, memory_order_relaxed);
+    if (!wb_on()) { wbs_note(regs[30], regs[29], 0); return ns; }   // 关着也数（A/B 两边同口径）
+    uint64_t now = (uint64_t)now_mono_ns(), other = atomic_load_explicit(&me->nsvc_all, memory_order_relaxed) - me->nsvc_poll; int hit;
+    int64_t eff = wbo_step(&me->wbo, regs[30], me->nblk, other, now, ns, (uint64_t)g_yb_start, (uint64_t)sl_cap(), &hit);
+    if (hit) atomic_fetch_add_explicit(&g_wb_rounds, 1, memory_order_relaxed);
+    wbs_note(regs[30], regs[29], eff > ns);
+    if (eff > ns) atomic_fetch_add_explicit(&g_wb_ext, 1, memory_order_relaxed);
+    else if (ns < SLEEP_YIELD_NS) { *yield = 1; atomic_fetch_add_explicit(&g_wb_yield, 1, memory_order_relaxed); return 0; }
+    return eff;
+}
+// 等待返回：ns = 游戏给的超时、eff = 实际用的、t0 = 进入时刻（now_mono_ns）
+static void wait_bo_leave(thr_t *me, int64_t ns, int64_t eff, int timed_out, uint64_t t0) {
+    if (ns <= 0 || ns >= 1000000) return;
+#ifndef S2A_UNIT_TEST
+    if (s2a_det_mode()) return;
+#endif
+    if (timed_out) atomic_fetch_add_explicit(&g_wb_to, 1, memory_order_relaxed);
+    if (!wb_on()) return;
+    uint64_t now = (uint64_t)now_mono_ns();
+    if (timed_out && eff > ns && now - t0 > (uint64_t)ns) atomic_fetch_add_explicit(&g_wb_ext_ns, now - t0 - (uint64_t)ns, memory_order_relaxed);
+    wbo_done(&me->wbo, timed_out, now);
+}
+#ifdef S2A_UNIT_TEST
+static wbo_t g_test_wbo;
+void s2a_test_wbo_reset(void) { memset(&g_test_wbo, 0, sizeof g_test_wbo); }
+int64_t s2a_test_wbo_step(uint64_t lr, uint64_t blk, uint64_t other, uint64_t now, int64_t ns) { int hit; return wbo_step(&g_test_wbo, lr, blk, other, now, ns, 2000000, 250000, &hit); }
+void s2a_test_wbo_done(int timed_out, uint64_t now) { wbo_done(&g_test_wbo, timed_out, now); }
+void s2a_test_wait_bo(int on) { g_wb_on = on; }
+uint64_t s2a_test_wait_bo_ext(void) { return atomic_load(&g_wb_ext); }
+uint64_t s2a_test_wait_bo_yield(void) { return atomic_load(&g_wb_yield); }
+#endif
 // ---------- 自旋闸（10-24 起缺省开，S2A_SPIN=0 关；包要经 S2A_REWRITE_SPIN 改写（出包缺省开）才有这类门。借鉴上游 dm_spin_wait，MIT）----------
 // 改写器认出的「只读内存、自己离不开」的忙等循环，第二圈起每圈过这里（见 runtime/rewriter/rewriter.c 自旋等待）。Switch 上这种轮询只占自己那个核，
 // 宿主上却吃掉干活线程的核。一轮等待 = 两次过闸之间没有系统调用、游戏代码不超过 20 µs；头 2 ms 照转（多是工人之间的短交接），之后每圈睡 run/8（10–250 µs）。
@@ -1978,6 +2080,21 @@ void s2a_yield_stat_log(const char *when) {
             LOG("SleepThread [%s] 按线程 #%d：线程 %llu「%s」优先级 %d%s，短睡 %llu 次、被拉长 %llu 次、多睡 %.1f ms；最近调用点 %s", when, i + 1, (unsigned long long)top[i]->id, nm[0] ? nm : "?", top[i]->prio,
                 top[i]->is_main ? "（游戏主线程）" : "", (unsigned long long)top[i]->nsl, (unsigned long long)top[i]->nsl_bo, top[i]->sl_bo_ns / 1e6, at); }
         pthread_mutex_unlock(&G); }
+    {   // 短超时等待轮询退避（每局都打，0 次 = 没命中）：一行总数 + 按调用点前 3（x30 ← 上一层，定游戏哪段在轮询）
+        int top[3] = {-1, -1, -1};
+        for (int i = 0; i < WBS_N; i++) { uint64_t n = atomic_load(&g_wbs[i].n); if (!n) continue;
+            for (int k = 0; k < 3; k++) if (top[k] < 0 || n > atomic_load(&g_wbs[top[k]].n)) { for (int j = 2; j > k; j--) top[j] = top[j - 1]; top[k] = i; break; } }
+        char sites[640] = ""; size_t o = 0;
+        for (int k = 0; k < 3 && top[k] >= 0; k++) { char at[2][96];
+            for (int j = 0; j < 2; j++) { uint64_t a = (j ? atomic_load(&g_wbs[top[k]].up) : atomic_load(&g_wbs[top[k]].lr)) & 0x0000007fffffffffull; module_t *m = a ? module_of((void *)a) : NULL;
+                if (m) snprintf(at[j], sizeof at[j], "%s+%#llx", m->name, (unsigned long long)(a - (uint64_t)m->base)); else snprintf(at[j], sizeof at[j], "%#llx", (unsigned long long)a); }
+            o += (size_t)snprintf(sites + o, o < sizeof sites ? sizeof sites - o : 0, "%s#%d %s ← %s %llu 次 / 放长 %llu", k ? "；" : "", k + 1, at[0], at[1],
+                                  (unsigned long long)atomic_load(&g_wbs[top[k]].n), (unsigned long long)atomic_load(&g_wbs[top[k]].ext));
+            if (o >= sizeof sites) break; }
+        LOG("短超时等待 [%s]：%s；< 1 ms 超时的等待 %llu 次（超时返回 %llu、< 20 µs 不起定时器按让出 %llu），成轮 %llu 轮，放长 %llu 次、共多等 %.1f ms；调用点前 3：%s", when,
+            wb_on() ? "退避开" : "退避关（S2A_WAIT_BACKOFF=0）", (unsigned long long)atomic_load(&g_wb_n), (unsigned long long)atomic_load(&g_wb_to), (unsigned long long)atomic_load(&g_wb_yield),
+            (unsigned long long)atomic_load(&g_wb_rounds), (unsigned long long)atomic_load(&g_wb_ext), atomic_load(&g_wb_ext_ns) / 1e6, sites[0] ? sites : "无");
+    }
     if (g_yb_cap <= 0) return;
     LOG("让步退避 [%s]：让步 %llu 次，其中退避睡 %llu 次、共 %.1f ms；有进展直接返回 %llu 次", when, (unsigned long long)atomic_load(&g_yb_yields), (unsigned long long)atomic_load(&g_yb_sleeps), atomic_load(&g_yb_sleep_ns) / 1e6, (unsigned long long)atomic_load(&g_yf_n));
 }
@@ -2311,6 +2428,8 @@ int svc_thread(int num, uint64_t *regs) {
     if (__builtin_expect(g_wg_state > 0 && g_wg_mode == 3 && !t_wg_joined, 0)) { thr_t *w = thread_current_or_null(); if (w) { char nm[48]; snprintf(nm, sizeof nm, "游戏线程 %llu（优先级 %d）", (unsigned long long)w->id, w->prio); wg_join_self(nm); } }
 #endif
     { thr_t *s = thread_current_or_null(); if (s) { atomic_fetch_add_explicit(&s->nsvc_all, 1, memory_order_relaxed);
+        if (num == 0x1E) s->nsvc_tick++;
+        if (num == 0x0B || num == 0x18 || num == 0x1C || num == 0x34 || num == 0x1E) s->nsvc_poll++;
         if (hz_pin() && !s->pinned && s->tlr && *(volatile uint16_t *)((uint8_t *)s->tlr + 0x100)) { glock(); pin_set(s, 1); pthread_mutex_unlock(&G); } } }
     switch (num) {
     case 0x08: case 0x09: case 0x0A: case 0x0B: case 0x0C: case 0x0D: case 0x0E: case 0x0F: case 0x10: case 0x25:
@@ -2480,6 +2599,7 @@ static int svc_thread_impl(thr_t *me, int num, uint64_t *regs) {
         uint64_t addr = regs[0], key = regs[1];
         if (addr & 3) { regs[0] = 0xCC01; return 1; }   // InvalidAddress：锁字要 4 字节对齐（Ryujinx）
         tag_check(me, (uint32_t)regs[2], "WaitProcessWideKeyAtomic", addr);
+        int wy; uint64_t wt0 = (uint64_t)now_mono_ns(); int64_t wns = (int64_t)regs[3], weff = wait_bo_enter(me, regs, wns, &wy);   // 短超时轮询退避（wbo_step）
         glock();
         st32(key, 1);
         me->wkey = key; me->waddr = addr; me->wtag = (uint32_t)regs[2];
@@ -2487,8 +2607,9 @@ static int svc_thread_impl(thr_t *me, int num, uint64_t *regs) {
 #ifdef S2A_UNIT_TEST
         { extern void (*s2a_test_cv_after_release)(void); if (s2a_test_cv_after_release) s2a_test_cv_after_release(); }   // t_thread：紧跟放锁之后、挂链之前
 #endif
-        int64_t r = block(me, 2, (int64_t)regs[3]);   // 超时：不重新拿锁（用户态自己拿）
+        int64_t r = block(me, 2, weff);   // 超时：不重新拿锁（用户态自己拿）
         pthread_mutex_unlock(&G);
+        if (wy && r == R_TIMEOUT) sched_yield(); wait_bo_leave(me, wns, weff, r == R_TIMEOUT, wt0);
         regs[0] = (uint64_t)r; return 1;
     }
     case 0x1D: {  // SignalProcessWideKey(x0 条件键, w1 个数，≤0 全部)
@@ -2509,6 +2630,7 @@ static int svc_thread_impl(thr_t *me, int num, uint64_t *regs) {
         uint64_t addr = regs[0]; int type = (int)regs[1]; int32_t val = (int32_t)regs[2]; int64_t val64 = (int64_t)regs[2];
         if (addr & (type == 3 ? 7 : 3)) { regs[0] = 0xCC01; return 1; }   // InvalidAddress（Ryujinx Syscall.WaitForAddress；64 位按 8 字节）
         if ((unsigned)type > 3) { regs[0] = 0xF001; return 1; }        // InvalidEnumValue：原先未知类型按「小于则等」执行
+        int wy; uint64_t wt0 = (uint64_t)now_mono_ns(); int64_t wns = (int64_t)regs[3], weff = wait_bo_enter(me, regs, wns, &wy);   // 短超时轮询退避（wbo_step）
         glock();
         int64_t r; uint32_t v = ld32(addr);
         int ok = type == 3 ? (int64_t)__atomic_load_n((uint64_t *)addr, __ATOMIC_SEQ_CST) == val64 : type == 2 ? (int32_t)v == val : (int32_t)v < val;
@@ -2518,9 +2640,10 @@ static int svc_thread_impl(thr_t *me, int num, uint64_t *regs) {
             // 换了地址才清「谁发过信号」：同地址超时重挂要保留——TimedWaitLightEvent 会周期性重挂，
             //   每次清零就会永远显示「从没来过」，正好把要找的那条抹掉
             if (me->waddr != addr) { me->sig_id = 0; me->sig_tick = 0; }
-            me->waddr = addr; r = block(me, 3, (int64_t)regs[3]);
+            me->waddr = addr; r = block(me, 3, weff);
         }
         pthread_mutex_unlock(&G);
+        if (ok) { if (wy && r == R_TIMEOUT) sched_yield(); wait_bo_leave(me, wns, weff, r == R_TIMEOUT, wt0); }
         regs[0] = (uint64_t)r; return 1;
     }
     case 0x35: {  // SignalToAddress(x0 地址, w1 类型, w2 值, w3 个数)：0 唤醒、1 相等则加一并唤醒、2 相等则按等待数改值并唤醒
@@ -2632,9 +2755,10 @@ static int svc_thread_impl(thr_t *me, int num, uint64_t *regs) {
         regs[0] = (uint64_t)r; return 1;
     }
     case 0x18: {  // WaitSynchronization(→w1 下标; x1 句柄数组, w2 个数, x3 超时)
-        const uint32_t *hs = (const uint32_t *)regs[1]; int n = (int)regs[2]; int64_t ns = (int64_t)regs[3];
-        int64_t deadline = ns > 0 ? now_mono_ns() + ns : 0, r; int idx = -1;
+        const uint32_t *hs = (const uint32_t *)regs[1]; int n = (int)regs[2]; int64_t wns = (int64_t)regs[3];
         if (n < 0 || n > 64) { regs[0] = 0xEE01; return 1; }   // OutOfRange（Horizon 上限 64）
+        int wy; uint64_t wt0 = (uint64_t)now_mono_ns(); int64_t ns = wait_bo_enter(me, regs, wns, &wy);   // 短超时轮询退避（wbo_step）：ns = 实际用的超时
+        int64_t deadline = ns > 0 ? (int64_t)wt0 + ns : 0, r; int idx = -1;
         glock(); me->wh = hs; me->wn = n;
         for (;;) {
             if (me->cancel) { me->cancel = 0; r = R_CANCELLED; break; }
@@ -2651,6 +2775,7 @@ static int svc_thread_impl(thr_t *me, int num, uint64_t *regs) {
             if (r == R_TIMEOUT || r == R_CANCELLED) break;
         }
         me->wn = 0; pthread_mutex_unlock(&G);
+        if (r != R_BAD_HANDLE) { if (wy && r == R_TIMEOUT) sched_yield(); wait_bo_leave(me, wns, ns, r == R_TIMEOUT, wt0); }
         regs[0] = (uint64_t)r; regs[1] = idx >= 0 ? (uint64_t)idx : 0; return 1;
     }
     case 0x19: {  // CancelSynchronization(w0 线程)
