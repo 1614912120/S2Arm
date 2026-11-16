@@ -76,7 +76,8 @@ class RewriteRefreshTests(unittest.TestCase):
              patch.object(rr.layout, "update_info", side_effect=lambda c, g, **f: self.info.setdefault(g, {}).update(f)), \
              patch.object(rr, "rewrite_modules", side_effect=rewrite), \
              patch.object(rr, "sgrade_off", return_value=sgrade is None), \
-             patch.object(rr, "sgrade_key", return_value=sgrade or "-"), patch.object(rr, "sgrade_rewrite", side_effect=self.fake_sgrade()):
+             patch.object(rr, "sgrade_key", return_value=sgrade or "-"), patch.object(rr, "sgrade_rewrite", side_effect=self.fake_sgrade()), \
+             patch.object(rr, "_refresh_bf_ios", return_value=[]):   # 补 _bf 一段另有单测（test_sgrade_bf.py）
             return rr.refresh_ios(self.c, games), kits
 
     def test_affected_module_replaced_others_untouched_and_id_recorded(self):
@@ -238,7 +239,8 @@ class RewriteRefreshTests(unittest.TestCase):
              patch.object(rr, "sgrade_key", return_value="k"), patch.object(rr.layout, "game_info", return_value={}), \
              patch.object(rr.layout, "update_info", side_effect=lambda c, g, **f: self.info.setdefault(g, {}).update(f)), \
              patch.object(rr.layout, "ios_kit", return_value=self.tmp), patch.object(rr.layout, "nro_kept", return_value=self.tmp / "no-kept"), \
-             patch.object(rr, "check_and_update", side_effect=lambda c, g, *a: "unavailable" if g == "0100A" else "updated"):
+             patch.object(rr, "check_and_update", side_effect=lambda c, g, *a: "unavailable" if g == "0100A" else "updated"), \
+             patch.object(rr, "_refresh_bf_ios", return_value=[]):
             self.assertEqual(rr.refresh_ios(self.c, ["0100A", "0100B"]), ["0100B"])
         self.assertTrue(any("甲游戏" in e and "没补上 S 级优化" in e and "乙游戏" not in e for e in self.events), self.events)
         self.assertEqual(self.info["0100A"]["ios"]["sgradeMissing"], "k", "缺原件补不上：记下这一版记号，「更新 iPhone」不再因它重装（install.sgrade_pending）")
@@ -304,7 +306,7 @@ class KeptNroRefreshTests(unittest.TestCase):
 
     def test_refresh_ios_counts_kept(self):
         with patch.object(rr, "rewriter_id", return_value="rid"), patch.object(rr, "pending_ios", return_value=[]), \
-             patch.object(rr.layout, "ios_kit", return_value=self.base):
+             patch.object(rr.layout, "ios_kit", return_value=self.base), patch.object(rr, "_refresh_bf_ios", return_value=[]):
             self.assertEqual(self.run_add(lambda c, g: rr.refresh_ios(c, [g])), ["0100A"])
         self.assertTrue((self.base / "nro1.patched.bin").is_file())
 
