@@ -148,6 +148,13 @@ struct PackSpace: Equatable {
 
 @MainActor
 public final class S2ArmLauncherModel: ObservableObject {
+    let home = HomeLibraryState()
+    let gamepad = LauncherPadNavigation()
+    var playSessionActive: Bool {
+        guard let session, session.kind == .play else { return false }
+        if case .finished = session.phase { return false }
+        return true
+    }
     @Published private(set) var games: [GameSummary] = []
     @Published private(set) var loading = false
     /// 游戏库读回来过（成功或失败）：之前库是空的只说明还没读完，不能显示「还没有游戏」。
@@ -160,7 +167,9 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published var selectedID: String?
     /// 出包平台的勾选没能写盘。
     @Published private(set) var choiceError: String?
-    @Published var session: JobSession?   // 批量出包时编排作业一步换一款，+Batch.swift batchStepStarted 换会话
+    @Published var session: JobSession? {   // 批量出包时编排作业一步换一款，+Batch.swift batchStepStarted 换会话
+        didSet { if session?.started != oldValue?.started { sessionHidden = false } }
+    }
     /// 出包页开着的那一款（nil = 游戏库）。
     @Published var exportFor: String?
     /// 下游深度方案确认页（DownstreamConfirmSheet）：导出 iPhone 前弹，选完记下（downstreamChoice 作业）再接着导出这一单
@@ -1008,10 +1017,17 @@ public final class S2ArmLauncherModel: ObservableObject {
     }
 
     /// 在 Xcode 打开引导项目；玩家运行一次后，装机页每 5 秒的重查会自动打勾。
-    func openSigningProject() {
+    func openSigningProject(completion: ((Error?) -> Void)? = nil) {
         Task {
-            do { NSWorkspace.shared.open(URL(fileURLWithPath: try await provider.signingProject())) }
-            catch { installError = error.localizedDescription }
+            do {
+                let path = try await provider.signingProject()
+                guard !path.isEmpty else { throw CocoaError(.fileNoSuchFile) }
+                let url = URL(fileURLWithPath: path)
+                guard NSWorkspace.shared.open(url) else { throw CocoaError(.fileReadUnknown) }
+                completion?(nil)
+            } catch {
+                if let completion { completion(error) } else { installError = error.localizedDescription }
+            }
         }
     }
 
@@ -1168,6 +1184,9 @@ public final class S2ArmLauncherModel: ObservableObject {
     }
 
     private func startPlay(_ game: GameSummary, uiLanguage: String?) {
+        // The helper accepts one consumer. Release the launcher's reader before
+        // the host can connect, including launches initiated by the control port.
+        gamepad.releaseRelay()
         let relaySocket = controller.relaySocketForGame()
         var controllerArguments: [String: String] = [
             "switch2ProAutoConnect": relaySocket == nil ? "0" : "1",   // 有通道就让游戏自己接（还没连上时游戏会重试）
@@ -1233,7 +1252,7 @@ public final class S2ArmLauncherModel: ObservableObject {
             guard let self else { return }
             do {
                 let r = try await self.provider.locations(probe: probe); self.readOK("s2arm.fail.locations")
-                self.locations = r.rows; self.lastLocation = r.last
+                self.lastLocation = r.last; self.locations = r.rows
                 if let probe, let slack = r.probeSlack { self.probedSlack[probe] = slack }
             } catch { self.reportFailure("s2arm.fail.locations", error, passive: true) }   // 读不到就保留上次的列表
         }
@@ -1256,10 +1275,18 @@ public final class S2ArmLauncherModel: ObservableObject {
         return BackendText.launcherText("export.location.slack_format", language: language)
     }
 
-    /// 出包页「存放位置」缺省选哪个：这款现在的位置 → 上次用的位置 → 默认位置。
+    /// 优先恢复上次手动选择；还没选过时沿用这款现在的位置、后端上次用的位置、默认位置。
+    /// 出包页缺省存放位置，玩家自己定过的优先（维护者 11-15「玩家自行选择优先级更高」）：
+    ///   ① 给这款手动选过的文件夹 → ② 这款现在放的位置 → ③ 上次手动选的（只给还没放过的新游戏）→ ④ 上次出包的位置 / 缺省位置
     func defaultLocation(for game: GameSummary) -> String {
+        if let picked = provider.settings.exportLocation(forGame: game.id), !picked.isEmpty { return picked }
         if game.location.state == "ok" || game.location.state == "offline", !game.location.path.isEmpty { return game.location.path }
+        if let saved = provider.settings.exportLocation, !saved.isEmpty { return saved }
         return locations.first(where: { $0.id == lastLocation && $0.connected })?.path ?? locations.first(where: \.isDefault)?.path ?? ""
+    }
+
+    func rememberExportLocation(_ path: String, game: GameSummary) {
+        do { try provider.settings.setExportLocation(path, game: game.id) } catch { choiceError = error.localizedDescription }
     }
 
     /// 移动到其他位置（整个文件夹，存档跟着走）。
@@ -1483,6 +1510,7 @@ public final class S2ArmLauncherModel: ObservableObject {
             session.stage = stage
             if event.ev == "stage", session.stages.last != stage { session.stages.append(stage) }
             if session.kind == .play, event.fields["stageKey"] as? String == "game_running" {   // 后端固定机读名（build.py begin key），不认中文阶段名
+                if let id = session.gameID { home.recordPlay(id) }
                 controllerGameStarted = true
                 controller.gameDidStart()
             }

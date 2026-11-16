@@ -225,6 +225,16 @@ import S2ArmAppleAdapter
                     if !o.note.isEmpty { r["note"] = o.note }
                     return r })
             } catch { return .bad(error.localizedDescription) }
+        case ("POST", "/mods"):   // 资源替换 mod（同启动设置「资源 Mod」）：import [zip / 文件夹路径]、enable {名字: 真/假}（关掉 = 改名 .off-<名字>）、remove [名字]；都不给 = 只列
+            guard let id = str("gameId") else { return .bad("缺 gameId") }
+            if let b = busy() { return b }
+            let imp = a["import"] as? [String], rem = a["remove"] as? [String], en = a["enable"] as? [String: Bool]
+            do {
+                let m = try await model.launchSettingsFull(id, modsImport: imp?.isEmpty == false ? imp : nil, modsRemove: rem?.isEmpty == false ? rem : nil,
+                                                           modsEnable: en?.isEmpty == false ? en : nil).5
+                return .object(["mods": m.items.map { ["name": $0.id, "enabled": $0.enabled, "files": $0.files, "bytes": $0.bytes] as [String: Any] },
+                                "imported": m.imported, "notes": m.notes])
+            } catch { return .bad(error.localizedDescription) }
         case ("POST", "/cloudFolder"):
             // iCloud 存档同步的云盘文件夹（同环境页「选择文件夹…」）：path 为空 = 关闭
             let path = str("path") ?? ""
@@ -309,6 +319,7 @@ import S2ArmAppleAdapter
         ["POST /installCheck {gameId}", "装机前清单（只读）：几秒后看 GET /state 的 installReadiness"],
         ["POST /install {gameId, acceptDropped?, acceptNoBackup?, acceptStale?}", "装到 iPhone（不用先 installCheck，缺什么作业报真实原因）；可确认的失败码先问玩家、同意了带对应参数再发：container_would_drop → acceptDropped（手机上有别的电脑装的游戏这次带不上）、save_backup_failed → acceptNoBackup（覆盖前没能备份存档）、container_stale → acceptStale（旧资源包要重出）"],
         ["POST /uninstall {gameId, acceptDropped?, acceptNoBackup?}", "从 iPhone 上的 S2Arm 删一款（备份存档 → 更新容器 → 删数据；其余游戏不动）；acceptDropped / acceptNoBackup 同 /install"],
+        ["POST /mods {gameId, import?:[路径], enable?:{名字: 真/假}, remove?:[名字]}", "资源替换 mod：导入 zip / 文件夹（找 romfs）、开关（关掉下次开始游戏不叠，装到 iPhone 时机上删掉）、删除；都不给只列；回 {mods:[{name, enabled, files, bytes}], imported, notes}"],
         ["POST /delete {gameId}", "删除这款游戏：IPA / 资源包 / 出包中间产物 / 缓存全删；存档与原始游戏文件保留"],
         ["POST /target {action:probe} | {productType, os}", "重新检测连接的设备 / 选出包提示用的机型和系统大版本"],
         ["POST /launch {gameId}", "在 Mac 上启动游戏"],

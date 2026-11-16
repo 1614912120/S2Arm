@@ -156,6 +156,7 @@
 入	pack/contracts/target.v1.schema.json
 入	pack/contracts/validate.py
 入	pack/display_name.py
+入	pack/jobs/cache_retention.py
 入	pack/jobs/errors.py
 入	pack/pkg_srcs.py
 入	pack/shell/manifest.py

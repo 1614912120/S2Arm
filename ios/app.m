@@ -691,7 +691,7 @@ static void audio_category_apply(void) {
     s2a_session_on_restart_done(restart_done);   // 任何发起方的进程内重启完成都由壳放重启首帧屏障（见 restart_done）
     NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
     [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; display_focus_publish(NO); LOG("iOS 壳：失去焦点（仍在前台，游戏照跑）"); }];
-    [nc addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; display_focus_publish(NO); s2a_dguard_background(1, now_ns()); { void s2a_diag_session_fg(int); s2a_diag_session_fg(0); } s2a_ios_suspend_enqueue(1, "进后台"); s2a_guest_run_mark(0); }];   // 直连安全网：后台被杀 / 玩家划掉不算崩
+    [nc addObserverForName:UIApplicationDidEnterBackgroundNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n; display_focus_publish(NO); s2a_dguard_background(1, now_ns()); { int s2a_playtime_flush(void); s2a_playtime_flush(); } { void s2a_diag_session_fg(int); s2a_diag_session_fg(0); } s2a_ios_suspend_enqueue(1, "进后台"); s2a_guest_run_mark(0); }];   // 直连安全网：后台被杀 / 玩家划掉不算崩
     // 直连安全网：前台收到内存告警算这局的失败证据（之后被系统按内存杀掉进不了崩溃处理）；玩满 60 秒照样清零，进后台撤回
     [nc addObserverForName:UIApplicationDidReceiveMemoryWarningNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n;
         if (UIApplication.sharedApplication.applicationState != UIApplicationStateBackground) s2a_dguard_evidence("内存告警", 0); }];
@@ -751,6 +751,7 @@ static void audio_category_apply(void) {
         // 客体内存分区账（S2A_MEM_SPLIT=1，缺省关）：心跳每 10 秒一行，另起 100 ms 采样线程抓跳变（mem_split_*）
         if (mem_split_on()) { mem_split_line("内存分区", s2a_footprint_mb(), wr, wo, 0); mem_split_start(); }
         s2a_energy_log();
+        { int s2a_playtime_flush(void); s2a_playtime_flush(); }   // 游玩时间同节拍落盘（runtime/src/playtime.c）：闪退 / 被杀最多丢这 10 秒
         s2a_pad_latency latency; s2a_pad_get_latency(&latency, 1);
         if (latency.samples) LOG("[输入延迟] %llu 次变化：快照到HID提交 平均 %.3f ms / 最大 %.3f ms；读取到提交 平均 %.3f ms / 最大 %.3f ms（不含蓝牙和画面显示）",
             (unsigned long long)latency.samples, latency.host_total_us / (1000.0 * latency.samples), latency.host_max_us / 1000.0,
@@ -929,9 +930,9 @@ const char *s2a_shell_install_failure(const char *gid) {   // 主线程
     if (!why.length) return NULL;
     strlcpy(out, why.UTF8String, sizeof out); return out;
 }
-static atomic_int g_games_repairing = 1;   // 游戏目录 App 写不进时的迁移（#569，img_scan_bg）：第一次扫完之前算「在查」：冷启动库先于扫描出现时也不抢着解
+static atomic_int g_games_repairing = 1;   // 首次清点容器 / 资源包挪位（img_scan_bg）完成之前算「在查」：冷启动库先于扫描出现时也不抢着解包
 int s2a_shell_install_game(const char *gid) {   // 主线程（s2a_shell.h 约定）
-    if (atomic_load(&g_games_repairing)) return 0;   // 还在查 / 迁游戏目录（#569）：先不解，库下一秒重判再起
+    if (atomic_load(&g_games_repairing)) return 0;   // 还在清点 / 挪资源包：先不解，库下一秒重判再起
     if (!gid || strlen(gid) != 16 || strchr(gid, '/') || atomic_exchange(&g_inst_busy, 1)) return 0;
     strlcpy(g_inst_gid, gid, sizeof g_inst_gid); atomic_store(&g_inst_done, 0); atomic_store(&g_inst_total, 0);
     atomic_store(&g_inst_phase, 0); atomic_store(&g_inst_pdone, 0); atomic_store(&g_inst_ptotal, 0);
@@ -1042,15 +1043,16 @@ static void img_scan_report(void) {   // 主线程
     [a addAction:[UIAlertAction actionWithTitle:S2AL(@"common.gotIt") style:UIAlertActionStyleCancel handler:nil]];
     [lib_top() presentViewController:a animated:YES completion:nil];
 }
-// 游戏目录 App 写不进时迁到新目录（#569，pack_apply.c s2a_games_repair）：本进程第一次扫之前做一次，迁移期间不起解包（s2a_shell_install_game 拒绝，
-//   库照旧显示「安装中」、下一秒重判再起）；结果用界面语言在库上说一次：迁好了 / 没迁成和原因（不悄悄绕路，玩家知道发生了什么）
-int s2a_games_repair(const char *proc_docs); const char *s2a_games_repair_detail(void); unsigned s2a_games_repair_files(void); unsigned s2a_games_repair_owner(void);   // pack_apply.c
-static void games_repair_report(int r) {   // 主线程
-    if (r == 0 || !g_lib_window) return;
-    NSString *title = r > 0 ? S2AL(@"games.repair.done.title") : S2AL(@"games.repair.failed.title");
-    // 屏上只说人话；属主 uid 与失败原文只进日志 / 诊断包（pack_apply.c 已记；11-11 维护者：原文和码不上屏）
-    NSString *body = r > 0 ? [NSString stringWithFormat:S2AL(@"games.repair.done.body"), s2a_games_repair_files()] : S2AL(@"games.repair.failed.body");
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:title message:body preferredStyle:UIAlertControllerStyleAlert];
+// App 容器里属主不是 App 的条目（#569；维护者 11-15 定：不迁移、不驻留、不靠电脑）：App 改不了也删不掉，只有删除重装能清。
+//   每进程第一次扫之前清点一次（pack_apply.c s2a_foreign_scan），读数进日志 / 诊断；只在真有影响时对玩家说：占用 ≥ 2 GB 时在库上说一次占了多少、
+//   为什么删不掉、怎么办（先导出存档 → 删除重装 S2Arm → 导回存档）。写不进导致装不上 / 起不了的，由解包失败码 ios_install_dir_unwritable 那条说
+unsigned s2a_foreign_scan(const char *home, uint64_t *bytes, char *line, size_t n);   // pack_apply.c
+static uint64_t g_foreign_bytes;
+static void foreign_report(void) {   // 主线程
+    if (g_foreign_bytes < (2ull << 30) || !g_lib_window) return;
+    NSString *gb = [NSString stringWithFormat:@"%.1f", g_foreign_bytes / 1073741824.0];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:S2AL(@"container.locked.title")
+        message:[NSString stringWithFormat:S2AL(@"container.locked.body"), gb] preferredStyle:UIAlertControllerStyleAlert];
     [a addAction:[UIAlertAction actionWithTitle:S2AL(@"common.gotIt") style:UIAlertActionStyleCancel handler:nil]];
     [lib_top() presentViewController:a animated:YES completion:nil];
 }
@@ -1078,10 +1080,12 @@ static void pack_layout_prepare(const char *proc_docs) {   // 后台线程
 static void img_scan_bg(void) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         static atomic_int checked; int r = 0;
-        if (!atomic_exchange(&checked, 1) && !atomic_load(&g_game_picked)) { char d[1024]; s2a_container_docs(d, sizeof d); r = s2a_games_repair(d); pack_layout_prepare(d); }
+        if (!atomic_exchange(&checked, 1) && !atomic_load(&g_game_picked)) { char d[1024]; s2a_container_docs(d, sizeof d);
+            char line[1600]; uint64_t fb = 0; if (s2a_foreign_scan(NSHomeDirectory().fileSystemRepresentation, &fb, line, sizeof line)) { LOG("【黄】%s", line); g_foreign_bytes = fb; r = 1; }
+            pack_layout_prepare(d); }
         atomic_store(&g_games_repairing, 0);
         int n = img_scan_now();
-        dispatch_async(dispatch_get_main_queue(), ^{ if ((n > 0 || r > 0) && s2a_shell_refresh) s2a_shell_refresh(); games_repair_report(r); if (r == 0) img_scan_report(); });   // 同一刻只弹一个框：迁移那次先说迁移，认领失败下次回前台重扫再说
+        dispatch_async(dispatch_get_main_queue(), ^{ if (n > 0 && s2a_shell_refresh) s2a_shell_refresh(); if (r) foreign_report(); if (!r || g_foreign_bytes < (2ull << 30)) img_scan_report(); });   // 同一刻只弹一个框：迁移那次先说迁移，认领失败下次回前台重扫再说
     });
 }
 static void img_scan_if_library(void) { if (g_lib_window) img_scan_bg(); }
@@ -1259,6 +1263,7 @@ static void cloud_sync_done(void *ctx) {
 - (void)startHost {
     s2a_boot_entry entry = s2a_host_boot_take();
     if (!entry) return;   // 先领取，再启动；后续激活只走现有恢复路径
+    { void s2a_ios_test_save_op(void); s2a_ios_test_save_op(); }   // 测试开关 S2A_TEST_SAVE_OP（ios/save_transfer.m）：游戏已选定、宿主还没起，导出 / 导回一次存档
     int inputError = s2a_ios_input_config_load();
     if (inputError) { LOG("【红】iOS 输入配置损坏，拒绝启动（%d: %s）", inputError, s2a_input_config_error_message(inputError)); exit(2); }
     s2a_log_session_start();

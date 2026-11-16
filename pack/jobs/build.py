@@ -147,7 +147,9 @@ def runtime_env(c, game, runtime, input_ok=True):
         p.mkdir(parents=True, exist_ok=True)
     # S2A_SAVE_DIR is a test/import seed that clears saves at boot; launch() sets it
     # only for a save the player just imported, never for normal play. Persist the Ryujinx data root instead.
+    # 游玩时间（runtime/src/playtime.c）写进这款的游戏文件夹：S2A_DOCS 在 temp/（总览里算可清的临时件），清了不能把累计时长一起清掉
     env.update(S2A_GAME_DATA=str(runtime), S2A_RYU_DATA=str(save), S2A_DOCS=str(docs), S2A_SAVE_FOLDER=str(save_folder),
+               S2A_PLAYTIME=str(layout.path(c, game["id"], "playtime.json")),
                NXGAL_SHADER_CACHE_DIR=str(cache / "shaders"), NXGAL_PSO_DEV_DIR=str(cache / "pso"),
                S2A_MACRO_DUMP=str(cache / "macros"),
                S2A_DOCKED="0" if c.r.get("docked") is False else "1",   # Mac 缺省主机模式（维护者 11-07）；只有请求明说 false 才掌机

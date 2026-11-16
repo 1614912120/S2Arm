@@ -102,6 +102,7 @@ final class NS2LauncherController: ObservableObject {
     private let notifications: NotificationCenter
     private var observers: [NSObjectProtocol] = []
     let socketURL: URL
+    let faceMaps: ControllerFaceMapStore
     private var process: Process?
     private var output: Pipe?
     private var input: Pipe?   // 运行中改设定（两只怎么用）经 stdin 一行命令交给连接程序，不用重连
@@ -113,6 +114,7 @@ final class NS2LauncherController: ObservableObject {
     init(socketURL: URL, store: UserDefaults? = nil, orderFile: URL = PlayerAssignment.orderFileURL, watchGame: Bool = false,
          systemControllers: @escaping () -> [GCController] = { GCController.controllers() }, notifications: NotificationCenter = .default) {
         self.socketURL = socketURL
+        faceMaps = ControllerFaceMapStore(fileURL: orderFile.deletingPathExtension().appendingPathExtension("face.json"))
         self.systemControllers = systemControllers
         self.notifications = notifications
         orderFileURL = orderFile
@@ -147,12 +149,7 @@ final class NS2LauncherController: ObservableObject {
         return helperDetail
     }
     private func refreshSystemControllers(connected: GCController? = nil, disconnected: GCController? = nil) {
-        var controllers = systemControllers().filter { $0 !== disconnected }
-        // 通知里的设备是本次事件的真值；枚举快照尚未更新时也要及时显示连接 / 断开。
-        //   蓝牙手柄刚接上那一下输入描述（physicalInputProfile）可能还没就绪——这时也照常显示连接（#934：
-        //   系统蓝牙已连上、面板却一直「未连接」），晚一拍描述就绪后照常读
-        let controller = connected ?? controllers.first { $0.extendedGamepad != nil || !$0.physicalInputProfile.buttons.isEmpty }
-        systemControllerName = controller.map { $0.vendorName.flatMap { $0.isEmpty ? nil : $0 } ?? "Game Controller" }
+        systemControllerName = SystemControllers.snapshot(systemControllers(), connected: connected, disconnected: disconnected).first?.name
     }
 
     /// 面板状态（#520 UI 稿「连接状态」：固定 7 种，状态行只写这几个词；细节放下面一行）

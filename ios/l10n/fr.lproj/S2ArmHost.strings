@@ -327,10 +327,8 @@
 "img.scanFailed.title" = "Impossible d'importer le fichier du jeu";
 "img.noShaders.title" = "Ce fichier de jeu est incomplet";
 "img.noShaders.body" = "« %@ » est incomplet. Remplacez-le par le « <nom du jeu>.img » du dossier « S2Arm Self-Sign Export » sur votre ordinateur, ou connectez votre téléphone et cliquez sur « Send to iPhone » dans S2Arm sur votre ordinateur.";
-"games.repair.done.title" = "Dossier du jeu réparé";
-"games.repair.done.body" = "Le dossier du jeu appartenait à un compte système, S2Arm ne pouvait pas y écrire et l'installation ne démarrait pas. Il a été déplacé vers un nouveau dossier appartenant à S2Arm (%u fichiers, partageant les données d'origine, sans espace supplémentaire). Vous pouvez continuer l'installation. S2Arm ne peut pas supprimer l'ancien dossier ; il sera effacé à la prochaine connexion à votre ordinateur.";
-"games.repair.failed.title" = "Impossible de réparer le dossier du jeu";
-"games.repair.failed.body" = "Le dossier du jeu appartient à un compte système, S2Arm ne peut pas y écrire, et le déplacement vers un nouveau dossier a également échoué. Vos données de jeu n'ont pas été touchées. Réinstallez le jeu depuis votre ordinateur ; si cela échoue encore, exportez un diagnostic et envoyez-le-nous.";
+"container.locked.title" = "Certains fichiers de S2Arm sont verrouillés par le système";
+"container.locked.body" = "%@ Go d’anciens fichiers S2Arm sur cet appareil sont verrouillés par le système. S2Arm ne peut ni les modifier ni les supprimer ; ils ne disparaissent qu’en supprimant l’app.\n\nPour libérer cet espace :\n1. Dans chaque jeu, ouvrez le menu → Gérer les sauvegardes → Exporter la sauvegarde actuelle…, vers un emplacement de Fichiers hors du dossier S2Arm (par exemple iCloud Drive ; le dossier S2Arm est supprimé avec l’app)\n2. Supprimez et réinstallez S2Arm\n3. Gérer les sauvegardes → Choisir une sauvegarde à vérifier… pour récupérer vos sauvegardes";
 "diag.fileWord" = "diag";
 "diag.error.bundleName" = "Impossible d'anonymiser le nom du paquet, aucun diagnostic exporté";
 "diag.error.redact" = "Impossible d'anonymiser ou d'écrire le diagnostic, aucun paquet de diagnostic exporté";

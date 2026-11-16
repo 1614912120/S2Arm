@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -360,13 +361,24 @@ def reader_values(destination):
     return out
 
 
+def _rmtree_writable(path):
+    """删整棵目录；删不动的先加写权限再删一次（Windows 上 git 的对象文件、commit-graph 是只读的，rmtree 报 WinError 5 拒绝访问）"""
+    def retry(fn, p, _):
+        os.chmod(p, stat.S_IWRITE | stat.S_IREAD)
+        fn(p)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=retry)
+    else:
+        shutil.rmtree(path, onerror=retry)
+
+
 def seal_snapshot(destination, fingerprint):
     """快照库已 commit + gc、引擎目录里的文件都放齐之后调：git 算快照字段写进 engine.json → 删 .git → 各读方新旧两种读法逐项比对，不一致就停、不出包"""
     destination = Path(destination)
     write_manifest(destination, fingerprint, snap={})   # engine.json / prepare.json 先落盘：玩家副本里 git ls-files 会列出它们，listed 要算进去
     before = reader_values(destination)                 # 旧读法（git）
     fields = snapshot_fields(destination)
-    shutil.rmtree(destination / ".git")
+    _rmtree_writable(destination / ".git")
     write_manifest(destination, fingerprint, snap=fields)
     after = reader_values(destination)                  # 新读法（engine.json）
     failed = [k for k, v in before.items() if k.startswith("sh_") and v[0]]
@@ -389,7 +401,10 @@ def precompile(root, python):
     python = Path(python)
     if not python.is_file():
         raise RuntimeError(f"预编 .pyc 要用 App 自带的 Python，没找到：{python}")
-    subprocess.run([str(python), "-I", "-m", "compileall", "-q", "-j", "0", "--invalidation-mode", "checked-hash", str(root)],
+    # -B：解释器起来时自己会导入 encodings / sitecustomize，不加 -B 就先把它们写成按时间戳失效的 .pyc，compileall 见已有就不重写；
+    #   装机改了源码时间后第一次起包里的 Python 就重写这 4 份（sitecustomize 关写字节码在它们之后才生效），签名封存坏（v0.4.4 候选验收⑦）。
+    #   -f：已有的一律按 checked-hash 重写。compileall 自己显式写 .pyc，不受 -B 影响
+    subprocess.run([str(python), "-I", "-B", "-m", "compileall", "-q", "-f", "-j", "0", "--invalidation-mode", "checked-hash", str(root)],
                    stdout=subprocess.DEVNULL, check=True)
 
 

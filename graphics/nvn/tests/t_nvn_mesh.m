@@ -206,7 +206,8 @@ int main(void) {
                  "④c 预热交来的管线：同一笔不跳过、不用等、画出列 2、3、4（跳过过 %d，等待 +%llu，列掩码 %#x；stderr：%s）", w4c, (unsigned long long)(g_mtk_waits - sn0), cols, o.UTF8String); }
         unlink(pso_user);
 
-        // ④d 每帧等待预算用完：丢不起的那笔照旧跳过、打「past the … frame budget」、不卡提交线程（预算 0 → 一次都不等）。新目标（近两帧没画过）+ 新片元（管线没编过）
+        // ④d（D-84J2 起）丢不起的那笔等到管线编好，只受「编译服务卡死」封顶（DM_NVN_PSO_UNSAFE_WAIT_MS，这里设 300 ms）：编译被挂住时等满封顶才跳过、打红行并写明是封顶。
+        //   新目标（近两帧没画过）+ 新片元（管线没编过）。④e：编译在等待中途放开 → 等到编好就画出，不计跳过、没有红行
         { tex_t rt2; memset(&rt2, 0, sizeof rt2); rt2.magic = MAGIC('T', 'E', 'X', 0); rt2.serial = nvn_new_serial(); rt2.d = g_rt.d; nvn_tex_layout(&rt2.d, &rt2.L); nvn_be_tex_init(&rt2); REQUIRE(tex_mtl(&rt2));
           NvShader *fs3 = [NvShader new]; fs3->stage = 1; strlcpy(fs3->key, "dddddddddddddddd_b", sizeof fs3->key); fs3->ventry = @"main0";
           NSError *e = nil; id<MTLLibrary> l = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nfragment float4 main0() { return float4(1, 1, 1, 0.25); }\n" options:nil error:&e]; REQUIRE(l); fs3->fn = [l newFunctionWithName:@"main0"]; REQUIRE(fs3->fn);
@@ -219,18 +220,38 @@ int main(void) {
           // 后台编译先挂住（占满后台并发名额 g_mtk_sem）：这笔管线在检查时一定还没编好，期望不靠编译快慢。
           //   原先不挂：门禁机编得快（0.1 ms 编好），检查时已能画、没走「跳过」，超预算 +0 / 跳过 +0（main c3708ffdb 已知红）
           REQUIRE(g_mtk_sem); int held = mtk_width(); for (int i = 0; i < held; i++) dispatch_semaphore_wait(g_mtk_sem, DISPATCH_TIME_FOREVER);
-          int b0 = g_mtk_budget; g_mtk_budget = 0; S.prog = &gp4d; uint64_t ov0 = g_mtk_wait_over, w0 = g_mtk_wait;
-          o = capture(^{ draw(&d4, NULL); });
-          g_mtk_budget = b0; for (int i = 0; i < held; i++) dispatch_semaphore_signal(g_mtk_sem);
+          int b0 = g_mtk_budget, u0 = g_pso_unsafe_ms; g_mtk_budget = 0; g_pso_unsafe_ms = 300; S.prog = &gp4d; uint64_t ov0 = g_mtk_wait_over, w0 = g_mtk_wait, mx0 = g_mtk_wait_max;
+          uint64_t t4d = bp_now(); o = capture(^{ draw(&d4, NULL); }); double ms4d = (bp_now() - t4d) / 1e6;
+          g_mtk_budget = b0; g_pso_unsafe_ms = u0; for (int i = 0; i < held; i++) dispatch_semaphore_signal(g_mtk_sem);
           dispatch_group_wait(g_mtk_group, DISPATCH_TIME_FOREVER);
           rp_flush(); uint64_t fence = nvn_be_sub_commit(); REQUIRE(nvn_be_wait(fence, 10000000000ull));
-          VERIFY(g_mtk_wait_over == ov0 + 1 && g_mtk_wait == w0 + 1 && [o containsString:@"past the 0 ms frame budget"] && [o containsString:@"not ready: skipped this frame"] && red_lines(o, nil) == 0,
-                 "④d 预算 0：丢不起的那笔（新目标）不等、照旧跳过并计数、写明超预算（超预算 +%llu，跳过 +%llu；stderr：%s）", (unsigned long long)(g_mtk_wait_over - ov0), (unsigned long long)(g_mtk_wait - w0), o.UTF8String);
+          (void)mx0;
+          VERIFY(g_mtk_wait_over == ov0 + 1 && g_mtk_wait == w0 + 1 && ms4d >= 300 && [o containsString:@"stuck-compiler cap DM_NVN_PSO_UNSAFE_WAIT_MS 300 ms"] && [o containsString:@"not ready: skipped this frame"] && red_lines(o, nil) == 1,
+                 "④d 编译挂住：丢不起的那笔等满封顶 300 ms 才跳过、计数、打一条红行写明封顶（等了 %.0f ms，超时 +%llu，跳过 +%llu；stderr：%s）", ms4d, (unsigned long long)(g_mtk_wait_over - ov0), (unsigned long long)(g_mtk_wait - w0), o.UTF8String);
           // 这笔从没画出来过，它的管线在请求编译时就进了本机记录（M 行，片元键 dddd…）。反证：只在第一次画出时记，这里就没有
           int rec4d = 0; pso_user_seen_load();
           for (NSString *l in g_pso_user_seen) { if (![l hasPrefix:@"M\t"]) continue; pso_skey sk; NSArray *c = [l componentsSeparatedByString:@"\t"];
               if (c.count >= 2 && !pso_skey_parse([c[1] UTF8String], &sk) && !strcmp(sk.fs, "dddddddddddddddd_b")) rec4d++; }
           VERIFY(rec4d == 1, "④d 没画出来过的网格管线在请求编译时就记了一行 M（实得 %d 行）", rec4d); }
+        // ④e 同样丢不起的一笔（又一张新目标 + 又一个新片元），编译挂住约 100 ms 后放开：这笔等到管线编好就画出——不跳过、不计超时、没有红行，等待 ≥ 挂住的时长
+        { tex_t rt3; memset(&rt3, 0, sizeof rt3); rt3.magic = MAGIC('T', 'E', 'X', 0); rt3.serial = nvn_new_serial(); rt3.d = g_rt.d; nvn_tex_layout(&rt3.d, &rt3.L); nvn_be_tex_init(&rt3); REQUIRE(tex_mtl(&rt3));
+          NvShader *fs4 = [NvShader new]; fs4->stage = 1; strlcpy(fs4->key, "eeeeeeeeeeeeeeee_b", sizeof fs4->key); fs4->ventry = @"main0";
+          NSError *e = nil; id<MTLLibrary> l = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nfragment float4 main0() { return float4(1, 1, 1, 0.5); }\n" options:nil error:&e]; REQUIRE(l); fs4->fn = [l newFunctionWithName:@"main0"]; REQUIRE(fs4->fn);
+          NvProg *direct4 = [NvProg new]; direct4->sh[1] = fs4; direct4->sh[4] = md;
+          static prog_t gp4e; memset(&gp4e, 0, sizeof gp4e); gp4e.magic = MAGIC('P', 'R', 'O', 'G'); gp4e.serial = nvn_new_serial(); serial_put(gp4e.serial, direct4);
+          nvn_be_set_frame(++g_frame); nvn_be_sub_begin(); state_reset();
+          const struct { op_hdr set; p_set_rt_c rt; const tex_t *color0; uint8_t snap[sizeof(tex_t)]; op_hdr end; } c = {
+              .set = {OP_SET_RT, sizeof(op_hdr) + sizeof(p_set_rt_c) + 8 + sizeof(tex_t)}, .rt = {.n = 1, .cmask = 1}, .color0 = &rt3, .end = {OP_END, sizeof(op_hdr)} };
+          nvn_be_exec((const uint8_t *)&c);
+          int held = mtk_width(); for (int i = 0; i < held; i++) dispatch_semaphore_wait(g_mtk_sem, DISPATCH_TIME_FOREVER);
+          dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ for (int i = 0; i < held; i++) dispatch_semaphore_signal(g_mtk_sem); });
+          int b0 = g_mtk_budget, u0 = g_pso_unsafe_ms; g_mtk_budget = 0; g_pso_unsafe_ms = 10000; S.prog = &gp4e; uint64_t ov0 = g_mtk_wait_over, w0 = g_mtk_wait, n0 = g_mtk_n;
+          uint64_t t4e = bp_now(); NSString *o4 = capture(^{ draw(&d4, NULL); }); double ms4e = (bp_now() - t4e) / 1e6;
+          g_mtk_budget = b0; g_pso_unsafe_ms = u0;
+          dispatch_group_wait(g_mtk_group, DISPATCH_TIME_FOREVER);
+          rp_flush(); uint64_t fence = nvn_be_sub_commit(); REQUIRE(nvn_be_wait(fence, 10000000000ull));
+          VERIFY(g_mtk_wait_over == ov0 && g_mtk_wait == w0 && g_mtk_n == n0 + 1 && ms4e >= 100 && ms4e < 10000 && red_lines(o4, nil) == 0,
+                 "④e 编译 100 ms 后放开：丢不起的那笔等到编好就画出（等了 %.0f ms，画出 +%llu，跳过 +%llu，超时 +%llu；stderr：%s）", ms4e, (unsigned long long)(g_mtk_n - n0), (unsigned long long)(g_mtk_wait - w0), (unsigned long long)(g_mtk_wait_over - ov0), o4.UTF8String); }
 
         // ⑧
         frame_begin(); S.prog = &gp[2]; uint64_t s0 = g_mtk_skip;
