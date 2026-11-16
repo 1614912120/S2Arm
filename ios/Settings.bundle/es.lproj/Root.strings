@@ -11,10 +11,11 @@
 "Off" = "Desactivado";
 "SMAA Medium" = "SMAA Medio";
 "SMAA High" = "SMAA Alto";
-"Used to scale the game picture to the screen; doesn’t change the internal render resolution." = "Se usa para escalar la imagen del juego a la pantalla; no cambia la resolución de renderizado interna.";
-"Scaling Filter" = "Filtro de escalado de imagen";
-"Bilinear (Smooth)" = "Bilineal (suave)";
-"Nearest Neighbor (Crisp Pixels)" = "Vecino más cercano (píxeles nítidos)";
+"Used to scale the game picture to the screen; doesn’t change the internal render resolution. Sharp Upscaling (MetalFX) adds a little GPU time every frame, so frame rate and battery use may be slightly affected." = "Se usa para escalar la imagen del juego a la pantalla; no cambia la resolución de renderizado interna. El escalado nítido (MetalFX) añade un poco de trabajo de GPU en cada fotograma, por lo que la tasa de fotogramas y el consumo de batería pueden verse ligeramente afectados.";
+"Picture Quality" = "Calidad de imagen";
+"Standard" = "Estándar";
+"For 2D Games" = "Para juegos 2D";
+"Sharp Upscaling (MetalFX)" = "Escalado nítido (MetalFX)";
 "Sets a frame rate cap for the game picture; doesn’t unlock the game’s own frame rate limit. The actual frame rate also depends on the game and the screen’s refresh rate." = "Establece un límite de velocidad de fotogramas para la imagen del juego; no desbloquea el límite de velocidad de fotogramas del propio juego. La velocidad de fotogramas real también depende del juego y de la tasa de refresco de la pantalla.";
 "Frame Rate Limit" = "Límite de velocidad de fotogramas";
 "30 FPS" = "30 FPS";

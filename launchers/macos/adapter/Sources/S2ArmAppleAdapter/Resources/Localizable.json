@@ -6692,8 +6692,8 @@
   "en": "No 60 FPS option is available for this game."
  },
  {
-  "source": "这款游戏没有走直连渲染，用不了 MetalFX 放大。",
-  "en": "This game doesn't use direct rendering, so MetalFX upscaling isn't available."
+  "source": "这款游戏没有走直连渲染，用不了锐利放大（MetalFX）。",
+  "en": "This game doesn't use direct rendering, so sharp upscaling (MetalFX) isn't available."
  },
  {
   "source": "没有可以装回的上一版手机 S2Arm。",

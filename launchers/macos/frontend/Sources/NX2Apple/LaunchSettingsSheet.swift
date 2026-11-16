@@ -10,6 +10,14 @@ import NXModel
 import NXLauncher
 import S2ArmAppleAdapter
 
+/// 下拉里这一档置灰（画质提升：没走直连时的锐利放大）。前端最低 macOS 13，selectionDisabled 要 14：13 上照常可选，起局不生效、原因照写在标题下
+private struct SelectionBlocked: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        if #available(macOS 14, *) { content.selectionDisabled(on) } else { content }
+    }
+}
+
 /// 一项的状态（作业层 community 结果的 mac 字段）：值是 Bool（开关）或 String（选项）。
 struct LaunchOption {
     let available: Bool
@@ -21,6 +29,8 @@ struct LaunchOption {
     let choices: [String]?
     /// 游戏语言：选的 / 系统语言这款不支持时，作业层写明起局实际用哪种（中英两份，不弹窗）
     let note: [String: String]
+    /// 列着但这款用不了的选项值（画质提升：没走直连时的锐利放大）：置灰，原因在 reason
+    let blocked: [String]
 
     init(_ raw: Any?) {
         let row = raw as? [String: Any] ?? [:]
@@ -30,6 +40,7 @@ struct LaunchOption {
         reason = row["reason"] as? String ?? ""
         choices = row["choices"] as? [String]
         note = row["note"] as? [String: String] ?? [:]
+        blocked = row["blocked"] as? [String] ?? []
     }
 }
 
@@ -271,13 +282,15 @@ struct LaunchSettingsSheet: View {
             }
         case "choice":
             let option = options[item.id]
-            CardRow(title, detail: option?.available == false ? loc.backend(option?.reason ?? "") : option?.note[lang] ?? item.detail(lang)) {
+            // 标题下那句：用不了 / 有一档用不了的原因（作业层 reason）→ 作业层写的说明（游戏语言）→ 选中这一档自己的说明（画质提升选锐利放大写代价）→ 这项的说明
+            let picked = item.options.first { $0.value == option?.value as? String }
+            CardRow(title, detail: !(option?.reason ?? "").isEmpty ? loc.backend(option?.reason ?? "") : option?.note[lang] ?? picked?.detail(lang) ?? item.detail(lang)) {
                 Picker("", selection: Binding(get: { option?.value as? String ?? "" }, set: { v in Task { await load([item.id: v]) } })) {
                     // 游戏语言只列这款支持的（作业层 choices）；当前值不在里面（旧版选过、这款没有）也留着，不让选择框空掉
                     ForEach(item.options.filter { o in option?.choices.map { $0.contains(o.value) || o.value == option?.value as? String } ?? true }, id: \.value) { o in
-                        Text(o.label[lang] ?? o.value).tag(o.value) }
+                        Text(o.label[lang] ?? o.value).tag(o.value).modifier(SelectionBlocked(on: option?.blocked.contains(o.value) == true)) }
                 }
-                .labelsHidden().pickerStyle(.menu).frame(width: 150).accessibilityLabel(title)
+                .labelsHidden().pickerStyle(.menu).frame(width: item.id == "quality" ? 220 : 150).accessibilityLabel(title)   // 「锐利放大（MetalFX）」150 放不下
                 .accessibilityIdentifier("launch." + item.id)
                 .disabled(option?.available != true || saving || model.busy)
             }

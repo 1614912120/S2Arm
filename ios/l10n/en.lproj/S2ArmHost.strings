@@ -363,9 +363,12 @@
 "gfx.antiAliasing.high" = "SMAA High";
 "gfx.antiAliasing.medium" = "SMAA Medium";
 "gfx.antiAliasing.off" = "Off";
-"gfx.filter" = "Scaling filter";
-"gfx.filter.bilinear" = "Bilinear (smooth)";
-"gfx.filter.nearest" = "Nearest neighbor (crisp pixels)";
+"gfx.filter" = "Picture quality";
+"gfx.filter.bilinear" = "Standard";
+"gfx.filter.metalfx" = "Sharp upscaling (MetalFX)";
+"gfx.filter.metalfx.noDirect" = "This game doesn't use direct rendering, so sharp upscaling (MetalFX) isn't available.";
+"gfx.filter.metalfx.note" = "Sharp upscaling (MetalFX) adds a little GPU time every frame, so frame rate and battery use may be slightly affected.";
+"gfx.filter.nearest" = "For 2D games";
 "gfx.fpsLimit" = "Frame rate limit";
 "gfx.fpsLimit.none" = "Unlimited";
 "gfx.resolution" = "Render resolution";

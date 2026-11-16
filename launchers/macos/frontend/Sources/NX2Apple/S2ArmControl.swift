@@ -256,7 +256,10 @@ import S2ArmAppleAdapter
                 model.showEnvironment = false; model.showInstallFor = g.id
             case "sgradeUpgrade":   // S 级优化升级页（同点游戏库「S 级优化升级」）：截图核界面用
                 model.showEnvironment = false; model.exportFor = nil; model.sgradeUpgradeOpen = true
-            default: return .bad("page 只认 environment / export / library / install / sgradeUpgrade")
+            case "launchSettings":   // 这款的启动设置（同点游戏库齿轮）：截图核界面用
+                guard let g = game() else { return .bad("没有这个 gameId") }
+                model.showEnvironment = false; model.exportFor = nil; model.displayRequest = g.id
+            default: return .bad("page 只认 environment / export / library / install / sgradeUpgrade / launchSettings")
             }
             return .ok()
         case ("POST", "/refresh"):
