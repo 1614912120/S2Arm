@@ -301,6 +301,11 @@ def bundle(destination, developer_dir):
 # 快照不带 .git（瘦身约 28 MB）：出包各阶段原先在快照库里用 git 取的值，打包时（快照库已 commit + gc、文件都放齐、签名之前）用 git 算好写进 engine.json，
 #   读方有字段就用（pack/stage_keyfiles.sh engine_snap、pack/orch/roots.py snapshot、tools/stage_deps.py _listed）。不能签名后按文件重算：
 #   签名改写了快照里的 Mach-O（translator/dmsh_xlate_bin/dmsh_xlate 在直连库阶段的输入表里），按文件算出的对象号与提交里的不同，所有玩家的直连库都会重编
+# 只在打包时参与算键、玩家机上没人执行的文件：键算完、和 .git 一起从包里拿掉。
+#   translator/dmsh_xlate_bin/dmsh_xlate：翻译器的 .NET 启动壳（要系统装 .NET 才起得来）。直连库阶段的输入表登记了它，所以照算键；
+#   但出包作业里 dmsh_chain 只读同目录的 .source_sha 与几个 dll 的哈希，翻译走 NativeAOT 的 dsh_batch，没有地方执行它
+#   （去 .NET 静态扫描点名它）。从仓库删会改直连库的键、所有款重编，拿出包更便宜
+BUILD_ONLY = ("translator/dmsh_xlate_bin/dmsh_xlate",)
 SNAP_KEYS = ("commit", "stageFilesKeys", "scanTree", "romfsIndexOids", "listed")
 SNAP_STAGES = ("extract", "direct", "direct_seed")   # 玩家出包路径上调 stage_files_key 的阶段
 ROMFS_WRITER = ("services/S2A.Services/RomFsIndex.cs", "services/romfs_index", "services/romfs_index.sh", "compat/tree/Directory.Packages.props")
@@ -379,6 +384,8 @@ def seal_snapshot(destination, fingerprint):
     before = reader_values(destination)                 # 旧读法（git）
     fields = snapshot_fields(destination)
     _rmtree_writable(destination / ".git")
+    for rel in BUILD_ONLY:   # 键已按它们算进 engine.json：从包里拿掉不改任何键
+        (destination / rel).unlink(missing_ok=True)
     write_manifest(destination, fingerprint, snap=fields)
     after = reader_values(destination)                  # 新读法（engine.json）
     failed = [k for k, v in before.items() if k.startswith("sh_") and v[0]]
