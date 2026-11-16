@@ -80,11 +80,12 @@ struct LaunchCheat: Identifiable {
 /// 资源替换类 mod 一份（community 结果的 mods；pack/jobs/mods.py listing）：游戏文件夹 mods/<名字>/romfs，起局按名字升序叠上
 struct LaunchMod: Identifiable, Equatable {
     let id: String   // = 名字
+    let enabled: Bool   // 关掉 = 作业层改名为 mods/.off-<名字>，起局不叠
     let files: Int
     let bytes: Int64
     init?(_ raw: [String: Any]) {
         guard let name = raw["name"] as? String else { return nil }
-        id = name; files = raw["files"] as? Int ?? 0; bytes = (raw["bytes"] as? NSNumber)?.int64Value ?? 0
+        id = name; enabled = raw["enabled"] as? Bool ?? true; files = raw["files"] as? Int ?? 0; bytes = (raw["bytes"] as? NSNumber)?.int64Value ?? 0
     }
 }
 
@@ -112,7 +113,7 @@ extension S2ArmLauncherModel {
     /// 同上，另带 S 级每类状态（作业层 sgradeState：widescreen / fps / gfx，作业层；没出这个字段 = 空，界面不画状态句）
     func launchSettingsFull(_ gameID: String, change: [String: Any]? = nil, patches: [String: Bool]? = nil, cheats: [String: Bool]? = nil,
                             cheatsImport: [String]? = nil, cheatsShare: Bool? = nil,
-                            modsImport: [String]? = nil, modsRemove: [String]? = nil) async throws -> ([String: LaunchOption], [LaunchPatch], [LaunchCheat], String, [String: SGradeCategoryState], LaunchMods) {
+                            modsImport: [String]? = nil, modsRemove: [String]? = nil, modsEnable: [String: Bool]? = nil) async throws -> ([String: LaunchOption], [LaunchPatch], [LaunchCheat], String, [String: SGradeCategoryState], LaunchMods) {
         var extra: [String: Any] = [:]
         if let change { extra["settings"] = change }
         if let patches { extra["graphics"] = patches }
@@ -121,6 +122,7 @@ extension S2ArmLauncherModel {
         if let cheatsShare { extra["cheatsShare"] = cheatsShare }
         if let modsImport { extra["modsImport"] = modsImport }
         if let modsRemove { extra["modsRemove"] = modsRemove }
+        if let modsEnable { extra["modsEnable"] = modsEnable }
         let result = try await saveJob(extra.isEmpty ? "community" : "communitySave", gameID: gameID, extra: extra)
         let mac = (result["mac"] as? [String: Any] ?? [:]).mapValues(LaunchOption.init)
         let gfx = (result["graphics"] as? [[String: Any]] ?? []).compactMap { g -> LaunchPatch? in
@@ -313,8 +315,13 @@ struct LaunchSettingsSheet: View {
             ForEach(mods.items) { m in
                 CardRow("  " + m.id, detail: t("display.mods.files").replacingOccurrences(of: "{0}", with: String(m.files))
                             .replacingOccurrences(of: "{1}", with: ByteCountFormatter.string(fromByteCount: m.bytes, countStyle: .file))) {
-                    Button(t("display.mods.remove")) { Task { await load(nil, modsRemove: [m.id]) } }.buttonStyle(LauncherSecondaryButtonStyle())
-                        .accessibilityIdentifier("launch.mods.remove." + m.id).disabled(saving || model.busy)
+                    HStack(spacing: 10) {
+                        Button(t("display.mods.remove")) { Task { await load(nil, modsRemove: [m.id]) } }.buttonStyle(LauncherSecondaryButtonStyle())
+                            .accessibilityIdentifier("launch.mods.remove." + m.id).disabled(saving || model.busy)
+                        Toggle("", isOn: Binding(get: { m.enabled }, set: { on in Task { await load(nil, modsEnable: [m.id: on]) } }))
+                            .toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(m.id)
+                            .accessibilityIdentifier("launch.mods.toggle." + m.id).disabled(saving || model.busy)
+                    }
                 }
             }
         case "choice":
@@ -418,12 +425,12 @@ struct LaunchSettingsSheet: View {
     }
 
     private func load(_ change: [String: Any]?, patches change2: [String: Bool]? = nil, cheats change3: [String: Bool]? = nil, cheatsImport: [String]? = nil, cheatsShare: Bool? = nil,
-                      modsImport: [String]? = nil, modsRemove: [String]? = nil) async {
+                      modsImport: [String]? = nil, modsRemove: [String]? = nil, modsEnable: [String: Bool]? = nil) async {
         saving = true; defer { saving = false }
         do {
             if items.isEmpty { items = try GameSettingsSpec.macItems() }
             (options, patches, cheats, cheatsReason, sgrade, mods) = try await model.launchSettingsFull(gameID, change: change, patches: change2, cheats: change3, cheatsImport: cheatsImport, cheatsShare: cheatsShare,
-                                                                                                       modsImport: modsImport, modsRemove: modsRemove)
+                                                                                                       modsImport: modsImport, modsRemove: modsRemove, modsEnable: modsEnable)
             failure = nil; loaded = true
         } catch {
             failure = (error as? JobClientError)?.message ?? error.localizedDescription
