@@ -370,6 +370,10 @@
 "dprompt.expiry.title" = "签名快到期了";
 "dprompt.ns2pro.body" = "四指长按屏幕 1.5 秒打开设置，打开「启用 Switch 2 Pro 手柄」，再按手柄上的配对键。";
 "dprompt.ns2pro.title" = "用 Switch 2 Pro 手柄？";
+"dprompt.motion.title" = "体感操作";
+"dprompt.motion.padNone.phone" = "读不到这个手柄的体感（比如 Joy-Con 一代、Xbox 手柄），游戏里的体感改由手机陀螺仪完成：转动手机就行。";
+"dprompt.motion.padNone.off" = "读不到这个手柄的体感（比如 Joy-Con 一代、Xbox 手柄），手机陀螺仪也关着，所以体感暂时用不了。要用的话：左上角齿轮 →「手柄与体感」→ 打开「手机陀螺仪」。";
+"dprompt.motion.phoneOff" = "这款游戏用到了体感，但「手机陀螺仪」关着，体感没有反应。要用的话：左上角齿轮 →「手柄与体感」→ 打开「手机陀螺仪」。";
 "gfx.antiAliasing" = "抗锯齿";
 "gfx.antiAliasing.high" = "SMAA 高";
 "gfx.antiAliasing.medium" = "SMAA 中";
@@ -542,6 +546,14 @@
 "sgrade.state.version.older" = "补丁只有旧版本 %1$@ 的，你这个版本暂时没有。";
 "sgrade.state.version.port_failed" = "已试过移植到你这份，没成功。";
 "sgrade.state.none" = "补丁库里还没有这款游戏的%1$@补丁。";
+"sgrade.state.failed" = "这款的%1$@补丁没能打入：%2$@";
+"sgrade.result.why.mismatch" = "和你这份游戏对不上";
+"sgrade.result.why.conflict" = "和另一份补丁改的是同一处";
+"sgrade.result.why.translate" = "这一处暂时转译不了";
+"sgrade.result.why.full" = "同一模块的补丁太多，放不下";
+"sgrade.result.why.port" = "补丁是别的版本的，移植不到你这份";
+"sgrade.result.why.version" = "这个 Mod 是给别的游戏版本做的，和你这份对不上";
+"sgrade.result.why.unsupported" = "补丁用了 S2Arm 还不支持的写法";
 "sgrade.state.opted_out" = "没打入：出包时取消了「出包时打入」。重新出包时勾上就有。";
 "sgrade.state.pending.ios" = "电脑上有可用的新补丁：在电脑的 S2Arm 点「S 级优化升级」装进来。";
 "sgrade.state.mac_only" = "画面补丁只在 Mac 版里。";

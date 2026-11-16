@@ -64,7 +64,7 @@ import S2ArmAppleAdapter
     /// 资源替换类 mod（11-15，作业层 pack/jobs/mods.py）：导入 / 删除走 communitySave、请求带 modsImport / modsRemove；模型读出列表与导入说明
     func testModsImportRemoveAndList() async throws {
         runner.mods = [["name": "HD Textures", "files": 2, "bytes": 3]]
-        runner.modsImported = ["imported": ["HD Textures"], "notes": ["里面的代码补丁（exefs 的 pchtxt / IPS）这里不收：只导入资源替换（romfs）"]]
+        runner.modsImported = ["imported": ["HD Textures"], "notes": ["「HD Textures」带 1 份代码补丁：重新打包这款（或 S 级优化升级）后生效"]]
         let full = try await model.launchSettingsFull(gid, modsImport: ["/tmp/pack.zip"])
         XCTAssertEqual(runner.requests.last?["operation"] as? String, "communitySave")
         XCTAssertEqual(runner.requests.last?["modsImport"] as? [String], ["/tmp/pack.zip"])

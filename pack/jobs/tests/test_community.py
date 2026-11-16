@@ -1,5 +1,6 @@
 """社区资源（pack/jobs/community.py，10-27 维护者 01:4x 口径）：宽屏 / 60 帧是宿主开关（缺省开、可关），版本不符走跨版本定位不判死，
 画面同互斥组单选；Mac 启动按选择设 S2A_WIDESCREEN=0 / S2A_FPS60=0。期望按规则手写"""
+import unittest.mock as um
 import importlib.util
 import json, os, shutil, sys, tempfile, unittest
 from pathlib import Path
@@ -50,6 +51,33 @@ class CommunityTests(unittest.TestCase):
         self.assertEqual((ws["available"], ws["verified"], ws["enabled"], ws["sources"], ws["relocate"]), (True, True, True, ["uwrepo"], False))
         self.assertEqual((fps["available"], fps["verified"], fps["enabled"], fps["sources"], fps["relocate"]), (True, False, True, ["fpsrepo"], True))   # 1.1.1≠4.1.0：跨版本定位、不判死；30 帧那条不算
         self.assertEqual([(it["id"], it["enabled"], it["license"]) for it in r["graphics"]], [("widescreen:aa", True, "MIT"), ("gfx:bb", True, "")])   # 11-13 起没选过 = 默认开（Mac 画面类也开）；帧率 / 金手指不在这里
+
+    def test_other_kind_default_off(self):
+        # 11-15：认不出是画面的补丁（other:，声音 / 玩法等）列出来可开，但没选过 = 关：启动设置里 enabled 假、起局开关列表不带；玩家明确开了才带。期望手写
+        p = layout.image_mac(self.c, GID) / "cpatch.tsv"
+        write(p, p.read_text(encoding="utf-8") + "other:ee\tmain\t3\tother\tNo Music\t\to.pchtxt\t\t0\n")
+        g = {it["id"]: it for it in community.listing(self.c)["graphics"]}
+        self.assertEqual((g["other:ee"]["enabled"], g["other:ee"]["kind"], g["gfx:bb"]["enabled"]), (False, "other", True))
+        self.assertEqual(community.launch_env(self.c, GID)["S2A_CPATCH_ON"], "gfx:bb,widescreen:aa")
+        self.c.r = {"gameId": GID, "graphics": {"other:ee": True}}
+        community.save(self.c)
+        self.assertEqual(community.launch_env(self.c, GID)["S2A_CPATCH_ON"], "gfx:bb,other:ee,widescreen:aa")
+
+    def test_reclassified_keeps_player_choice(self):
+        # 11-15 升级改正分类：原先误判成画面、默认开着的去声音补丁（gfx:ff，没选过）重编后成 other:ff → 关；
+        #   玩家在旧编号上手动开过的（gfx:gg 记了 True）重编后 other:gg → 照旧开（玩家自行选择优先）；手动关过的（gfx:hh False）照旧关。期望手写
+        data = community.load_launch(self.c, GID)
+        p = layout.image_mac(self.c, GID) / "cpatch.tsv"
+        write(p, "编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\n"
+              "other:ff\tmain\t0\tother\tNo Music\t\tf.pchtxt\t\t0\nother:gg\tmain\t1\tother\tRemove Audio\t\tg.pchtxt\t\t0\n"
+              "other:hh\tmain\t2\tother\tSkip Intro\t\th.pchtxt\t\t0\n")
+        self.assertEqual(community.choice({"gfx:gg": True}, "other:gg"), True)
+        self.assertEqual(community.choice({"gfx:gg": True}, "other:ff"), None)
+        self.assertEqual(community.choice({"other:gg": False, "gfx:gg": True}, "other:gg"), False)   # 新编号上的选择优先
+        with um.patch.object(community, "load_launch", return_value=dict(data, patches={"gfx:gg": True, "gfx:hh": False})):
+            g = {it["id"]: it["enabled"] for it in community.listing(self.c)["graphics"]}
+            self.assertEqual(g, {"other:ff": False, "other:gg": True, "other:hh": False})
+            self.assertEqual(community.launch_env(self.c, GID)["S2A_CPATCH_ON"], "other:gg")
 
     def test_save_and_launch_env(self):
         self.assertEqual(community.launch_env(self.c, GID), {"S2A_CPATCH_ON": "gfx:bb,widescreen:aa", "S2A_WIDESCREEN": "0"})   # 没选过：包里的补丁全开（11-13），开着宽屏补丁 S2Arm 满屏让开；60 帧由宿主定

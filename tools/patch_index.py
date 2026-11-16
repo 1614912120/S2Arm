@@ -25,17 +25,45 @@ MAX = 2 << 20
 GID = re.compile(r'01[0-9A-Fa-f]{14}')
 
 
-def classify(path, text=''):
-    """类别按路径 / 文件头关键词（同本机补丁库覆盖表口径）：帧率 / 画幅 / 其余画面"""
+def own_name(path):
+    """补丁自己的名字：Atmosphere 结构 <mod 名>/exefs/<文件> 取 mod 名的上一级起往后（变体只用数字命名时类别写在上一级，
+    如 Kenji-NX 的 Aspect Ratio/16'10/exefs/）；不是这种结构取最后两段。
+    再往上的仓库名、聚合目录名不算（11-15 奥德赛：pacoa-kdbg 的 generated-narrow-aspect/ 目录下「关动态分辨率」「关 FXAA」被目录名里的
+    aspect 判成画幅类，绕过 iOS 不打画面类的规则跟着满屏默认打开，开场动画闪退）"""
+    parts = [p for p in path.replace('\\', '/').split('/') if p]
+    low = [p.lower() for p in parts]
+    if 'exefs' in low:
+        i = len(low) - 1 - low[::-1].index('exefs')
+        return '/'.join(parts[max(0, i - 2):])
+    return '/'.join(parts[-2:])
+
+
+GFX = re.compile(r'resolution|\bres\b|\d{3,4}\s*[px]\s*\d{3,4}|\b\d{3,4}p\b|\b(1080|720|900|1440|2160|4k)\b|dynamic|\blod|level of detail|detail|'
+                 r'anti.?alias|\b(fx|sm|t|ms)aa\b|shadow|bloom|blur|depth of field|\bdof\b|\bfog\b|quality|graphic|sharpen|filter|anisotrop|'
+                 r'ambient occlusion|\bssao\b|render|texture|draw distance|lighting|reflection|\bhdr\b|upscal|downscal|scaling|docked|gamma|'
+                 r'brightness|colou?r|contrast|vignette|chromatic|film grain|post.?process|outline|mipmap|bias|v-?sync|frame ?buffer|visual|'
+                 r'\b\d{1,2}k\b|\b(ss|ms|fx|sm|t)?aa\b|cloud|flare|heat ?wave|lens|shading|shader|tint|\bfov\b|field of view|crop')
+
+
+# 整个仓库都是画面合集、补丁自身只写版本号的（文件名 1.0.1.pchtxt、文件头只有游戏名）：自身认不出时按仓库判画面（11-15 全库普查）
+GFX_REPOS = {'cucholix/NX-IPS-romfs-compilation'}
+
+
+def classify(path, text='', repo=''):
+    """类别按补丁自己的名字（own_name）/ 文件头关键词（同本机补丁库覆盖表口径）：帧率 / 画幅 / 其余画面"""
     # 先去网址（11-13）：作者署名里的仓库网址（github.com/StevensND/ue4-emuswitch-60fps）落在前 400 字内，「60fps」把同一作者的关景深 / 关抗锯齿 / 分辨率补丁全判成帧率 60
-    s = re.sub(r'https?://\S+', ' ', (path + '\n' + text[:400]).lower())
+    s = re.sub(r'https?://\S+', ' ', (own_name(path) + '\n' + text[:400]).lower())
     fps = re.search(r'(\d{2,3})\s*fps', s)
-    if re.search(r'ultra\s*wide|widescreen|21[:x_.]9|32[:x_.]9|aspect', s):
+    if re.search(r'ultra\s*wide|widescreen|21[:x_.]9|32[:x_.]9|aspect|(?<![\d.])16[:x_.\']10(?![\d.])', s):   # 16:10 也写成 16.10 / 16\'10：前后不挨数字和点，免得把版本号 1.16.10 当画幅
         m = re.search(r'(\d{1,2}(?:\.\d)?)\s*[:x_\-](9|10)\b', s)
         return 'widescreen', '', f'{m.group(1)}:{m.group(2)}' if m else ''
     if fps or 'fpslock' in s or 'speedfix' in s or re.search(r'(unlock|uncap|unlimit)\w*[\s_-]*fps|fps[\s_-]*(unlock|uncap|unlimit)', s):
         return 'fps', fps.group(1) if fps else '', ''
-    return 'gfx', '', ''
+    # 画面类按正向认定（11-15：原先认不出的一律算画面，「No Music」「Remove Audio」「Subtract Coins」这类声音 / 玩法补丁跟着画面类默认打开，
+    #   Mac 玩家一开游戏就没有背景音乐、没有声音，6 份诊断里都是开着的）；认不出的归 other：不默认开、iPhone 不打，玩家自己在启动设置里开
+    if GFX.search(s) or repo in GFX_REPOS:
+        return 'gfx', '', ''
+    return 'other', '', ''
 
 
 def bids_of(path, data):
@@ -137,7 +165,7 @@ def scan(mirror, keep_local=False, cheat_libs=False):
                 kind, cat, tfps, aspect, bids = 'cheat', 'cheat', '', '', [m.group(1).upper()]
             else:
                 kind = 'ips' if name.lower().endswith('.ips') else 'pchtxt'
-                cat, tfps, aspect = classify(rel + '/' + name if extra else rel, data.decode('utf-8', 'replace') if kind == 'pchtxt' else '')
+                cat, tfps, aspect = classify(rel + '/' + name if extra else rel, data.decode('utf-8', 'replace') if kind == 'pchtxt' else '', repo)
                 bids = bids_of(name, data)
             rows.append(dict(repo=repo, commit=commit, path=rel, size=len(data), sha256=hashlib.sha256(data).hexdigest(), kind=kind, cat=cat,
                              target_fps=tfps, aspect=aspect, gids=sorted({g.upper() for g in GID.findall(rel + '/' + name)}), bids=bids, license=lic, **(extra or {})))

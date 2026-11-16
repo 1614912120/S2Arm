@@ -1,7 +1,7 @@
 // S2Arm（不是上游文件）：一款游戏的启动设置（「开始游戏」旁的齿轮、「更多」菜单里同一入口；11-09 维护者）。
 //   设置项只从共享定义表 launchers/shared/game_settings.v1.json 读（iOS 游戏内菜单同一份），这里不另写文案和缺省；
 //   读写走作业层 community / communitySave（存这款游戏文件夹的 launch.json），改完下次开始游戏生效，不用重新准备。
-//   可用与否按这款的能力清单，不可用时显示原因。「手柄与按键」打开现有的按键设置页。
+//   可用与否按这款的能力清单，不可用时显示原因。「手柄设置」打开现有的手柄设置页。
 import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
@@ -9,14 +9,6 @@ import NXCore
 import NXModel
 import NXLauncher
 import S2ArmAppleAdapter
-
-/// 下拉里这一档置灰（画质提升：没走直连时的锐利放大）。前端最低 macOS 13，selectionDisabled 要 14：13 上照常可选，起局不生效、原因照写在标题下
-private struct SelectionBlocked: ViewModifier {
-    let on: Bool
-    func body(content: Content) -> some View {
-        if #available(macOS 14, *) { content.selectionDisabled(on) } else { content }
-    }
-}
 
 /// 一项的状态（作业层 community 结果的 mac 字段）：值是 Bool（开关）或 String（选项）。
 struct LaunchOption {
@@ -148,7 +140,7 @@ struct LaunchSettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var model: S2ArmLauncherModel
     let gameID: String
-    /// 「手柄与按键」：关掉本页、打开按键设置页
+    /// 「手柄设置」：关掉本页、打开同一款游戏的手柄设置页
     var openInput: () -> Void = {}
     @State private var items: [GameSettingItem] = []
     @State private var options: [String: LaunchOption] = [:]
@@ -167,21 +159,19 @@ struct LaunchSettingsSheet: View {
     private var gameName: String { model.games.first { $0.id == gameID }?.name ?? gameID }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(t("display.title")).font(.manrope(26, .heavy)).tracking(-0.6)
-                Text(gameName).font(.manrope(14)).foregroundStyle(.secondary).lineLimit(1)
-                Text(t("display.hint")).font(.manrope(12.5)).foregroundStyle(.secondary).padding(.top, 6)
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            LauncherSheetHeading(t("display.title"), subtitle: gameName, note: t("display.hint"))
+                .padding(LauncherTheme.Space.page)
             if let failure {
                 Label { Text(loc.backend(failure)).fixedSize(horizontal: false, vertical: true) } icon: { Image(systemName: "exclamationmark.circle.fill") }
-                    .font(.manrope(12.5)).foregroundStyle(LauncherPalette.danger)
+                    .font(LauncherTheme.TypeStyle.detail).foregroundStyle(LauncherPalette.danger)
+                    .padding(.horizontal, LauncherTheme.Space.page).padding(.bottom, LauncherTheme.Space.large)
             }
             if !loaded && failure == nil {
-                ProgressView().controlSize(.small)
+                ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if loaded {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: LauncherTheme.Space.section) {
                         // 分组顺序：画面 → S 级优化（社区补丁 + 金手指，金色卡）→ 手柄 → 其他（定义表 launchers/shared/game_settings.v1.json 的 group）
                         ForEach(["display", "sgrade", "controls", "other"], id: \.self) { group in
                             let rows = items.filter { groupOf($0) == group && visible($0) }
@@ -194,20 +184,18 @@ struct LaunchSettingsSheet: View {
                             }
                         }
                     }
+                    .padding(.horizontal, LauncherTheme.Space.page).padding(.bottom, LauncherTheme.Space.section)
                 }
             }
             Spacer(minLength: 0)
-            HStack {
+            LauncherSheetFooter {
                 Spacer()
-                Button(t("display.done")) { dismiss() }.buttonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.cancelAction)
+                Button(t("display.done")) { dismiss() }.controllerButtonStyle(LauncherPrimaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger, .back)
+                    .controllerID("launch.done")
             }
         }
-        .padding(30)
-        .frame(width: 600, height: 640)
-        .background(LauncherPalette.background)
-        .font(.manrope(13))
-        .preferredColorScheme(.dark)
-        .tint(LauncherPalette.cream)
+        .launcherSheet()
+        .onExitCommand { dismiss() }
         .task { if !loaded { await load(nil) } }
     }
 
@@ -234,7 +222,7 @@ struct LaunchSettingsSheet: View {
             onCheat: { id, on in if confirmShared(id, on) { Task { await load(nil, cheats: [id: on]) } } },
             onImport: { importCheats() },
             summary: { on, all in t("display.cheats.summary").replacingOccurrences(of: "{0}", with: String(on)).replacingOccurrences(of: "{1}", with: String(all)) },
-            searchPrompt: t("display.cheats.search"),
+            searchPrompt: t("display.cheats.search"), clearSearchTitle: loc.t("home.clearSearch"),
             patchesSummary: { on, all in t("display.cheats.summary").replacingOccurrences(of: "{0}", with: String(on)).replacingOccurrences(of: "{1}", with: String(all)) },
             cheatsIcon: SGradeCardView.sGold)
     }
@@ -250,7 +238,7 @@ struct LaunchSettingsSheet: View {
         SGradeTopRow(cat == "fps" ? t("sgrade.row.fps") : item.text(lang),
                      note: option?.available == false ? loc.backend(option?.reason ?? "") : note?.text ?? item.detail(lang), dim: note?.disabled == true) {
             if let reenable {
-                Button(t("sgrade.state.reenable")) { Task { await self.reenable(reenable) } }.buttonStyle(LauncherSecondaryButtonStyle())
+                Button(t("sgrade.state.reenable")) { Task { await self.reenable(reenable) } }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                     .accessibilityIdentifier("launch." + item.id + ".reenable").disabled(saving || model.busy)
             } else {
                 Toggle("", isOn: Binding(get: { on }, set: { v in Task { await load([item.id: v]) } }))
@@ -270,6 +258,9 @@ struct LaunchSettingsSheet: View {
 
     /// 补丁一栏只在这款列得出补丁时出现；开关 / 选项要作业层给了状态才画
     private func visible(_ item: GameSettingItem) -> Bool {
+        // 主玩家四键改在顶栏手柄弹窗设置；共享定义和旧布局值仍供其他平台读取。
+        //   玩家以前在这里明确选过 Switch / Xbox 布局（不是缺省「自动」）的照样起作用（community.py → S2A_PAD_FACE），这一行就留着让他看得到、改得回（11-15「玩家自行选择优先」）
+        if item.id == "padFace" { return (options[item.id]?.value as? String ?? "auto") != "auto" }
         switch item.type {
         case "patches": return !patches.isEmpty
         case "page", "cheats", "mods": return true
@@ -283,8 +274,8 @@ struct LaunchSettingsSheet: View {
         switch item.type {
         case "page":
             CardRow(title, detail: item.detail(lang)) {
-                Button(t("display.open")) { dismiss(); openInput() }.buttonStyle(LauncherSecondaryButtonStyle())
-                    .accessibilityIdentifier("launch." + item.id)
+                Button(t("display.open")) { dismiss(); openInput() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+                    .controllerID("launch." + item.id)
             }
         case "patches":
             CardRow(title, detail: item.detail(lang)) { EmptyView() }
@@ -296,7 +287,7 @@ struct LaunchSettingsSheet: View {
             }
         case "cheats":
             CardRow(title, detail: cheats.isEmpty && !cheatsReason.isEmpty ? loc.backend(cheatsReason) : item.detail(lang)) {
-                Button(t("display.cheats.import")) { importCheats() }.buttonStyle(LauncherSecondaryButtonStyle())
+                Button(t("display.cheats.import")) { importCheats() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                     .accessibilityIdentifier("launch.cheats.import").disabled(saving || model.busy)
             }
             ForEach(cheats) { ch in
@@ -309,15 +300,15 @@ struct LaunchSettingsSheet: View {
             }
         case "mods":
             CardRow(title, detail: modsNote(item)) {
-                Button(t("display.mods.import")) { importMods() }.buttonStyle(LauncherSecondaryButtonStyle())
-                    .accessibilityIdentifier("launch.mods.import").disabled(saving || model.busy)
+                Button(t("display.mods.import")) { importMods() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+                    .controllerID("launch.mods.import").disabled(saving || model.busy)
             }
             ForEach(mods.items) { m in
                 CardRow("  " + m.id, detail: t("display.mods.files").replacingOccurrences(of: "{0}", with: String(m.files))
                             .replacingOccurrences(of: "{1}", with: ByteCountFormatter.string(fromByteCount: m.bytes, countStyle: .file))) {
                     HStack(spacing: 10) {
-                        Button(t("display.mods.remove")) { Task { await load(nil, modsRemove: [m.id]) } }.buttonStyle(LauncherSecondaryButtonStyle())
-                            .accessibilityIdentifier("launch.mods.remove." + m.id).disabled(saving || model.busy)
+                        Button(t("display.mods.remove")) { Task { await load(nil, modsRemove: [m.id]) } }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+                            .controllerID("launch.mods.remove." + m.id).disabled(saving || model.busy)
                         Toggle("", isOn: Binding(get: { m.enabled }, set: { on in Task { await load(nil, modsEnable: [m.id: on]) } }))
                             .toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(m.id)
                             .accessibilityIdentifier("launch.mods.toggle." + m.id).disabled(saving || model.busy)
@@ -326,23 +317,21 @@ struct LaunchSettingsSheet: View {
             }
         case "choice":
             let option = options[item.id]
-            // 标题下那句：用不了 / 有一档用不了的原因（作业层 reason）→ 作业层写的说明（游戏语言）→ 选中这一档自己的说明（画质提升选锐利放大写代价）→ 这项的说明
             let picked = item.options.first { $0.value == option?.value as? String }
             CardRow(title, detail: !(option?.reason ?? "").isEmpty ? loc.backend(option?.reason ?? "") : option?.note[lang] ?? picked?.detail(lang) ?? item.detail(lang)) {
-                Picker("", selection: Binding(get: { option?.value as? String ?? "" }, set: { v in Task { await load([item.id: v]) } })) {
-                    // 游戏语言只列这款支持的（作业层 choices）；当前值不在里面（旧版选过、这款没有）也留着，不让选择框空掉
-                    ForEach(item.options.filter { o in option?.choices.map { $0.contains(o.value) || o.value == option?.value as? String } ?? true }, id: \.value) { o in
-                        Text(o.label[lang] ?? o.value).tag(o.value).modifier(SelectionBlocked(on: option?.blocked.contains(o.value) == true)) }
-                }
-                .labelsHidden().pickerStyle(.menu).frame(width: item.id == "quality" ? 220 : 150).accessibilityLabel(title)   // 「锐利放大（MetalFX）」150 放不下
-                .accessibilityIdentifier("launch." + item.id)
+                LauncherDropdown(options: item.options.filter { o in
+                    option?.choices.map { $0.contains(o.value) || o.value == option?.value as? String } ?? true
+                }.map { ($0.value, $0.label[lang] ?? $0.value) },
+                                 selection: option?.value as? String ?? "", label: title,
+                                 disabledOptions: Set(option?.blocked ?? [])) { v in Task { await load([item.id: v]) } }
+                .controllerID("launch." + item.id)
                 .disabled(option?.available != true || saving || model.busy)
             }
         default:
             let option = options[item.id], state = stateLine(item.id)
             CardRow(title, detail: option?.available == false ? loc.backend(option?.reason ?? "") : item.detail(lang), detail2: state?.text ?? "") {
                 if let key = state?.reenable {
-                    Button(t("sgrade.state.reenable")) { Task { await reenable(key) } }.buttonStyle(LauncherSecondaryButtonStyle())
+                    Button(t("sgrade.state.reenable")) { Task { await reenable(key) } }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                         .accessibilityIdentifier("launch." + item.id + ".reenable").disabled(saving || model.busy)
                 } else if option?.hidden != true {   // 包里没有这一类的补丁：只写为什么，不给开关
                     Toggle("", isOn: Binding(get: { option?.value as? Bool ?? false }, set: { on in Task { await load([item.id: on]) } }))

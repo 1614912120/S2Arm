@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include "../src/native.h"
 #include <sys/mman.h>
+#include <sys/stat.h>
 void s2a_cpatch_load(module_t *m, const char *dir);
 void s2a_cpatch_load_source(module_t *m, const void *bytes, size_t length);
 void s2a_cpatch_fps_follow(int on); int s2a_cpatch_fps_count(void);
@@ -145,8 +146,40 @@ int main(void) {
       setenv("S2A_CPATCH_ON", "wsauto:fam", 1); int c3 = s2a_cpatch_ws_needs_docked(dir); unsetenv("S2A_CPATCH_ON");
       char got[32]; snprintf(got, sizeof got, "%d %d %d", a, b, c3);
       CHECK(!strcmp(got, "0 1 0"), "⑫ 强制主机档：期望 0 1 0（全开 / 只定画幅 / 只自适应），实得 %s", got); }
+    { // ⑬ 玩家导入的 mod 带的代码补丁（编号 mod:，11-15）：开关跟 mod 文件夹走、不看 S2A_CPATCH_ON。手算：表里只一行 mod:x 位 1、0x20 处 11 → 99；
+      //   S2A_CPATCH_ON=none 且 S2A_MODS_DIR/TestMod 在 → 开：掩码 0x2、0x20 = 99、0x30 = 00；改名 .off-TestMod（关掉）→ 0、11；没设 none（缺省全开）也照样 0、11
+      char md[] = "/tmp/t_cpatch_mod_XXXXXX"; if (!mkdtemp(md)) return 2;
+      char q[400], m1[400], m2[400]; snprintf(q, sizeof q, "%s/cpatch.tsv", md); FILE *g = fopen(q, "w");
+      fprintf(g, "编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\n");
+      fprintf(g, "mod:x\tmain\t1\tmod\t玩家 mod\t\tTestMod/a.pchtxt\t20:11:99\t0\n"); fclose(g);
+      snprintf(m1, sizeof m1, "%s/TestMod", md); snprintf(m2, sizeof m2, "%s/.off-TestMod", md); mkdir(m1, 0755); setenv("S2A_MODS_DIR", md, 1);
+      const char *want[] = {"2 99 00", "0 11 00", "0 11 00"}; const char *ons[] = {"none", "none", NULL};
+      for (int k = 0; k < 3; k++) {
+        if (k == 1) rename(m1, m2);
+        int pp[2]; pipe(pp); pid_t c = fork(); g_source = 0; g_nul = 0;
+        if (c == 0) { dup2(pp[1], 1); close(pp[0]); run(md, ons[k]); _exit(0); }
+        close(pp[1]); char buf[4096] = {0}; size_t n = 0; ssize_t r; while ((r = read(pp[0], buf + n, sizeof buf - 1 - n)) > 0) n += (size_t)r; close(pp[0]); waitpid(c, NULL, 0);
+        char *res = strstr(buf, "RESULT "); char got[256] = "?"; if (res) { sscanf(res + 7, "%255[^\n]", got); }
+        CHECK(!strcmp(got, want[k]), "⑬ mod 代码补丁%s：期望 %s，实得 %s", k == 0 ? "（文件夹在、列表 none）" : k == 1 ? "（改名 .off- 关掉）" : "（关掉、没选过）", want[k], got);
+      }
+      unsetenv("S2A_MODS_DIR"); unlink(q); rmdir(m2); rmdir(md); }
+    { // ⑭ other（认不出是画面的：声音 / 玩法等，tools/patch_index.py classify，11-15）不默认开。手算：表里只一行 other:x 位 1、0x20 处 11 → 99；
+      //   没设 S2A_CPATCH_ON（没选过）→ 不开：掩码 0、0x20 = 11；S2A_CPATCH_ON=other:x（玩家开了）→ 开：0x2、99；=none → 0、11
+      char od[] = "/tmp/t_cpatch_other_XXXXXX"; if (!mkdtemp(od)) return 2;
+      char q[400]; snprintf(q, sizeof q, "%s/cpatch.tsv", od); FILE *g = fopen(q, "w");
+      fprintf(g, "编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\n");
+      fprintf(g, "other:x\tmain\t1\tother\tNo Music\t\to.pchtxt\t20:11:99\t1\n"); fclose(g);
+      const char *want[] = {"0 11 00", "2 99 00", "0 11 00"}; const char *ons[] = {NULL, "other:x", "none"};
+      for (int k = 0; k < 3; k++) {
+        int pp[2]; pipe(pp); pid_t c = fork(); g_source = 0; g_nul = 0;
+        if (c == 0) { dup2(pp[1], 1); close(pp[0]); run(od, ons[k]); _exit(0); }
+        close(pp[1]); char buf[4096] = {0}; size_t n = 0; ssize_t r; while ((r = read(pp[0], buf + n, sizeof buf - 1 - n)) > 0) n += (size_t)r; close(pp[0]); waitpid(c, NULL, 0);
+        char *res = strstr(buf, "RESULT "); char got[256] = "?"; if (res) { sscanf(res + 7, "%255[^\n]", got); }
+        CHECK(!strcmp(got, want[k]), "⑭ other 类%s：期望 %s，实得 %s", k == 0 ? "（没选过）" : k == 1 ? "（玩家开了）" : "（全关）", want[k], got);
+      }
+      unlink(q); rmdir(od); }
     unlink(p); rmdir(dir);
     if (fails) { printf("✗ t_cpatch：%d 项红\n", fails); return 1; }
-    printf("✓ t_cpatch：21 项（目录装载与 APK 内存表各 9 项 + 内存表带 NUL 报红：没选过 = 包里全开 / 只开 A / 全关 / 原值不符不开 / 帧率类跟 60 帧开关 / 金手指逐条开关 / 自适应画幅 / 定画幅变体 / 列表外帧率补丁目标照取 / 自适应开着时定画幅变体让位 / 两档齐的自适应在时不强制主机档）\n");
+    printf("✓ t_cpatch：27 项（目录装载与 APK 内存表各 9 项 + 内存表带 NUL 报红：没选过 = 包里全开 / 只开 A / 全关 / 原值不符不开 / 帧率类跟 60 帧开关 / 金手指逐条开关 / 自适应画幅 / 定画幅变体 / 列表外帧率补丁目标照取 / 自适应开着时定画幅变体让位 / 两档齐的自适应在时不强制主机档）\n");
     return 0;
 }

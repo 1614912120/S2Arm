@@ -830,6 +830,9 @@
   "export.sgrade.hit.fps": "フレームレート補正パッチ {0} 件、エクスポート時に適用、デフォルトで有効",
   "export.sgrade.hit.gfx": "グラフィックパッチ {0} 件、Mac 版のみに適用、デフォルトで有効",
   "export.sgrade.hit.cheat": "チート {0} 件、エクスポート時に追加、デフォルトで無効。ゲーム内で個別に有効化できます",
+  "export.sgrade.hit.mod": "インポートした Mod のコードパッチ {0} 件、エクスポート時にプログラムへ組み込み。その Mod をオフにすると無効",
+  "export.sgrade.mod.note": "Mod をインポート：アセット置き換えはゲーム起動時に適用、コードパッチ（exefs の pchtxt / IPS）はエクスポート時に組み込み",
+  "export.sgrade.mod.import": "Mod をインポート…",
   "export.sgrade.hit.version": "これらのパッチはゲームバージョン {0} に対応しています。適用前にバイト単位で検証し、一致しないものは除外されます。",
   "export.sgrade.hit.note": "パッチがゲームと互換性がなくクラッシュやフリーズを引き起こした場合、有効だったパッチは自動的に無効化され、ゲームを続行できます。起動設定で再度有効化できます。",
   "export.sgrade.toggle": "ビルド時に追加",
@@ -844,6 +847,8 @@
   "sgrade.result.why.translate": "この部分はまだ変換できません",
   "sgrade.result.why.full": "このモジュールのパッチが多すぎます",
   "sgrade.result.why.port": "別バージョン用で適応できませんでした",
+  "sgrade.result.why.version": "この Mod は別バージョンのゲーム用です",
+  "sgrade.result.why.unsupported": "パッチに S2Arm が未対応の書き方が含まれています",
   "mods.page.menu": "Mod…",
   "mods.page.title": "{0} · Mod",
   "mods.page.importZip": "zip を読み込む…",
@@ -883,6 +888,7 @@
   "export.sgrade.cat.fps": "フレームレート",
   "export.sgrade.cat.gfx": "グラフィック",
   "export.sgrade.cat.cheat": "チート",
+  "export.sgrade.cat.mod": "Mod",
   "display.mods.import": "Mod を読み込む…",
   "display.mods.remove": "削除",
   "display.mods.files": "{0} 個のファイル · {1}",
@@ -968,6 +974,7 @@
   "sgrade.state.version.older": "パッチは古いバージョン {0} 用しかなく、お使いのバージョン用はまだありません。",
   "sgrade.state.version.port_failed": "お使いのバージョンへの移植を試しましたが、うまくいきませんでした。",
   "sgrade.state.none": "パッチライブラリにこのゲームの{0}パッチはまだありません。",
+  "sgrade.state.failed": "このゲームの{0}パッチを組み込めませんでした：{1}",
   "sgrade.state.opted_out": "未適用：書き出し時に「書き出し時に適用」をオフにしました。オンにして書き出し直すと入ります。",
   "sgrade.state.pending.ios": "新しいパッチがあります：パソコンの S2Arm で「S 級最適化アップグレード」を選んでください。",
   "sgrade.state.mac_only": "画面パッチは Mac 版のみです。",
@@ -3788,6 +3795,10 @@
   "开始准备": "準備を開始",
   "继续准备": "準備を続行",
   "运行": "プレイ",
-  "停止": "停止"
+  "停止": "停止",
+  "显卡卡住了，S2Arm 把这局安全停下了。": "GPU が応答しなくなったため、S2Arm がこのプレイを安全に停止しました。",
+  "再开一次一般能接着玩（存档停在游戏上次保存的地方）；同一处反复这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上。": "もう一度起動すれば、たいてい続きから遊べます（セーブはゲームが最後に保存した時点のものです）。同じ場所で繰り返す場合は、「環境チェック」で診断パッケージを書き出し、GitHub の投稿に添付してください。",
+  "显卡卡住了，这局被安全停下": "GPU が応答せず、このプレイを安全に停止しました",
+  "游戏运行中显卡卡住了，S2Arm 为了不让整台电脑跟着卡死，停下了这局。存档停在游戏上次保存的地方。": "プレイ中に GPU が応答しなくなりました。Mac 全体が固まらないよう、S2Arm がこのプレイを停止しました。セーブはゲームが最後に保存した時点のものです。"
  }
 }

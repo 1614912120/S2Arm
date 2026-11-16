@@ -830,6 +830,9 @@
   "export.sgrade.hit.fps": "Parches de velocidad de fotogramas: {0}, añadidos y activados por defecto",
   "export.sgrade.hit.gfx": "Parches de gráficos: {0}, añadidos solo a la versión de Mac y activados por defecto",
   "export.sgrade.hit.cheat": "Trucos: {0}, añadidos pero desactivados por defecto; actívalos en el juego",
+  "export.sgrade.hit.mod": "Parches de código de tus mods: {0}, se integran en el programa al exportar; desactiva el mod para detenerlos",
+  "export.sgrade.mod.note": "Importar mods: los reemplazos de recursos se cargan al iniciar el juego; los parches de código (pchtxt / IPS en exefs) se integran al exportar",
+  "export.sgrade.mod.import": "Importar mod…",
   "export.sgrade.hit.version": "Estos parches coinciden con la versión {0} de tu juego. Cada uno se verifica byte a byte antes de añadirse; los que no coinciden se omiten.",
   "export.sgrade.hit.note": "Si un parche no funciona con este juego y provoca un fallo o bloqueo, los parches activados se desactivan automáticamente para que puedas seguir jugando. Puedes reactivarlos en Ajustes de inicio.",
   "export.sgrade.toggle": "Añadir al compilar",
@@ -844,6 +847,8 @@
   "sgrade.result.why.translate": "esta parte aún no puede traducirse",
   "sgrade.result.why.full": "hay demasiados parches para este módulo",
   "sgrade.result.why.port": "es para otra versión y no pudo adaptarse",
+  "sgrade.result.why.version": "este mod es para otra versión del juego",
+  "sgrade.result.why.unsupported": "el parche usa algo que S2Arm aún no admite",
   "mods.page.menu": "Mods…",
   "mods.page.title": "{0} · Mods",
   "mods.page.importZip": "Importar zip…",
@@ -883,6 +888,7 @@
   "export.sgrade.cat.fps": "velocidad de fotogramas",
   "export.sgrade.cat.gfx": "gráficos",
   "export.sgrade.cat.cheat": "trucos",
+  "export.sgrade.cat.mod": "mod",
   "display.mods.import": "Importar mod…",
   "display.mods.remove": "Quitar",
   "display.mods.files": "{0} archivos · {1}",
@@ -968,6 +974,7 @@
   "sgrade.state.version.older": "Solo hay parches para la versión anterior {0}; para tu versión todavía no hay.",
   "sgrade.state.version.port_failed": "Intentamos adaptarlo a tu versión, pero no funcionó.",
   "sgrade.state.none": "La biblioteca de parches aún no tiene parche de {0} para este juego.",
+  "sgrade.state.failed": "No se pudo añadir el parche de {0} de este juego: {1}",
   "sgrade.state.opted_out": "No añadido: «Añadir al compilar» estaba desactivado al exportar. Actívalo y vuelve a exportar.",
   "sgrade.state.pending.ios": "Hay parches nuevos: abre S2Arm en tu ordenador y elige «Mejora a grado S».",
   "sgrade.state.mac_only": "Los parches de gráficos son solo para Mac.",
@@ -3788,6 +3795,10 @@
   "开始准备": "Comenzar preparación",
   "继续准备": "Continuar preparación",
   "运行": "Jugar",
-  "停止": "Detener"
+  "停止": "Detener",
+  "显卡卡住了，S2Arm 把这局安全停下了。": "La GPU se bloqueó, así que S2Arm detuvo esta partida de forma segura.",
+  "再开一次一般能接着玩（存档停在游戏上次保存的地方）；同一处反复这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上。": "Volver a iniciarlo suele permitir seguir jugando (tu partida guardada es la del último guardado del juego). Si se repite en el mismo punto, exporta un paquete de diagnóstico desde Comprobación del entorno y adjúntalo a un issue de GitHub.",
+  "显卡卡住了，这局被安全停下": "La GPU se bloqueó y esta partida se detuvo de forma segura",
+  "游戏运行中显卡卡住了，S2Arm 为了不让整台电脑跟着卡死，停下了这局。存档停在游戏上次保存的地方。": "La GPU se bloqueó mientras el juego se ejecutaba. S2Arm detuvo esta partida para que no se congelara todo el Mac. Tu partida guardada es la del último guardado del juego."
  }
 }

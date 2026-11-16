@@ -497,9 +497,9 @@ public sealed partial class EnvironmentWindow
             // 满屏 / 帧率解锁 / 金手指固定三行（11-15 维护者定：三项金色字 + 金色 S，三端一致）。Windows 不跑游戏：只写会打进包里的东西、
             //   进了包在哪开关（iPhone 齿轮菜单）；画面补丁只进 Mac 版，Windows 出的是 iPhone 包，不列
             var rows = new StackPanel { Spacing = 10 };
-            void Row(string titleText, string note, bool dim = false)
+            void Row(string titleText, string note, bool dim = false, Control? action = null)
             {
-                var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 11, Opacity = dim ? 0.55 : 1 };
+                var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*,Auto"), ColumnSpacing = 11, Opacity = dim ? 0.55 : 1 };
                 row.Children.Add(new Image { Source = SGoldImage(), Width = 22, Height = 22, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 1, 0, 0) });
                 var text = new StackPanel { Spacing = 2 };
                 text.Children.Add(new TextBlock { Text = titleText, FontSize = 14, FontWeight = FontWeight.Bold,
@@ -507,6 +507,7 @@ public sealed partial class EnvironmentWindow
                         GradientStops = { new GradientStop(SGoldHi, 0), new GradientStop(SGold, 1) } } });
                 text.Children.Add(new TextBlock { Text = note, FontSize = 12, Foreground = new SolidColorBrush(Color.FromRgb(168, 168, 173)), TextWrapping = TextWrapping.Wrap });
                 Grid.SetColumn(text, 1); row.Children.Add(text);
+                if (action is not null) { action.VerticalAlignment = VerticalAlignment.Center; Grid.SetColumn(action, 2); row.Children.Add(action); }
                 rows.Children.Add(row);
             }
             // 满屏跨版本（patches.match port，同 Mac SGradeCard）：这份没有同版本的满屏补丁、别的版本有 → 出包时尝试移植
@@ -520,6 +521,11 @@ public sealed partial class EnvironmentWindow
             Row(T("sgrade.row.fs"), Hit("widescreen") > 0 ? T("sgrade.win.patch") : port ? portText : T("sgrade.win.fs.own"));
             Row(T("sgrade.row.fps"), Hit("fps") > 0 ? T("sgrade.win.patch") : T("sgrade.win.fps.fi"));
             Row(T("sgrade.row.cheats"), Hit("cheat") > 0 ? T("export.sgrade.hit.cheat").Replace("{0}", Hit("cheat").ToString()) : T("sgrade.cheats.none"), dim: Hit("cheat") == 0);
+            // Mod（11-15 维护者「打包页增加 mod 导入，S 级优化又升级了」，同 Mac SGradeCard）：带代码补丁的 mod 出包时编进程序；按钮打开这款的 Mod 页（ModsPage.cs）导入
+            var modBtn = new Button { Content = T("export.sgrade.mod.import"), FontSize = 12.5 };
+            modBtn.Click += (_, _) => OpenMods(game);
+            Avalonia.Automation.AutomationProperties.SetAutomationId(modBtn, "export.sgrade.mod.import");
+            Row(T("export.sgrade.cat.mod"), Hit("mod") > 0 ? T("export.sgrade.hit.mod").Replace("{0}", Hit("mod").ToString()) : T("export.sgrade.mod.note"), action: modBtn);
             var build = r.TryGetProperty("build", out var b) ? b.GetString() ?? "" : "";
             // 补丁按版本生效（11-14 维护者）：写明对应玩家这份游戏的哪个版本；列出的别的版本不会打入（同 Mac SGradeCard）
             var ver = r.TryGetProperty("version", out var vv) ? vv.GetString() ?? "" : "";
@@ -1225,7 +1231,7 @@ public sealed partial class EnvironmentWindow
     ///   同 Mac SGradeResultView（launchers/macos/frontend/Sources/NX2Apple/SGradeResult.swift）；都没有内容 = null（不出这块）
     internal Control? SGradeResultPanel(IEnumerable<(string Name, JsonElement Res)> results, bool cheats = true)
     {
-        string Cat(string c) => T("export.sgrade.cat." + (c is "widescreen" or "fps" or "gfx" or "cheat" ? c : "gfx"));
+        string Cat(string c) => T("export.sgrade.cat." + (c is "widescreen" or "fps" or "gfx" or "cheat" or "mod" ? c : "gfx"));
         IEnumerable<JsonElement> Arr(JsonElement r, string k) => r.TryGetProperty(k, out var a) && a.ValueKind == JsonValueKind.Array ? a.EnumerateArray() : [];
         string S(JsonElement e, string k) => e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
         int Cheats(JsonElement r) => cheats && r.TryGetProperty("cheats", out var n) && n.ValueKind == JsonValueKind.Number ? n.GetInt32() : 0;

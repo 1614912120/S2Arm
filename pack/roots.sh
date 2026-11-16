@@ -84,7 +84,7 @@ _root_identity_shared() {
 # 本树提交号（.root_src）：发布快照不带 .git，读打包时写进 engine.json 的 commit；快照只有那一个提交，「a 是 b 的祖先」只在两者都是它时成立（与原先在快照库里跑 merge-base 结果相同）
 _root_snap_commit() {
   local e; e=$(dirname "${BASH_SOURCE[0]}")/../engine.json; [ -f "$e" ] || return 1
-  "${S2A_PYTHON:-${S2A_PY:-python3}}" -I -c 'import json, sys
+  "${S2A_PYTHON:-${S2A_PY:-python3}}" -B -I -c 'import json, sys
 c = json.load(open(sys.argv[1], encoding="utf-8")).get("commit")
 if not c: sys.exit(1)
 print(c)' "$e"

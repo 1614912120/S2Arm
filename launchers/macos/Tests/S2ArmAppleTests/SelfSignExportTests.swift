@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 S2Arm contributors
 import AppKit
+import SwiftUI
 import XCTest
 @testable import NX2AppleUI
 @testable import S2ArmAppleAdapter
@@ -30,6 +31,41 @@ import XCTest
     private func waitFor(_ op: String) async -> [String: Any]? {
         for _ in 0..<300 { if let r = runner.requests.last(where: { $0["operation"] as? String == op }) { return r }; try? await Task.sleep(for: .milliseconds(10)) }
         return nil
+    }
+
+    private func activateHomeSelfSign(_ gameID: String, operation: String) async throws -> [String: Any]? {
+        model.selectedID = gameID
+        model.gamepad.source.controllers = { [] }
+        let host = NSHostingView(rootView: S2ArmAppleRootView(model: model, brand: "Original UI fixture"))
+        let window = NSWindow(contentRect: NSRect(x: 80, y: 80, width: 1120, height: 630),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        window.orderBack(nil)
+        defer { model.gamepad.detach(); window.close() }
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(300))
+        let target = try XCTUnwrap(model.gamepad.controlTargets(in: window).first { $0.id == "hero.selfSign" },
+                                  "新版 Home 必须保留 main 的常驻导出自签包入口")
+        XCTAssertTrue(window.convertToScreen(host.bounds).contains(target.frame), "导出入口必须位于窗口内")
+        model.gamepad.focus(target.id)
+        model.gamepad.handle(.confirm)
+        return await waitFor(operation)
+    }
+
+    func testHomePackedGameExportsThroughControllerAction() async throws {
+        let request = try await activateHomeSelfSign("0100A", operation: "install")
+        XCTAssertEqual(request?["mode"] as? String, "export")
+        XCTAssertNil(request?["device"], "导出不连手机，不带设备")
+        XCTAssertFalse(runner.requests.contains { $0["operation"] as? String == "installCheck" }, "导出入口不检查装机条件")
+    }
+
+    func testHomeUnpackedGamePacksThroughControllerAction() async throws {
+        let request = try await activateHomeSelfSign("0100B", operation: "export")
+        XCTAssertEqual(request?["mode"] as? String, "export")
+        let items = ((request?["plan"] as? [String: Any])?["items"] as? [[String: Any]]) ?? []
+        XCTAssertEqual(items.first?["platforms"] as? [String], ["iphone"])
+        XCTAssertFalse(runner.requests.contains { $0["operation"] as? String == "installCheck" })
     }
 
     func testPackedGameExportsDirectly() async throws {
