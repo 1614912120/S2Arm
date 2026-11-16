@@ -155,14 +155,9 @@ def input_interface(c, executable=None):
     return False, "没有找到可检查的 Mac 宿主，无法确认该引擎是否支持输入接口"
 
 
-READER_RECIPE = "aot1"  # 读取器发布方式（NativeAOT 单文件）的配方号：改动发布命令时升它，缓存键跟着换（键只算源码内容，不含本文件的改动）
-
-
 def reader_key(c):
     c.require_source()
-    return hashlib.sha256(
-        (tree_hash(c.engine, ["pack/nx_unpack", "compat/packages"]) + READER_RECIPE).encode()
-    ).hexdigest()[:24]
+    return tree_hash(c.engine, ["pack/nx_unpack", "compat/packages"])[:24]
 
 
 def reader(c):
@@ -180,11 +175,9 @@ def reader(c):
     from embedded import artifact
     bundled = artifact(c, "Reader")
     if bundled:
-        return (
-            bundled / "nx_unpack"
-        )  # 发版件：NativeAOT 单文件（bundle_engine.py 发版时照同一配方编），直接执行、不再要 .NET 运行时
+        return bundled / "nx_unpack.dll"
     folder = c.private / "tools" / reader_key(c)
-    path = folder / "nx_unpack"
+    path = folder / "nx_unpack.dll"
     stamp = read(folder / "ready.json", {})
     if not path.is_file() or stamp.get("sha256") != digest(path):
         raise Failure("S2Arm 读取工具尚未准备或源码已变化，请点击准备引擎工具。", code="reader_unavailable")
@@ -199,27 +192,11 @@ def prepare(c):
     c.begin("编译 S2Arm 内容读取工具", 1, 1)
     folder = c.private / "tools" / reader_key(c)
     folder.mkdir(parents=True, exist_ok=True)
-    # NativeAOT 单文件（同发版件 Binaries/Reader 的形态，-r 按本机架构）：读取器在玩家机 / 源码树都是自包含可执行文件，作业环境不再需要 .NET 运行时
-    rid = "osx-arm64" if platform.machine() == "arm64" else "osx-x64"
-    c.run(
-        [
-            "dotnet",
-            "publish",
-            c.engine / "pack/nx_unpack/nx_unpack.csproj",
-            "-c",
-            "Release",
-            "-r",
-            rid,
-            "-o",
-            folder,
-            "--nologo",
-            "-p:PublishAot=true",
-            "-p:UseSharedCompilation=false",
-            "-p:BaseIntermediateOutputPath=" + str(folder / "obj") + "/",
-        ],
-        c.logs / (c.task + "-reader.log"),
-    )
-    path = folder / "nx_unpack"
+    c.run(["dotnet", "build", c.engine / "pack/nx_unpack/nx_unpack.csproj", "-c", "Release",
+           "-o", folder, "--nologo", "-p:UseAppHost=false", "-p:BaseIntermediateOutputPath=" + str(folder / "obj") + "/"],
+          c.logs / (c.task + "-reader.log"))
+    (folder / "nx_unpack").unlink(missing_ok=True)
+    path = folder / "nx_unpack.dll"
     if not path.is_file():
         raise Failure("读取工具未生成完整产物。")
     atomic(folder / "ready.json", dict(schema=1, sha256=digest(path)))
@@ -265,16 +242,11 @@ def preflight(c):
         with c.last_log.open("a") as log:
             log.write(c.redact(f"{name}: {'OK' if ok else 'FAIL'}: {message}") + "\n")
         if not ok:
-            code = code or {
-                "apple_silicon": "architecture_unsupported",
-                "macos": "os_unsupported",
-                "python": "engine_incomplete",
-                "engine": "engine_incomplete",
-                "metal": "metal_unavailable",
-                "xcode": "xcode_unavailable",
-                "dotnet_sdk": "dotnet_sdk_missing",
-                "reader": "reader_unavailable",
-            }.get(cid, "tool_missing")
+            code = code or {"apple_silicon": "architecture_unsupported", "macos": "os_unsupported",
+                            "python": "engine_incomplete", "engine": "engine_incomplete",
+                            "dotnet": "dotnet_unavailable", "metal": "metal_unavailable",
+                            "xcode": "xcode_unavailable", "dotnet_sdk": "dotnet_sdk_missing",
+                            "reader": "reader_unavailable"}.get(cid, "tool_missing")
             check["diagnostic"] = c.describe_failure(Failure(message, code=code))
         checks.append(check)
         c.emit("check", check=check)
@@ -307,8 +279,10 @@ def preflight(c):
     except Failure:
         source_ok = False
     add("engine", "S2Arm 内置引擎", source_ok, "应用内置 S2Arm 宿主和准备工具。", ("prepare", "launch"))
-    # .NET 检查项已删（出包 C# 工具全为随 App 预编的原生单文件，运行不再要 .NET）：源码树要 SDK 的只剩「打 iPhone 包」（下面的 dotnet_sdk 项）与命令行现编入口（各自报红）
     packaged = bool(c.r.get("engineBundle"))
+    ok, version = probe(c, ["dotnet", "--list-runtimes" if packaged else "--list-sdks"])
+    add("dotnet", ".NET 10", ok and ("Microsoft.NETCore.App 10." in version if packaged else any(line.startswith("10.") for line in version.splitlines())),
+        "应用内置 .NET 10 运行时。" if packaged else "开发构建需要 .NET 10 SDK。")
     ok, version = probe(c, ["xcrun", "--sdk", "macosx", "metal", "--version"])
     developer = Path(c.r.get("developerDir") or "")
     # 没找到 Xcode 时启动器传空串：Path("") 拼出的相对路径会按工作目录（从 Finder 打开是 /）落到系统自带的
@@ -370,7 +344,7 @@ def preflight(c):
         add(command.replace("-", "_"), command, ok,
             "应用内置 " + command + "。" if packaged else "构建环境缺少 " + command + "。")  # 非玩家句
     # 打 iPhone 包要现编 iOS 版 C# 库：需要 .NET 10 SDK（用户目录 ~/.dotnet，一键安装不要管理员密码）。只算「打 iPhone 包」的条件，不挡 Mac 打包和启动
-    #   发版应用不要：C# 件随发版预编为原生单文件、iOS 壳随包（Resources/Shell），运行不要任何 .NET；只有源码树开发构建要
+    #   发版应用不要：C# 件随发版预编、iOS 壳随包（Resources/Shell），只用内置 .NET 运行时；只有源码树开发构建要
     if not packaged:
         from ipa import dotnet_sdk
         add("dotnet_sdk", ".NET SDK（打 iPhone 包）", dotnet_sdk()[1] is not None,

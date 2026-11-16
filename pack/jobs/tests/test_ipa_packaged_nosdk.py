@@ -39,15 +39,8 @@ class PackagedNoSdk(unittest.TestCase):
             seen.update(args=[str(a) for a in args], env=env)
             out = Path(args[args.index("--out") + 1]); (out / "x.ipa").write_bytes(b"ipa")
             oneclick_done(args, out / "x.ipa", build_id="b", graphics_mode="direct")
-
-        with (
-            um.patch.object(ipa, "dotnet_sdk", side_effect=sdk),
-            um.patch.object(self.c, "run", run),
-            um.patch.object(self.c, "engine", ROOT),
-            um.patch(
-                "toolchain.reader", return_value=Path("/App/Engine/Binaries/Reader/nx_unpack")
-            ),
-        ):
+        with um.patch.object(ipa, "dotnet_sdk", side_effect=sdk), um.patch.object(self.c, "run", run), \
+             um.patch.object(self.c, "engine", ROOT), um.patch("toolchain.reader", return_value=Path("/App/Engine/Binaries/Reader/nx_unpack.dll")):
             return ipa.build(self.c), seen
 
     @shared_extract
@@ -57,8 +50,9 @@ class PackagedNoSdk(unittest.TestCase):
         r, seen = self.run_build()
         env = seen["env"]
         self.assertEqual(env["S2A_SHELL"], str(res / "Shell"))
-        # 读取器是发版预编的自包含单文件（NativeAOT），直接交给链上：不再包 dotnet 壳、不再要 .NET 运行时
-        self.assertEqual(env["S2A_NX_UNPACK"], "/App/Engine/Binaries/Reader/nx_unpack")
+        nxu = Path(env["S2A_NX_UNPACK"])
+        self.assertEqual(nxu.read_text(), '#!/bin/sh\nexec dotnet /App/Engine/Binaries/Reader/nx_unpack.dll "$@"\n')
+        self.assertTrue(os.access(nxu, os.X_OK))
         self.assertEqual(env.get("DOTNET_ROOT"), before, "不换成外部 SDK")
         self.assertTrue((Path(r["outputPath"]) / "kit" / "main.npdm").is_file())   # 交付件进了这款的 image/ios（不再留单款 ipa）
 

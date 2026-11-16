@@ -92,18 +92,7 @@ def original_exefs(c, game, work):
         return None
     import toolchain
     out = work / "x"
-    c.run(
-        [
-            toolchain.reader(c),
-            c.keys,
-            out,
-            "--exefs-only",
-            "--title-id=" + game["id"],
-            *map(str, paths),
-        ],
-        work / "exefs.log",
-        c.env(),
-    )
+    c.run(["dotnet", toolchain.reader(c), c.keys, out, "--exefs-only", "--title-id=" + game["id"], *map(str, paths)], work / "exefs.log", c.env())
     if not (out / "exefs/main").is_file():
         return None
     return sgrade.save_program(c, game["id"], out / "exefs") or out / "exefs"   # 从原件解出来的存一份，下次不用回原件
