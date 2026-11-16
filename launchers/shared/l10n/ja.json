@@ -1007,7 +1007,8 @@
   "sgrade.upgrade.version.mine": "（お使いのもの：{0}）",
   "sgrade.upgrade.cat.cheatPlain": "チート",
   "phone.done.export.fresh": "今回コピーが必要な .img：{0}。残りの {1} 本は前回の書き出しと同じなので、すでに iPhone にあればコピーし直す必要はありません。",
-  "phone.done.export.same": "すべての .img が前回の書き出しと同じです。すでに iPhone にあればコピーし直す必要はありません。"
+  "phone.done.export.same": "すべての .img が前回の書き出しと同じです。すでに iPhone にあればコピーし直す必要はありません。",
+  "phone.done.export.unwritten": "今回は選んだゲームの .img だけを書き出しました。{0} の .img は書き出していません。すでに iPhone にあればそのまま遊べます。ない場合はライブラリでそのゲームを選んでもう一度書き出してください。"
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "全画面パッチ（画面比率に応じて自動選択）",

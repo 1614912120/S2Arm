@@ -1007,7 +1007,8 @@
   "sgrade.upgrade.version.mine": " (la vôtre : {0})",
   "sgrade.upgrade.cat.cheatPlain": "codes de triche",
   "phone.done.export.fresh": "Fichiers .img à copier cette fois : {0}. Les {1} autres sont identiques à la dernière exportation ; s'ils sont déjà sur votre téléphone, inutile de les recopier.",
-  "phone.done.export.same": "Tous les .img sont identiques à la dernière exportation ; s'ils sont déjà sur votre téléphone, inutile de les recopier."
+  "phone.done.export.same": "Tous les .img sont identiques à la dernière exportation ; s'ils sont déjà sur votre téléphone, inutile de les recopier.",
+  "phone.done.export.unwritten": "Cette fois, seul le .img du jeu choisi a été écrit. Aucun .img pour {0} : s'ils sont déjà sur votre téléphone, ils fonctionnent toujours ; sinon, choisissez ce jeu dans la bibliothèque et exportez à nouveau."
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "Correctif plein écran (choisi selon votre ratio d'écran)",

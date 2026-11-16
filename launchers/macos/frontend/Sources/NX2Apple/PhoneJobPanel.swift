@@ -187,6 +187,10 @@ struct PhoneJobPanel: View {
                     : t("phone.done.export.fresh").replacingOccurrences(of: "{0}", with: o.exportFresh.joined(separator: "、")).replacingOccurrences(of: "{1}", with: "\(o.exportReused)")))
                     .font(.manrope(15, .semibold)).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("phone.export.fresh")
             }
+            if !o.exportUnwritten.isEmpty {   // 只新写了点的那款：别的款这次没写 .img，说清手机上已有照常能玩、没有怎么办（Windows PhoneJobCard 同）
+                Text(LauncherCopy.note(t("phone.done.export.unwritten").replacingOccurrences(of: "{0}", with: o.exportUnwritten.joined(separator: "、"))))
+                    .font(.manrope(15, .semibold)).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("phone.export.unwritten")
+            }
             HStack(alignment: .top, spacing: 52) {
                 ForEach(Array(stats.enumerated()), id: \.offset) { _, s in
                     VStack(alignment: .leading, spacing: 6) {

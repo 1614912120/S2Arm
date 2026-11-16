@@ -1007,7 +1007,8 @@
   "sgrade.upgrade.version.mine": " (la tuya: {0})",
   "sgrade.upgrade.cat.cheatPlain": "trucos",
   "phone.done.export.fresh": "Archivos .img que debes copiar esta vez: {0}. Los otros {1} son iguales que en la última exportación; si ya están en tu teléfono, no hace falta copiarlos de nuevo.",
-  "phone.done.export.same": "Todos los .img son iguales que en la última exportación; si ya están en tu teléfono, no hace falta copiarlos de nuevo."
+  "phone.done.export.same": "Todos los .img son iguales que en la última exportación; si ya están en tu teléfono, no hace falta copiarlos de nuevo.",
+  "phone.done.export.unwritten": "Esta vez solo se escribió el .img del juego que elegiste. No se escribió el .img de {0}: si ya están en tu teléfono siguen funcionando; si no, elige ese juego en la biblioteca y vuelve a exportar."
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "Parche de pantalla completa (elegido según la proporción de tu pantalla)",
