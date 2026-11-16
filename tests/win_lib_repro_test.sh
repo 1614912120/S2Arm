@@ -10,7 +10,7 @@
 #   ② spvc_inproc._build：Windows 分支编译带 -fmacro-prefix-map=<仓库根>=.、链接带 -shared -Wl,/Brepro；Mac 分支命令里两者都没有、仍是 -dynamiclib；
 #      FLAGS 仍是 -O2 -std=c++14 -fPIC（FLAGS 进输出身份，Mac 翻译键不动）
 #   ③ （只 Windows）同一份源码拷到两个不同目录各编一次：两份 dsx.dll 逐字节相同、两份 libspvc_cli.dll 逐字节相同
-# 负对照（手做）：dsx_win.py / spvc_inproc.py 换回修前版本 → ① ② 不通；天眼实测修前两目录各编一次 dsx / spvc 哈希都不同（差在文件头时间戳与宽字符检出路径）
+# 负对照（手做）：dsx_win.py / spvc_inproc.py 换回修前版本 → ① ② 不通；Windows 出包机实测修前两目录各编一次 dsx / spvc 哈希都不同（差在文件头时间戳与宽字符检出路径）
 set -u; H=$(cd "$(dirname "$0")/.." && pwd)
 python3 - "$H" <<'PY'
 import os, shutil, subprocess, sys, tempfile, hashlib

@@ -8,7 +8,7 @@ COFF 不认 dsx_abi.h 的 visibility("default")，导出表按 C 源码里标 NX
 字节可复现：库整文件哈希进翻译键（graphics/tools/direct/dsh/batch/Build.cs LibFp，PE 不拆节），lld-link 缺省把链接时刻写进文件头与导出表、
   导出表还记链接时的文件名，原先每编一次字节都不同，Windows 出包机每换一份代码检出全部着色器翻译缓存作废（shader cache: hit 0）。
   /Brepro 让时间戳取内容哈希；在临时子目录里按最终文件名链接，导出表记的名字不带进程号；SPIRV-Cross 的 assert 把 __FILE__（宽字符）编进库，
-  -fmacro-prefix-map 把仓库根换成「.」，库里不带检出路径（天眼按提交号各一份检出 R:/s2a/src/c<提交>）。
+  -fmacro-prefix-map 把仓库根换成「.」，库里不带检出路径（Windows 出包机按提交号各一份检出）。
 """
 import concurrent.futures
 import os
