@@ -153,14 +153,15 @@ final class PlayServiceTests: XCTestCase {
         XCTAssertFalse(play.isRunning)
     }
 
-    func testUnknownUILanguageIsNotSent() throws {
+    func testUILanguageIsPassedThroughForTheJobLayerToResolve() throws {
+        // 法文界面原先不带 uiLanguage，作业层回落中文，自签导出文件夹成了「S2Arm 自签导出」（#502）：现在照原样带，作业层自己认
         let box = try Sandbox(); defer { box.remove() }
         let runner = FakeRunner()
         let c = client(box, runner)
         let play = PlayService(client: c)
         let done = expectation(description: "finish")
-        try play.play(gameId: "0100A", uiLanguage: "sv", onFinish: { _ in done.fulfill() })
+        try play.play(gameId: "0100A", uiLanguage: "fr", onFinish: { _ in done.fulfill() })
         wait(for: [done], timeout: 5)
-        XCTAssertNil(runner.starts.first?.request["uiLanguage"])
+        XCTAssertEqual(runner.starts.first?.request["uiLanguage"] as? String, "fr")
     }
 }
