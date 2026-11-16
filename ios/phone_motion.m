@@ -40,7 +40,7 @@ static void orient_refresh(void) {
                 CGPoint o = [cs convertPoint:CGPointZero toCoordinateSpace:fs], r = [cs convertPoint:CGPointMake(1, 0) toCoordinateSpace:fs], d = [cs convertPoint:CGPointMake(0, 1) toCoordinateSpace:fs];
                 // 固定坐标 y 朝下、机身 y 朝上：右 =（Δx, −Δy）；屏幕上 = 界面 −y 方向 =（−Δx, +Δy）
                 int rx = unit(r.x - o.x), ry = -unit(r.y - o.y), ux = -unit(d.x - o.x), uy = unit(d.y - o.y);
-                { int rv[2] = {rx, ry}, uv[2] = {ux, uy}; s2a_phone_panel_fix((int)sc.nativeBounds.size.width, (int)sc.nativeBounds.size.height, rv, uv); rx = rv[0]; ry = rv[1]; ux = uv[0]; uy = uv[1]; }
+                { int rv[2] = {rx, ry}, uv[2] = {ux, uy}; s2a_phone_panel_fix((int)sc.nativeBounds.size.width, (int)sc.nativeBounds.size.height, UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone, rv, uv); rx = rv[0]; ry = rv[1]; ux = uv[0]; uy = uv[1]; }
                 if ((rx || ry) && (ux || uy)) {
                     int nb = basis_pack(rx, ry, ux, uy), was = atomic_exchange(&g_basis, nb);
                     if (was != nb) LOG("手机六轴：屏幕右 = 机身 (%d, %d)、上 = 机身 (%d, %d)（原生面板 %.0fx%.0f）", rx, ry, ux, uy, sc.nativeBounds.size.width, sc.nativeBounds.size.height);
