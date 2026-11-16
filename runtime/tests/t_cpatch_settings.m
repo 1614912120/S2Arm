@@ -116,6 +116,13 @@ int main(int argc, char **argv) {
         ck([keys(S2ACrashNarrow(on4, goodAll)) isEqual:@"f/HP,gfx:B"], [NSString stringWithFormat:@"⑭ 没新开 → 没验过的（金手指、B）→ %@", keys(S2ACrashNarrow(on4, goodAll))]);
         ck([keys(S2ACrashNarrow(@[A, F], goodAll)) isEqual:@"widescreen:A,fps60"], [NSString stringWithFormat:@"⑭ 再崩、剩下都验过 → 全关 → %@", keys(S2ACrashNarrow(@[A, F], goodAll))]);
         ck([keys(S2ACrashNarrow(on4, nil)) isEqual:@"f/HP,gfx:B"], [NSString stringWithFormat:@"⑭ 没收局记录 → 先关没验过的 → %@", keys(S2ACrashNarrow(on4, nil))]);
+        // ⑮ 降负载画面补丁（11-16，表第 14 列方向）：gfx:L 方向 load、gfx:Q 方向 quality、gfx:U 方向空、gfx:O 旧表行（没有第 14 列）→ 只列 L 一项，分在「画面」组
+        NSArray *lg = S2ACPatchGroupsFromTSV(@"编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\t组\t方向\n"
+            "gfx:L\tmain\t0\tgfx\tDisable DOF\t\tl.pchtxt\t\t0\t\t\t\t\tload\ngfx:Q\tmain\t1\tgfx\t4K\t\tq.pchtxt\t\t0\t\t\t\t\tquality\n"
+            "gfx:U\tmain\t2\tgfx\tLOD\t\tu.pchtxt\t\t0\t\t\t\t\t\ngfx:O\tmain\t3\tgfx\tNo Bloom\t\to.pchtxt\t\t0\n");
+        NSArray *li = lg.count == 1 ? ((S2ACPatchGroup *)lg[0]).items : @[];
+        ck(lg.count == 1 && [((S2ACPatchGroup *)lg[0]).kind isEqual:@"gfx"] && [[li valueForKey:@"ident"] isEqual:@[@"gfx:L"]],
+           [NSString stringWithFormat:@"⑮ 画面类只列方向 load 的一份 gfx:L → %@", [li valueForKey:@"ident"]]);
 
         [d removePersistentDomainForName:@"s2a.t_cpatch_settings"];
         if (bad) { fprintf(stderr, "✗ t_cpatch_settings：%d/%d 项不符\n", bad, n); return 1; }

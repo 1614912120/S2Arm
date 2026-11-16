@@ -176,7 +176,8 @@ def scan(index_dirs, exefs, log=None):
                 skipped['索引哈希与内容不符'] = skipped.get('索引哈希与内容不符', 0) + 1; continue
             uid = f"{kind_id}:{digest[:16]}"
             meta = {'fps': fps_of(r.get('target_fps'), path), 'romfs': romfs_need(path, romfs_roots),
-                    'aspect': aspect_of(r.get('aspect'), r.get('origin') or path) if kind_id == 'widescreen' else None}   # 画幅变体（运行时按屏幕比例选一份，见 plan）
+                    'aspect': aspect_of(r.get('aspect'), r.get('origin') or path) if kind_id == 'widescreen' else None,   # 画幅变体（运行时按屏幕比例选一份，见 plan）
+                    'dir': (r.get('dir') or '') if kind_id == 'gfx' else ''}   # 画面类方向（load / quality，统一包条目 dir）：表第 14 列，iOS 运行时只开 load
             if uid in taken:
                 m0 = taken[uid]
                 if m0['fps'] is None: m0['fps'] = meta['fps']
@@ -1522,7 +1523,8 @@ def plan(root, default_on, index_dirs):
         uid, mod = key; u = units[key]; m = u['meta']; rf = m['romfs'] if m['romfs'] != 1 else known.get((mod, flat(u)), 1)
         # ⓪ 自适应满屏（wsauto:，adapt_families 合成，任何画幅都铺满）先占位：同模块定画幅的宽屏变体（别家按单一画幅出的）与它改同一处就让它
         #   玩家自己导入的 mod 代码补丁（mod:，11-15）比所有社区补丁先占位：玩家自己选的优先（关掉那份 mod 不会让被它挤掉的社区补丁回来，重出包才回来）
-        return (0 if uid.startswith('mod:') else 1 if uid.startswith('wsauto:') else 2, 0 if not uid.startswith('fps:') or m['fps'] == 60 else 1 if m['fps'] is None else 2, rf, order.index(key))
+        #   画面类（gfx:）最后占位（11-16 维护者：iOS 收降负载画面补丁，和满屏补丁改同一处时满屏优先；落选的照旧记「与 … 改同一处」，结果页写原因）
+        return (0 if uid.startswith('mod:') else 1 if uid.startswith('wsauto:') else 3 if uid.startswith('gfx:') else 2, 0 if not uid.startswith('fps:') or m['fps'] == 60 else 1 if m['fps'] is None else 2, rf, order.index(key))
     ranked = sorted(units, key=rank)
     if ranked != order:
         print('社区补丁按目标排序（帧率 60 优先、不缺 romfs 参数表优先）：' + ' '.join(f"{k[0]}/{k[1]}({units[k]['meta']['fps'] or '?'} 帧，参数表{('不缺', '判不了', '缺')[rank(k)[2]]})" for k in ranked), file=sys.stderr)
@@ -1718,14 +1720,15 @@ def plan(root, default_on, index_dirs):
         # 目标帧率（第 10 列，11-13 维护者「补丁优先：有 120 帧补丁就盖过我们的 60 帧」）：帧率类写补丁目标（索引 target_fps / 名字里的「<数> fps」），
         #   宿主按它定出图上限（runtime/src/cpatch.c：> 60 开 120 Hz 出图）；别的类与认不出的写空
         # 画幅（第 11 列）：宽屏类写补丁画幅（宽 ÷ 高，aspect_of），宿主在开着的几份里按当前屏幕比例只开最近的一份、上屏按它铺满（runtime/src/cpatch.c）；认不出的写空（照旧单独开关）
-        f.write('编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\t组\n')
+        # 方向（第 14 列，11-16）：画面类写 load / quality（统一包条目 dir），宿主在 iOS 上只开 load（runtime/src/cpatch.c cp_ios_blocked）；别的类与认不出的写空
+        f.write('编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\t组\t方向\n')
         for uid, mod, bit, u, dw in table:
             tf = (u.get('meta') or {}).get('fps') if uid.startswith('fps:') else None
             ta = (u.get('meta') or {}).get('aspect') if uid.startswith('widescreen:') else None
             # 第 12 列模式（自适应满屏，11-13）：both = 主机 / 掌机两档渲染尺寸都按画幅（出包补齐了另一档）；docked = 只有主机档（宿主切主机模式）；空 = 不涉渲染尺寸
             md = ('both' if '@y4/' in dw else 'docked') if uid.startswith('wsauto:') and '@x4' in dw else ''
             f.write('\t'.join([uid, mod, str(bit), u['cat'], re.sub(r'[\t\n]', ' ', u['name']), u['license'], u['path'], dw, '1' if uid in on else '0', str(tf) if tf else '', f'{ta:.4f}' if ta else '', md,
-                               fps_group(u) if uid.startswith('fps:') else '']) + '\n')
+                               fps_group(u) if uid.startswith('fps:') else '', (u.get('meta') or {}).get('dir', '') if uid.startswith('gfx:') else '']) + '\n')
     with open(os.path.join(root, 'cpatch_plan.log'), 'a') as f: f.write('\n'.join(log) + '\n')
     print(f'社区补丁 {len(units)} 份匹配，进包 {len(table)} 份', file=sys.stderr)
     return 0

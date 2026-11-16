@@ -27,7 +27,7 @@ BASE = "https://dl.s2arm.com/patches/v2"
 TIMEOUT = 10
 MAX_BYTES = 4 << 20
 UA = "S2Arm-patches"
-FIELDS = {"fps": "target_fps", "widescreen": "aspect", "gfx": None, "other": None}   # other：认不出是画面的（声音 / 玩法等，tools/patch_index.py）
+FIELDS = {"fps": "target_fps", "widescreen": "aspect", "gfx": "dir", "other": None}   # other：认不出是画面的（声音 / 玩法等，tools/patch_index.py）
 
 
 def module_bids(exefs):
@@ -199,8 +199,9 @@ def cheat_rows(c, gid, bids):
 
 def fetch(c, game, exefs, target="mac"):
     """→ 交 S2A_CPATCH_DIRS 的索引目录列表（每类一个：fps / widescreen / gfx）；什么都没取到 = []。
-    target = "ios" 时不带画面类（gfx）：11-13 维护者定「画面补丁 iOS 不进包、Mac 进包」。画面类多是主机模式分辨率（1080p / 4K 底座），
-    手机上用不着，还和满屏补丁改同一处（渲染分辨率）——一起进包时改写器只收先排到的一份，满屏补丁整批被挤掉（暗黑三实测 9 份满屏全落选）"""
+    target = "ios" 时画面类（gfx）只带降负载的（条目 dir = load，tools/patch_index.py gfx_dir：关后处理 / 降阴影 / ≤720p 等；11-16 维护者拍板，
+    取代 11-13「画面补丁 iOS 不进包」）。提画质与认不出的照旧不带：多是主机模式分辨率（1080p / 4K 底座），手机上用不着、可能被系统杀。
+    和满屏补丁改同一处时满屏优先（pack/cpatch.py plan 排序：画面类最后占位，落选的在结果页写「和别的补丁改同一处」）"""
     gid = game["id"].upper()
     cache = Path(c.private) / "community-cache"
     bids = module_bids(exefs)
@@ -208,7 +209,8 @@ def fetch(c, game, exefs, target="mac"):
     seeds = [x for x in rows if x[0].get("kind") == "pso"]; rows = [x for x in rows if x[0].get("kind") != "pso"]
     pso_write(cache / "games" / gid / "pso", seeds)
     if target == "ios":
-        rows = [x for x in rows if (x[0].get("cat") if x[0].get("cat") in FIELDS else "other") not in ("gfx", "other")]   # iPhone 不打画面类与其它类
+        rows = [x for x in rows if (x[0].get("cat") if x[0].get("cat") in FIELDS else "other") != "other"
+                and (x[0].get("cat") != "gfx" or x[0].get("dir") == "load")]   # iPhone 不打其它类；画面类只打降负载的
     out = {}
     for it, data in rows:
         cat = it.get("cat") if it.get("cat") in FIELDS else "other"   # 认不出的类别按其它（不默认开），不当画面

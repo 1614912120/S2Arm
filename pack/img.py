@@ -178,10 +178,22 @@ def orig_romfs(root, work):
     return tmp, tmp
 
 
+def _romfs_img():
+    """同目录的 pack/romfs_img.py，按文件路径加载：本文件常被作业层按文件路径加载（pack/jobs/sgrade_bf.py _img，spec_from_file_location），
+    那时 pack/ 不在模块搜索路径里，裸 import romfs_img 找不到（11-16 资源包是 game.img、要补片上读取着色器的款装机「放进手机」一步 job_failed）"""
+    import importlib.util
+    mod = sys.modules.get('s2a_pack_romfs_img')
+    if mod is None:
+        spec = importlib.util.spec_from_file_location('s2a_pack_romfs_img', os.path.join(os.path.dirname(os.path.abspath(__file__)), 'romfs_img.py'))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sys.modules['s2a_pack_romfs_img'] = mod
+    return mod
+
+
 def std_files(path, base):
     """IMG 里标准 RomFS 段（起点 base）的文件表 → {相对路径: (game.img 里的绝对偏移, 长度)}；按公开格式只读元数据，不读文件数据（解析只此一份：pack/romfs_img.py）"""
-    from romfs_img import RomfsImage
-    return RomfsImage(path, base).files()
+    return _romfs_img().RomfsImage(path, base).files()
 
 
 def write_map(pack_dir, img_path):

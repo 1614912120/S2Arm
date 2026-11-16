@@ -898,7 +898,7 @@ def adopt_library_logs(c):
         if src.name != "jobs" or not src.is_dir():
             continue
         prune_jobs(c.private, jobs=src)
-        for p in src.glob("*.json"):
+        for p in entries(src, "*.json"):
             if p.name.endswith(".request.json"):
                 continue
             try:
@@ -942,6 +942,18 @@ OS_JUNK_PREFIX = "._"
 
 def os_junk(name):
     return name in OS_JUNK or name.startswith(OS_JUNK_PREFIX)
+
+
+def entries(d, pattern="*", recursive=False):
+    """d 下按 pattern 列出的业务文件 / 目录（排好序）：路径里任何一级是系统附属文件都不算（d 不存在 / 不是目录 → []）。
+    玩家能放到外置盘上的目录（游戏库、数据目录、mod / 金手指 / 导出文件夹）一律经这里列：exFAT / FAT 上 macOS 给每个带扩展属性的文件
+    配一份 ._<名>（4 KB AppleDouble，含 NUL、非 UTF-8），pathlib 的 glob("*.json") / rglob 照样匹配它；逐个调用点各自补过滤，
+    换个调用点又漏（#812 #816 #911 #1010 #369 #382 都是这一类）"""
+    d = Path(d)
+    if not d.is_dir():
+        return []
+    found = d.rglob(pattern) if recursive else d.glob(pattern)
+    return sorted(p for p in found if not any(os_junk(part) for part in p.relative_to(d).parts))
 
 
 def has_content(d):

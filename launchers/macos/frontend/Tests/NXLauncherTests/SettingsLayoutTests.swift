@@ -28,14 +28,19 @@ import S2ArmAppleAdapter
                 XCTAssertEqual(players.count, 4)
                 let playerRect = window.convertFromScreen(players[player].frame)
                 try click(CGPoint(x: playerRect.midX, y: playerRect.midY), in: window)
-                try await Task.sleep(for: .milliseconds(180))
-                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-                host.cacheDisplay(in: host.bounds, to: bitmap)
+                // 等选中态真画出来再判：固定等 180 ms 在整套负载下偶发取到旧色。每 50 ms 截一次取色，选中即停，最多等 3 秒
                 let point = host.convert(CGPoint(x: playerRect.minX + 5, y: playerRect.midY), from: nil)
-                let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
-                let sampleY = host.isFlipped ? point.y : host.bounds.maxY - point.y
-                let color = try XCTUnwrap(bitmap.colorAt(x: Int(point.x * scale), y: Int(sampleY * scale))?.usingColorSpace(.deviceRGB))
-                XCTAssertGreaterThan(color.redComponent, 0.8, "必须实际选中玩家\(player + 1)，不能重复验证玩家 1")
+                var red: CGFloat = 0
+                let deadline = Date().addingTimeInterval(3)
+                repeat {
+                    try await Task.sleep(for: .milliseconds(50))
+                    let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+                    let sampleY = host.isFlipped ? point.y : host.bounds.maxY - point.y
+                    red = try XCTUnwrap(bitmap.colorAt(x: Int(point.x * scale), y: Int(sampleY * scale))?.usingColorSpace(.deviceRGB)).redComponent
+                } while red <= 0.8 && Date() < deadline
+                XCTAssertGreaterThan(red, 0.8, "必须实际选中玩家\(player + 1)，不能重复验证玩家 1")
                 for target in ["A", "B", "Y", "X", "L"] {
                     navigation.focus("input.map." + target)
                     let key = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "input.map." + target })
@@ -263,6 +268,7 @@ import S2ArmAppleAdapter
                 location: GameLocation(catalog: ["state": "ok", "path": first]))
             for stage in 0..<4 {
                 let model = stage < 2 ? fixture.model : S2ArmLauncherModel(client: fixture.model.provider.client)
+                fixture.quiet(model)
                 if stage >= 2 {
                     if stage == 3 { fixture.runner.storageResponse = ["locations": [], "last": ""] }
                     model.loadLocations()
@@ -378,6 +384,37 @@ import S2ArmAppleAdapter
         XCTAssertEqual(fixture.runner.requests.filter { $0["operation"] as? String == "export" }.count, 1)
         navigation.source.tick(now: 0.8)
         XCTAssertEqual(fixture.runner.requests.filter { $0["operation"] as? String == "export" }.count, 1, "长按不能重复开始出包")
+    }
+
+    /// #1272：选过方案后出包页看得到选的是哪套、能「更改」（弹同一个确认页，不顺带开出包）；没选过不出这一行（导出 iPhone 时确认页会问）
+    func testExportPageShowsDownstreamChoiceWithChange() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        for choice in [nil, ""] as [String?] {
+            fixture.runner.catalogDownstreamChoice = choice
+            fixture.model.refresh()
+            for _ in 0..<200 where fixture.model.games.first?.downstream?.choice != choice || fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+            let game = try XCTUnwrap(fixture.model.games.first)
+            XCTAssertEqual(game.downstream?.choice, choice)
+            let padFocus = PadFocus()
+            let page = AnyView(ExportView(model: fixture.model, covers: CoverCache(), game: game, install: {})
+                .environmentObject(padFocus).padScope("main", padFocus).frame(width: 1120, height: 900))
+            let (host, window) = try await render(page, fixture: fixture, language: .zh)
+            let navigation = fixture.navigation
+            navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
+            defer { navigation.detach(); window.close() }
+            let has = navigation.controlTargets(in: window).contains { $0.id == "export.downstream.change" }
+            XCTAssertEqual(has, choice != nil, "选过才出「更改」（choice \(String(describing: choice))）")
+            if choice != nil {
+                try snapshot(host, "export-downstream-change-zh")
+                let before = fixture.runner.requests.count
+                navigation.focus("export.downstream.change"); navigation.handle(.confirm)
+                for _ in 0..<100 where fixture.model.downstreamPromptFor == nil { try await Task.sleep(for: .milliseconds(10)) }
+                XCTAssertEqual(fixture.model.downstreamPromptFor, game.id, "「更改」弹确认页")
+                XCTAssertFalse(fixture.runner.requests.dropFirst(before).contains { $0["operation"] as? String == "export" }, "更改不顺带开出包")
+                fixture.model.downstreamPromptFor = nil
+            }
+        }
     }
 
     func testExportNameControllerOpensKeyboardWithoutRenameAlert() async throws {
@@ -1613,6 +1650,8 @@ private struct SearchControlPreview: View {
     let model: S2ArmLauncherModel
     let navigation = LauncherPadNavigation()
     let runner = SettingsRunner()
+    /// 模型想弹的提示框（标题：内容）：走记录不走真 NSAlert（runAlert 注入）
+    private(set) var alerts: [String] = []
     init() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("s2arm-settings-layout-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Jobs"), withIntermediateDirectories: true)
@@ -1620,7 +1659,10 @@ private struct SearchControlPreview: View {
         try Data().write(to: root.appendingPathComponent("Jobs/main.py"))
         model = S2ArmLauncherModel(client: JobClient(environment: JobEnvironment(privateRoot: root, resources: root,
             library: root.appendingPathComponent("library").path, libraryId: "layout-fixture"), runner: runner))
+        quiet(model)
     }
+    /// 这个夹具里建的模型（含重启后新建的）一律接上：提示框记下来，不弹真窗
+    func quiet(_ m: S2ArmLauncherModel) { m.runAlert = { [weak self] a in self?.alerts.append(a.messageText + "：" + a.informativeText); return .alertSecondButtonReturn } }
     func remove() { try? FileManager.default.removeItem(at: root) }
 }
 
@@ -1648,6 +1690,12 @@ private final class SettingsRunner: JobProcessRunner {
         get { lock.withLock { gameCount } }
         set { lock.withLock { gameCount = newValue } }
     }
+    private var downstreamChoice: String? = nil
+    /// 夹具款上次选的下游方案（nil = 没选过；"" = 仍用原版）
+    var catalogDownstreamChoice: String? {
+        get { lock.withLock { downstreamChoice } }
+        set { lock.withLock { downstreamChoice = newValue } }
+    }
     private var playtime: [String: Any]? = nil
     var catalogPlaytime: [String: Any]? {
         get { lock.withLock { playtime } }
@@ -1670,6 +1718,7 @@ private final class SettingsRunner: JobProcessRunner {
                 var game: [String: Any] = ["id": index == 0 ? "fixture" : "fixture-\(index)", "name": "Original UI fixture \(index)", "cover": catalogCover, "ready": true, "needsPreparation": catalogNeedsPreparation, "missing": [],
                  "downstream": ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy]]
                 if index == 0, let playtime = catalogPlaytime { game["playtime"] = playtime }
+                if let choice = catalogDownstreamChoice { game["downstream"] = ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy, "choice": choice] }
                 return game
             }]
         }
