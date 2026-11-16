@@ -309,77 +309,6 @@ static nvn_gpu_rc wsi_encoded_target(struct nvn_gpu_surface_s *s, nvn_gpu_err *e
     return rc(NVN_GPU_OK);
 }
 
-// 合成一段：把源（crop 矩形）缩放到交换链图（dst 矩形，flip_y 可上下翻），末态转 PRESENT_SRC。
-// 返回 0 = 矩形越界。encode 时 target 是 sRGB 中间图，末段逐字节拷回交换链图。
-static int wsi_compose_blit(struct nvn_gpu_cmd_s *c, struct nvn_gpu_surface_s *s, uint32_t idx,
-                            struct nvn_gpu_tex_s *st, const nvn_gpu_present_desc *d,
-                            const VkFormatProperties *fp, int encode, VkImage target) {
-    cmd_ref(c, d->src, REF_VIEW);   // 源视图活到呈现段完成（它同时让贴图活着）：后端记录用的是 image，调用方录完就 release 视图也不能把 image 提前拆掉
-    image_barrier(c, st, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-    wsi_swap_barrier(c->cb, s->images[idx], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
-                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-    // 下一帧覆盖中间图前，等此前呈现段的 copy 读完；UNDEFINED 仅丢内容，仍需读→写依赖。
-    if (encode) wsi_swap_barrier(c->cb, target, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                                VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-    VkClearColorValue black; memset(&black, 0, sizeof black); black.float32[3] = 1.0f;
-    { static int bars = -1; if (bars < 0) bars = nvn_plat_flag("nvk_bars", 0);   // 调试：黑边改成品红，截图上一眼分清「没呈现」和「呈现了一张黑图」
-      if (bars) { black.float32[0] = 1.0f; black.float32[2] = 1.0f; } }
-    VkImageSubresourceRange whole = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(c->cb, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &whole);   // 目标矩形外是黑的
-    wsi_swap_barrier(c->cb, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
-                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);   // 清与贴是对同一张图的两次写：之间要有屏障
-    // 源：crop（宽高为 0 = 整个视图的首级）；目标：dst（宽高为 0 = 整张交换链图）。裁到各自范围内。
-    uint32_t lw = st->w >> d->src->base_level, lh = st->h >> d->src->base_level; if (!lw) lw = 1; if (!lh) lh = 1;
-    int32_t sx = d->crop[0], sy = d->crop[1], sw = d->crop[2], sh = d->crop[3];
-    if (sw <= 0 || sh <= 0) { sx = 0; sy = 0; sw = (int32_t)lw; sh = (int32_t)lh; }
-    int32_t dx = d->dst[0], dy = d->dst[1], dw = d->dst[2], dh = d->dst[3];
-    if (dw <= 0 || dh <= 0) { dx = 0; dy = 0; dw = (int32_t)s->extent.width; dh = (int32_t)s->extent.height; }
-    int ok = sx >= 0 && sy >= 0 && (uint32_t)(sx + sw) <= lw && (uint32_t)(sy + sh) <= lh && dx >= 0 && dy >= 0 && (uint32_t)(dx + dw) <= s->extent.width && (uint32_t)(dy + dh) <= s->extent.height;
-    if (ok) {
-        VkImageBlit bl; memset(&bl, 0, sizeof bl);
-        bl.srcSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, d->src->base_level, d->src->base_layer, 1};
-        bl.srcOffsets[0] = (VkOffset3D){sx, d->flip_y ? sy + sh : sy, 0}; bl.srcOffsets[1] = (VkOffset3D){sx + sw, d->flip_y ? sy : sy + sh, 1};   // flip_y：两个 y 对调，贴出来上下翻转
-        bl.dstSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        bl.dstOffsets[0] = (VkOffset3D){dx, dy, 0}; bl.dstOffsets[1] = (VkOffset3D){dx + dw, dy + dh, 1};
-        VkFilter filt = d->filter && (fp->optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-        vkCmdBlitImage(c->cb, st->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, filt);
-    }
-    if (encode) {
-        wsi_swap_barrier(c->cb, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                         VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-        VkImageCopy copy = {0};
-        copy.srcSubresource = copy.dstSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        copy.extent = (VkExtent3D){s->extent.width, s->extent.height, 1};
-        vkCmdCopyImage(c->cb, target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s->images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-    }
-    wsi_swap_barrier(c->cb, s->images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0,
-                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    image_barrier(c, st, VK_IMAGE_LAYOUT_GENERAL);   // 源图转回常驻布局（见 backend_vulkan.c「图像布局」：别的段一律按 GENERAL 用它）
-    return ok;
-}
-
-// 可选的上屏 EASU 放大：直接画进交换链图（它本来就带 COLOR_ATTACHMENT 用法）。
-// 返回 1 = 已录制；0 = 不适用（调用方回落 wsi_compose_blit；此处已下发的 UNDEFINED 屏障对后者无害）。
-static int wsi_compose_easu(struct nvn_gpu_cmd_s *c, struct nvn_gpu_surface_s *s, uint32_t idx,
-                            const nvn_gpu_present_desc *d, int encode) {
-    // 整张图先清黑：渲染通道的 CLEAR 只作用于渲染区，dst 之外的边框得自己清（与 blit 路径同一个黑）。
-    wsi_swap_barrier(c->cb, s->images[idx], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
-                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
-    VkClearColorValue black; memset(&black, 0, sizeof black); black.float32[3] = 1.0f;
-    if (nvn_plat_flag("nvk_bars", 0)) { black.float32[0] = 1.0f; black.float32[2] = 1.0f; }
-    VkImageSubresourceRange whole = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(c->cb, s->images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &whole);
-    wsi_swap_barrier(c->cb, s->images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                     VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
-    if (!easu_compose(c, s->images[idx], s->extent, 0, s->format, d->src, d->crop, d->dst, d->flip_y, s->gen, encode))
-        return 0;
-    wsi_swap_barrier(c->cb, s->images[idx], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-                     VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, 0, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
-    return 1;
-}
-
 nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const nvn_gpu_present_desc *d, uint64_t ticket,
                            nvn_gpu_presented_fn presented, void *user, nvn_gpu_err *err) {
     nvn_gpu_err local; if (!err) err = &local;
@@ -469,17 +398,47 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
     out = nvn_gpu_cmd_begin(NULL, &ch, err);
     if (!nvn_gpu_ok(out)) { s->held = idx; s->held_sem = sem; goto done; }
     struct nvn_gpu_cmd_s *c = ch;
-    // 可选的上屏 EASU 放大（默认关）：nvn_plat_flag 只在调试构建里读得到 debug.s2a.nvk_upscale。
-    int upscaled = 0;
-    { int up = nvn_plat_flag("nvk_upscale", 0);
-      int elig = up ? easu_eligible(st, s->format) : 0;
-      { static int seen = -1; int now = up * 2 + elig;   // 只在「开关 × 适用」变化时记一行
-        if (now != seen) { seen = now; char b[160];
-          snprintf(b, sizeof b, "上屏放大读数：开关=%d 适用=%d（源格式=%d 交换链=%d）", up, elig, (int)st->format, (int)s->format);
-          nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); } }
-      if (elig) { upscaled = wsi_compose_easu(c, s, idx, d, encode);
-        if (!upscaled) nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", "上屏放大：这次不适用，回落缩放拷贝"); } }
-    int ok = upscaled ? 1 : wsi_compose_blit(c, s, idx, st, d, &fp, encode, target);
+    cmd_ref(c, d->src, REF_VIEW);   // 源视图活到呈现段完成（它同时让贴图活着）：后端记录用的是 image，调用方录完就 release 视图也不能把 image 提前拆掉
+    image_barrier(c, st, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    wsi_swap_barrier(c->cb, s->images[idx], VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    // 下一帧覆盖中间图前，等此前呈现段的 copy 读完；UNDEFINED 仅丢内容，仍需读→写依赖。
+    if (encode) wsi_swap_barrier(c->cb, target, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                VK_ACCESS_TRANSFER_READ_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+    VkClearColorValue black; memset(&black, 0, sizeof black); black.float32[3] = 1.0f;
+    { static int bars = -1; if (bars < 0) bars = nvn_plat_flag("nvk_bars", 0);   // 调试：黑边改成品红，截图上一眼分清「没呈现」和「呈现了一张黑图」
+      if (bars) { black.float32[0] = 1.0f; black.float32[2] = 1.0f; } }
+    VkImageSubresourceRange whole = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdClearColorImage(c->cb, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &whole);   // 目标矩形外是黑的
+    wsi_swap_barrier(c->cb, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);   // 清与贴是对同一张图的两次写：之间要有屏障
+    // 源：crop（宽高为 0 = 整个视图的首级）；目标：dst（宽高为 0 = 整张交换链图）。裁到各自范围内。
+    uint32_t lw = st->w >> d->src->base_level, lh = st->h >> d->src->base_level; if (!lw) lw = 1; if (!lh) lh = 1;
+    int32_t sx = d->crop[0], sy = d->crop[1], sw = d->crop[2], sh = d->crop[3];
+    if (sw <= 0 || sh <= 0) { sx = 0; sy = 0; sw = (int32_t)lw; sh = (int32_t)lh; }
+    int32_t dx = d->dst[0], dy = d->dst[1], dw = d->dst[2], dh = d->dst[3];
+    if (dw <= 0 || dh <= 0) { dx = 0; dy = 0; dw = (int32_t)s->extent.width; dh = (int32_t)s->extent.height; }
+    int ok = sx >= 0 && sy >= 0 && (uint32_t)(sx + sw) <= lw && (uint32_t)(sy + sh) <= lh && dx >= 0 && dy >= 0 && (uint32_t)(dx + dw) <= s->extent.width && (uint32_t)(dy + dh) <= s->extent.height;
+    if (ok) {
+        VkImageBlit bl; memset(&bl, 0, sizeof bl);
+        bl.srcSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, d->src->base_level, d->src->base_layer, 1};
+        bl.srcOffsets[0] = (VkOffset3D){sx, d->flip_y ? sy + sh : sy, 0}; bl.srcOffsets[1] = (VkOffset3D){sx + sw, d->flip_y ? sy : sy + sh, 1};   // flip_y：两个 y 对调，贴出来上下翻转
+        bl.dstSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        bl.dstOffsets[0] = (VkOffset3D){dx, dy, 0}; bl.dstOffsets[1] = (VkOffset3D){dx + dw, dy + dh, 1};
+        VkFilter filt = d->filter && (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT) ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        vkCmdBlitImage(c->cb, st->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, filt);
+    }
+    if (encode) {
+        wsi_swap_barrier(c->cb, target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+        VkImageCopy copy = {0};
+        copy.srcSubresource = copy.dstSubresource = (VkImageSubresourceLayers){VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.extent = (VkExtent3D){s->extent.width, s->extent.height, 1};
+        vkCmdCopyImage(c->cb, target, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, s->images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    }
+    wsi_swap_barrier(c->cb, s->images[idx], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_ACCESS_TRANSFER_WRITE_BIT, 0,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    image_barrier(c, st, VK_IMAGE_LAYOUT_GENERAL);   // 源图转回常驻布局（见 backend_vulkan.c「图像布局」：别的段一律按 GENERAL 用它）
     // 内部段：摘出活动表，自己提交（等取图信号量、发呈现信号量），交给完成线程只做回收
     pthread_mutex_lock(&g_mu);
     { struct nvn_gpu_cmd_s **pp = &g.live; while (*pp && *pp != c) pp = &(*pp)->live_next; if (*pp) *pp = c->live_next; }
@@ -491,9 +450,7 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
     if (r == VK_SUCCESS) r = vkCreateFence(g.d, &fi, NULL, &fence);
     pthread_mutex_lock(&g_submit_mu);
     if (r == VK_SUCCESS) {
-        VkPipelineStageFlags wait_stage = upscaled
-            ? (VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT)   // 先清场再画
-            : VK_PIPELINE_STAGE_TRANSFER_BIT;
+        VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_TRANSFER_BIT;
         VkSubmitInfo si; memset(&si, 0, sizeof si);
         VkCommandBuffer cbs[2];
         si.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO; si.commandBufferCount = submit_cbs(c, cbs); si.pCommandBuffers = cbs;

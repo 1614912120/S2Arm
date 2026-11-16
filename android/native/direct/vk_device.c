@@ -153,12 +153,6 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
 #endif
     info.enabledExtensionCount = enabled_count;
     info.ppEnabledExtensionNames = enabled;
-    // nvk 路径也给自定义驱动一个机会：game 构建里 vkCreateInstance 被 --wrap 接管，
-    // 这里先填窄 shim。没选驱动时返回 NULL，系统 loader 路径与改前完全相同。
-    {
-        extern void *s2a_android_vk_custom_driver_prepare(const char *) __attribute__((weak));
-        if (s2a_android_vk_custom_driver_prepare) (void)s2a_android_vk_custom_driver_prepare(NULL);
-    }
     if (vkCreateInstance(&info, NULL, &out->instance) != VK_SUCCESS)
         return fail(why, why_size, "vkCreateInstance failed");
 #if defined(__ANDROID__)

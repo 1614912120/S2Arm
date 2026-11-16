@@ -70,38 +70,4 @@ final class SGradeStateTextTests: XCTestCase {
             }
         }
     }
-
-    private func row(_ cat: String, _ raw: [String: Any]?, hasPatch: Bool = false, fpsOn: Bool = false) -> (String, Bool)? {
-        let t = { (k: String) in BackendText.launcherText(k, language: "zh-Hans") }
-        return SGradeStateText.rowNote(cat: cat, raw.map(SGradeCategoryState.init), hasFpsPatch: hasPatch, fpsOn: fpsOn, t: t, date: { _ in "11-15" }).map { ($0.text, $0.disabled) }
-    }
-
-    func testTopRowNotesSayWhatIsInUse() {
-        // 11-15 齿轮页一级三行：与 iPhone t_sgrade_line 同输入同一句（期望按定稿手写）
-        XCTAssertEqual(row("widescreen", ["state": "on", "source": "patch", "active": "adaptive"])?.0, "社区补丁 · 按屏幕比例自动选")
-        XCTAssertEqual(row("widescreen", ["state": "on", "source": "patch", "active": "fixed"])?.0, "社区补丁 · 固定画幅")
-        XCTAssertEqual(row("widescreen", ["state": "off_user", "source": "own"])?.0, "S2Arm 通用满屏（这款没有社区补丁）")
-        XCTAssertEqual(row("widescreen", nil)?.0, "S2Arm 通用满屏（这款没有社区补丁）")
-        XCTAssertEqual(row("widescreen", ["state": "off_auto", "source": "own", "autoOff": ["cause": "crash", "at": 1794740000]])?.0, "已自动关：11-15 游戏崩溃时它开着")
-        XCTAssertEqual(row("fps", ["state": "on", "source": "patch", "active": ["levels": [60, 120], "pick": "0"]], hasPatch: true, fpsOn: true)?.0, "社区补丁 · 最高 120 帧")
-        XCTAssertEqual(row("fps", ["state": "off_user", "source": "fi", "active": ["levels": [120], "pick": "0"]], hasPatch: true)?.0, "补帧：30 帧补到 60 帧")
-        XCTAssertEqual(row("fps", ["source": "fi"])?.0, "补帧：30 帧补到 60 帧（这款没有社区补丁）")
-        let none = row("fps", ["source": "none", "fiSupported": false])
-        XCTAssertEqual(none?.0, "这台设备不支持补帧"); XCTAssertEqual(none?.1, true, "没补丁且设备不支持补帧：真用不了才置灰")
-        let patched = row("fps", ["source": "none", "fiSupported": false, "active": ["levels": [60], "pick": "0"]], hasPatch: true)
-        XCTAssertEqual(patched?.0, "社区补丁 · 最高 60 帧"); XCTAssertEqual(patched?.1, false)
-        XCTAssertEqual(row("fps", nil)?.0, "补帧：30 帧补到 60 帧（这款没有社区补丁）")
-        let unsup = row("fps", ["state": "unsupported", "source": "fi"])
-        XCTAssertEqual(unsup?.0, "这台设备不支持补帧"); XCTAssertEqual(unsup?.1, true)
-        XCTAssertEqual(row("widescreen", ["state": "off_auto", "source": "own", "autoOff": ["cause": "widen_fit", "at": 1794740000]])?.0, "已自动关：11-15 满屏没铺满或画面被拉伸")
-    }
-
-    func testTopRowKeysInEveryLanguage() {
-        for lang in ["zh-Hant", "ja", "es", "fr"] {
-            for k in ["sgrade.row.fps", "sgrade.src.fs.adaptive", "sgrade.src.fs.fixed", "sgrade.src.fs.own", "sgrade.src.fps.patch", "sgrade.src.fps.fi",
-                      "sgrade.src.fps.fi.nopatch", "sgrade.unavail.fi", "sgrade.cheats.none", "sgrade.cpatch.detail", "sgrade.notice.fullscreen_off"] {
-                XCTAssertNotEqual(BackendText.launcherText(k, language: lang), BackendText.launcherText(k, language: "en"), "\(lang) 缺 \(k)")
-            }
-        }
-    }
 }

@@ -6,8 +6,6 @@
 #   bash android/tests/vk/run.sh              # 默认：lavapipe + validation
 #   bash android/tests/vk/run.sh --tsan       # 追加 TSan（C04 发布顺序）
 #   bash android/tests/vk/run.sh --asan       # 追加 ASan/UBSan
-#   bash android/tests/vk/run.sh --fsr        # FSR1 EASU 专项（算法对照，不接上屏）
-#   bash android/tests/vk/run.sh --present-upscale  # 上屏 EASU 开/关夹具（独立进程）
 # 环境：
 #   S2A_LAVAPIPE_ICD   指定 lavapipe ICD json（默认找 ~/.local / /usr/share/vulkan/icd.d）
 #   S2A_VK_LAYER_DIR   指定 validation 层目录（默认找 ~/.local / /usr/share/vulkan/explicit_layer.d）
@@ -151,37 +149,6 @@ if [ -z "$glslc" ]; then
     exit 2
 fi
 
-
-# FSR1 EASU 专项（--fsr）：合成图 1280x720 → 2133x1200，compute 版 EASU 对照 CPU 双线性。
-# 与上屏路径（backend_vulkan_easu.inc 的片元版）各自独立；这里只验算法更锐且无错。
-# 着色器出处与 MIT 许可见 shaders/fsr_easu.LICENSE.txt。
-if [ "$mode" = "--fsr" ]; then
-    fsr_out="$repo/build/fsr-spike"; mkdir -p "$fsr_out"
-    "$glslc" --target-env=vulkan1.1 "$repo/android/tests/vk/shaders/fsr_easu.comp" -o "$fsr_out/fsr_easu.comp.spv"
-    cc -D_POSIX_C_SOURCE=200809L -std=c11 -O1 -g -Wall -Wextra -Werror \
-        -I "$repo/android/tests/vkhost" \
-        -I "$repo/graphics/nvn/third_party/vulkan-headers/include" \
-        "$repo/android/tests/vk/t_fsr_upscale.c" \
-        -lvulkan -lm -o "$fsr_out/t_fsr_upscale"
-    echo "lavapipe: $icd"
-    echo "validation: $layer"
-    set +e
-    VK_ICD_FILENAMES="$icd" VK_DRIVER_FILES="$icd" VK_LAYER_PATH="$layer" \
-        VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation \
-        timeout 120 "$fsr_out/t_fsr_upscale" "$fsr_out" "$fsr_out" 2>&1 | tee "$fsr_out/run.log"
-    rc=${PIPESTATUS[0]}
-    set -e
-    bad=$(grep -cE "Validation Error|VUID-" "$fsr_out/run.log" || true)
-    if [ "$rc" -ne 0 ] || [ "$bad" -ne 0 ]; then
-        echo "【红】FSR1 EASU 专项：rc=${rc}，validation 报错 ${bad} 条" >&2
-        exit 1
-    fi
-    grep -q '^device: llvmpipe' "$fsr_out/run.log" || { echo '【红】不是 lavapipe 设备' >&2; exit 1; }
-    grep -q '^FSR_SPIKE: PASS' "$fsr_out/run.log" || { echo '【红】FSR 专项未 PASS' >&2; exit 1; }
-    echo "【绿】FSR1 EASU 专项：边缘指标达门槛、无 NaN/越界、validation 0 条；对照图在 build/fsr-spike/"
-    exit 0
-fi
-
 mkdir -p "$repo/build/vk-tests"
 export TMPDIR="$repo/build/vk-tests"
 out=$(mktemp -d "$TMPDIR/s2a-nvn-vk.XXXXXX")
@@ -265,7 +232,7 @@ case "$mode" in
     --tsan) cflags+=(-fsanitize=thread) ;;
     --asan) cflags+=(-fsanitize=address,undefined -fno-omit-frame-pointer) ;;
     --shown-only) cflags+=(-DS2A_C883_TEST=1) ;;
-    ""|--present-only|--present-upscale|--separate-core|--separate-neg-sampler|--gs-only|--gs-compiler|--gs-core|--gs-no-cap|--gs-neg-stage|--gs-neg-flags|--gs-neg-cap) ;;
+    ""|--present-only|--separate-core|--separate-neg-sampler|--gs-only|--gs-compiler|--gs-core|--gs-no-cap|--gs-neg-stage|--gs-neg-flags|--gs-neg-cap) ;;
     *) echo "未知参数：${mode}（可用 --tsan / --asan）" >&2; exit 64 ;;
 esac
 
@@ -340,23 +307,6 @@ if [ "$mode" != "--tsan" ]; then
     export VK_LAYER_PATH=$layer
     export VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
     export VK_LAYER_VALIDATE_SYNC=1   # 同步校验：缺屏障会报 SYNC-HAZARD-*
-
-# 上屏 EASU 开/关夹具（--present-upscale）：独立进程跑一次，避开 surface 单例与 C71 的提交信号序列。
-if [ "$mode" = "--present-upscale" ]; then
-    set +e
-    S2A_TEST_PRESENT_UPSCALE_ONLY=1 timeout 180 "$out/t_backend_vk" "$out/shaders" 2>&1 | tee "$out/log_present_upscale"
-    rc=${PIPESTATUS[0]}
-    set -e
-    bad=$(grep -cE "Validation Error|VUID-" "$out/log_present_upscale" || true)
-    if [ "$rc" -ne 0 ] || [ "$bad" -ne 0 ] || ! grep -q "PRESENT_UPSCALE isolated failures=0" "$out/log_present_upscale"; then
-        echo "【红】上屏 EASU 开关夹具：rc=${rc}，validation 报错 ${bad} 条" >&2
-        grep -E "Validation Error|VUID-|PRESENT_UPSCALE" "$out/log_present_upscale" | head -20 >&2
-        exit 1
-    fi
-    grep "PRESENT_UPSCALE" "$out/log_present_upscale" || true
-    echo "【绿】上屏 EASU 开关夹具：关走原合成、开走 EASU 通道，validation 0 条"
-    exit 0
-fi
 fi
 # 机型能力模拟（可选）：S2A_VK_PROFILE_LAYER_DIR 指 VK_LAYER_KHRONOS_profiles 所在目录时，把它排在 validation
 # 之下（离驱动更近），让 lavapipe 按 VK_KHRONOS_PROFILES_* 指定的机型能力档上报；validation 看到的是模拟后的能力。

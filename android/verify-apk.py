@@ -30,7 +30,6 @@ LICENSE_MARKERS = [
                                    'assets/licenses/libvpx-PATENTS.txt']),                    # BSD-3-Clause + patent grant
     (b'adrenotools-libvulkan', ['assets/licenses/libadrenotools-LICENSE.txt',
                                 'assets/licenses/liblinkernsbypass-LICENSE.txt']),           # BSD-2-Clause
-    (b'S2ARM_EASU_ffx_fsr1_mit', ['assets/licenses/easu-fsr1-LICENSE.txt']),                 # AMD FidelityFX FSR1 EASU (MIT)
 ]
 
 # 许可文本不再在仓库里留副本：打包时从 third_party 原件拷入。这里逐字节核对；
@@ -40,8 +39,6 @@ LICENSE_EXACT = [
      HERE / 'third_party/libadrenotools/LICENSE'),
     ('assets/licenses/liblinkernsbypass-LICENSE.txt',
      HERE / 'third_party/libadrenotools/lib/linkernsbypass/LICENSE'),
-    ('assets/licenses/easu-fsr1-LICENSE.txt',
-     HERE / 'third_party/ffx_fsr1/LICENSE.txt'),
 ]
 
 

@@ -509,7 +509,7 @@ def save(c):
         if c.r.get("cheatsImport"):
             if not isinstance(c.r["cheatsImport"], list):
                 raise Failure("金手指导入格式不对。", code="job_failed")
-            cheats.import_files(c, game, c.r["cheatsImport"])
+            c.r["cheatsImported"] = cheats.import_files(c, game, c.r["cheatsImport"], c.r.get("cheatsShare"))   # 勾了「分享给其他玩家」逐份上传（没给 = 缺省 cheats.SHARE_DEFAULT）
         if c.r.get("cheats") is not None:
             cheats.save(c, game, c.r["cheats"])
     if c.r.get("crashAnswer") is not None:   # 上次开着金手指 / 补丁时异常退出、已当场关掉，玩家看过通知 ack（pack/jobs/cheats.py answer_crash）
@@ -538,7 +538,10 @@ def save(c):
     atomic(launch_path(c, game["id"]), data)
     if any(table[k]["scope"] == "app" for k in want):
         atomic(app_path(c), shared)
-    return describe_game(c, game)
+    out = describe_game(c, game)
+    if c.r.get("cheatsImported") is not None:
+        out = dict(out, cheatsImported=c.r["cheatsImported"])   # 每份导入的分享结果（shared / duplicate / no_build / failed / off），界面据此说一句
+    return out
 
 
 def launch_env(c, gid):

@@ -207,34 +207,6 @@ struct SGradeGroupCard<Content: View>: View {
     }
 }
 
-/// S 级金卡最上面的一行（满屏 / 帧率解锁，11-15 维护者定：金色字 + 金色 S，复用现有开关）：标题金色渐变、左边小 S，
-///   副标题一句写现在用的是什么（SGradeStateText.rowNote）；右边是开关，自动关的换成「重新打开」，真用不了置灰
-struct SGradeTopRow<Trailing: View>: View {
-    let title: String
-    let note: String
-    var dim = false
-    var sImage: NSImage = SGradeCardView.sGold
-    let trailing: Trailing
-    init(_ title: String, note: String, dim: Bool = false, sImage: NSImage = SGradeCardView.sGold, @ViewBuilder trailing: () -> Trailing) {
-        self.title = title; self.note = note; self.dim = dim; self.sImage = sImage; self.trailing = trailing()
-    }
-    typealias G = SGradeCardView
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(nsImage: sImage).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 20, height: 20)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.manrope(14, .bold))
-                    .foregroundStyle(LinearGradient(colors: [G.goldHi, G.gold], startPoint: .leading, endPoint: .trailing))
-                if !note.isEmpty { Text(note).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
-            }
-            Spacer(minLength: 12)
-            trailing.launcherRowControls()
-        }
-        .padding(.horizontal, 18).padding(.vertical, 12)
-        .opacity(dim ? 0.55 : 1)
-    }
-}
-
 /// S 级优化组里的一行开关（社区补丁一份 / 金手指一条）
 struct SGradeToggle: Identifiable {
     let id: String
@@ -258,8 +230,6 @@ struct SGradeSettingsRows: View {
 
     /// 金手指一节默认收起（11-13 维护者：一款几十条会把框顶得很长）：只出一行「已开 n 条 · 共 m 条」，点开才列；列表限高、自己滚，多于 10 条带搜索
     @State private var cheatsOpen: Bool?
-    /// 社区补丁明细默认收起（11-15：满屏 / 帧率解锁两行已在金卡最上面，逐份开关是明细）
-    @State private var patchesOpen = false
     /// 一打开就展开（离屏单测出展开态用）；玩家点过之后按玩家的
     var startOpen = false
     private var open: Bool { cheatsOpen ?? startOpen }
@@ -267,13 +237,15 @@ struct SGradeSettingsRows: View {
     static let listMaxHeight: CGFloat = 300
     var summary: (Int, Int) -> String = { on, all in "已开 \(on) 条 · 共 \(all) 条" }
     var searchPrompt = "搜索金手指"
-    var patchesSummary: (Int, Int) -> String = { on, all in "已开 \(on) · 共 \(all)" }
-    /// 金手指小标题前的金色 S（与金卡最上面两行同一个标志）；nil = 不画（老样式 / 单测）
-    var cheatsIcon: NSImage? = nil
 
     var body: some View {
         VStack(spacing: 0) {
-            subhead(cheatsTitle, note: cheatsNote, icon: cheatsIcon) {
+            if !patches.isEmpty {
+                subhead(patchesTitle, note: patchesNote) { EmptyView() }
+                rows(patches, prefix: "launch.patch.", onPatch)
+                CardDivider()
+            }
+            subhead(cheatsTitle, note: cheatsNote) {
                 Button(importTitle) { onImport() }.buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("launch.cheats.import").disabled(busy)
             }
             if !cheats.isEmpty {
@@ -294,27 +266,14 @@ struct SGradeSettingsRows: View {
                         .fixedSize(horizontal: false, vertical: shown.count <= 4)   // 条数少就按内容高，不留空白
                 }
             }
-            if !patches.isEmpty {
-                CardDivider()
-                Button { withAnimation(.easeOut(duration: 0.2)) { patchesOpen.toggle() } } label: {
-                    CardRow(patchesTitle, detail: patchesSummary(patches.filter(\.on).count, patches.count), open: patchesOpen) { EmptyView() }.contentShape(Rectangle())
-                }
-                .buttonStyle(.plain).accessibilityIdentifier("launch.patches.toggleList")
-                if patchesOpen {
-                    if !patchesNote.isEmpty { Text(patchesNote).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        .padding(.leading, 18 + 7 + 12).padding(.trailing, 18).padding(.bottom, 4).frame(maxWidth: .infinity, alignment: .leading) }
-                    rows(patches, prefix: "launch.patch.", onPatch)
-                }
-            }
         }
     }
 
-    private func subhead<T: View>(_ title: String, note: String, icon: NSImage? = nil, @ViewBuilder trailing: () -> T) -> some View {
+    private func subhead<T: View>(_ title: String, note: String, @ViewBuilder trailing: () -> T) -> some View {
         HStack(spacing: 12) {
-            if let icon { Image(nsImage: icon).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 20, height: 20) }
-            else { Color.clear.frame(width: 7, height: 7) }
+            Color.clear.frame(width: 7, height: 7)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.manrope(icon == nil ? 13 : 14, .bold)).tracking(icon == nil ? 0.4 : 0)
+                Text(title).font(.manrope(13, .bold)).tracking(0.4)
                     .foregroundStyle(LinearGradient(colors: [G.goldHi, G.gold], startPoint: .leading, endPoint: .trailing))
                 if !note.isEmpty { Text(note).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             }

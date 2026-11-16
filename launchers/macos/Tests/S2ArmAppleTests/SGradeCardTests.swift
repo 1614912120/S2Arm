@@ -105,18 +105,9 @@ import XCTest
             patchesTitle: "社区补丁", patchesNote: "出包时按这个版本匹配打入的社区补丁（满屏、帧率、画面）；同组只能开一个，下次启动生效。",
             patches: [SGradeToggle(id: "wsauto:1", label: "自适应满屏（13 种画幅合成）", detail: "已生效：上一局画面铺满", on: true),
                       SGradeToggle(id: "fps:1", label: "60 帧（FPSLocker）", detail: "已生效：上一局实测 60 帧", on: true)],
-            cheatsTitle: "金手指", cheatsNote: "逐条开关，改完马上生效。", cheats: cheats, importTitle: "导入…", startOpen: open,
-            cheatsIcon: NSImage(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Branding/s-gold.png").standardized))
+            cheatsTitle: "金手指", cheatsNote: "逐条开关，改完马上生效。", cheats: cheats, importTitle: "导入…", startOpen: open)
         let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Branding/s-gold.png").standardized
-        let s = try XCTUnwrap(NSImage(contentsOf: src))
-        // 11-15：满屏 / 帧率解锁两行在金卡最上面（同启动设置 LaunchSettingsSheet.topRow），社区补丁明细默认收起
-        let view = SGradeGroupCard("S 级优化", note: SGradeCardTests.texts["hit.note"] ?? "", sImage: s) {
-            SGradeTopRow("满屏", note: "社区补丁 · 按屏幕比例自动选", sImage: s) { Toggle("", isOn: .constant(true)).toggleStyle(.switch).labelsHidden() }
-            Divider()
-            SGradeTopRow("帧率解锁", note: "补帧：30 帧补到 60 帧（这款没有社区补丁）", sImage: s) { Toggle("", isOn: .constant(true)).toggleStyle(.switch).labelsHidden() }
-            Divider()
-            rows
-        }
+        let view = SGradeGroupCard("S 级优化", note: SGradeCardTests.texts["hit.note"] ?? "", sImage: try XCTUnwrap(NSImage(contentsOf: src))) { rows }
             .frame(width: 540).padding(30).background(Color(red: 0.055, green: 0.055, blue: 0.06)).environment(\.colorScheme, .dark)
         // 放进真的 AppKit 视图再截（ImageRenderer 画不了输入框 / 滚动区这类原生控件）
         let host = NSHostingView(rootView: view); host.appearance = NSAppearance(named: .darkAqua)

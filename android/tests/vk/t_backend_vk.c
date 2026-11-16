@@ -46,7 +46,6 @@ int nvn_plat_window_size(void *native, uint32_t *w, uint32_t *h) { (void)native;
 static int g_memo_on;
 static int g_shown_timing_test;
 void nvn_plat_safepoint(void) {}
-static int g_upscale_flag = -1;   // -1 = 后端缺省（关），>= 0 = 读成这个值
 static int g_plc_flag_off;   // C88：1 = 调试开关 nvk_pipe_cache 读成 0（管线缓存关）
 // C207：诊断读数互不清零。g_c207_gputime = 1 时调试开关 nvk_gputime 读成 1（开会话之后才置，免得会话开着 GPU 时间戳）；
 // g_c207_cap = 1 时 nvn_plat_log 把「近 300 帧」读数里的描述符行存下来（g_c207_win），并核每一行「每笔读数」的每笔描述符条数 / 组数（g_c207_nlog、g_c207_badlog）。
@@ -65,7 +64,6 @@ int nvn_plat_flag(const char *name, int dflt) {
     if (!strcmp(name, "nvk_stg_std") && g_stg_std_flag >= 0) return g_stg_std_flag;
     if (!strcmp(name, "nvk_pipe_cache") && g_plc_flag_off) return 0;
     if (!strcmp(name, "nvk_gputime") && atomic_load_explicit(&g_c207_gputime, memory_order_relaxed)) return 1;
-    if (!strcmp(name, "nvk_upscale") && g_upscale_flag >= 0) return g_upscale_flag;
     if (!strcmp(name, "nvk_plc_new") && g_plc_thr_new >= 0) return g_plc_thr_new;
     if (!strcmp(name, "nvk_plc_first_ms") && g_plc_thr_first_ms >= 0) return g_plc_thr_first_ms;
     if (!strcmp(name, "nvk_plc_every_ms") && g_plc_thr_every_ms >= 0) return g_plc_thr_every_ms;
@@ -283,7 +281,6 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL __wrap_vkGetDeviceProcAddr(VkDevice dev
 }
 #endif
 static nvn_gpu_open_desc g_desc;
-extern uint64_t s2a_vk_easu_hits(void);   // backend_vulkan_easu.inc
 
 // 保守故障注入：不等 fence 就返回 TIMEOUT，记录完成证明前的视图销毁；其余调用走真实 Vulkan。
 static int g_bc_inject_wait, g_bc_unproven, g_bc_early_destroy;
@@ -8143,105 +8140,10 @@ static void c207_all(const char *dir) {
     printf("C207 诊断读数互不清零：近 300 帧读数与逐笔读数各自读增量、不清零共享累加器，已核对\n");
 }
 
-// 上屏 EASU 开关夹具：单独进程跑一次，先关后开各呈现一次。
-// 为什么单独：nvn_gpu_surface 是进程级单例，且提交信号序列由 C71 占着；
-// 插在大套件里会把 C71 的时间线打成失败终态（实测 signal 7 < 91）。
-static int present_upscale_only(void) {
-    char why[256] = {0};
-    if (s2a_vk_device_create(&g_dev, why, sizeof why) != 0) { fprintf(stderr, "PRESENT_UPSCALE device: %s\n", why); return 2; }
-    memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "present-upscale-only";
-    if (!open_backend()) return 1;
-    nvn_gpu_err e; memset(&e, 0, sizeof e);
-    nvn_gpu_surface sf = NULL;
-    CHECK(OK(nvn_gpu_surface_attach((void *)1, &sf, &e)) && sf, "PRESENT_UPSCALE attach：%s", e.why);
-    nvn_gpu_tex tex = make_tex(192, 108, NVN_FORMAT_RGBA8, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
-    nvn_gpu_view view = make_view(tex);
-    static uint8_t px[192 * 108 * 4];
-    for (int y = 0; y < 108; y++) for (int x = 0; x < 192; x++) {
-        uint8_t v = (((x / 12) + (y / 12)) & 1) ? 240 : 10;   // 高对比棋盘：亮边处可专门核
-        uint8_t *p = px + (y * 192 + x) * 4; p[0] = p[1] = p[2] = v; p[3] = 255;
-    }
-    nvn_gpu_cmd c = begin_cmd();
-    nvn_gpu_tex_upload(c, tex, 0, 0, NULL, px, 192 * 4, sizeof px);
-    CHECK(OK(nvn_gpu_cmd_commit(c, 1, on_done, NULL, &e)), "PRESENT_UPSCALE commit：%s", e.why);
-    CHECK(OK(nvn_gpu_fence_wait(1, 5000000000ull, &e)), "PRESENT_UPSCALE wait：%s", e.why);
-    for (int on = 0; on <= 1; on++) {
-        g_upscale_flag = on;
-        uint64_t hits0 = s2a_vk_easu_hits();
-        nvn_gpu_drawable dr; memset(&dr, 0, sizeof dr);
-        nvn_gpu_rc r = nvn_gpu_drawable_acquire(sf, 1000000000ull, NULL, &dr, &e);
-        CHECK(OK(r), "PRESENT_UPSCALE 关=%d acquire：%d %s", on, r.code, e.why);
-        if (!OK(r)) break;
-        nvn_gpu_present_desc pd; memset(&pd, 0, sizeof pd);
-        pd.src = view; pd.filter = 1;   // 192x108 -> 320x180：非整数倍
-        r = nvn_gpu_present(sf, &dr, &pd, 100 + (uint64_t)on, on_shown, NULL, &e);
-        CHECK(OK(r), "PRESENT_UPSCALE 关=%d present：%d %s", on, r.code, e.why);
-        uint64_t delta = s2a_vk_easu_hits() - hits0;
-        CHECK(delta == (uint64_t)on, "PRESENT_UPSCALE 关=%d：EASU 次数应为 %d，得 %llu（格式不匹配会回落 blit）", on, on, (unsigned long long)delta);
-        printf("PRESENT_UPSCALE 关=%d：present 成功、EASU 次数 %llu\n", on, (unsigned long long)delta);
-    }
-    // 跨字节序：源 BGRA8、目标是交换链（RGBA8）。EASU 应照样走，写出时换回目标字节序。
-    {
-        nvn_gpu_tex btex = make_tex(192, 108, NVN_FORMAT_BGRA8, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
-        nvn_gpu_view bview = make_view(btex);
-        nvn_gpu_cmd bc = begin_cmd();
-        nvn_gpu_tex_upload(bc, btex, 0, 0, NULL, px, 192 * 4, sizeof px);
-        CHECK(OK(nvn_gpu_cmd_commit(bc, 2, on_done, NULL, &e)), "PRESENT_UPSCALE BGRA commit：%s", e.why);
-        CHECK(OK(nvn_gpu_fence_wait(2, 5000000000ull, &e)), "PRESENT_UPSCALE BGRA wait：%s", e.why);
-        g_upscale_flag = 1;
-        uint64_t h0 = s2a_vk_easu_hits();
-        nvn_gpu_drawable bd; memset(&bd, 0, sizeof bd);
-        nvn_gpu_rc ba = nvn_gpu_drawable_acquire(sf, 1000000000ull, NULL, &bd, &e);
-        CHECK(OK(ba), "PRESENT_UPSCALE BGRA acquire：%d %s", ba.code, e.why);
-        if (OK(ba)) {
-            nvn_gpu_present_desc bpd; memset(&bpd, 0, sizeof bpd);
-            bpd.src = bview; bpd.filter = 1;
-            nvn_gpu_rc br = nvn_gpu_present(sf, &bd, &bpd, 200, on_shown, NULL, &e);
-            CHECK(OK(br), "PRESENT_UPSCALE BGRA present：%d %s", br.code, e.why);
-            uint64_t dh = s2a_vk_easu_hits() - h0;
-            CHECK(dh == 1, "PRESENT_UPSCALE BGRA：跨字节序应走 EASU，得 %llu", (unsigned long long)dh);
-            printf("PRESENT_UPSCALE BGRA 源：present 成功、EASU 次数 %llu\n", (unsigned long long)dh);
-        }
-    // sRGB 源 / UNORM 目标（真机实际组合）：采样线性化、写出编码回 sRGB，应走 EASU。
-    {
-        nvn_gpu_tex stex = make_tex(192, 108, NVN_FORMAT_RGBA8_SRGB, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
-        nvn_gpu_view sview = make_view(stex);
-        nvn_gpu_cmd sc = begin_cmd();
-        nvn_gpu_tex_upload(sc, stex, 0, 0, NULL, px, 192 * 4, sizeof px);
-        CHECK(OK(nvn_gpu_cmd_commit(sc, 3, on_done, NULL, &e)), "PRESENT_UPSCALE SRGB commit：%s", e.why);
-        CHECK(OK(nvn_gpu_fence_wait(3, 5000000000ull, &e)), "PRESENT_UPSCALE SRGB wait：%s", e.why);
-        g_upscale_flag = 1;
-        uint64_t h0 = s2a_vk_easu_hits();
-        nvn_gpu_drawable sd; memset(&sd, 0, sizeof sd);
-        nvn_gpu_rc sa = nvn_gpu_drawable_acquire(sf, 1000000000ull, NULL, &sd, &e);
-        CHECK(OK(sa), "PRESENT_UPSCALE SRGB acquire：%d %s", sa.code, e.why);
-        if (OK(sa)) {
-            nvn_gpu_present_desc spd; memset(&spd, 0, sizeof spd);
-            spd.src = sview; spd.filter = 1;
-            nvn_gpu_rc sr = nvn_gpu_present(sf, &sd, &spd, 300, on_shown, NULL, &e);
-            CHECK(OK(sr), "PRESENT_UPSCALE SRGB present：%d %s", sr.code, e.why);
-            uint64_t dh = s2a_vk_easu_hits() - h0;
-            CHECK(dh == 1, "PRESENT_UPSCALE SRGB：sRGB 源应走 EASU，得 %llu", (unsigned long long)dh);
-            printf("PRESENT_UPSCALE SRGB 源：present 成功、EASU 次数 %llu\n", (unsigned long long)dh);
-        }
-        nvn_gpu_view_release(sview); nvn_gpu_tex_release(stex);
-    }
-        nvn_gpu_view_release(bview); nvn_gpu_tex_release(btex);
-    }
-    g_upscale_flag = -1;
-    nvn_gpu_view_release(view); nvn_gpu_tex_release(tex);
-    CHECK(OK(nvn_gpu_surface_detach(sf, 5000000000ull, &e)), "PRESENT_UPSCALE detach：%s", e.why);
-    CHECK(OK(nvn_gpu_close(5000000000ull, &e)), "PRESENT_UPSCALE close：%s", e.why);
-    s2a_vk_device_destroy(&g_dev, 1);
-    printf("PRESENT_UPSCALE isolated failures=%d\n", g_fail);
-    return g_fail ? 1 : 0;
-}
-
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);   // 经 tee 的管道默认整块缓冲：超时被杀时最后一行不是卡点；按行刷新才看得出卡在哪
     if (getenv("S2A_TEST_COUNT_ONLY")) return c658_main(argc, argv);
     if (getenv("S2A_TEST_ERROR697_ONLY")) return error697_only();
-    if (getenv("S2A_TEST_PRESENT_UPSCALE_ONLY")) return present_upscale_only();
     if (!getenv("S2A_TEST_LOGICOP_ONLY")) t29_format_expand();
     char why[256] = {0};
     if (s2a_vk_device_create(&g_dev, why, sizeof why) != 0) {

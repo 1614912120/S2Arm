@@ -570,8 +570,8 @@ void s2a_ios_fps_capped(int reason) {
 //   persist（11-06 起）：两次不同启动都触发才记住（runtime/src/widen_remember.c）；只一次的不写设置，下次启动重新试满屏
 void s2a_ios_widen_auto(int hot, int why, int persist) {
     if (persist) { NSUserDefaults *d = s2a_ios_settings_defaults(); [d setBool:NO forKey:@"S2AWidescreen"]; [d setBool:YES forKey:qp_key(2)]; }
-    // 记住关（之后起局都不开）：11-15 与 Mac「已关掉上次出问题的设置」、齿轮菜单状态句同一句 sgrade.notice.fullscreen_off
-    NSString *body = persist ? S2AL(@"sgrade.notice.fullscreen_off") : (hot ? S2AL(@"app.widen.onceHot") : S2AL(@"app.widen.once"));
+    NSString *body = persist ? (hot ? S2AL(@"app.widen.persistHot") : S2AL(@"app.widen.persist"))
+                             : (hot ? S2AL(@"app.widen.onceHot") : S2AL(@"app.widen.once"));
     (void)why; dispatch_async(dispatch_get_main_queue(), ^{ s2a_dprompt_notice(S2AL(@"app.widen.title"), body, 0, 6); });
 }
 void s2a_ios_qprompt(int kind, int secs) {   // 文案 维护者 11-02 定：「过去 XX 秒检测到自适应满屏/60帧不稳定，是否切换到原生画面比例/帧率。」

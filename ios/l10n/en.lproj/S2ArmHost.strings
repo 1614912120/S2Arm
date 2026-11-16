@@ -10,6 +10,11 @@
 "cheats.footer.buildId" = "This game’s version (first 16 digits of the build ID): %@. Cheat files are usually named after it; files with other names won’t take effect.";
 "cheats.footer.empty" = "No cheat files yet. Tap “Import .txt” in the top-right corner.";
 "cheats.import" = "Import .txt";
+"cheats.share" = "Share with other players";
+"cheats.share.note" = "Public. Only the cheat text and game version are sent, never your device or account details. Cheats you import from now on will be shared.";
+"cheats.shared.warn.title" = "Cheat shared by another player";
+"cheats.shared.warn.message" = "This cheat hasn't been verified and could make the game misbehave or damage your save. Turn it on?";
+"cheats.shared.warn.on" = "Turn on anyway";
 "cheats.import.badItem" = "%@ (%@)";
 "cheats.import.failed" = "Some files weren’t imported";
 "cheats.import.failed.message" = "%@";
@@ -216,6 +221,8 @@
 "vpad.menu.holdLock.note" = "Hold for 2 s to lock; this game only";
 "vpad.menu.hud" = "Performance overlay";
 "vpad.menu.hud.note" = "Frame rate and memory in the top-right corner";
+"vpad.menu.fi" = "Frame generation";
+"vpad.menu.fi.note" = "Fills 30 FPS up to 60: smoother, with slightly more input delay; applies right away";
 "vpad.menu.manageLayouts" = "Import / Export / Save As…";
 "vpad.menu.ns2pro" = "Enable Switch 2 Pro Controller";
 "vpad.menu.pad" = "Controllers & Motion";
@@ -291,6 +298,8 @@
 "app.restartToApply" = "Restart the game to apply";
 "app.widen.once" = "Full-screen display problems were detected. Full screen will be tried again next launch.";
 "app.widen.onceHot" = "Full-screen display problems were detected, so the native aspect ratio is used this time. Full screen will be tried again next launch.";
+"app.widen.persist" = "Full-screen display problems were detected, so the game will start in its native aspect ratio from now on. You can turn full screen back on in Settings.";
+"app.widen.persistHot" = "Full-screen display problems were detected, so the game switched back to its native aspect ratio and will keep using it. You can turn full screen back on in Settings.";
 "app.widen.title" = "Full screen";
 "common.later" = "Later";
 "common.restartLater" = "Restart later";
@@ -526,15 +535,3 @@
 "sgrade.state.opted_out" = "Not added: \"Add when building\" was off at export. Turn it on and export again.";
 "sgrade.state.pending.ios" = "New patches are available: open S2Arm on your computer and choose \"S-grade upgrade\".";
 "sgrade.state.mac_only" = "Graphics patches are Mac-only.";
-"sgrade.row.fps" = "Frame rate unlock";
-"sgrade.src.fs.adaptive" = "Community patch · fits your screen";
-"sgrade.src.fs.fixed" = "Community patch · fixed aspect ratio";
-"sgrade.src.fs.own" = "S2Arm full screen (no community patch for this game)";
-"sgrade.src.fps.patch" = "Community patch · up to %1$@ fps";
-"sgrade.src.fps.fi" = "Frame generation: 30 to 60 fps";
-"sgrade.src.fps.fi.nopatch" = "Frame generation: 30 to 60 fps (no community patch for this game)";
-"sgrade.unavail.fi" = "This device doesn't support frame generation";
-"sgrade.cheats.none" = "No cheats for this game yet · you can import them on your computer";
-"sgrade.cpatch.detail" = "Community patch details";
-"sgrade.state.off_auto.widen_fit" = "Turned off automatically: on %1$@ full screen didn't fill the screen or stretched the picture";
-"sgrade.notice.fullscreen_off" = "S2Arm full screen didn't work this time, so it was turned off and the game runs as usual. You can turn it back on from the gear menu to try again.";

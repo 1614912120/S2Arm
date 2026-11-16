@@ -602,4 +602,3 @@
 20261115-0732-game-volume.patch
 20261115-1312-biquad-nonfinite-restart.patch
 20261115-1312-audio-diag-peak-nan.patch
-20261115-1505-macrojit-dynamic-code-guard.patch

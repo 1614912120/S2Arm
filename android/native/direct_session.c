@@ -433,10 +433,6 @@ static void *custom_driver_open(const char *state_dir) {
     return handle;
 }
 
-// nvk 回放层建实例前调用：把窄 shim 填上（game 构建里 vkCreateInstance 等被 --wrap 接管）。
-// 没选驱动 / 失败返回 NULL，调用方照原路走系统 loader，行为不变。每进程只试一次。
-void *s2a_android_vk_custom_driver_prepare(const char *state_dir) { return custom_driver_open(state_dir); }
-
 // 隔离探针：只通过 adrenotools 打开驱动、建一个实例、枚举物理设备并打印驱动身份。
 // 不改渲染路径；只用来回答“这个驱动包在 S2Arm 里能不能被 adrenotools 加载”。
 int s2a_android_vk_probe_driver(void) {
