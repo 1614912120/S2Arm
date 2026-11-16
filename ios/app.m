@@ -761,7 +761,9 @@ static void audio_category_apply(void) {
     [NSNotificationCenter.defaultCenter addObserverForName:NSProcessInfoThermalStateDidChangeNotification object:nil queue:nil usingBlock:^(NSNotification *n) { (void)n;
         LOG("[热] 热状态变为 %ld（0 正常 1 一般 2 严重 3 危急），帧 %llu", (long)NSProcessInfo.processInfo.thermalState, (unsigned long long)s2a_ap_frames()); }];
 }
-- (UIInterfaceOrientationMask)application:(UIApplication *)app supportedInterfaceOrientationsForWindow:(UIWindow *)w { return UIInterfaceOrientationMaskAllButUpsideDown; }
+// 应用层放开全部方向，由各页面自己的 supportedInterfaceOrientations 决定（系统取两者交集）。原先写死「除倒置外」：Duo 内屏是可缩放窗口、游戏页要全部方向
+//   （play_layout.m resizable），倒置竖屏被这里挡掉，摄像头那侧朝下拿时画面一直是倒的（#1364）。普通 iPhone 的游戏页仍只给横屏，其他页面系统缺省本来就不含倒置
+- (UIInterfaceOrientationMask)application:(UIApplication *)app supportedInterfaceOrientationsForWindow:(UIWindow *)w { return UIInterfaceOrientationMaskAll; }
 - (void)applicationWillTerminate:(UIApplication *)app {
     s2a_guest_run_mark(0);   // 正常终止不算「前台死掉」
     if (s2a_host_boot_pending()) return;
