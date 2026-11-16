@@ -3640,7 +3640,7 @@ static uint64_t safe_copy(uint8_t *dst, const uint8_t *src, uint64_t n) {
 }
 // 宿主 CPU 整段读贴图存储的唯一入口（pkg 上传、初始内容掩码、局部重传、ReadTexels、诊断转储都走它）：
 //   存储在已登记内存池里且按权限整段可读 → 直接用 t->mem；否则（不在池里的 CPU 回退路，或有不可读的页）→ 逐页安全拷进副本，读不了的按 0，*part 交调用方 free，记一次红。
-//   诊断#f83b30 / 测试机1 丝之歌（v0.4.3，move ← pkg_upload）：不在池里的存储按权限判「可读」、读的时候照样 SIGBUS（背后的存储已不在），所以这条路不靠判、一律安全拷。
+//   诊断#f83b30 / 常驻冒烟一台测试设备上稳定复现（v0.4.3，move ← pkg_upload）：不在池里的存储按权限判「可读」、读的时候照样 SIGBUS（背后的存储已不在），所以这条路不靠判、一律安全拷。
 //   副本多给 64 字节：去混排按 16 字节宽读，末尾不越出分配
 static const uint8_t *tex_src(const tex_t *t, uint64_t n, uint8_t **part) {
     *part = NULL;

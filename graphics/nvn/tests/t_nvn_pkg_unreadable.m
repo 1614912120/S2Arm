@@ -65,7 +65,7 @@ int main(void) { @autoreleasepool {
         VERIFY(ut == 0 && ss && !memcmp(ss, t2.mem, t2.L.size), "⑦ 对照：可读时 tp_fp_u 照读（untouched=%d）、tex_src 内容与原存储一致", ut);
         free(pp);
         munmap(r2, 2 * pg); }
-    {   // ⑧ 测试机1 丝之歌（v0.4.3，move ← pkg_upload，崩前没有「只映射了 N 字节」红行 = 按权限判整段可读）：页权限可读、背后的存储已不在 →
+    {   // ⑧ 常驻冒烟一台测试设备上稳定复现的那款（v0.4.3，move ← pkg_upload，崩前没有「只映射了 N 字节」红行 = 按权限判整段可读）：页权限可读、背后的存储已不在 →
         //   读就 SIGBUS。造法：文件 MAP_SHARED 映射两页后把文件截成 0。期望（手写）：tex_src 不崩、给出全 0 副本；改前（按权限判可读就直接读原存储）→ Bus error
         char fp[] = "/tmp/t_nvn_pkg_trunc_XXXXXX"; int fd = mkstemp(fp); REQUIRE(fd >= 0); unlink(fp); REQUIRE(!ftruncate(fd, (off_t)(2 * pg)));
         uint8_t *r3 = mmap(NULL, 2 * pg, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0); REQUIRE(r3 != MAP_FAILED); memset(r3, 0x77, 2 * pg); REQUIRE(!ftruncate(fd, 0));
