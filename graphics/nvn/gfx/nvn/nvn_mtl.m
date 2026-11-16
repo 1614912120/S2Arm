@@ -849,24 +849,32 @@ __attribute__((weak)) int s2a_guest_in_file(uint64_t a, uint64_t n) { (void)a; (
 //   whose shadow broke at a 2 MiB boundary, and this stopped the game before its first frame). One buffer needs one host range: the blocks' shadow pages are mapped again, in guest
 //   order, into one reserved range (vm_remap, no copy: the same pages, so the shadow and the view are the same memory for the CPU, the GPU and the far-fault emulation); *view = 1 then,
 //   and the range goes with the buffer (its deallocator)
+// 11-16 诊断#0ece63（D-6B27，iPhone、一款游戏 010063301BD50000，玩 32 分钟）：16 MB 的池 0x7fff800000.. 前 8 MB 在近区、后 8 MB 在远端（0x8000000000 起）。
+//   原先只看起点：起点不在远端就当整段都在近区，按游戏地址建零拷贝缓冲，后半段没有宿主映射，建不起来、中止。现在跨界的池也拼一个视图：
+//   逐 2 MiB 块取「远端 → 影子、近区 → 游戏地址本身」，vm_remap 进同一段（不拷贝）。拼不起来（某块既没影子也没映射）不中止：
+//   回游戏地址，交给 nvn_be_pool_add_body 的重试 / 视图兜底 / 不登记（同 #36fc20）
 static uintptr_t pool_host(uintptr_t a, uintptr_t b, int *view) {
     *view = 0;
     uint8_t *h = s2a_far_g2h(a);
-    if (!h) return a;
     uintptr_t gap = 0;
-    for (uintptr_t x = (a | 0x1FFFFF) + 1; x < b && !gap; x += 0x200000) if (s2a_far_g2h(x) != h + (x - a)) gap = x;
-    if (!gap) return (uintptr_t)h;
+    if (h) { for (uintptr_t x = (a | 0x1FFFFF) + 1; x < b && !gap; x += 0x200000) if (s2a_far_g2h(x) != h + (x - a)) gap = x; }
+    else { for (uintptr_t x = (a | 0x1FFFFF) + 1; x < b && !gap; x += 0x200000) if (s2a_far_g2h(x)) gap = x; }   // 起点在近区：后面有没有块落进远端
+    if (!gap) return h ? (uintptr_t)h : a;
     vm_address_t v = 0; kern_return_t kr = vm_allocate(mach_task_self(), &v, b - a, VM_FLAGS_ANYWHERE);
-    if (kr != KERN_SUCCESS) MDIE("memory pool %#lx..%#lx: its far shadow is not contiguous at %#lx and no host range of %#lx bytes could be reserved for one view of it (%d)", (unsigned long)a, (unsigned long)b, (unsigned long)gap, (unsigned long)(b - a), kr);
-    unsigned pieces = 0;
+    if (kr != KERN_SUCCESS) {
+        MLOG("【红】 memory pool %#lx..%#lx: not one host range (break at %#lx) and no host range of %#lx bytes could be reserved for one view of it (%d)", (unsigned long)a, (unsigned long)b, (unsigned long)gap, (unsigned long)(b - a), kr);
+        return a; }
+    unsigned pieces = 0, nfar = 0;
     for (uintptr_t x = a; x < b; pieces++) {
-        uintptr_t e = MIN((x | 0x1FFFFF) + 1, b); uint8_t *src = s2a_far_g2h(x);
+        uintptr_t e = MIN((x | 0x1FFFFF) + 1, b); uint8_t *src = s2a_far_g2h(x); nfar += src != NULL;
+        if (!src) src = (uint8_t *)x;   // 近区：游戏地址就是宿主地址
         vm_address_t dst = v + (x - a); vm_prot_t cur, max;
-        if (!src || (kr = vm_remap(mach_task_self(), &dst, e - x, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)src, FALSE, &cur, &max, VM_INHERIT_NONE)) != KERN_SUCCESS || dst != v + (x - a))
-            MDIE("memory pool %#lx..%#lx: mapping its far shadow block at %#lx into one view failed (%s %d)", (unsigned long)a, (unsigned long)b, (unsigned long)x, src ? "vm_remap" : "no shadow", src ? kr : 0);
+        if ((kr = vm_remap(mach_task_self(), &dst, e - x, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (vm_address_t)src, FALSE, &cur, &max, VM_INHERIT_NONE)) != KERN_SUCCESS || dst != v + (x - a)) {
+            MLOG("【红】 memory pool %#lx..%#lx: mapping its block at %#lx (%s) into one view failed (vm_remap %d)", (unsigned long)a, (unsigned long)b, (unsigned long)x, s2a_far_g2h(x) ? "far shadow" : "near", kr);
+            vm_deallocate(mach_task_self(), v, b - a); return a; }
         x = e;
     }
-    { static int n; if (n++ < 8) MLOG("memory pool %#lx..%#lx: its far shadow is not contiguous (first break at %#lx); one view of its %u shadow pieces made at %#lx", (unsigned long)a, (unsigned long)b, (unsigned long)gap, pieces, (unsigned long)v); }
+    { static int n; if (n++ < 8) MLOG("memory pool %#lx..%#lx: not one host range (first break at %#lx); one view of its %u pieces (%u in the far shadow) made at %#lx", (unsigned long)a, (unsigned long)b, (unsigned long)gap, pieces, nfar, (unsigned long)v); }
     *view = 1; return (uintptr_t)v;
 }
 static int g_pool_refuse = -1;   // S2A_POOL_NOCOPY_REFUSE（见 nvn_be_pool_add_body）；单测直接设
