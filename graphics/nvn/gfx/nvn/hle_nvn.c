@@ -413,7 +413,7 @@ static void ft_flush(const uint8_t *a, uint64_t n);
 //   我方贴图在 Metal 侧另有一份，刷新是「CPU 写过这段」唯一的显式信号，照真机做成空操作会在关了脏页上传的配置里漏发布（贴图停在旧内容）
 NVN(nvnMemoryPoolFlushMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) {   // see ft_add
     const pool_t *o = (const pool_t *)p;
-    if (!o->mem) return;
+    if (o->magic != MAGIC('P', 'O', 'O', 'L') || !o->mem) return;   // 没初始化成功的池（审计 P1-190 余项，同池收尾）：mem 是残值，不刷
     ft_flush(o->mem + off, n);
 #if defined(__ANDROID__)
     // 后端可选：内容变化通知（安卓直连用它推进资源账本的内容版本）。
