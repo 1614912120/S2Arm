@@ -389,8 +389,13 @@ public sealed partial class EnvironmentWindow : Window
     }
 
     /// <summary>设置页（入口整理）：界面语言 → 存放位置（游戏库 / iPhone 包 / 磁盘空间）→ 密钥 → 装机方式 → AI 操作 → 出包环境检查 → 运行路径（开发用）</summary>
+    private string settingsFrom = "library";
     private void RenderSettings(StackPanel body)
     {
+        var back = Action("nav.back", () => Navigate(settingsFrom == "settings" ? "library" : settingsFrom));   // 返回进来前那一页（11-16：原先只能再点一次顶栏设置图标、回不到出包页）
+        back.HorizontalAlignment = HorizontalAlignment.Left;
+        AutomationId(back, "settings.back");
+        body.Children.Add(back);
         body.Children.Add(Label(T("nav.settings"), 23));
 
         // 界面语言（原在顶栏）

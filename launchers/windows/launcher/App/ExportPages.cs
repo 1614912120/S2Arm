@@ -382,7 +382,7 @@ public sealed partial class EnvironmentWindow
         }
         body.Children.Add(tiles);
         body.Children.Add(LocationRow(game));
-        if (exportIos) body.Children.Add(InstallModeLine());   // 一键装用谁签名（Apple ID / 我的开发者证书）+ 「更改」去设置（InstallModePage.cs）
+        if (exportIos) body.Children.Add(IosAfterPackPicker());   // 出完之后：装到 iPhone（下面是签名身份）/ 导出自签 IPA（11-16 维护者：一个入口、两条分叉各走到底）
 
         // action bar
         var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 16 };
@@ -391,7 +391,7 @@ public sealed partial class EnvironmentWindow
         reason.Children.Add(Muted(blocker ?? T("export.hint"), 14));
         if (ExportBlockerKind(game) == "keys") reason.Children.Add(Action("nav.library", () => Navigate("library")));
         bar.Children.Add(reason);
-        var start = Primary(T("export.start"), () => _ = StartPackAskedAsync(game), !ExportStops(game));   // 缺文件 / 缺 keys 只在左边提示，不置灰（作业层核实）
+        var start = Primary(T(!exportIos ? "export.start" : IosAfterPack == "export" ? "export.start.selfsign" : "export.start.install"), () => StartPackBranch(game), !ExportStops(game));   // 缺文件 / 缺 keys 只在左边提示，不置灰（作业层核实）
         AutomationId(start, "export.start");
         Grid.SetColumn(start, 1); bar.Children.Add(start);
         body.Children.Add(Card(bar, 18));
@@ -828,6 +828,55 @@ public sealed partial class EnvironmentWindow
     private LibraryGame? exportAfterPack;   // 这次出完要接着导出的那款（出包作业收尾后起导出）
     /// <summary>「导出自签包」点在没出过包的款上：这几款出完 iPhone 包接着导出（不是装机）</summary>
     private readonly HashSet<string> selfSignAfterPack = new();
+    /// <summary>出包页选了「出完装到 iPhone」的款：iPhone 包出好接着装（同 selfSignAfterPack，走装机）</summary>
+    private readonly HashSet<string> installAfterPack = new();
+    private LibraryGame? installAfterPackGame;
+    /// <summary>出包页「出完之后」玩家选的那条路（install / export），记在私有目录（ios-after-export 在 = 导出自签）；「更新 iPhone 上的 S2Arm」也按它走</summary>
+    private string IosAfterPack
+    {
+        get => File.Exists(Path.Combine(privateRoot, "ios-after-export")) ? "export" : "install";
+        set
+        {
+            try { PrivateJobRequest.EnsurePrivateRoot(privateRoot); var f = Path.Combine(privateRoot, "ios-after-export"); if (value == "export") File.WriteAllBytes(f, []); else File.Delete(f); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        }
+    }
+
+    /// <summary>玩家选了「出完导出自签 IPA」：自动装到手机（连上就更新、新版首启横幅）一律跳过，玩家自己签名安装</summary>
+    private bool IosAfterPackIsExport => IosAfterPack == "export";
+
+    /// <summary>出包页的「开始」：出 iPhone 时按「出完之后」那条路一步走完（装到 iPhone / 导出自签包）</summary>
+    private void StartPackBranch(LibraryGame game)
+    {
+        if (exportIos) { if (IosAfterPack == "export") selfSignAfterPack.Add(game.Id); else installAfterPack.Add(game.Id); }
+        _ = StartPackAskedAsync(game);
+    }
+
+    /// <summary>出包页「出完之后」：两张卡二选一（同 Mac IosAfterPackPicker）；装到 iPhone 时下面接签名身份那一行</summary>
+    private Control IosAfterPackPicker()
+    {
+        var panel = new StackPanel { Spacing = 10 };
+        panel.Children.Add(Muted(T("export.after.title"), 13));
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,*"), ColumnSpacing = 12 };
+        var i = 0;
+        foreach (var (id, title, note) in new[] { ("install", "export.after.install", "export.after.install_note"), ("export", "export.after.export", "export.after.export_note") })
+        {
+            var on = IosAfterPack == id;
+            var text = new StackPanel { Spacing = 4 };
+            text.Children.Add(Label((on ? "● " : "○ ") + T(title), 15));
+            var n = Muted(T(note), 12); n.TextWrapping = TextWrapping.Wrap; text.Children.Add(n);
+            var card = new Button { Content = text, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(14, 12), CornerRadius = new CornerRadius(12), Foreground = Ink,
+                Background = on ? Brush.Parse("#2A2722") : Surface, BorderBrush = on ? Accent : Brush.Parse("#2A2A2E"), BorderThickness = new Thickness(on ? 1.5 : 1) };
+            AutomationId(card, "export.after." + id);
+            card.Click += (_, _) => { IosAfterPack = id; Render(); };
+            Grid.SetColumn(card, i++); row.Children.Add(card);
+        }
+        panel.Children.Add(row);
+        if (IosAfterPack != "export") panel.Children.Add(InstallModeLine());
+        return panel;
+    }
+
     /// <summary>这次装机作业是导出自签包：进度 / 结局按导出写，装机页只画结局卡、不画装机清单</summary>
     private bool installExport;
 
@@ -878,7 +927,8 @@ public sealed partial class EnvironmentWindow
                 Render();
                 if (batch) _ = BatchExportEndedAsync(job?.Report, error);
                 else if (exportAfterPack is { } g) { exportAfterPack = null; selfSignAfterPack.Remove(g.Id); _ = InstallAsync(g, export: true); }
-                else if (packGame is { } pg) selfSignAfterPack.Remove(pg.Id);   // 出包没成（起不来 / 失败 / 取消）：标记清掉，这款以后正常出包不再当导出画
+                else if (installAfterPackGame is { } ig) { installAfterPackGame = null; installAfterPack.Remove(ig.Id); _ = InstallAsync(ig); Navigate("install"); }   // 选了「出完装到 iPhone」：接着装
+                else if (packGame is { } pg) { selfSignAfterPack.Remove(pg.Id); installAfterPack.Remove(pg.Id); }   // 出包没成（起不来 / 失败 / 取消）：标记清掉，这款以后正常出包不再当导出画
                 if (!batch) PumpExportQueue();
             });
         }
@@ -923,6 +973,7 @@ public sealed partial class EnvironmentWindow
                     if (packGame is not null) finishedPacks[packGame.Id] = (packState, packIpa ?? "", packIpaBytes, packPackBytes, packSeconds ?? 0);
                     // 「导出自签包」点在没出过包的款上：出好就接着导出（D-9ZF9，同 Mac exportSink）；导出不连手机、不签名，等这次出包作业收尾后起
                     if (!batch && packGame is not null && selfSignAfterPack.Contains(packGame.Id)) exportAfterPack = packGame;
+                    else if (!batch && packGame is not null && installAfterPack.Contains(packGame.Id)) installAfterPackGame = packGame;
                 }
                 if (batch) _ = ReloadBatchAsync();
                 Render();
@@ -1620,7 +1671,8 @@ public sealed partial class EnvironmentWindow
         var notes = new List<string>();
         if (installState == "succeeded" && installTrack.Kind == "install" && installOpenToFinish) notes.Add(T("install.done.open"));
         var state = new StackPanel { Spacing = 16 };
-        state.Children.Add(PhoneJobCard(installTrack, installState, installMessage, installDiagnostics, game.Id, notes, showsOperation: showsOperation));
+        state.Children.Add(PhoneJobCard(installTrack, installState, installMessage, installDiagnostics, game.Id, notes, showsOperation: showsOperation,
+            switchExport: installState is "failed" or "interrupted" && !installExport && installTrack.Kind == "install" ? () => { IosAfterPack = "export"; ExportSelfSign(game); } : null));
         if (installState is "failed" && installCode == "apple_session_expired")
         {
             // Apple ID 登录过期（Apple 1100）：打开 Impactor 让玩家自己重新登录（密码不经手），登录好再点一次「装到 iPhone」
