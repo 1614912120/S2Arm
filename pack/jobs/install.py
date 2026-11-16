@@ -1339,7 +1339,11 @@ def export_phone(c, gid=None):
         ipa, games, _ = packer.assemble(c, gid, others, dest=work / "assemble")
         out = work / "out"
         out.mkdir()
-        os.replace(ipa, out / "S2Arm.ipa")
+        # 玩家在设置里关了主屏小组件（widget: false）：导出的 ipa 去掉扩展再交（侧载工具按壳里有什么签什么）；没关照原样
+        if c.r.get("widget") is False and ipa_strip_widget(ipa, out / "S2Arm.ipa"):
+            Path(ipa).unlink()
+        else:
+            os.replace(ipa, out / "S2Arm.ipa")
         shutil.rmtree(work / "assemble", ignore_errors=True)
         c.begin("写各款游戏的 .img（含着色器库）与着色器更新包", 3, 4)
         used, listed, fresh, unwritten = set(), [], [], []

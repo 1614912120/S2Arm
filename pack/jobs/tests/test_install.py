@@ -1874,6 +1874,24 @@ class ExportPhoneTests(unittest.TestCase):
             r = self._push(dict(device="U2"))
         self.assertEqual((r["pushDevice"], len(calls)), ("U2", 1))
 
+    def test_export_drops_widget_only_when_player_turned_it_off(self):
+        """小组件开关（11-16）：请求带 widget: false → 导出的 S2Arm.ipa 去掉 PlugIns/；不带 → 原样留着（侧载工具按壳里有的签）"""
+        A = self.A
+        self._library((A, "甲")); self._img(A, b"S2AIMG01-a")
+        base = self._ipa
+        def with_widget(path, sid, games):
+            base(path, sid, games)
+            with zipfile.ZipFile(path, "a") as z: z.writestr("Payload/S2Arm.app/PlugIns/S2ArmWidget.appex/Info.plist", b"p")
+            return path
+        self._ipa = with_widget
+        names = lambda: zipfile.ZipFile(self.c.library / install.EXPORT_DIRS["zh"] / "S2Arm.ipa").namelist()
+        self._export(dict(gameId=A))
+        self.assertTrue(any("/PlugIns/" in n for n in names()), "没关：带着")
+        self._export(dict(gameId=A, widget=False))
+        got = names()
+        self.assertFalse(any("/PlugIns/" in n for n in got), "关了：去掉")
+        self.assertIn("Payload/S2Arm.app/s2a_catalogue.json", got, "其余照旧")
+
     def test_export_folder_has_ipa_imgs_and_readme(self):
         """装法 export：点甲 → 甲、乙（单一 IMG）进容器和文件夹；丙旧格式点名跳过；丁没出过 iPhone 版不提；文件夹里只有 ipa、两份 .img（内容同库里）、说明"""
         A, B, C = self.A, self.B, self.C
