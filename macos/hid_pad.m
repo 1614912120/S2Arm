@@ -66,7 +66,8 @@ int s2a_pro_parse(const uint8_t *r, size_t n, const s2a_pro_cal *l, const s2a_pr
 uint8_t s2a_pro_player_lights(int slot) { return slot < 0 ? 0x1 : slot >= 3 ? 0xF : (uint8_t)((1u << (slot + 1)) - 1); }
 
 typedef struct { IOHIDDeviceRef dev; uint32_t buttons, hat; int16_t ax[4]; char name[96];
-    int full; uint8_t cnt, rep[64]; s2a_pro_cal cl, cr; } hp_dev;   // full：已收到 0x30 报告（之后不再用 HID 元素那一路）；cnt：子命令包序号
+    int full; uint8_t cnt, rep[64]; s2a_pro_cal cl, cr;
+    s2a_pad_motion motion; uint64_t motion_us; int imu_said; } hp_dev;   // motion：0x30 报告里的最后一组 IMU（motion_us = 收到时刻，0 = 没有）   // full：已收到 0x30 报告（之后不再用 HID 元素那一路）；cnt：子命令包序号
 static hp_dev g_dev[S2A_HID_PAD_MAX];
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
@@ -91,6 +92,20 @@ static void value_cb(void *ctx, IOReturn r, void *sender, IOHIDValueRef value) {
     pthread_mutex_unlock(&g_mu);
 }
 
+static int16_t rd16le(const uint8_t *p) { return (int16_t)(p[0] | p[1] << 8); }
+// 0x30 完整报告：报告号 + 计时 + 电量 + 按键 3 + 摇杆 6 + 振动 1 = 13 字节后是 3 组 IMU（每组 12 字节：加速度 xyz、角速度 xyz，5 ms 一组），取最后一组。
+//   量程同一代 Pro 出厂（±8 g、±2000 度/秒）：加速度 0.000244 g / 计数、角速度 0.06103 度/秒 / 计数；轴向同 joycon_imu.m 的 Pro（参考 SDL3 hidapi_switch.c，zlib）
+int s2a_pro_imu(const uint8_t *r, size_t n, s2a_pad_motion *out) {
+    if (!r || n < 13 + 36 || r[0] != 0x30) return 0;
+    const uint8_t *s = r + 13 + 24;
+    float ax = rd16le(s + 0) * 0.000244f, ay = rd16le(s + 2) * 0.000244f, az = rd16le(s + 4) * 0.000244f;
+    float gx = rd16le(s + 6) * 0.06103f, gy = rd16le(s + 8) * 0.06103f, gz = rd16le(s + 10) * 0.06103f;
+    out->acceleration_x = -ay; out->acceleration_y = ax; out->acceleration_z = az;
+    out->gyro_x = -gy; out->gyro_y = gx; out->gyro_z = gz;
+    return 1;
+}
+static uint64_t hp_now_us(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000; }
+
 // 原始输入报告（报告号在首字节）：0x30 = 完整报告（按键 + 12 位摇杆）；0x21 = 子命令应答（同样带按键摇杆，SPI 读应答带校准数据）
 static void report_cb(void *ctx, IOReturn r, void *sender, IOHIDReportType type, uint32_t id, uint8_t *rep, CFIndex n) {
     (void)r; (void)sender; (void)type;
@@ -108,6 +123,10 @@ static void report_cb(void *ctx, IOReturn r, void *sender, IOHIDReportType type,
         if (s2a_pro_parse(b, m, &d->cl, &d->cr, &bt, ax)) {
             if (id == 0x30 && !d->full) { d->full = 1; d->hat = 0; fprintf(stderr, "[输入] 兜底手柄 %s：收到完整报告 0x30，改按 Switch Pro 协议读（摇杆 12 位、按校准换算）\n", d->name); }
             if (d->full) { d->buttons = bt; memcpy(d->ax, ax, sizeof ax); } }
+        s2a_pad_motion mo;
+        if (id == 0x30 && s2a_pro_imu(b, m, &mo) && (mo.acceleration_x != 0 || mo.acceleration_y != 0 || mo.acceleration_z != 0)) {   // 全 0 = 手柄没开 IMU / 不带陀螺仪
+            mo.host_timestamp_us = hp_now_us(); d->motion = mo; d->motion_us = mo.host_timestamp_us;
+            if (!d->imu_said) { d->imu_said = 1; fprintf(stderr, "[输入] 兜底手柄 %s：报告里有六轴（陀螺仪 / 加速度），按玩家体感交给游戏\n", d->name); } }
     }
     pthread_mutex_unlock(&g_mu);
 }
@@ -148,6 +167,7 @@ static void attach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
     static const uint8_t spi[] = {0x3D, 0x60, 0x00, 0x00, 18};
     pro_subcmd_later(d, dev, 0x10, spi, sizeof spi, 0);
     pro_subcmd_later(d, dev, 0x03, (const uint8_t[]){0x30}, 1, 50);
+    pro_subcmd_later(d, dev, 0x40, (const uint8_t[]){0x01}, 1, 150);   // 打开 IMU（第三方 Switch 模式手柄带陀螺仪的才有读数；不带的照样回全 0，上面按全 0 不收）
     pro_subcmd_later(d, dev, 0x30, (const uint8_t[]){s2a_pro_player_lights(slot)}, 1, 100);
 }
 static void detach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
@@ -186,4 +206,17 @@ int s2a_mac_hid_pad_read(s2a_hid_pad out[S2A_HID_PAD_MAX]) {
     }
     pthread_mutex_unlock(&g_mu);
     return n;
+}
+
+int s2a_mac_hid_pad_motion(const void *id, s2a_pad_motion *out) {
+    int ok = 0;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < S2A_HID_PAD_MAX; i++) {
+        hp_dev *d = &g_dev[i];
+        if (id != (const void *)d || !d->dev || !d->motion_us) continue;
+        if (hp_now_us() - d->motion_us < 200000) { *out = d->motion; ok = 1; }
+        break;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return ok;
 }

@@ -2,7 +2,9 @@
 // 与 front_mac.m 的槽位表对接：每只占一个玩家槽，键位走同一份 gamepad 配置（键名同 Switch 2 Pro 那一路）。
 #ifndef S2A_MAC_HID_PAD_H
 #define S2A_MAC_HID_PAD_H
+#include <stddef.h>
 #include <stdint.h>
+#include "s2a_pad.h"
 
 enum { S2A_HID_PAD_MAX = 4 };
 // buttons 位序 = front_mac.m sample_coded_state 的键名表：east south north west leftStick rightStick leftShoulder rightShoulder
@@ -13,6 +15,11 @@ typedef struct { uint32_t buttons; int16_t lx, ly, rx, ry; const void *id; char 
 void s2a_mac_hid_pad_start(void);
 // 当前在线的兜底手柄，按接上顺序填进 out，返回只数
 int s2a_mac_hid_pad_read(s2a_hid_pad out[S2A_HID_PAD_MAX]);
+// 兜底手柄的体感（11-16，第三方 Switch 模式手柄：八位堂 / 盖世小鸡等自带陀螺仪、GameController 不认的）：id = s2a_hid_pad.id；
+//   有近 200 ms 内的六轴样本回 1（从 0x30 完整报告的 IMU 解出，同一代 Pro 的 Switch Pro 协议），否则回 0
+int s2a_mac_hid_pad_motion(const void *id, s2a_pad_motion *out);
+// 纯函数（单测）：0x30 完整报告（首字节报告号）→ 最后一组 IMU 样本换成 NS2 坐标（g、度/秒；同 joycon_imu.m 的 Pro / 右 Joy-Con 映射）。报告太短回 0
+int s2a_pro_imu(const uint8_t *r, size_t n, s2a_pad_motion *out);
 // 纯函数（单测用）：名字 / 厂商号的这只 HID 手柄要不要兜底接管——名字带「Pro Controller」就接，不按厂商号排除
 //   （#934 11-15：macOS 27 上任天堂原厂一代 Pro 手柄 0x057e:0x2009 系统没认出，按厂商号排除会把最需要兜底的这只挡在外面）；
 //   系统已认出的同名手柄由 front_mac.m 每帧按名字跳过，后连上、后被认出也照判，不会变成两个玩家
