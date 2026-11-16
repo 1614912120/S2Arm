@@ -14,6 +14,7 @@ targets:
       - ios/vpad_layout.m
       - ios/vpad_settings.m
       - ios/vpad_cheats.m
+      - ios/vpad_mods.m   # 资源 Mod 页（设置页组 11）
       - ios/cheats_parse.m
       - ios/game_options.m   # 单款补丁 / 金手指选项与崩溃询问（diag.m 调）
       - ios/app_settings.m
