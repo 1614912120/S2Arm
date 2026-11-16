@@ -887,11 +887,11 @@ void rp_draw(nvn_gpu_cmd c, const p_draw *dr, const p_draw_idx *di, const void *
         if (sr) { skip(sr > 0 ? "program_not_ready" : "program_unresolved", rec); g_prog = NULL; return; }
         if (np != g_prog) { g_prog = np; rp_pso_dirty = 1; }
     }
-    // 首片仅处理不依赖 DRV0 的已解码 count 组；单条间接/#941 和 OP_MULTI_DRAW 保持原路径。
+    // 仅拒绝绑定 DRV0 且未证明不读 base instance 的已解码 count 组；单条间接/#941 和 OP_MULTI_DRAW 保持原路径。
     if (g_decoded_count_n) {
         for (int st = 0; st < RP_PROG_STAGES; st++)
             for (uint32_t i = 0; i < g_prog->nent[st]; i++)
-                if (g_prog->ent[st][i].src_kind == NVN_RB_DRV0) {
+                if (g_prog->ent[st][i].src_kind == NVN_RB_DRV0 && !(g_prog->binst_unread >> st & 1)) {
                     skip("indirect_count_driver_base_instance", rec); return;
                 }
     }
