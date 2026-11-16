@@ -1858,5 +1858,7 @@
   "s2arm.punct.list": ", ",
   "s2arm.env.widget.group": "Widget de l’écran d’accueil",
   "s2arm.env.widget.title": "Inclure le widget de l’écran d’accueil sur l’iPhone",
-  "s2arm.env.widget.detail": "Un widget en forme de console pour l’écran d’accueil de l’iPhone, qui affiche vos jeux récents et les plus joués ; touchez une couverture pour jouer. Avec un identifiant Apple gratuit, chaque nouvelle installation utilise un App ID de plus (10 par 7 jours)."
+  "s2arm.env.widget.detail": "Un widget en forme de console pour l’écran d’accueil de l’iPhone, qui affiche vos jeux récents et les plus joués ; touchez une couverture pour jouer. Avec un identifiant Apple gratuit, chaque nouvelle installation utilise un App ID de plus (10 par 7 jours).",
+  "home.card.daysLeft": "Encore %d jours",
+  "home.card.expired": "Expiré"
 }

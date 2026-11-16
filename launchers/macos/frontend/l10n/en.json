@@ -1891,5 +1891,7 @@
   "s2arm.install.teamGuide.failed": "Could not open the helper project: {0}",
   "s2arm.env.widget.group": "Home Screen widget",
   "s2arm.env.widget.title": "Include the Home Screen widget on iPhone",
-  "s2arm.env.widget.detail": "A console-style widget for your iPhone Home Screen that shows your latest and most-played games; tap a cover to play. With a free Apple ID, each new install uses one more App ID (10 per 7 days)."
+  "s2arm.env.widget.detail": "A console-style widget for your iPhone Home Screen that shows your latest and most-played games; tap a cover to play. With a free Apple ID, each new install uses one more App ID (10 per 7 days).",
+  "home.card.daysLeft": "%d days left",
+  "home.card.expired": "Expired"
 }

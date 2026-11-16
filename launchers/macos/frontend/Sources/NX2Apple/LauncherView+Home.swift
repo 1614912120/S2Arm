@@ -244,6 +244,7 @@ extension LauncherView {
                         Image(systemName: "heart.fill").font(.system(size: 10)).padding(6).background(.black.opacity(0.6), in: Circle()).padding(8)
                     }
                 }
+                .overlay(alignment: .bottomLeading) { expiryBadge(game) }
                 .padding(5)
                 .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(focused ? 1 : selected ? 0.9 : 0), lineWidth: focused ? 3 : 2))
                 .shadow(color: .black.opacity(selected ? 0.4 : 0.2), radius: selected ? 12 : 6, y: 6)
@@ -255,6 +256,22 @@ extension LauncherView {
             .accessibilityAddTraits(selected ? .isSelected : []).controllerID("card." + game.id)
             .contextMenu { cardMenu(game) }
             .modifier(CardDrop(targeted: cardTargeted(game.id), artwork: artworkSide + 10) { dropOnCard($0, game: game) })
+    }
+
+    /// 卡片上的 iPhone 签名角标（旧版每张卡片下都有「还有 N 天 / 已过期」，新主题只在选中那款显示）：免费账号装过的款才有；
+    ///   还剩 1–2 天橙色、过期红色，其余白字深底——扫一眼就知道哪款要续签
+    @ViewBuilder func expiryBadge(_ game: GameSummary) -> some View {
+        if game.iphoneInstalledAt != nil, let days = game.iphoneDaysLeft() {
+            let color: Color = days == 0 ? LauncherPalette.danger : days <= 2 ? .orange : .white
+            Label(days == 0 ? loc.t("home.card.expired") : String(format: loc.t("home.card.daysLeft"), days), systemImage: "iphone")
+                .font(.manrope(11, .bold)).labelStyle(ConsoleBadgeLabelStyle())
+                .foregroundStyle(color)
+                .padding(.horizontal, 7).padding(.vertical, 4)
+                .background(.black.opacity(0.68), in: Capsule())
+                .overlay(Capsule().strokeBorder(color.opacity(days <= 2 ? 0.7 : 0.18)))
+                .padding(8)
+                .accessibilityIdentifier("card.expiry." + game.id)
+        }
     }
 
     private var homeFooter: some View {
@@ -376,5 +393,12 @@ private struct HomeControllerHint: View {
             Image(systemName: presentation.symbols[shortcut.displayed] ?? shortcut.displayed.symbol).font(.system(size: 19))
             Text(title).font(.manrope(11.5))
         }.fixedSize()
+    }
+}
+
+/// 角标里的小图标 + 字
+struct ConsoleBadgeLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) { configuration.icon.font(.system(size: 10, weight: .bold)); configuration.title }
     }
 }
