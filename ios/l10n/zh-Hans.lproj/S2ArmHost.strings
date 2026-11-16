@@ -332,10 +332,8 @@
 "img.scanFailed.title" = "没能导入游戏文件";
 "img.noShaders.title" = "这个游戏文件不完整";
 "img.noShaders.body" = "「%@」不完整。请换成电脑上「S2Arm 自签导出」文件夹里的「<游戏名>.img」，或者在电脑的 S2Arm 里连着手机点「推到手机」。";
-"games.repair.done.title" = "游戏文件夹已修好";
-"games.repair.done.body" = "游戏文件夹之前归系统账户，S2Arm 写不进去，安装一直开始不了。已自动迁到 S2Arm 自己的新文件夹（%u 个文件，和原文件共享数据，不多占空间），可以接着安装。旧文件夹 S2Arm 删不掉，下次连电脑时会清掉。";
-"games.repair.failed.title" = "游戏文件夹没能修好";
-"games.repair.failed.body" = "游戏文件夹归系统账户，S2Arm 写不进去，自动迁到新文件夹也没成。游戏数据没有动，可以从电脑重新安装这款游戏；还不行就导出诊断包发给我们。";
+"container.locked.title" = "S2Arm 的部分文件被系统锁住了";
+"container.locked.body" = "这台设备上有 %@ GB 的 S2Arm 旧文件被系统锁住（属主不是 S2Arm），S2Arm 改不了也删不掉，只能删除 App 时一起清掉。\n\n要腾出这些空间：先在每款游戏里打开菜单 →「存档管理」→「导出当前存档…」存到「文件」；再删除并重新安装 S2Arm；装好后用「存档管理」→「选择备份并检查…」导回存档。";
 "diag.fileWord" = "诊断";
 "diag.error.bundleName" = "诊断包名脱敏失败，未导出诊断包";
 "diag.error.redact" = "诊断脱敏或写入失败，未导出诊断包";

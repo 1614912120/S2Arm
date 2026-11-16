@@ -18,7 +18,7 @@
 #define TAR_RENAME "-s ',^a.txt,x/../../逃逸.txt,'"
 #endif
 int s2a_pack_apply(const char *docs); const char *s2a_pack_apply_failure(void);
-int s2a_games_repair(const char *proc_docs); const char *s2a_games_repair_detail(void); unsigned s2a_games_repair_files(void); unsigned s2a_games_repair_owner(void); int s2a_untar(const char *tar, const char *root, unsigned *nf, uint64_t *nb); int s2a_pack_check(const char *root, char *first, size_t n);
+int s2a_untar(const char *tar, const char *root, unsigned *nf, uint64_t *nb); int s2a_pack_check(const char *root, char *first, size_t n);
 int s2a_import_docs_pick(const s2a_launch_ctx *c, int game_data_env, const char *proc_docs, char *out, size_t n); int s2a_import_state_game(const char *proc_docs, const char *gid);
 int s2a_import_state_game_quick(const char *proc_docs, const char *gid);
 int s2a_game_install_state(const char *proc_docs, const char *gid);
@@ -90,6 +90,7 @@ static void boundary_cases(const char *T) {
     CHECK(f && fread(value, 1, 2, f) == 2 && !strcmp(value, "ok"), "合法 pax path 内容不符"); if (f) fclose(f);
 }
 
+unsigned s2a_foreign_scan(const char *home, uint64_t *bytes, char *line, size_t n); unsigned s2a_foreign_scan_as(const char *home, unsigned self_uid, uint64_t *bytes, char *line, size_t n);
 int main(void) {
     char T[] = "/tmp/s2a_t_pack_XXXXXX"; if (!mkdtemp(T)) return 1;
     boundary_cases(T);
@@ -101,7 +102,7 @@ int main(void) {
         {-4, EIO, 1, 0, "ios_install_pack_truncated"}, {-2, 0, 0, 0, "ios_install_pack_truncated"},
         {-11, 0, 0, 1, "ios_install_img_format"}, {-10, 0, 0, 1, "ios_install_img_corrupt"}, {-3, EINVAL, 0, 1, "ios_install_img_corrupt"},
         {-3, 0, 0, 0, "ios_install_unknown"}, {-5, 0, 0, 0, "ios_install_unknown"}, {-8, 0, 0, 0, "ios_install_files_missing"},
-        {-6, 0, 0, 0, "ios_install_manifest_bad"}, {-7, 0, 0, 0, "ios_install_manifest_bad"}, {-4, EACCES, 0, 0, "ios_install_write_failed"},
+        {-6, 0, 0, 0, "ios_install_manifest_bad"}, {-7, 0, 0, 0, "ios_install_manifest_bad"}, {-4, EACCES, 0, 0, "ios_install_dir_unwritable"}, {-4, EPERM, 0, 0, "ios_install_dir_unwritable"}, {-4, EIO, 0, 0, "ios_install_write_failed"},
         {-99, 0, 0, 0, "ios_install_unknown"} };
       for (size_t i = 0; i < sizeof m / sizeof *m; i++) { const char *got = s2a_install_code(m[i].rc, m[i].err, m[i].trunc, m[i].img);
           CHECK(!strcmp(got, m[i].want), "给码 rc %d errno %d 截短 %d IMG %d：期望 %s，实际 %s", m[i].rc, m[i].err, m[i].trunc, m[i].img, m[i].want, got); }
@@ -729,104 +730,21 @@ int main(void) {
       CHECK(s2a_pack_apply(ok) == 0, "索引只有程序描述的包应解开");
       CHECK(!*s2a_pack_apply_failure(), "成功后失败原因应清空 →「%s」", s2a_pack_apply_failure());
       CHECK(!*s2a_pack_apply_code(), "成功后码应清空 →「%s」", s2a_pack_apply_code()); }
-    // #569 游戏目录 App 写不进（玩家机上 games 一串归 root、0755）：解包一个包都不解、直接报目录与属主；s2a_games_repair 克隆进新树、
-    //   换名，旧的留在 .s2a-unwritable-*；全可写不动；树里有不认识的类型（命名管道）迁移失败、原样不动、新树清掉。期望按规则手写
+    // #569 游戏目录 App 写不进（玩家机上 games 一串归 root、0755）：解包一个包都不解、直接报目录与属主、给码 ios_install_dir_unwritable（不再迁移：App 改不了删不掉，提示玩家导出存档后重装）；
+    //   期望按规则手写
     if (getuid() != 0) {
         char base[] = "/tmp/s2a_t_repair_XXXXXX"; if (!mkdtemp(base)) return 1;
         char c[4096]; const char *gid = "0100000000ABC000";
         snprintf(c, sizeof c, "mkdir -p '%s/games/%s/资源包/.incoming' && printf 'hello' > '%s/games/%s/资源包/romfs.img' && printf 'x' > '%s/games/%s/资源包/.incoming/a.tar'", base, gid, base, gid, base, gid); sh(c);
-        CHECK(s2a_games_repair(base) == 0, "目录都写得进：迁移不动（返回 0）");
         char root[600]; snprintf(root, sizeof root, "%s/games/%s/资源包", base, gid); chmod(root, 0555);
         char gd[600]; snprintf(gd, sizeof gd, "%s/games/%s", base, gid);
         int arc = s2a_pack_apply(gd);
         CHECK(arc != 0 && strstr(s2a_pack_apply_failure(), "目录 App 写不进") && strstr(s2a_pack_apply_failure(), "资源包") && strstr(s2a_pack_apply_failure(), "权限 555"),
               "资源包目录写不进：解包先报目录与权限（实际 %d「%s」）", arc, s2a_pack_apply_failure());
         CHECK(!strcmp(s2a_pack_apply_code(), "ios_install_dir_unwritable"), "目录写不进给码 ios_install_dir_unwritable（实际 %s）", s2a_pack_apply_code());
-#if defined(__APPLE__)
-        int r = s2a_games_repair(base);
-        char ng[600]; snprintf(ng, sizeof ng, "%s/games/%s/资源包", base, gid);
-        char buf[16] = ""; char fp[700]; snprintf(fp, sizeof fp, "%s/romfs.img", ng); FILE *f = fopen(fp, "r"); if (f) { size_t k = fread(buf, 1, sizeof buf - 1, f); buf[k] = 0; fclose(f); }
-        snprintf(c, sizeof c, "ls -d '%s'/.s2a-unwritable-* >/dev/null 2>&1", base);
-        CHECK(r == 1 && s2a_games_repair_files() == 3 && !access(ng, W_OK) && !strcmp(buf, "hello") && sh(c) == 0,
-              "写不进 → 迁好：返回 1、克隆 3 个文件（romfs.img、a.tar、上一步失败写下的 unpack.log）、新资源包可写、内容一致、旧目录留在 .s2a-unwritable-*（实际 %d / %u / 内容「%s」）", r, s2a_games_repair_files(), buf);
-        CHECK(s2a_pack_apply(gd) != 0 && !strstr(s2a_pack_apply_failure(), "写不进"), "迁好后解包不再报目录写不进（这里因夹具不是真包会别的原因失败）：「%s」", s2a_pack_apply_failure());
-        CHECK(s2a_games_repair(base) == 0, "迁好后再查：都写得进（返回 0）");
-        // 反防御：读不到的项跳过、读得到的照搬——写不进的游戏目录里放一个命名管道（不是普通文件 / 目录 / 链接）、一个谁都读不了的文件（000）、一个正常文件：
-        //   迁好（返回 1），正常文件搬过去（1 个），管道与读不了的文件跳过（不在新树里），新目录可写、没有残留的 .s2a-games-new-*
-        char g2[600]; snprintf(g2, sizeof g2, "%s/games/0100000000DEF000", base); mkdir(g2, 0755);
-        char fifo[700]; snprintf(fifo, sizeof fifo, "%s/pipe", g2); mkfifo(fifo, 0644);
-        char locked[700]; snprintf(locked, sizeof locked, "%s/locked.bin", g2); { FILE *lf = fopen(locked, "w"); if (lf) { fputs("x", lf); fclose(lf); } } chmod(locked, 0);
-        char okf[700]; snprintf(okf, sizeof okf, "%s/ok.bin", g2); { FILE *of = fopen(okf, "w"); if (of) { fputs("ok", of); fclose(of); } }
-        chmod(g2, 0555);
-        int r2 = s2a_games_repair(base);
-        snprintf(c, sizeof c, "ls -d '%s'/.s2a-games-new-* >/dev/null 2>&1", base);
-        struct stat st2;
-        CHECK(r2 == 1 && !stat(okf, &st2) && stat(fifo, &st2) && stat(locked, &st2) && !access(g2, W_OK) && sh(c) != 0,
-              "读不到的跳过、读得到的照搬：返回 1、ok.bin 在新目录、管道与 000 文件不在、新目录可写、新树没残留（实际 %d「%s」）", r2, s2a_games_repair_detail());
-        snprintf(c, sizeof c, "chmod -R u+rw '%s'/.s2a-unwritable-* 2>/dev/null", base); sh(c);
-        { // 审计 P1-180：读不到的是存档（S2A/ 下，000），目录又写不进 → 不换树（换上去活动目录里就没有这份存档了），资源包读不到照旧可跳过。
-          //   期望手写：返回负数；活动目录 games 原样（存档文件还在原处、还是 000 读不到）；没留 .s2a-games-new-*；原因里写「存档」
-          char g3[600]; snprintf(g3, sizeof g3, "%s/games/0100000000FED000", base);
-          snprintf(c, sizeof c, "mkdir -p '%s/S2A/ryujinx/bis/user/save/1' && printf sv > '%s/S2A/ryujinx/bis/user/save/1/data' && chmod 0 '%s/S2A/ryujinx/bis/user/save/1/data' && chmod 555 '%s'", g3, g3, g3, g3);
-          CHECK(sh(c) == 0, "P1-180 造：写不进的游戏目录里一份读不到的存档");
-          int r3 = s2a_games_repair(base);
-          char sv[700]; snprintf(sv, sizeof sv, "%s/S2A/ryujinx/bis/user/save/1/data", g3); struct stat st3;
-          snprintf(c, sizeof c, "ls -d '%s'/.s2a-games-new-* >/dev/null 2>&1", base);
-          CHECK(r3 < 0 && !stat(sv, &st3) && st3.st_size == 2 && sh(c) != 0 && strstr(s2a_games_repair_detail(), "存档"),
-                "P1-180 存档读不到：不换树（返回 %d）、存档还在原处、没残留新树、原因写存档（「%s」）", r3, s2a_games_repair_detail());
-          snprintf(c, sizeof c, "chmod 755 '%s'; chmod 644 '%s'; rm -rf '%s'", g3, sv, g3); sh(c); }
-        { // D-QCTB：每款目录本身写得进、只有下面的 cheats/ 写不进（玩家机上归 root），金手指写 status.txt 被拒。
-          //   期望手写：查得出（返回 1）、新 cheats/ 可写、里面的玩家文件 a.txt 内容「hi」照搬
-          char g4[600], ch[700], ct[760], buf4[8] = ""; snprintf(g4, sizeof g4, "%s/games/0100000000ABC000", base); snprintf(ch, sizeof ch, "%s/cheats", g4); snprintf(ct, sizeof ct, "%s/a.txt", ch);
-          snprintf(c, sizeof c, "mkdir -p '%s' && printf hi > '%s' && chmod 555 '%s'", ch, ct, ch);
-          CHECK(sh(c) == 0, "D-QCTB 造：每款下 cheats/ 写不进");
-          int r4 = s2a_games_repair(base);
-          FILE *f4 = fopen(ct, "r"); if (f4) { size_t k = fread(buf4, 1, sizeof buf4 - 1, f4); buf4[k] = 0; fclose(f4); }
-          CHECK(r4 == 1 && !access(ch, W_OK) && !strcmp(buf4, "hi"), "D-QCTB cheats/ 写不进 → 迁好：返回 1、新 cheats/ 可写、a.txt 内容一致（实际 %d / 内容「%s」）", r4, buf4);
-          snprintf(c, sizeof c, "chmod -R u+rw '%s'/.s2a-unwritable-* 2>/dev/null; rm -rf '%s'", base, g4); sh(c); }
-#endif
         chmod(root, 0755);
         snprintf(c, sizeof c, "chmod -R u+w '%s' 2>/dev/null; rm -rf '%s'", base, base); sh(c);
     }
-    // iOS 27 玩家机（v0.3.3）：Library/Application Support/S2Arm 整条 App 写不进（归 root），连迁移的新树都建不出 → 资源包改放备用位置 Library/S2Arm：
-    //   读得到的搬过去（返回 1、1 个文件、内容一致），旧的原样留着，之后本款资源包根取备用位置；再查一次不再动（返回 0）。期望按规则手写（s2a_docs.h、pack_apply.c repair_pack_base）
-#if defined(__APPLE__)
-    if (getuid() != 0) {
-        char base[] = "/tmp/s2a_t_alt_XXXXXX"; if (!mkdtemp(base)) return 1;
-        char c[4096], pd[600], sup[700], gd[700], want[800], root[800]; const char *gid = "0100F8D01A06E000";
-        snprintf(pd, sizeof pd, "%s/Documents", base); snprintf(sup, sizeof sup, "%s/Library/Application Support/S2Arm", base);
-        snprintf(c, sizeof c, "mkdir -p '%s/games/%s' '%s/games/%s/资源包' && printf 'hello' > '%s/games/%s/资源包/romfs.img' && chmod -R a-w '%s'", pd, gid, sup, gid, sup, gid, sup); sh(c);
-        snprintf(gd, sizeof gd, "%s/games/%s", pd, gid);
-        int r = s2a_games_repair(pd);
-        s2a_pack_root(root, sizeof root, gd);
-        snprintf(want, sizeof want, "%s/Library/S2Arm/games/%s/资源包", base, gid);
-        char buf[16] = ""; char fp[900]; snprintf(fp, sizeof fp, "%s/romfs.img", want); FILE *f = fopen(fp, "r"); if (f) { size_t k = fread(buf, 1, sizeof buf - 1, f); buf[k] = 0; fclose(f); }
-        char old[900]; snprintf(old, sizeof old, "%s/games/%s/资源包/romfs.img", sup, gid); struct stat so;
-        CHECK(r == 1 && s2a_games_repair_files() == 1 && !strcmp(root, want) && !strcmp(buf, "hello") && !access(want, W_OK) && !stat(old, &so),
-              "主位置整条写不进 → 搬到 Library/S2Arm：返回 1、1 个文件、资源包根换到备用位置、内容一致、可写、旧的还在（实际 %d / %u /「%s」/「%s」）", r, s2a_games_repair_files(), root, buf);
-        // #074d88（三台设备推 game.img 报 AFC「Permission denied」，都在搬家后的 Library/S2Arm 里）：旧树里的文件本身也没有写位（夹具 a-w，romfs.img 0444），
-        //   clonefile 原样照抄权限位，搬过来的文件归 App 却仍是 0444，之后电脑端经 AFC 打开写入被拒。期望：搬过来的文件 App 可写（同逐字节拷的退路 | 0600）
-        CHECK(!access(fp, W_OK), "搬过来的文件 App 可写（源文件 0444；实际 access W_OK = %d）", access(fp, W_OK));
-        CHECK(s2a_games_repair(pd) == 0, "搬过之后再查：不再动（返回 0）");
-        snprintf(c, sizeof c, "chmod -R u+w '%s' 2>/dev/null; rm -rf '%s'", base, base); sh(c);
-    }
-    // 审计 P1-180 兄弟站点（repair_pack_base 搬去备用位置）：主位置整条写不进、树里有一份读不到的存档（S2A/ 下，000）→ 不换上新树。
-    //   期望手写：返回负数；备用位置 Library/S2Arm/games 没建出来（资源包根不切过去）；不留 .s2a-games-new-*；存档原处还在；原因写「存档」
-    if (getuid() != 0) {
-        char base[] = "/tmp/s2a_t_altsave_XXXXXX"; if (!mkdtemp(base)) return 1;
-        char c[4096], pd[600], sup[700], sv[900], altg[800]; const char *gid = "0100F8D01A06F000";
-        snprintf(pd, sizeof pd, "%s/Documents", base); snprintf(sup, sizeof sup, "%s/Library/Application Support/S2Arm", base);
-        snprintf(sv, sizeof sv, "%s/games/%s/S2A/ryujinx/bis/user/save/1/data", sup, gid); snprintf(altg, sizeof altg, "%s/Library/S2Arm/games", base);
-        snprintf(c, sizeof c, "mkdir -p '%s/games/%s' '%s/games/%s/资源包' \"$(dirname '%s')\" && printf hello > '%s/games/%s/资源包/romfs.img' && printf sv > '%s' && chmod 0 '%s' && chmod -R a-w '%s'",
-                 pd, gid, sup, gid, sv, sup, gid, sv, sv, sup);
-        CHECK(sh(c) == 0, "P1-180 备用位置 造：主位置写不进、里面一份读不到的存档");
-        int r = s2a_games_repair(pd); struct stat ss;
-        snprintf(c, sizeof c, "ls -d '%s/Library/S2Arm'/.s2a-games-new-* >/dev/null 2>&1", base);
-        CHECK(r < 0 && stat(altg, &ss) && !stat(sv, &ss) && ss.st_size == 2 && sh(c) != 0 && strstr(s2a_games_repair_detail(), "存档"),
-              "P1-180 备用位置 存档读不到：不换树（返回 %d）、备用位置没建 games、存档还在原处、没残留新树、原因写存档（「%s」）", r, s2a_games_repair_detail());
-        snprintf(c, sizeof c, "chmod -R u+rw '%s' 2>/dev/null; rm -rf '%s'", base, base); sh(c);
-    }
-#endif
     // ⑮ 资源包挪出 Documents（v0.3.0）：容器形状的临时目录 <容器>/Documents/games/<游戏号>；期望按规则手写（s2a_docs.h s2a_pack_root、pack_apply.c s2a_pack_migrate_one）
     {
         char base[] = "/tmp/s2a_t_migrate_XXXXXX"; if (!mkdtemp(base)) return 1;
@@ -897,12 +815,17 @@ int main(void) {
                  " printf '{\"index_sha256\": \"q1\"}' > \"$g/manifest.json\"; printf q1 > \"$g/.applied\"", base);
         sh(c);
         CHECK(s2a_import_state_game_quick(P, "0100BBBB00000010") == 0, "⑮⑥ 游戏库快判读新位置：就绪");
-        // ⑦ #569 写不进修复也管新位置：Library 那棵 games/<游戏号>/资源包 归不可写 → 克隆换上、可写
-        char lg[1500]; snprintf(lg, sizeof lg, "%s/Library/Application Support/S2Arm/games/0100BBBB00000011/资源包", base);
-        chmod(lg, 0555);
-        int r7 = s2a_games_repair(P);
-        CHECK(r7 == 1 && !access(lg, W_OK), "⑮⑦ 新位置写不进 → 修好（返回 %d、可写 %d）", r7, !access(lg, W_OK));
         snprintf(c, sizeof c, "chmod -R u+w '%s' 2>/dev/null; rm -rf '%s'", base, base); sh(c);
     }
-    printf("%s t_pack_apply：%d 处不符\n", bad ? "✗" : "✓", bad); return bad != 0;
+        { // 容器内属主不是 App 的条目清点（#569 / jhz 11-15：不迁移、只清点 + 有影响才提示）。期望手写：
+      //   自己建的目录（3 个条目：目录 a、子目录 a/b、文件 a/b/f 4096 字节）按真 uid 数 → 0；把「自己」当成别的 uid 数 → 4 个（含根目录本身）、文件实占 ≥ 4096、
+      //   最早一条读数行里带「属主 uid <真 uid>」
+      char F[1200]; snprintf(F, sizeof F, "%s/foreign_home", T);
+      snprintf(c, sizeof c, "mkdir -p '%s/a/b' && head -c 4096 /dev/zero > '%s/a/b/f'", F, F); CHECK(sh(c) == 0, "造容器样本");
+      uint64_t b0 = 1, b1 = 0; char l0[1600], l1[1600];
+      unsigned n0 = s2a_foreign_scan(F, &b0, l0, sizeof l0), n1 = s2a_foreign_scan_as(F, (unsigned)getuid() + 1, &b1, l1, sizeof l1);
+      char want[64]; snprintf(want, sizeof want, "属主 uid %u", (unsigned)getuid());
+      CHECK(n0 == 0 && b0 == 0, "清点：全是自己的 → 0 个、0 字节（实际 %u、%llu）", n0, (unsigned long long)b0);
+      CHECK(n1 == 4 && b1 >= 4096 && strstr(l1, want) && strstr(l1, "4 个"), "清点：把自己当外人 → 4 个、≥4096 字节、读数行带属主（实际 %u、%llu「%s」）", n1, (unsigned long long)b1, l1); }
+printf("%s t_pack_apply：%d 处不符\n", bad ? "✗" : "✓", bad); return bad != 0;
 }

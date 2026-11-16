@@ -8,7 +8,7 @@ from pathlib import Path
 
 
 RECOVERY = {
-    "ios_install_dir_unwritable": "重新打开 S2Arm（会自动修好），再从电脑推送一次。",   # iOS 端装机 / 导入失败：手机上的 S2Arm 报码、按码显示（11-11 维护者「补上说人话的原因」）
+    "ios_install_dir_unwritable": "重试没用：先在游戏菜单「存档管理」里导出存档，再删除并重新安装 S2Arm，装好后导回存档。",   # iOS 端装机 / 导入失败：手机上的 S2Arm 报码、按码显示（11-11 维护者「补上说人话的原因」）
     "ios_install_no_space": "清出空间后点「重试」。",   # iOS 端装机 / 导入失败：手机上的 S2Arm 报码、按码显示（11-11 维护者「补上说人话的原因」）
     "ios_install_img_format": "更新 iPhone 上的 S2Arm，再打开这款游戏。",   # iOS 端装机 / 导入失败：手机上的 S2Arm 报码、按码显示（11-11 维护者「补上说人话的原因」）
     "ios_install_img_corrupt": "从电脑重新装到 iPhone，会接着已传的部分续传。",   # iOS 端装机 / 导入失败：手机上的 S2Arm 报码、按码显示（11-11 维护者「补上说人话的原因」）

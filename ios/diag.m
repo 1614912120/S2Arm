@@ -27,6 +27,11 @@ NSUserDefaults *s2a_ios_settings_defaults(void);   // settings.m：诊断局开�
 #include "s2a_sesdiag.h"
 #include "diag_upload.h"   // 上传给开发者：结果判断（纯 C，单测 t_diag_upload）
 
+unsigned s2a_foreign_scan(const char *home, uint64_t *bytes, char *line, size_t n);   // pack_apply.c
+static NSDictionary *container_foreign(void) {
+    uint64_t bytes = 0; char line[1600] = ""; unsigned n = s2a_foreign_scan(NSHomeDirectory().fileSystemRepresentation, &bytes, line, sizeof line);
+    return @{@"count": @(n), @"bytes": @(bytes), @"summary": @(line)};
+}
 static NSString *docs(void) { return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject; }
 // 资源包根：启动上下文给了本款资源包就读它（上下文文件 / 多款容器选了游戏：v0.3.0 起在 Library 下，s2a_docs.h s2a_pack_root）；
 //   单款兼容照旧 Documents/资源包（不随 S2A_GAME_DATA，同改造前）
@@ -311,6 +316,8 @@ static NSURL *build_zip(NSUInteger cap, BOOL slim, NSString **err) {
         @"device": @{@"model": hw_model(), @"ios": UIDevice.currentDevice.systemVersion, @"ram_mb": @(NSProcessInfo.processInfo.physicalMemory >> 20),
                      @"gpu_family": gpu_family(), @"low_power": @(NSProcessInfo.processInfo.lowPowerModeEnabled)},
         @"settings": @{@"language": NSLocale.preferredLanguages.firstObject ?: @""},
+        // 容器里属主不是 App 的条目（#569：App 改不了删不掉、只有卸载能清；pack_apply.c s2a_foreign_scan）：个数、文件实占、最早那条的路径 / 时间 / 属主——定是哪种安装方式或迁移造成的
+        @"container_foreign": container_foreign(),
         @"sessions": sessions, @"metrickit": @{@"crash": @(crash), @"hang": @(hang), @"exit": @(exits)}, @"files": files };
     [[NSJSONSerialization dataWithJSONObject:manifest options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil]
         writeToFile:[W stringByAppendingPathComponent:@"manifest.json"] atomically:NO];

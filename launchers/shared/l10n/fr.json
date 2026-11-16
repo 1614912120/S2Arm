@@ -2763,7 +2763,7 @@
   "在等「{0}」结束…": "En attente de la fin de « {0} »…",
   "再启动一次试试；还是这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上，我们按崩溃现场修。": "Essayez de le relancer. Si ça se reproduit, exportez un paquet de diagnostic depuis Vérification de l'environnement et joignez-le à un ticket GitHub pour qu'on corrige le plantage.",
   "没找到要装的那台设备（{0}）：它还没和这台电脑配对过——插上数据线并解锁，在设备上点「信任」（配对过以后也可以连同一个 Wi-Fi 装）。": "L'appareil choisi ({0}) n'a pas encore été jumelé avec cet ordinateur : branchez-le, déverrouillez-le et appuyez sur Faire confiance sur l'appareil (après ça, l'installation via le même Wi-Fi fonctionnera aussi).",
-  "重新打开 S2Arm（会自动修好），再从电脑推送一次。": "Rouvrez S2Arm (il corrige ça automatiquement), puis envoyez à nouveau depuis l'ordinateur.",
+  "重试没用：先在游戏菜单「存档管理」里导出存档，再删除并重新安装 S2Arm，装好后导回存档。": "Réessayer ne servira à rien : exportez vos sauvegardes depuis le menu du jeu (Gérer les sauvegardes), supprimez puis réinstallez S2Arm, puis réimportez les sauvegardes.",
   "清出空间后点「重试」。": "Libérez de l'espace, puis appuyez sur Réessayer.",
   "更新 iPhone 上的 S2Arm，再打开这款游戏。": "Mettez à jour S2Arm sur l'iPhone, puis rouvrez le jeu.",
   "从电脑重新装到 iPhone，会接着已传的部分续传。": "Réinstallez sur l'iPhone depuis l'ordinateur ; le transfert reprend à partir de ce qui a déjà été envoyé.",

@@ -2763,7 +2763,7 @@
   "在等「{0}」结束…": "Esperando a que termine \"{0}\"…",
   "再启动一次试试；还是这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上，我们按崩溃现场修。": "Intenta iniciarlo de nuevo. Si vuelve a ocurrir, exporta un paquete de diagnóstico desde Comprobación del Entorno y adjúntalo a un problema en GitHub para que podamos corregir el fallo.",
   "没找到要装的那台设备（{0}）：它还没和这台电脑配对过——插上数据线并解锁，在设备上点「信任」（配对过以后也可以连同一个 Wi-Fi 装）。": "El dispositivo elegido ({0}) aún no se ha emparejado con este ordenador: conéctalo, desbloquéalo y pulsa Confiar en el dispositivo (después de eso también puede instalarse por la misma Wi-Fi).",
-  "重新打开 S2Arm（会自动修好），再从电脑推送一次。": "Vuelve a abrir S2Arm (lo corrige automáticamente) y luego envía desde el ordenador de nuevo.",
+  "重试没用：先在游戏菜单「存档管理」里导出存档，再删除并重新安装 S2Arm，装好后导回存档。": "Reintentar no sirve: exporta tus partidas desde el menú del juego (Gestionar partidas guardadas), borra y vuelve a instalar S2Arm, y después importa las partidas.",
   "清出空间后点「重试」。": "Libera espacio y luego pulsa Reintentar.",
   "更新 iPhone 上的 S2Arm，再打开这款游戏。": "Actualiza S2Arm en el iPhone y luego abre el juego de nuevo.",
   "从电脑重新装到 iPhone，会接着已传的部分续传。": "Instala en el iPhone desde el ordenador de nuevo; se reanuda desde lo que ya se envió.",
