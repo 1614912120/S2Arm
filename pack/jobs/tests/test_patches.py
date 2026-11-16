@@ -23,7 +23,7 @@ def nso(path, bid_hex):
 def it(data, kind, cat, name, gids, bids, repo="o/r", path="x", member="", **kw):
     return dict(id=hashlib.sha256(data).hexdigest()[:16], kind=kind, cat=cat, name=name, gids=gids, bids=bids, target_fps=kw.get("fps", ""), aspect=kw.get("aspect", ""),
                 source=dict(repo=repo, commit="a" * 40, path=path, member=member), license=kw.get("lic", ""), author=kw.get("author", ""),
-                sha256=kw.get("sha", hashlib.sha256(data).hexdigest()), data=base64.b64encode(data).decode())
+                sha256=kw.get("sha", hashlib.sha256(data).hexdigest()), data=base64.b64encode(data).decode(), **({"dir": kw["dir"]} if kw.get("dir") else {}))
 
 
 class PatchesTests(unittest.TestCase):
@@ -57,11 +57,26 @@ class PatchesTests(unittest.TestCase):
         shutil.rmtree(self.t, ignore_errors=True)
 
     def test_ios_package_leaves_out_graphics_patches(self):
-        # 期望手写：同一份统一包，Mac 收 fps / widescreen / gfx 三类，iPhone（target="ios"）不收 gfx（11-13 维护者「画面补丁 iOS 不进包」）
+        # 期望手写：同一份统一包，Mac 收 fps / widescreen / gfx 三类，iPhone（target="ios"）不收没写方向的 gfx（11-13「画面补丁 iOS 不进包」，旧包条目都没有 dir）
         self.bundles[f"g/{GID}"].append(it(b"lod", "pchtxt", "gfx", "lod.pchtxt", [GID], []))
         self.publish()
         self.assertEqual([Path(d).name for d in patches.fetch(self.c, dict(id=GID), str(self.exefs))], ["fps", "gfx", "widescreen"])
         self.assertEqual([Path(d).name for d in patches.fetch(self.c, dict(id=GID), str(self.exefs), "ios")], ["fps", "widescreen"])
+
+    def test_ios_package_takes_only_load_reducing_graphics(self):
+        # 期望手写（11-16 维护者：iOS 收降负载画面补丁）：三份画面补丁 dir = load / quality / 不写；Mac 三份都收，iPhone 只收 load 那一份；
+        #   INDEX.tsv 带 dir 列（pack/cpatch.py 读进第 14 列方向）
+        self.bundles[f"g/{GID}"] += [it(b"nodof", "pchtxt", "gfx", "nodof.pchtxt", [GID], [], dir="load"),
+                                     it(b"4k", "pchtxt", "gfx", "4k.pchtxt", [GID], [], dir="quality"),
+                                     it(b"lod", "pchtxt", "gfx", "lod.pchtxt", [GID], [])]
+        self.publish()
+        def gfx_rows(target):
+            d = next(Path(x) for x in patches.fetch(self.c, dict(id=GID), str(self.exefs), target) if Path(x).name == "gfx")
+            rows = (d / "INDEX.tsv").read_text().splitlines()
+            col = rows[0].split("\t").index("dir")
+            return sorted((r.split("\t")[2].split("/")[-1], r.split("\t")[col]) for r in rows[1:])
+        self.assertEqual(gfx_rows("mac"), [("4k.pchtxt", "quality"), ("lod.pchtxt", ""), ("nodof.pchtxt", "load")])
+        self.assertEqual(gfx_rows("ios"), [("nodof.pchtxt", "load")])
 
     def test_fetch_by_gid_and_main_build_and_index(self):
         dirs = patches.fetch(self.c, dict(id=GID), str(self.exefs))
