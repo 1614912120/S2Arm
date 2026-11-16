@@ -181,7 +181,7 @@ def title_of(d):
 
 
 def orig_romfs(root, work):
-    """原始 RomFS（IMG 只装原始资源）→ (目录, 用完要删的临时目录或 None)。宽屏界面布局阶段（pack/stage_uilayout.sh）只把 ui_overlay.tsv 列的文件换进产物根 romfs、
+    """原始 RomFS（IMG 只装原始资源）→ (目录, 用完要删的临时目录或 None)。旧形态（11-16 前 Mac 宽屏界面布局阶段 pack/stage_uilayout.sh）把 ui_overlay.tsv 列的文件就地换进产物根 romfs、
     原版取自 seed.txt 记的游戏数据目录 /romfs；所以原件 = 产物根 romfs，但这几个文件换回数据目录里的原版。其余文件一律取产物根（与 romfs.s2aidx 天然一致；
     11-11 实测数据目录在播种后变过：别的文件长度与产物根差 1 字节，整棵取数据目录会和索引对不上）。临时目录建在 work 下：产物根 romfs 逐文件硬链（APFS / NTFS 都行、不占盘），
     覆盖文件换成原版。没有覆盖 → 直接用产物根 romfs；有覆盖但 seed.txt 缺或原版缺 → 报红"""
@@ -195,14 +195,14 @@ def orig_romfs(root, work):
             raise Red(f'产物根只有 RomFS 镜像 {std}，界面覆盖却是就地改 RomFS 的形态（没有 ui_overlay/），分不出原版：要重新出包')
         return std, None
     if not ov: return romfs, None
-    # 覆盖层形态（Windows pack/orch/stages.py _uilayout，11-06 起）：产物根 romfs 本身一直是原版（仍联到共享存储那份不可变的身份），改动只写在 <版本>/ui_overlay/ 层，
+    # 覆盖层形态（Windows pack/orch/stages.py _uilayout 11-06 起，Mac pack/stage_uilayout.sh 11-16 起）：产物根 romfs 本身一直是原版（仍联到共享存储那份不可变的身份），改动只写在 <版本>/ui_overlay/ 层，
     #   原件就是产物根 romfs，不看 seed.txt。seed.txt 记的解包目录不可靠：Windows 播种从原件解时把它的 romfs 挪进共享存储、原处链接在播种那一版被修剪后悬空；
     #   玩家实报它还指到过别的款的解包目录（v0.3.0 Windows：有界面覆盖的款写 IMG 报「找不到原版」）
     if os.path.isdir(os.path.join(root, 'ui_overlay')): return romfs, None
     sf = os.path.join(root, 'seed.txt')
     src = next((l[4:].strip() for l in open(sf, encoding='utf-8') if l.startswith('src=')), '') if os.path.isfile(sf) else ''
     ts, tr = (title_of(src), title_of(root)) if src else ('', '')
-    if ts and tr and ts != tr:   # 就地改过的形态（Mac pack/stage_uilayout.sh）才要原版：解包目录必须是这一款的，别的款的文件绝不进 IMG
+    if ts and tr and ts != tr:   # 就地改过的旧形态（11-16 前 Mac pack/stage_uilayout.sh；之后两端都只写覆盖层）才要原版：解包目录必须是这一款的，别的款的文件绝不进 IMG
         raise Red(f'seed.txt 记的解包目录 {src} 是游戏 {ts} 的，不是这一款（{tr}）：要重新出包')
     lost = [r for r in ov if not os.path.isfile(os.path.join(src, 'romfs', r))] if src else ov
     if lost: raise Red(f'产物根 romfs 叠过 {len(ov)} 个界面覆盖文件，找不到其中 {len(lost)} 个的原版（seed.txt 的 src={src or "无"}，如 {lost[:2]}），不能当原件进 IMG')
@@ -327,7 +327,7 @@ def _is_junction(path):
 def free_clones(root, keep, pack_dir, work=None):
     """边写边删之前（#746）：和这次读的 RomFS（keep）共享数据块的其余各份都删掉，只留 keep 这一份——APFS 克隆 / 硬链要所有份都删了才真腾出空间。
     各份都在这款的出包工作目录里，从产物根自己的记录找，不按路径猜：
-      产物根各版本里是真目录的 romfs（链接不占空间，留着）、RomFS 共享存储（roots/.romfs_store/<款>/）里别的身份、seed.txt 记的解包目录 src/romfs、
+      产物根各版本里是真目录的 romfs（链接不占空间，留着）、RomFS 共享存储（roots/.romfs_store/<款>/）里别的身份、seed.txt 记的解包目录 src/romfs、各版本与解包目录里的 RomFS 镜像 romfs.std（单个文件，keep 本身也可以是它）、
       资源包清单里的 RomFS 行（Mac 是克隆、Windows 是另一份拷贝；本来写完 IMG 就删）和旧形态库内镜像 romfs.files。
     出包收尾本来就清掉整个出包工作目录（pack/jobs/library.py prune_build），这里只是提前；写到一半失败由调用方清掉整个工作目录、下次重新解包。
     work：这款的出包工作目录（作业层传 build/ios）。删的每一份都必须在它里面——玩家导入的原件（NSP / XCI，包括外接盘上只读引用的）、
@@ -337,10 +337,11 @@ def free_clones(root, keep, pack_dir, work=None):
     work = os.path.realpath(work or os.path.dirname(roots_dir))
     def inside(p): return os.path.realpath(p).startswith(work + os.sep)
     def other(p): r = os.path.realpath(p); return r != keep and not keep.startswith(r + os.sep) and inside(p)
+    def drop_image(p):   # RomFS 镜像 romfs.std（单个文件，各版本间是克隆 / 硬链接，同一族）：别的名字都删了，这一份的块才真腾出来
+        if os.path.isfile(p) and not os.path.islink(p) and other(p): os.unlink(p)
     for v in romfs_list.listdir(roots_dir):
         rf = os.path.join(roots_dir, v, 'romfs')
-        sf = rf + '.std'   # 镜像形态（RomFS 不落散文件）：各版本里是真文件的 romfs.std 同理
-        if not v.startswith('.') and os.path.isfile(sf) and not os.path.islink(sf) and other(sf): os.unlink(sf)
+        if not v.startswith('.'): drop_image(rf + '.std')   # 镜像形态（RomFS 不落散文件）：各版本里是真文件的 romfs.std 同理
         if v.startswith('.') or os.path.islink(rf) or _is_junction(rf) or not os.path.isdir(rf): continue
         if other(rf): drop_tree(rf)
     store = os.path.join(roots_dir, '.romfs_store')
@@ -354,6 +355,7 @@ def free_clones(root, keep, pack_dir, work=None):
     if src:
         s = os.path.join(src, 'romfs')
         if os.path.lexists(s) and not os.path.islink(s) and not _is_junction(s) and other(s): drop_tree(s)
+        drop_image(s + '.std')
     if not inside(pack_dir): return   # 资源包不在工作目录里（只可能是手工调用）：不碰
     for rel, _ in pack_rows(pack_dir):
         if rel.startswith(SKIP) and not rel.startswith(KEEP):
