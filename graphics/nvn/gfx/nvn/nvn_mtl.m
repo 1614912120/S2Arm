@@ -1379,6 +1379,7 @@ static uint64_t g_pkg_epoch;   // Packaged-texture check period: a new one at ea
 //   and the indirect-draw conversions / masked multi-draw records. They were keyed by the submission, and after a cut a cache hit could hand out an address in a block already reused
 static uint64_t g_arena_gen = 1;
 static void ts_sub_begin(void);   // segment boundary timestamps (ts_on, before sub_cut)
+static void gstex_sync_all(void);   // GPU 写的稀疏贴图（nvn_stex.inc 胶水，pkg_upload_ 之前）
 static void sub_cut_begin(void);   // the segment draw count starts with the submission (before sub_cut)
 static void dsnap_stale(void);   // #387 (with fb_prepare)
 static void up_pool_trim(void);   // upload staging pool (with up_flush)
@@ -1395,6 +1396,7 @@ void nvn_be_sub_begin(void) {
     atomic_store(&g_last_commit_error, 0);
     g_sub_pool = objc_autoreleasePoolPush();
     main_barrier_reset(); g_cb = rec_cb_new();
+    gstex_sync_all();   // GPU 写的稀疏贴图跟上上次提交以来本池的映射（nvn_stex.inc 胶水）
     // Do not wait for the GPU mid-frame (hot real device: with a fixed rotation of 3, when the GPU cannot keep up every frame blocks here, and the submit thread runs at low frequency after waking, instruction count −18% but CPU time +49%):
     // pick an allocator the GPU has finished with; if all are in use create a new one; only at the cap wait for the oldest one. How far ahead it runs is bounded by the wait where the game acquires the swapchain texture, same as the old interface.
     // Metal 3 has no allocators: every submission takes a fresh command buffer (m3_cb)
@@ -2714,7 +2716,7 @@ void nvn_be_drain(void) { if (mtl_gpu_halted()) { MLOG("GPU 安全停中：后�
 
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[202];   // RED_ONCE keys 0..201 (198–201: nvn_sparse_tex.inc Metal sparse textures — heap / texture not made, page / level deswizzle failed, map / upload command buffer failed; 195–197: nvn_tensor.inc tensor_fix_in, the tensor stand-in's fixed-size input; 194: #798 a texel buffer's aligned lead view could not be made, tbl_view; 193: a texture outside any memory pool with an unmapped storage tail, #b5a081; 188–192: internal resolution — 188 a draw / dispatch still held scaled image-slot storages after the retry limit, rs_pre_draw / rs_pre_images; 189 a storage past the device texture limit, rs_rescale / tex_widen; 190 a CPU readback of an enlarged storage not scaled back linearly, nvn_be_read_texels; 191 an image-slot storage that could not go back to its own size; 192 a screenshot of the enlarged window texture not scaled back; 187: a multisample count the GPU does not support, stepped down, mtl_samples_supported (#903); 186: a packaged texture's storage runs past the end of its memory pool, pkg_upload_ (#819); 183 / 184 / 185: an incompatible Metal texture format view fell back to the base format in rt_view_fmt / attach / clear_tex; 182: a block-compressed texture whose GPU writer resolved to its own Metal format, bcal_copy; 181: a texture view whose target and layer range Metal cannot express (#199), tex_by_id; 179 / 180: a pass's own depth attachment sampled in it could not be copied / viewed (#387); 178: a slot read on-chip by the first draw of a pass was not opened loaded; 177: a compute dispatch's binding ended the shared encoder again on the retry; 175 / 176: a block-compressed texture's GPU-written bytes not taken: no host texture of the uncompressed writer / no staging buffer, bcal_sync; 174: a converted vertex attribute stream address in no memory pool, vconv_bind; 172 / 173: a pool table for handles traced to no slot could not be allocated / grown, pool_tab_new / pool_tab_put_n; 171: a first-invocation store skipped, dispatch; 170: an sRGB / linear view not made again on its upgraded parent, tex_upgrade; 169: unused since 11-07 (a not-loaded color attachment written: g_noload_wrong, first 8 lines); 167 / 168: a storage buffer address the pools do not hold, slot / handle in a uniform buffer; 166: a texture turning packaged whose old host texture has another shape, its GPU-written texels not carried over, carry_gpu) (162: a vertex buffer address the pools do not hold, bind_vbufs) (160 / 161 / 163–165: tensor-core network stand-in, nvn_tensor.inc; 147–159 left for the NVN2 task / mesh branch) (143–146: NVN2 DLSS → MetalFX, nvn_dlss.inc) (139–142: folded linear textures: tex_linear, se_want, se_bind, copies / clears into one) (137 / 138: a GL texture an NVN texture is built from has no usable storage / no matching NVN format) (136: a draw's binding ended its pass twice) (134 / 135: alpha test / multisampling off the fragment shader cannot take); same-pass feedback snapshot too large 127, native image atomics use 128/129, same-pass feedback view narrowing 133
+static int g_red_once[205];   // RED_ONCE keys 0..204 (202–204: nvn_stex.inc 放置式稀疏贴图块管理 — CPU 写的 / GPU 写的稀疏贴图同步失败（没堆页 / 暂存），稀疏贴图不做 tex_upgrade 整张复制; 198–201: nvn_sparse_tex.inc Metal sparse textures — heap / texture not made, page / level deswizzle failed, map / upload command buffer failed; 195–197: nvn_tensor.inc tensor_fix_in, the tensor stand-in's fixed-size input; 194: #798 a texel buffer's aligned lead view could not be made, tbl_view; 193: a texture outside any memory pool with an unmapped storage tail, #b5a081; 188–192: internal resolution — 188 a draw / dispatch still held scaled image-slot storages after the retry limit, rs_pre_draw / rs_pre_images; 189 a storage past the device texture limit, rs_rescale / tex_widen; 190 a CPU readback of an enlarged storage not scaled back linearly, nvn_be_read_texels; 191 an image-slot storage that could not go back to its own size; 192 a screenshot of the enlarged window texture not scaled back; 187: a multisample count the GPU does not support, stepped down, mtl_samples_supported (#903); 186: a packaged texture's storage runs past the end of its memory pool, pkg_upload_ (#819); 183 / 184 / 185: an incompatible Metal texture format view fell back to the base format in rt_view_fmt / attach / clear_tex; 182: a block-compressed texture whose GPU writer resolved to its own Metal format, bcal_copy; 181: a texture view whose target and layer range Metal cannot express (#199), tex_by_id; 179 / 180: a pass's own depth attachment sampled in it could not be copied / viewed (#387); 178: a slot read on-chip by the first draw of a pass was not opened loaded; 177: a compute dispatch's binding ended the shared encoder again on the retry; 175 / 176: a block-compressed texture's GPU-written bytes not taken: no host texture of the uncompressed writer / no staging buffer, bcal_sync; 174: a converted vertex attribute stream address in no memory pool, vconv_bind; 172 / 173: a pool table for handles traced to no slot could not be allocated / grown, pool_tab_new / pool_tab_put_n; 171: a first-invocation store skipped, dispatch; 170: an sRGB / linear view not made again on its upgraded parent, tex_upgrade; 169: unused since 11-07 (a not-loaded color attachment written: g_noload_wrong, first 8 lines); 167 / 168: a storage buffer address the pools do not hold, slot / handle in a uniform buffer; 166: a texture turning packaged whose old host texture has another shape, its GPU-written texels not carried over, carry_gpu) (162: a vertex buffer address the pools do not hold, bind_vbufs) (160 / 161 / 163–165: tensor-core network stand-in, nvn_tensor.inc; 147–159 left for the NVN2 task / mesh branch) (143–146: NVN2 DLSS → MetalFX, nvn_dlss.inc) (139–142: folded linear textures: tex_linear, se_want, se_bind, copies / clears into one) (137 / 138: a GL texture an NVN texture is built from has no usable storage / no matching NVN format) (136: a draw's binding ended its pass twice) (134 / 135: alpha test / multisampling off the fragment shader cannot take); same-pass feedback snapshot too large 127, native image atomics use 128/129, same-pass feedback view narrowing 133
 // The key must be a constant inside the table: a key past the end wrote into the statics next to it (11-05: nvn_tensor.inc used 160 / 161 with 147 slots)
 #define RED_ONCE(k, ...) do { _Static_assert((k) >= 0 && (k) < (int)(sizeof g_red_once / sizeof g_red_once[0]), "RED_ONCE key outside g_red_once"); if (!g_red_once[k]++) MLOG("【红】 " __VA_ARGS__); } while (0)
 // NVN vertex streams 0–15 → Metal vertex buffer slots: 0–13 go to 16–29 (30 is the constant fallback buffer), 14 and 15 to 14 and 15. Metal has only the 31 slots 0–30; translated shaders use only buffer(0) (the argument buffer),
@@ -3049,7 +3051,7 @@ int nvn_be_tex_from_gl(tex_t *t, uint32_t gl_name) { @autoreleasepool {
 // spare: the texture the last re-upload replaced, kept resident and written by the next re-upload once the GPU has passed spare_fence (a texture the CPU rewrites every frame, a movie frame,
 // alternates between two textures instead of allocating one per frame: Link's Awakening's title movie made and freed an 8 MB texture a frame)
 static void ph_free(uint64_t *ph, uint32_t n);
-@interface NvPkg : NSObject { @public id<MTLTexture> tex, spare, view; uint64_t stamp, seen, hash, spare_fence, vgen, vseen, check_epoch; const void *span; int sparse, vbase; uint64_t *ph, *pgpu; uint32_t nph; int pre; uint64_t pre_fp; } @end   // hash: full hash of the uploaded content under DM_NVN_DIRTYCHECK; span: its tracked range (nvn_dirty_span, NULL = untracked);
+@interface NvPkg : NSObject { @public id<MTLTexture> tex, spare, view; uint64_t stamp, seen, hash, spare_fence, vgen, vseen, check_epoch; const void *span; int sparse, vbase; uint64_t *ph, *pgpu; uint32_t nph; int pre; uint64_t pre_fp; void *stex; } @end   // hash: full hash of the uploaded content under DM_NVN_DIRTYCHECK; span: its tracked range (nvn_dirty_span, NULL = untracked);
 static void evict_note(id obj) {
     id o = [obj isKindOfClass:[NvPkg class]] ? ((NvPkg *)obj)->tex : obj;
     id<MTLTexture> m = [o conformsToProtocol:@protocol(MTLTexture)] ? o : nil; while (m.parentTexture) m = m.parentTexture;
@@ -3057,8 +3059,10 @@ static void evict_note(id obj) {
     os_unfair_lock_lock(&g_evict_lk); if (!g_evict_w) g_evict_w = [NSHashTable weakObjectsHashTable]; [g_evict_w addObject:m]; g_evict_n++; os_unfair_lock_unlock(&g_evict_lk);
 }
 // sparse: in a sparse virtual pool, read through its page table (hle_nvn.c nvn_sparse_*), vgen the page table's generation at the upload and vseen at the last look; view: what it is bound as (sparse_view)
+static void stex_pkg_free(void *s);   // nvn_stex.inc 胶水（pkg_upload_ 之前）：页还回堆
+// stex：放置式稀疏贴图（nvn_stex.inc）背着的大稀疏贴图：tex 就是它的贴图，原地增量同步、不换
 @implementation NvPkg
-- (void)dealloc { res_remove(tex); if (spare) res_remove(spare); ph_free(ph, nph); free(pgpu); }
+- (void)dealloc { res_remove(tex); if (spare) res_remove(spare); ph_free(ph, nph); free(pgpu); if (stex) stex_pkg_free(stex); }
 @end
 static uint64_t g_pkg_uploads, g_pkg_reuploads, g_pkg_miss, g_pkg_same, g_pkg_gpu_writes, g_pkg_gpu_kept, g_pkg_partial;
 // pgpu (S2Arm 10-25): per host page, the dirty-page generation when the GPU last wrote the texture's bytes there (a copy or clear into it; nvn_dirty_now at encoding, which is the game's submission).
@@ -3229,12 +3233,14 @@ static int pf_r32i(MTLPixelFormat pf) { return pf == MTLPixelFormatR32Uint || pf
 //   other format of the pair (mtl_ext_tex) looked the same, was dropped as stale with no NVN descriptor to make it again, and the present got no texture (t_present_settings srgb-plane)
 static void srgb_twin_mark(id<MTLTexture> v) { if (v) objc_setAssociatedObject(v, &g_twin_view_key, (__bridge id)kCFBooleanTrue, OBJC_ASSOCIATION_ASSIGN); }
 static int srgb_twin_view(id o) { return o && objc_getAssociatedObject(o, &g_twin_view_key) != nil; }
+static int stex_backed(id<MTLTexture> t);   // 放置式 / 稀疏贴图（nvn_stex.inc 胶水）
 static id<MTLTexture> tex_upgrade(const tex_t *t, id<MTLTexture> asked, MTLTextureUsage add, MTLPixelFormat view_pf) {
     id holder = tex_get(t->serial);
     // The serial holds an sRGB / linear view of the asked texture, or the asked texture is that view (upstream reference implementation, MIT, 92f223a7): the parent is upgraded and the
     //   view made again on it, so the pair keeps sharing its bytes
     id<MTLTexture> view = srgb_twin_view(holder) && (holder == asked || ((id<MTLTexture>)holder).parentTexture == asked) ? holder : nil;
     id<MTLTexture> base = view ? view.parentTexture : asked;
+    if (stex_backed(base)) { RED_ONCE(204, "sparse-backed texture ser=%llu needs usage %#lx / a format view %lu it was not made with: not upgraded (a copy would take its whole size)", (unsigned long long)t->serial, (unsigned long)add, (unsigned long)view_pf); return asked; }
     MTLTextureDescriptor *d = [MTLTextureDescriptor new];
     d.textureType = base.textureType; d.pixelFormat = base.pixelFormat; d.width = base.width; d.height = base.height; d.depth = base.depth;   // Keep the original format, only add the format-view usage
     d.arrayLength = base.arrayLength; d.mipmapLevelCount = base.mipmapLevelCount; d.sampleCount = base.sampleCount;
@@ -4040,6 +4046,134 @@ static id<MTLBuffer> up_tex_src(uint64_t addr, uint64_t len, uint64_t *off) {
     return buf;
 }
 #include "nvn_sparse_tex.inc"
+#include "nvn_stex.inc"
+// 放置式稀疏贴图块管理（nvn_stex.inc，移植自 kartnative，MIT）的胶水。Switch 2 款、Metal 4 队列上：
+//   CPU 写的大稀疏贴图（NvPkg stex）原地增量同步——只映射 / 解除变了的块、只传页变过的块，一次至多 STEX_BUDGET 字节，余下挂起到下次用到；同一物理内存的块共用堆页。
+//   GPU 写的大稀疏贴图（稀疏渲染目标，gstex_new）也是放置式，块只在游戏映射了内存的地方，不上传；本池映射变了时在下一次提交开头跟上（gstex_sync_all）。
+//   Switch 1 款与 Metal 3 照旧（nvn_sparse_tex.inc sp_upload / 整张）。DM_NVN_STEX=0 关
+enum { STEX_MIN_BYTES = 32u << 20, STEX_BUDGET = 256u << 20 };
+static int stex_on(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("DM_NVN_STEX"); v = !(e && *e == '0') && nvn_gob_switch2 && sp_m4();
+        MLOG("placement-sparse tile sharing for large sparse textures (CPU- and GPU-written): %s (Switch 2 on a Metal 4 queue; DM_NVN_STEX=0 off)", v ? "on" : "off"); }
+    return v;
+}
+uint64_t nvn_sparse_backing(const void *pool, uint64_t a);
+void nvn_sparse_pool_gen(const void *pool, uint64_t *gen, uint64_t *id);
+typedef struct { const void *pool; uint64_t vgen, stamp; int all; } stex_gctx;
+static int stex_mapped(void *c, uint64_t a, uint64_t n) { return nvn_sparse_mapped(((stex_gctx *)c)->pool, a, n); }
+static int stex_changed(void *c, uint64_t a, uint64_t n) { stex_gctx *g = c; return g->all || nvn_sparse_since(g->pool, a, n, g->vgen, g->stamp); }
+static void stex_copy(void *c, void *dst, uint64_t a, uint64_t n) { nvn_sparse_copy(((stex_gctx *)c)->pool, dst, a, n); }
+static uint64_t stex_backing(void *c, uint64_t a) { return nvn_sparse_backing(((stex_gctx *)c)->pool, a); }
+// 暂存：共享缓冲，随上传批退役（同整张 CPU 上传的暂存）
+static id<MTLBuffer> stex_stage(void *c, size_t n, size_t *off) {
+    (void)c; id<MTLBuffer> b = [g_dev newBufferWithLength:n ? n : 16 options:MTLResourceStorageModeShared];
+    if (!b) return nil;
+    res_add(b); up_keep_add(b); *off = 0; return b;
+}
+static id stex_encoder(void *c) { (void)c; return g_up_ce; }
+static void stex_resident(void *c, id<MTLAllocation> a) { (void)c; res_add((id<MTLResource>)a); }   // 新放置堆常驻（堆建了就不删）
+static void stex_drain(void *c) { (void)c; rec_drain(); }   // 解除映射前：延后编码里已录的命令先交到队列（它们可能还读那些块）
+static char g_stex_key;   // CPU 写的放置式稀疏贴图（stex_pkg_new）的标记
+static const nvn_stex_host g_stex_host = {NULL, stex_stage, stex_encoder, stex_resident, stex_drain};
+static void stex_pkg_free(void *s) { if (@available(macOS 26.0, iOS 26.0, *)) nvn_stex_free((nvn_stex *)s, nil, NULL); }   // 释放于用过它的提交之后（defer_obj_release）：只还页，映射随贴图走
+static void stex_sync(NvPkg *pk, const tex_t *t, int all) {
+    if (@available(macOS 26.0, iOS 26.0, *)) {
+        uint64_t vg = nvn_sparse_gen();
+        nvn_sparse_protect(t->pool, (uint64_t)(uintptr_t)t->mem, t->L.size); uint64_t st = nvn_dirty_now();   // 先保护、再取戳、再读（同 pkg_upload_）：戳之后的写下次查得到
+        up_begin();
+        stex_gctx gc = {t->pool, pk->vgen, pk->stamp, all};
+        nvn_stex_guest g = {&gc, (uint64_t)(uintptr_t)t->mem, stex_mapped, stex_changed, stex_copy, stex_backing};
+        int64_t n = nvn_stex_sync((nvn_stex *)pk->stex, g_q4, &g, &g_stex_host, STEX_BUDGET);
+        if (n < 0) RED_ONCE(202, "sparse texture sync failed ser=%llu %ux%ux%u format %#x (no tile heap or staging): its tiles stay as they were", (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format);
+        else g_bp_up_bytes += (uint64_t)n;
+        if (!g_cb) up_flush();
+        pk->stamp = st; pk->vgen = pk->vseen = vg;
+    }
+}
+// 首次：这张大稀疏贴图走放置式块管理就建好（贴图 + 第一次同步），不走 → 0（照旧 pkg_upload）
+static int stex_pkg_new(NvPkg *pk, const tex_t *t) {
+    if (!pk->sparse || !stex_on()) return 0;
+    uint32_t upf; int ubpp; if (fmt_unpack(t->d.format, &upf, &ubpp)) return 0;   // 要 CPU 改格式的不走（同 sp_eligible）
+    if (@available(macOS 26.0, iOS 26.0, *)) {
+        MTLTextureDescriptor *md = tex_desc(t, 1);
+        if (!md || !nvn_stex_wanted(g_dev, &t->d, md.pixelFormat, STEX_MIN_BYTES)) return 0;
+        md.usage |= MTLTextureUsagePixelFormatView | (fmt_compressed(t->d.format) ? 0 : MTLTextureUsageRenderTarget);   // tex_upgrade 不能换它（整张复制）：先带上它会加的用途
+        nvn_stex *s = nvn_stex_new(g_dev, md, &t->d, 0);
+        if (!s) return 0;
+        pk->stex = s; pk->tex = nvn_stex_texture(s); res_add(pk->tex); objc_setAssociatedObject(pk->tex, &g_stex_key, @1, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        stex_sync(pk, t, 1);
+        static int nl; if (nl++ < 24) MLOG("sparse texture ser=%llu %ux%ux%u levels %u format %#x: placement-sparse, tiles where the game maps memory (%llu MB of storage); heap pages in use %llu MB for %llu MB of tiles",
+            (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.levels, t->d.format, (unsigned long long)(t->L.size >> 20), (unsigned long long)(nvn_stex_mapped_bytes() >> 20), (unsigned long long)(nvn_stex_tile_bytes() >> 20));
+        return 1;
+    }
+    return 0;
+}
+// GPU 写的稀疏贴图（flags SPARSE 的渲染目标：这款的 16384x16384 R8、8192x8192 RG16 / R16 地形贴图，整张 3.1 GB，游戏各只映射 8–26 MB）：放置式，块只在游戏映射了内存处，不上传；
+//   块的页就是 GPU 写的那块内存，同一物理内存的块共用（GPU 上页表指向同一物理页），没映射的块丢写、读 0。属主挂在贴图上（关联对象），贴图走时还页。
+//   本池映射变了就在下一次提交开头跟上。限制：一块物理内存所有块都解除映射后再映射回来从零开始（GPU 上保留原内容），按「丢失」计数，第一次记一行红
+@interface NvGpuStex : NSObject { @public void *s; const void *pool; uint64_t mem, vgen, pid, ser, seen_lost; uint32_t w, h, d, fmt; } @end
+static NvGpuStex *__unsafe_unretained *g_gstex; static int g_ngstex, g_cgstex;
+static pthread_mutex_t g_gstex_mu = PTHREAD_RECURSIVE_MUTEX_INITIALIZER;   // 可重入：属主的 dealloc（贴图最后一次释放）可能发生在同步持锁时
+static char g_gstex_key;
+@implementation NvGpuStex
+- (void)dealloc { pthread_mutex_lock(&g_gstex_mu); for (int i = 0; i < g_ngstex; i++) if (g_gstex[i] == self) { g_gstex[i] = g_gstex[--g_ngstex]; break; } pthread_mutex_unlock(&g_gstex_mu); stex_pkg_free(s); }
+@end
+static int stex_backed(id<MTLTexture> t0) { id<MTLTexture> t = t0; while (t.parentTexture) t = t.parentTexture; return t && (objc_getAssociatedObject(t, &g_gstex_key) != nil || objc_getAssociatedObject(t, &g_stex_key) != nil); }   // tex_upgrade 不碰（整张复制）
+static void gstex_sync(NvGpuStex *o) {   // 提交线程
+    if (@available(macOS 26.0, iOS 26.0, *)) {
+        uint64_t vg, pid; nvn_sparse_pool_gen(o->pool, &vg, &pid);
+        if (pid != o->pid) { o->pool = NULL; return; }   // 池收尾了（或地址给了新池）：不再跟
+        up_begin();
+        stex_gctx gc = {o->pool, o->vgen, nvn_dirty_now(), 0};
+        nvn_stex_guest g = {&gc, o->mem, stex_mapped, stex_changed, NULL, stex_backing};
+        int64_t n = nvn_stex_sync((nvn_stex *)o->s, g_q4, &g, &g_stex_host, 0);
+        if (n < 0) RED_ONCE(203, "GPU-written sparse texture sync failed ser=%llu (no tile heap or staging): its tiles stay as they were", (unsigned long long)o->ser);
+        uint64_t lost, fresh; nvn_stex_lost((nvn_stex *)o->s, &lost, &fresh);
+        if (lost > o->seen_lost) { static int once; if (!once++) MLOG("【红】 GPU-written sparse texture ser=%llu %ux%ux%u format %#x: %llu tiles mapped onto memory whose content the host had dropped (it starts as zeros; the GPU keeps it), %llu onto memory no tile held before (first case, frame %llu)",
+            (unsigned long long)o->ser, o->w, o->h, o->d, o->fmt, (unsigned long long)(lost - o->seen_lost), (unsigned long long)fresh, (unsigned long long)atomic_load(&g_cur_frame));
+            o->seen_lost = lost; }
+        if (!g_cb) up_flush();
+        o->vgen = vg;
+    }
+}
+static void gstex_sync_all(void) {   // nvn_be_sub_begin：本池映射变过的
+    if (!g_ngstex) return;
+    pthread_mutex_lock(&g_gstex_mu);
+    for (int i = 0; i < g_ngstex; i++) { NvGpuStex *o = g_gstex[i]; if (!o->pool) continue; uint64_t vg, pid; nvn_sparse_pool_gen(o->pool, &vg, &pid); if (vg != o->vgen || pid != o->pid) gstex_sync(o); }
+    { static uint64_t last_sub, last_lost; uint64_t lost, fresh; nvn_stex_lost(NULL, &lost, &fresh);
+      if (g_sub_serial - last_sub >= 3600 && lost != last_lost) { last_sub = g_sub_serial; MLOG("GPU-written sparse textures up to frame %llu: tiles mapped onto memory whose content the host had dropped %llu (+%llu), onto new memory %llu",
+          (unsigned long long)atomic_load(&g_cur_frame), (unsigned long long)lost, (unsigned long long)(lost - last_lost), (unsigned long long)fresh); last_lost = lost; } }
+    pthread_mutex_unlock(&g_gstex_mu);
+}
+static id<MTLTexture> gstex_new(const tex_t *t) {
+    if (!t->mem || !t->pool || !(t->d.flags & NVN_TEXTURE_FLAGS_SPARSE) || !nvn_sparse_pool(t->pool) || !stex_on() || !on_sub_thread()) return nil;
+    if (@available(macOS 26.0, iOS 26.0, *)) {
+        MTLTextureDescriptor *md = tex_desc(t, 0);
+        if (md) md.usage |= MTLTextureUsagePixelFormatView | MTLTextureUsageRenderTarget;   // tex_upgrade 不能换它；不做无损压缩，这些用途不花钱
+        if (!md || !nvn_stex_wanted(g_dev, &t->d, md.pixelFormat, STEX_MIN_BYTES)) return nil;
+        nvn_stex *s = nvn_stex_new(g_dev, md, &t->d, 1); if (!s) return nil;
+        id<MTLTexture> mt = nvn_stex_take(s);
+        NvGpuStex *o = [NvGpuStex new]; o->s = s; o->pool = t->pool; o->mem = (uint64_t)(uintptr_t)t->mem; o->vgen = ~0ull;
+        { uint64_t vg; nvn_sparse_pool_gen(t->pool, &vg, &o->pid); }
+        o->ser = t->serial; o->w = t->d.width; o->h = t->d.height; o->d = t->d.depth; o->fmt = (uint32_t)t->d.format;
+        objc_setAssociatedObject(mt, &g_gstex_key, o, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        res_add(mt);
+        pthread_mutex_lock(&g_gstex_mu);
+        if (g_ngstex == g_cgstex) {
+            NvGpuStex *__unsafe_unretained *grown = (NvGpuStex *__unsafe_unretained *)realloc(g_gstex, (size_t)(g_cgstex ? 2 * g_cgstex : 16) * sizeof *g_gstex);
+            if (!grown) MDIE("GPU-written sparse texture table allocation failed");
+            g_gstex = grown; g_cgstex = g_cgstex ? 2 * g_cgstex : 16;
+        }
+        g_gstex[g_ngstex++] = o;
+        gstex_sync(o);
+        pthread_mutex_unlock(&g_gstex_mu);
+        static int nl; if (nl++ < 16) MLOG("GPU-written sparse texture ser=%llu %ux%ux%u format %#x levels %u: placement-sparse, tiles where the game maps memory (%llu MB of storage); heap pages in use %llu MB",
+            (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format, t->d.levels, (unsigned long long)(t->L.size >> 20), (unsigned long long)(nvn_stex_mapped_bytes() >> 20));
+        return mt;
+    }
+    return nil;
+}
 static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture> reuse, uint64_t **ph, uint32_t *nph, int bg_hash) {   // bg_hash: take ph on ph_queue (the first upload, see NvPkg ph)
     uint64_t stl0 = stl_now();
     MTLTextureDescriptor *d = tex_desc(t, 1);
@@ -5136,10 +5270,17 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
                     }
                 }
             }
-            if (clean && atomic_load_explicit(&g_up_lost_n, memory_order_relaxed) && up_lost_take(pk->tex)) { clean = 0; uint64_t k = atomic_load(&g_up_lost_redo); if (k <= 3 || !atomic_load(&g_up_lost_n)) MLOG("re-uploading a texture whose upload was dropped ser=%llu (%llu in total, %d left in the record)", (unsigned long long)t->serial, (unsigned long long)k, atomic_load(&g_up_lost_n)); }
+            int lost = 0;
+            if (clean && atomic_load_explicit(&g_up_lost_n, memory_order_relaxed) && up_lost_take(pk->tex)) { clean = 0; lost = 1; uint64_t k = atomic_load(&g_up_lost_redo); if (k <= 3 || !atomic_load(&g_up_lost_n)) MLOG("re-uploading a texture whose upload was dropped ser=%llu (%llu in total, %d left in the record)", (unsigned long long)t->serial, (unsigned long long)k, atomic_load(&g_up_lost_n)); }
+            if (pk->stex && nvn_stex_pending((nvn_stex *)pk->stex)) clean = 0;   // 上次同步超预算留下的块
             if (clean) {
                 if (dirtycheck() && !pk->sparse && full_hash(t->mem, t->L.size) != pk->hash && !g_pkg_miss++)
                     MLOG("【红】 dirty-page miss: texture ser=%llu pool content changed but was not detected", t->serial);
+                return pk->view ? pk->view : pk->tex;
+            }
+            if (pk->stex) {   // 原地增量同步：只动映射变了 / 页变过的块；上传批丢了就全部已映射块重传
+                stex_sync(pk, t, lost);
+                sparse_view(pk, t); g_ser_gen++; pk->seen = nvn_dirty_now(); g_pkg_reuploads++;
                 return pk->view ? pk->view : pk->tex;
             }
             // Pool content changed (streamed assets written into the same storage, a movie frame): switch to another texture, as in-flight draws still read the old one. That is the spare
@@ -5167,7 +5308,7 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
         uint64_t *gr = NULL, gb = 0; int gn = 0; id<MTLTexture> gfrom = nil;   // turning packaged from a GPU-only texture: its texels a GPU write left stale in guest memory (carry_gpu)
         if (have && !pk->sparse && [have conformsToProtocol:@protocol(MTLTexture)]) { gfrom = have; gn = gpw_stale(t->mem, t->L.size, &gr, &gb); }
         tp_first_upload(t);   // upload ahead: this frame's first-use demand
-        pk->tex = pkg_upload(t, &pk->stamp, nil, &pk->ph, &pk->nph, 1);
+        if (!stex_pkg_new(pk, t)) pk->tex = pkg_upload(t, &pk->stamp, nil, &pk->ph, &pk->nph, 1);   // 大稀疏贴图（Switch 2、Metal 4）：放置式块管理（nvn_stex.inc）
         if (!pk->tex) { free(gr); return nil; }
         pk->span = nvn_dirty_span(t->mem, t->L.size);
         pk->seen = nvn_dirty_now(); g_pkg_uploads++; if (dirtycheck() && !pk->sparse) pk->hash = full_hash(t->mem, t->L.size);
@@ -5240,6 +5381,7 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
         if (v) { srgb_twin_mark(v); tex_put(t->serial, v); return v; }
     }
     id<MTLTexture> mt = tex_linear(t);
+    if (!mt) mt = gstex_new(t);   // GPU 写的稀疏贴图：块只在游戏映射了内存处（nvn_stex.inc）
     if (!mt) {
         MTLTextureDescriptor *d = tex_desc(t, 0);
         if (!d) return nil;
