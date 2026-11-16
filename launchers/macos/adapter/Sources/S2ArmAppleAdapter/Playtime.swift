@@ -19,21 +19,27 @@ public struct GamePlaytime: Equatable {
     ///   哪天：按本机时区比日历日：同一天「今天」、差 1 天「昨天」、再早「N 天前」；时刻在未来（改过时钟）按「今天」
     /// text：按文案键取当前界面语言的模板（{0} 占位）；locale 决定小数点写法
     public func summary(now: Date, calendar: Calendar, locale: Locale, text: (String) -> String) -> String {
+        let p = parts(now: now, calendar: calendar, locale: locale, text: text)
+        return text(p.template).replacingOccurrences(of: "{0}", with: p.number) + " · " + p.when
+    }
+
+    /// 同 summary 的规则，拆成三块给要单独排版数字的地方（Mac 首页游玩时间）：时长模板的文案键、填进 {0} 的数、哪天
+    public func parts(now: Date, calendar: Calendar, locale: Locale, text: (String) -> String) -> (template: String, number: String, when: String) {
         let minutes = seconds / 60
-        let duration: String
+        let template: String, number: String
         if minutes < 60 {
-            duration = text("library.playtime.minutes").replacingOccurrences(of: "{0}", with: "\(max(1, minutes))")
+            template = "library.playtime.minutes"; number = "\(max(1, minutes))"
         } else {
             let tenths = minutes * 10 / 60   // 向下取到 0.1 小时
             let f = NumberFormatter(); f.locale = locale; f.minimumFractionDigits = 0
             f.maximumFractionDigits = tenths < 100 ? 1 : 0; f.roundingMode = .down
-            let n = f.string(from: NSNumber(value: tenths < 100 ? Double(tenths) / 10 : Double(minutes / 60))) ?? "\(minutes / 60)"
-            duration = text("library.playtime.hours").replacingOccurrences(of: "{0}", with: n)
+            template = "library.playtime.hours"
+            number = f.string(from: NSNumber(value: tenths < 100 ? Double(tenths) / 10 : Double(minutes / 60))) ?? "\(minutes / 60)"
         }
         let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: Date(timeIntervalSince1970: lastPlayed)),
                                            to: calendar.startOfDay(for: now)).day ?? 0
         let when = days <= 0 ? text("library.playtime.today") : days == 1 ? text("library.playtime.yesterday")
             : text("library.playtime.daysAgo").replacingOccurrences(of: "{0}", with: "\(days)")
-        return duration + " · " + when
+        return (template, number, when)
     }
 }
