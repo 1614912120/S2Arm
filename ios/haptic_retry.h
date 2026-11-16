@@ -78,7 +78,7 @@ static inline float s2a_hp_feel(float amplitude) {
     return v < 1 ? v : 1;
 }
 
-// 震动分左右马达（11-16，jhz「做，放进 0.5.0」）：游戏给的是左右两侧 HD 震动（s2a_pad_vibration[2]：[0] 左、[1] 右）。
+// 震动分左右马达（11-16）：游戏给的是左右两侧 HD 震动（s2a_pad_vibration[2]：[0] 左、[1] 右）。
 //   手柄的 GCDeviceHaptics 同时支持 LeftHandle / RightHandle 两个 locality（Xbox / DualSense / DualShock 等双转子马达）时，
 //   左右各建一个引擎、各播各的；只有 Default 的（单马达 / 系统不报分侧）照旧两侧合成一路。返回 true = 分两路
 static inline bool s2a_hp_split(bool has_left_handle, bool has_right_handle) { return has_left_handle && has_right_handle; }
