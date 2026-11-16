@@ -18,6 +18,9 @@
     <string name="player_err_in_place_next">Put the game folder back as it was (or copy it from your computer again), then tap \"Use a game folder in place…\" in the library to register it again.</string>
     <string name="import_progress">Importing game: %1$d / %2$d MiB</string>
     <string name="fps_overlay_show">Show FPS (successful frame submissions)</string>
+    <string name="quality_high">High quality</string>
+    <string name="quality_saver">Battery saver</string>
+    <string name="quality_note">High quality turns on edge-adaptive spatial upscaling and similar features for a sharper picture.</string>
     <string name="fps_overlay_description">Successful game frame submissions per second; not the screen refresh rate</string>
     <!-- #528 item 15: player diagnostic bundle (library screen) -->
     <string name="export_diagnostics">Export diagnostics…</string>

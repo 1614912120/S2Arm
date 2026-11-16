@@ -15,6 +15,9 @@
     <string name="player_err_in_place_next">把游戏文件夹按原样放回去（或从电脑重新拷一份），再在游戏库点「原地使用游戏文件夹…」重新登记。</string>
     <string name="import_progress">正在导入游戏：%1$d / %2$d MiB</string>
     <string name="fps_overlay_show">显示 FPS（成功提交速率）</string>
+    <string name="quality_high">高画质</string>
+    <string name="quality_saver">更省电</string>
+    <string name="quality_note">选择高画质模式会打开边缘自适应空间放大等功能，画面更清晰</string>
     <string name="fps_overlay_description">游戏帧成功提交速率，每秒更新；不是屏幕刷新率</string>
 
     <!-- 触屏菜单（四指长按）与编辑条；术语对齐 iOS 的 zh-Hans 文案 -->
