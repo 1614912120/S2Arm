@@ -302,6 +302,16 @@ WHY11 = '调用改成空：main+0x104 原是调用（9400003f），改成 nop �
 for tag, w100, w108, want in (('A', 0xB940A260, 0xAA0003F4, ['不收\t' + WHY11]), ('B', 0xF9400A60, 0xAA0003F4, ['收']), ('C', 0xB940A260, 0x2A0003F4, ['收'])):
     got = nopcall_case(tag, w100, w108)
     ck(f'⑪ {tag}：期望 {want}（实得 {got}）', got == want)
+# ⑫ 其它类（11-15：认不出是画面的，tools/patch_index.py 归 other，pack/jobs/patches.py 按类别目录写索引）：索引目录名 other → 编号前缀 other:
+#    （运行时不默认开、iPhone 不开，runtime/src/cpatch.c；单测 t_cpatch ⑭）。合成 main 同 ⑪ A 的布局，补丁改 0x108 一个字
+r12 = f'{T}/other12'; os.makedirs(r12); shutil.copytree(root + '/exefs', r12 + '/exefs')
+o12 = f'{T}/other12_idx/other'; os.makedirs(o12)
+open(o12 + '/m.pchtxt', 'w').write(f'@nsobid-{BID}\n@flag offset_shift 0x100\n@enabled\n00000100 60008052\n@stop\n')
+open(o12 + '/INDEX.tsv', 'w').write('title_id\ttype\tpath\n0100A3501946E000\tpchtxt\tm.pchtxt\n')
+subprocess.run([sys.executable, H + '/pack/cpatch.py', 'plan', r12, '', o12], capture_output=True, text=True)
+ids12 = [l.split('\t')[0] for l in open(r12 + '/cpatch.tsv').read().splitlines()[1:]] if os.path.exists(r12 + '/cpatch.tsv') else []
+want12 = 'other:' + hashlib.sha256(open(o12 + '/m.pchtxt', 'rb').read()).hexdigest()[:16]
+ck(f'⑫ 其它类目录 → 编号 {want12}（实得 {ids12}）', ids12 == [want12])
 sys.exit(bad)
 EOF
 [ $bad = 0 ] && echo "✅ cpatch_test 全过" || { echo "🔴 cpatch_test 有不通项"; exit 1; }

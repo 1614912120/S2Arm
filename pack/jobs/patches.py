@@ -27,7 +27,7 @@ BASE = "https://dl.s2arm.com/patches/v2"
 TIMEOUT = 10
 MAX_BYTES = 4 << 20
 UA = "S2Arm-patches"
-FIELDS = {"fps": "target_fps", "widescreen": "aspect", "gfx": None}
+FIELDS = {"fps": "target_fps", "widescreen": "aspect", "gfx": None, "other": None}   # other：认不出是画面的（声音 / 玩法等，tools/patch_index.py）
 
 
 def module_bids(exefs):
@@ -208,10 +208,10 @@ def fetch(c, game, exefs, target="mac"):
     seeds = [x for x in rows if x[0].get("kind") == "pso"]; rows = [x for x in rows if x[0].get("kind") != "pso"]
     pso_write(cache / "games" / gid / "pso", seeds)
     if target == "ios":
-        rows = [x for x in rows if (x[0].get("cat") if x[0].get("cat") in FIELDS else "gfx") != "gfx"]
+        rows = [x for x in rows if (x[0].get("cat") if x[0].get("cat") in FIELDS else "other") not in ("gfx", "other")]   # iPhone 不打画面类与其它类
     out = {}
     for it, data in rows:
-        cat = it.get("cat") if it.get("cat") in FIELDS else "gfx"
+        cat = it.get("cat") if it.get("cat") in FIELDS else "other"   # 认不出的类别按其它（不默认开），不当画面
         # 在索引目录之内（pack/cpatch.py 拒收逃出索引目录的路径）；按内容哈希分目录、只留原文件名（IPS / FPSLocker 靠文件名认构建号）——
         #   照上游原路径摆会撞 Windows 260 字符路径上限（11-12 Windows 出包机实测：上游路径带游戏名与长目录名）
         name = os.path.basename(it.get("name") or "") or "patch"
@@ -317,7 +317,7 @@ def _why(text):
 
 def _cat_of(uid, cat=""):
     k = uid.split(":", 1)[0]
-    return {"wsauto": "widescreen", "widescreen": "widescreen", "fps": "fps", "gfx": "gfx", "cheat": "cheat"}.get(k) or (cat if cat in CATS else "gfx")
+    return {"wsauto": "widescreen", "widescreen": "widescreen", "fps": "fps", "gfx": "gfx", "cheat": "cheat", "other": "other"}.get(k) or (cat if cat in CATS else "gfx")
 
 
 def outcome(root):
