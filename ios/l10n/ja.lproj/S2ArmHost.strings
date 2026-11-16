@@ -9,6 +9,11 @@
 "cheats.footer.buildId" = "このゲームのバージョン（ビルドID の最初の16桁）：%@。チートファイル名は通常これと一致します。異なる名前のファイルは反映されません。";
 "cheats.footer.empty" = "チートファイルがまだありません。右上の「txt をインポート」をタップしてください。";
 "cheats.import" = "txt をインポート";
+"cheats.share" = "ほかのプレイヤーと共有";
+"cheats.share.note" = "オンにすると、今後読み込むチートがほかのプレイヤーに公開されます。送信するのはチートの内容とゲームのバージョンだけで、端末やアカウントの情報は含みません。";
+"cheats.shared.warn.title" = "ほかのプレイヤーが共有したチート";
+"cheats.shared.warn.message" = "ほかのプレイヤーが共有したチートで、S2Arm では確認していません。ゲームの不具合やセーブデータの破損を起こす可能性があります。それでもオンにしますか？";
+"cheats.shared.warn.on" = "それでもオンにする";
 "cheats.import.badItem" = "%@ (%@)";
 "cheats.import.failed" = "一部のファイルがインポートされませんでした";
 "cheats.import.failed.message" = "%@";

@@ -10,6 +10,11 @@
 "cheats.footer.buildId" = "This game’s version (first 16 digits of the build ID): %@. Cheat files are usually named after it; files with other names won’t take effect.";
 "cheats.footer.empty" = "No cheat files yet. Tap “Import .txt” in the top-right corner.";
 "cheats.import" = "Import .txt";
+"cheats.share" = "Share with other players";
+"cheats.share.note" = "When on, cheats you import from now on are shared publicly with other players. Only the cheat text and game version are uploaded, never your device or account details.";
+"cheats.shared.warn.title" = "Cheat shared by another player";
+"cheats.shared.warn.message" = "This cheat was shared by another player and hasn't been checked by S2Arm. It could make the game misbehave or damage your save. Turn it on anyway?";
+"cheats.shared.warn.on" = "Turn on anyway";
 "cheats.import.badItem" = "%@ (%@)";
 "cheats.import.failed" = "Some files weren’t imported";
 "cheats.import.failed.message" = "%@";
