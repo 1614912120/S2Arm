@@ -357,6 +357,34 @@ import S2ArmAppleAdapter
         }
     }
 
+    func testExportIosAfterPackPickerShowsBothBranches() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        let saved = fixture.model.iosAfterPack
+        defer { fixture.model.iosAfterPack = saved }
+        if !fixture.model.exportTargets.contains(.ios) { fixture.model.toggleExport(.ios) }
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+        let game = try XCTUnwrap(fixture.model.games.first)
+        for language in [Lang.zh, .en] {
+            for branch in ["install", "export"] {
+                fixture.model.iosAfterPack = branch
+                let padFocus = PadFocus()
+                let page = AnyView(ExportView(model: fixture.model, covers: CoverCache(), game: game, install: {})
+                    .environmentObject(padFocus).padScope("main", padFocus).frame(width: 1120, height: 720))
+                let (host, window) = try await render(page, fixture: fixture, language: language)
+                defer { window.close() }
+                if let scroll = scrollViews(in: host).first, let document = scroll.documentView {
+                    let clip = scroll.contentView
+                    clip.scroll(to: CGPoint(x: 0, y: document.isFlipped ? max(0, document.bounds.height - clip.bounds.height) : 0))
+                    scroll.reflectScrolledClipView(clip)
+                }
+                try await Task.sleep(for: .milliseconds(70))
+                try self.snapshot(host, "export-after-\(branch)-\(language.code)")
+            }
+        }
+    }
+
     func testExportSubmitShortcutUsesTheExistingExportAction() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
