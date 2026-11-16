@@ -9910,5 +9910,9 @@
  {
   "source": "点「再启动一次」一般能接着玩，存档停在游戏上次保存的地方。",
   "en": "Click “Start again” and you can usually keep playing; your save is as of the last time the game saved."
+ },
+ {
+  "source": "游戏照常能玩、能装；只是这款的程序件里混进了不该有的大文件，多占电脑空间、装机多推一些。请导出诊断反馈给我们。",
+  "en": "The game still installs and plays normally; this game's program files just picked up a large file that does not belong there, which takes extra disk space and makes installs push more data. Please export a diagnostic report and send it to us."
  }
 ]
