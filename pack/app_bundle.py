@@ -25,6 +25,7 @@ if __package__ in (None, ''):
         sys.path.pop(0)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pack.shell.manifest import validate_download_paths
+from pack import widget_ext
 
 
 class BundleError(ValueError):
@@ -105,6 +106,7 @@ def _executable_paths(app, entries):
             result.add(rel)
         if directory and path.parent == app / 'Frameworks' and path.suffix == '.framework':
             result.add(_executable(_plist(path / 'Info.plist'), path).relative_to(app).as_posix())
+    result.update(widget_ext.executables(app))   # 主屏小组件扩展的程序（PlugIns/*.appex，11-16）：组装 / 打 IPA 都要保留可执行位
     return result
 
 
@@ -144,6 +146,8 @@ def update_metadata(app_dir, values):
     data = _metadata(_info(app), values)
     _executable(plistlib.loads(data), app)
     _atomic_write(app / 'Info.plist', data)
+    if values.get('CFBundleIdentifier'):   # 主包名变了：小组件扩展包名跟着改成 <主包名>.widget（苹果要求扩展包名以主包名开头）
+        widget_ext.retarget(app, values['CFBundleIdentifier'])
 
 
 def write_icons(icon_path, app_dir):

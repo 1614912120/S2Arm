@@ -213,6 +213,7 @@ public sealed partial class EnvironmentWindow
             if (sgradeUpgrade) extra["sgradeUpgrade"] = true;
             foreach (var key in accept) extra[key] = true;
             if (PhoneUpdateTarget is { Device.Length: > 0 } target) extra["device"] = target.Device;
+            if (!HomeWidget) extra["widget"] = false;   // 玩家关了「装到 iPhone 时带主屏小组件」
             var job = await PackJobClient.RunAsync(PackRequest("installUpdate", "", extra.Count > 0 ? extra : null),
                 e => Dispatcher.UIThread.Post(() => IngestUpdateEvent(e)), front.Token, front.Next());
             succeeded = job.Report.Succeeded;

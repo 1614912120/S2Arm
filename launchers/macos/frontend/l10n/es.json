@@ -1855,5 +1855,8 @@
   "s2arm.controller.gameController": "Mando de juego",
   "s2arm.controller.bluetooth": "Bluetooth",
   "s2arm.controller.toolbar": "Mando",
-  "s2arm.punct.list": ", "
+  "s2arm.punct.list": ", ",
+  "s2arm.env.widget.group": "Widget de pantalla de inicio",
+  "s2arm.env.widget.title": "Incluir el widget de pantalla de inicio en el iPhone",
+  "s2arm.env.widget.detail": "Un widget con forma de consola para la pantalla de inicio del iPhone que muestra tus juegos más recientes y más jugados; toca una portada para jugar. Con un Apple ID gratuito, cada instalación nueva usa un App ID más (10 cada 7 días)."
 }

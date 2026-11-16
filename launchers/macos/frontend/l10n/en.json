@@ -1888,5 +1888,8 @@
   "s2arm.install.teamGuide.step1": "Open the helper project and select S2ArmSigning → Signing & Capabilities → Personal Team",
   "s2arm.install.teamGuide.step2": "Connect and unlock your iPhone, select it in Xcode and click Run",
   "s2arm.install.teamGuide.step3": "After it runs, return and click Check again to refresh the signing status",
-  "s2arm.install.teamGuide.failed": "Could not open the helper project: {0}"
+  "s2arm.install.teamGuide.failed": "Could not open the helper project: {0}",
+  "s2arm.env.widget.group": "Home Screen widget",
+  "s2arm.env.widget.title": "Include the Home Screen widget on iPhone",
+  "s2arm.env.widget.detail": "A console-style widget for your iPhone Home Screen that shows your latest and most-played games; tap a cover to play. With a free Apple ID, each new install uses one more App ID (10 per 7 days)."
 }

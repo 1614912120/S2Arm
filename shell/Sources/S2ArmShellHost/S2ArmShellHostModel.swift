@@ -176,6 +176,7 @@ public final class S2ArmShellHostModel {
         defer {
             if ledgerChanged { saveLedger() }
             if missing != notOnDevice { notOnDevice = missing; NSLog("S2Arm 游戏库：这台设备上 %d / %d 款可显示", allGames.count - missing.count, allGames.count) }
+            exportWidget()   // 主屏小组件的数据（WidgetExport.swift）：内容变了才写
             startTicker()
         }
         for i in allGames.indices {
@@ -205,10 +206,15 @@ public final class S2ArmShellHostModel {
     /// 这款在这台设备上的游玩时间：运行时 runtime/src/playtime.c 写 <游戏根>/<游戏号>/playtime.json（{"seconds":N,"lastPlayed":<Unix 秒>}），
     ///   这里只读；文件没有 / 读不出 / 0 秒都按没玩过
     func playtimeLine(_ id: String, now: Date = Date()) -> String? {
+        let (seconds, last) = playtimeRaw(id)
+        return ShellFormat.playtime(seconds: seconds, lastPlayed: Date(timeIntervalSince1970: last), now: now)
+    }
+
+    /// 这款的本机游玩秒数与上次玩的时刻（Unix 秒）；没有 / 读不出按 (0, 0)。游戏库那一行和主屏小组件（WidgetExport.swift）共用
+    func playtimeRaw(_ id: String) -> (Int, Double) {
         guard let data = try? Data(contentsOf: gamesRoot.appendingPathComponent(id).appendingPathComponent("playtime.json")),
-              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let seconds = (j["seconds"] as? NSNumber)?.intValue else { return nil }
-        return ShellFormat.playtime(seconds: seconds, lastPlayed: Date(timeIntervalSince1970: (j["lastPlayed"] as? NSNumber)?.doubleValue ?? 0), now: now)
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return (0, 0) }
+        return ((j["seconds"] as? NSNumber)?.intValue ?? 0, (j["lastPlayed"] as? NSNumber)?.doubleValue ?? 0)
     }
 
     /// 游戏设置页「游戏数据」那一栏（11-11 宿主梳理：原先永远「未选择数据」、点「选择…」没反应）：资源已就绪的款显示
