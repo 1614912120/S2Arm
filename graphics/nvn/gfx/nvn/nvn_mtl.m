@@ -15430,6 +15430,7 @@ static void dispatch(const p_dispatch *dp) {
 // S2Arm widen: CPU-visible copies of a widened storage go through a game-width scratch texture, scaled with the copy draw (the generic mode's Narrowed readback / WidenUpload;
 // Ryujinx reads a scaled texture back at scale 1 too, DmaClass): a readback sees the game's width, an upload fills the whole widened width. One cached scratch per format and size
 static int copy_t2t_draw(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsigned ss, unsigned dl, unsigned ds, const NVNcopyRegion *sr, const NVNcopyRegion *dr, int linear, int mirror);
+static const char *g_t2t_draw_why;   // copy_t2t_draw 上一次画不了的原因（NULL = 画了或没走到）
 static id<MTLTexture> wd_scratch(MTLPixelFormat pf, int w, int h) {
     static __strong id<MTLTexture> t;
     if (t && t.pixelFormat == pf && (int)t.width == w && (int)t.height == h) return t;
@@ -15687,10 +15688,12 @@ static int fmt_int_or_ds(MTLPixelFormat f) {
 }
 static int copy_t2t_draw(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsigned ss, unsigned dl, unsigned ds, const NVNcopyRegion *sr, const NVNcopyRegion *dr, int linear, int mirror) {
     static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *pso; static id<MTLFunction> vf, ff, fd, fds; static id<MTLSamplerState> samp[2]; static id at; static id<MTLDepthStencilState> dss, dss_s; static int failed;
-    if (failed || sr->width <= 0 || sr->height <= 0 || dr->width <= 0 || dr->height <= 0) return 0;
+    g_t2t_draw_why = NULL;   // D-HT4P 取证：画不了时记哪一条（copy_t2t_ 的「没实现」红行带上）
+    if (failed || sr->width <= 0 || sr->height <= 0 || dr->width <= 0 || dr->height <= 0) { g_t2t_draw_why = failed ? "管线没建起来" : "区域为空"; return 0; }
     int depth = (s.pixelFormat == MTLPixelFormatDepth32Float || s.pixelFormat == MTLPixelFormatDepth32Float_Stencil8) && d.pixelFormat == s.pixelFormat, stencil = depth && d.pixelFormat == MTLPixelFormatDepth32Float_Stencil8;
-    if (!depth && (fmt_int_or_ds(s.pixelFormat) || fmt_int_or_ds(d.pixelFormat))) return 0;
-    if (mtl_fmt_block(d.pixelFormat) || !(d.usage & MTLTextureUsageRenderTarget) || s.sampleCount > 1 || d.sampleCount > 1) return 0;
+    if (!depth && (fmt_int_or_ds(s.pixelFormat) || fmt_int_or_ds(d.pixelFormat))) { g_t2t_draw_why = "整数 / 深度模板格式（不是同格式 D32F）"; return 0; }
+    if (mtl_fmt_block(d.pixelFormat) || !(d.usage & MTLTextureUsageRenderTarget) || s.sampleCount > 1 || d.sampleCount > 1) {
+        g_t2t_draw_why = mtl_fmt_block(d.pixelFormat) ? "目标是压缩格式" : !(d.usage & MTLTextureUsageRenderTarget) ? "目标没有渲染目标用途" : "多重采样"; return 0; }
     if (!pso) {
         static const char *src =
             "#include <metal_stdlib>\nusing namespace metal;\n"
@@ -15729,7 +15732,7 @@ static int copy_t2t_draw(id<MTLTexture> s, id<MTLTexture> d, unsigned sl, unsign
         pso[pk] = ps;
     }
     unsigned sw = MAX(s.width >> sl, 1ul), sh = MAX(s.height >> sl, 1ul), dw = MAX(d.width >> dl, 1ul), dh = MAX(d.height >> dl, 1ul);
-    if ((unsigned)(dr->xoffset + dr->width) > dw || (unsigned)(dr->yoffset + dr->height) > dh) return 0;
+    if ((unsigned)(dr->xoffset + dr->width) > dw || (unsigned)(dr->yoffset + dr->height) > dh) { g_t2t_draw_why = "目标区域超出目标存储"; return 0; }
     int nz = sr->depth ? sr->depth : 1;
     rp_end(); if (g_blit) { enc_b_end(g_blit); g_blit = nil; }
     for (int z = 0; z < nz; z++) {
@@ -15908,8 +15911,10 @@ static void copy_t2t_(const p_copy_t2t *c) {
         && copy_t2t_draw(s, d, sl, sz0, dl, dz0, &c->sr, &c->dr, !!(c->flags & NVN_COPY_FLAGS_LINEAR_FILTER_BIT), c->flags)) return;   // format change / scaling / mirroring: draw it (see copy_t2t_draw)
     if (c->sr.width != c->dr.width || c->sr.height != c->dr.height || (c->sr.depth ? c->sr.depth : 1) != (c->dr.depth ? c->dr.depth : 1) || (c->flags & ~NVN_COPY_FLAGS_ENGINE_2D_BIT & ~NVN_COPY_FLAGS_LINEAR_FILTER_BIT)
         || s.pixelFormat != d.pixelFormat || s3 != d3) {
-        RED_ONCE(33, "texture→texture copy case not implemented: %dx%dx%d→%dx%dx%d flags %#x format %lu→%lu 3D %d→%d", c->sr.width, c->sr.height, c->sr.depth, c->dr.width, c->dr.height, c->dr.depth,
-                 c->flags, (unsigned long)s.pixelFormat, (unsigned long)d.pixelFormat, s3, d3);
+        RED_ONCE(33, "texture→texture copy case not implemented: %dx%dx%d→%dx%dx%d flags %#x format %lu→%lu 3D %d→%d; storage %lux%lu→%lux%lu, samples %lu→%lu, destination render-target use %d, internal-resolution state %d→%d; draw path: %s",
+                 c->sr.width, c->sr.height, c->sr.depth, c->dr.width, c->dr.height, c->dr.depth, c->flags, (unsigned long)s.pixelFormat, (unsigned long)d.pixelFormat, s3, d3,
+                 (unsigned long)s.width, (unsigned long)s.height, (unsigned long)d.width, (unsigned long)d.height, (unsigned long)s.sampleCount, (unsigned long)d.sampleCount,
+                 !!(d.usage & MTLTextureUsageRenderTarget), rs_state(s), rs_state(d), g_t2t_draw_why ? g_t2t_draw_why : "not tried (3D / depth count / flags)");
         return;
     }
     id<MTL4ComputeCommandEncoder> b = blit();
