@@ -939,6 +939,7 @@ def big_split(p):   # 要分段扫 zlib 的大文件：顶层不是 zstd / Yaz0 
         with romfs_list.open_file(p) as f: m = f.read(0x80)
     except OSError: return False
     return m[:4] not in (b'\x28\xb5\x2f\xfd', b'Yaz0', b'SARC', b'pkzl') and not _vendor(m)   # 厂商归档（Telltale 465 MB 的 ttarch2）整读后按成员 visit
+READ_RED, READ_RED_SHOW = '【红】文件读不了', 3   # 每个工作分片逐条打前 3 个（带路径与原因），总数在收尾的红行与降级表
 def work(args):
     root, files, outdir = args; rows, blobs, stat = [], {}, collections.Counter()
     for p in files:
@@ -954,7 +955,10 @@ def work(args):
                 data = romfs_list.map_file(p)
                 stat['顶层文件'] += 1; stat['叶子文件'] += 1; scan_blob(_rel(p, root), data, rows, blobs, stat); continue
             data = romfs_list.read_file(p)
-        except Exception: stat['读失败'] += 1; continue
+        except Exception as e:   # 读不了的文件整份漏抽：计红、进降级表（原先只计「读失败」进统计行，RomFS 只有镜像时 19012 个文件这样悄悄跳过）
+            stat[READ_RED] += 1
+            if stat[READ_RED] <= READ_RED_SHOW: print(f'【红】文件读不了：{_rel(p, root)}（{type(e).__name__}：{e}）', file=sys.stderr, flush=True)
+            continue
         stat['顶层文件'] += 1; visit(_rel(p, root), data, rows, blobs, stat)
     flush(blobs, outdir); return rows, stat
 def work_zlib(args):   # 大文件的一段：只认起点在 [lo, hi) 的 zlib 流；往前多解 16 MB 接上跨段的尾巴（单个流不超过 16 MB，见 scan_zlib 的解压上限）
@@ -1103,7 +1107,8 @@ if __name__ == '__main__':
         tree = romfs_list.scan(root)
         # 文件头一次取齐（romfs_list.heads：前 32 字节，并行读、按内容身份落盘，同一份 RomFS 各阶段只读一次）：厂商档案 / Unity 判魔数都查这张表，
         #   不再各自把全部文件串行打开一遍（#606：Windows 30.4 万个文件，kitpak / hgpak / scan_unity 三遍逐个 open，停在「抽取 3/4」很久）
-        hd = {e.path: e.head for e in romfs_list.heads(tree.top, tree=tree).files() if e.error is None and e.head is not None}
+        #   读头就失败的文件记空头：厂商档案 / Unity 探魔数一律不认、不再各自重开（kitpak 重开抛 OSError，原先一个读不了的文件让整个抽取退出），由 work() 计红进降级表
+        hd = {e.path: (e.head if e.error is None else b'') for e in romfs_list.heads(tree.top, tree=tree).files() if e.error is not None or e.head is not None}
         cdirs = sorted(dp for dp, dn, fn in tree.walk() if 'build_manifest.psv' in fn)   # 扁平 CASC 归档（暴雪游戏）：按清单逐条解出再扫，归档文件本身不当普通文件扫
         files = sorted(os.path.join(dp, f) for dp, dn, fn in tree.walk() if dp not in cdirs for f in fn)
         import unreal_pak as ue_pak
@@ -1182,8 +1187,9 @@ if __name__ == '__main__':
     print('统计', dict(stat)); print('阶段记录', len(rows), '唯一键', len(uniq), '按阶段', dict(collections.Counter(v[0] for v in uniq.values())))
     # 读不了的文件跳过、其余照抽（v0.3.1 拿不准不停；原先 10-23 定「漏抽是硬错误」退 1、整款出不了包）：漏的那部分着色器运行时首遇现编，
     #   按类计数写进 <输出目录>/degrade.tsv（graphics/tools/direct/extract.sh 并进抽取的降级汇总），逐条原因见上方【红】行
-    skip = [(k, stat[k]) for k in ('【红】pak 索引加密', '【红】pak 损坏', '【红】pak 条目解码失败', '【红】zlib 块续解失败', '【红】PKZ/DAT 解析失败', '【红】厂商档案读不了') if stat[k]]
+    skip = [(k, stat[k]) for k in ('【红】pak 索引加密', '【红】pak 损坏', '【红】pak 条目解码失败', '【红】zlib 块续解失败', '【红】PKZ/DAT 解析失败', '【红】厂商档案读不了', READ_RED) if stat[k]]
     with open(os.path.join(outdir, 'degrade.tsv'), 'w', encoding='utf-8') as f:
         for k, n in skip:
             f.write(f"extract\ts2x:{k[3:]}\t{n}\t\tS2Arm 抽取跳过读不了的部分，里面的着色器运行时首遇现编\n")
+    if stat[READ_RED]: print(f'【红】抽取：{stat[READ_RED]} 个文件读不了、整份没抽（前几个见上方「【红】文件读不了」行），其余照抽；这些文件里的着色器运行时首遇现编', file=sys.stderr)
     if skip: print(f"【黄】抽取：跳过读不了的部分（{'、'.join(f'{k[3:]} {n}' for k, n in skip)}），其余照抽；这些着色器运行时首遇现编，逐条见上方", file=sys.stderr)
