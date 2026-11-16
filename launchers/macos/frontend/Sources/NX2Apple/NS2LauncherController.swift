@@ -343,7 +343,7 @@ final class NS2LauncherController: ObservableObject {
         }
     }
     /// 手柄面板打开：已经被拒（或这次没选就关了）、又没在连，面板直接显示「允许蓝牙」
-    /// 手柄面板开着时一直搜：蓝牙已允许就自动开始连接；已连着手柄（按钮是「断开」）也照样搜，好让别的手柄接上（使用者 11-16）。
+    /// 手柄面板开着时一直搜：蓝牙已允许、「自动连接」开着就自动开始连接（关着时按「连接」才连）；已连着手柄（按钮是「断开」）也照样搜，好让别的手柄接上（使用者 11-16）。
     ///   连着手柄的连接程序不重扫（NS2Transport rescan 会略过），新手柄由空着的那个连接程序（syncSecond 总留一个）接。每轮扫完再搜，关面板就停
     private var panelScanTimer: Timer?
     private var stoppedWhilePanelOpen = false   // 面板开着时玩家自己按了「停止 / 断开」：这次不再自动连回去，关面板后重置
@@ -362,6 +362,8 @@ final class NS2LauncherController: ObservableObject {
     }
     private func scanWhilePanelOpen() {
         guard !assigning, phase != .handedOff, !stoppedWhilePanelOpen else { return }   // 分配中自己会搜；游戏用着手柄时不动；玩家刚自己断开的不连回去
+        // 「自动连接」关着、又还没连手柄：打开面板不主动连（按「连接」才连）。已连着就照样搜，好让别的手柄接上
+        guard autoConnectOnOpen || !allDevices.isEmpty else { return }
         if process == nil { connectManually(); return }
         send("scan\n")
         extras.forEach { $0.send("scan\n") }
