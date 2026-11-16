@@ -13,11 +13,11 @@ enum PhoneBanner: Equatable { case preparing, ready, onConnect }
 
 extension S2ArmLauncherModel {
     /// 更新弹窗的主按钮写「更新启动器和 iPhone App」：装过 iPhone、且没关自动更新 iPhone App
-    var updateAlsoPhone: Bool { phoneDevices > 0 && Self.autoUpdatePhoneOn() }
+    var updateAlsoPhone: Bool { phoneDevices > 0 && Self.autoUpdatePhoneOn() && !selfSignChosen }
 
     /// 启动后一次（refresh 的 startup）：有要更新的手机就后台准备，横幅跟着变
     func preparePhoneUpdate() {
-        guard !phoneUpdates.isEmpty, Self.autoUpdatePhoneOn(), phoneBanner == nil else { return }
+        guard !phoneUpdates.isEmpty, Self.autoUpdatePhoneOn(), !selfSignChosen, phoneBanner == nil else { return }   // 选了导出自签：不准备、不出横幅
         phoneBanner = .preparing
         Task { [weak self] in
             guard let self else { return }

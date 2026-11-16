@@ -32,12 +32,12 @@ public sealed partial class EnvironmentWindow
     private bool phonePrepareTried;
 
     /// <summary>更新弹窗主按钮写「更新启动器和 iPhone App」：装过 iPhone、且没关自动更新 iPhone App</summary>
-    private bool UpdateAlsoPhone => (catalog?.PhoneDevices ?? 0) > 0 && AutoUpdatePhoneOn;
+    private bool UpdateAlsoPhone => (catalog?.PhoneDevices ?? 0) > 0 && AutoUpdatePhoneOn && !IosAfterPackIsExport;
 
     /// <summary>这次启动头一次读到要更新的手机：后台准备一次</summary>
     private async Task PreparePhoneUpdateAsync()
     {
-        if (phonePrepareTried || catalog is not { PhoneUpdates.Count: > 0 } || !AutoUpdatePhoneOn || connectedFolder is null || libraryId is null) return;
+        if (phonePrepareTried || IosAfterPackIsExport || catalog is not { PhoneUpdates.Count: > 0 } || !AutoUpdatePhoneOn || connectedFolder is null || libraryId is null) return;
         phonePrepareTried = true;
         phoneBanner = "preparing"; Render();
         var ok = false;
@@ -87,7 +87,8 @@ public sealed partial class EnvironmentWindow
     /// <summary>一轮：→ 这次有没有发起「更新 iPhone」</summary>
     private async Task<bool> PhoneAutoUpdateTickAsync()
     {
-        if (phoneAutoTicking || connectedFolder is null || libraryId is null || ControlBusy || batchRunning) return false;
+        // 玩家在出包页选了「出完之后导出自签」：不走启动器装机，自动装到手机也不做（玩家选择优先）
+        if (IosAfterPackIsExport || phoneAutoTicking || connectedFolder is null || libraryId is null || ControlBusy || batchRunning) return false;
         phoneAutoTicking = true;
         try
         {

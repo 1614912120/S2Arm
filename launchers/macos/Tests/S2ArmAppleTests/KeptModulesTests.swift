@@ -26,6 +26,13 @@ import S2ArmAppleAdapter
         XCTAssertFalse(playing, "手机上 S2Arm 正在跑：不推（装 App 会杀掉这局）")
         XCTAssertEqual(runner.updates.count, 0)
         runner.running = false
+        let keptAfter = UserDefaults.standard.object(forKey: "S2AIosAfterPack")
+        defer { UserDefaults.standard.set(keptAfter, forKey: "S2AIosAfterPack") }
+        model.iosAfterPack = "export"
+        let selfSign = await model.keptModulesTick()
+        XCTAssertFalse(selfSign, "出包页选了导出自签：不自动装到手机（玩家选择优先）")
+        XCTAssertEqual(runner.updates.count, 0)
+        model.iosAfterPack = "install"
         let first = await model.keptModulesTick()
         for _ in 0..<300 where model.busy || runner.updates.count < 1 { try? await Task.sleep(for: .milliseconds(10)) }
         let again = await model.keptModulesTick()
@@ -89,6 +96,11 @@ import S2ArmAppleAdapter
         XCTAssertEqual(ok.phoneBanner, .ready)
         XCTAssertEqual(ok.phoneBannerLine?.key, "phone.update.banner.ready")
         XCTAssertTrue(ok.updateAlsoPhone, "装过手机、开关开：更新弹窗写「更新启动器和 iPhone App」")
+        let after = UserDefaults.standard.object(forKey: "S2AIosAfterPack")
+        ok.iosAfterPack = "export"
+        XCTAssertFalse(ok.updateAlsoPhone, "选了导出自签：更新弹窗按钮照旧")
+        ok.iosAfterPack = "install"
+        UserDefaults.standard.set(after, forKey: "S2AIosAfterPack")
         ok.phoneUpdates = []
         XCTAssertNil(ok.phoneBannerLine, "手机已是本版：横幅收起")
         let (bad, _) = try await run(fails: true, on: true)

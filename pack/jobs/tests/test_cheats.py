@@ -79,6 +79,21 @@ class CheatsTests(unittest.TestCase):
         with self.assertRaises(Failure):
             cheats.save(self.c, self.game, {"nope.txt/X": True})
 
+    def test_no_build_id_unusable_on_windows_only(self):
+        # #1321：文件名不是 16 位构建号、首行也没 BID= → Windows（只能出 iPhone 包，出包核不了版本、整份不收）列成用不了并写原因；
+        #   Mac 本机运行时照常认（Cheats.cs BuildMatches 不核），照常可开。期望手写
+        from types import SimpleNamespace
+        from unittest import mock
+        self.d.mkdir(parents=True, exist_ok=True)
+        (self.d / "mine.txt").write_text("[A]\n04000000 00000010 00000001\n")
+        with mock.patch.object(cheats, "os", SimpleNamespace(name="nt")):
+            it = cheats.listing(self.c, self.game)["items"][0]
+        self.assertEqual((it["key"], it["ok"], it["reason"]),
+                         ("mine.txt/A", False, "没写构建号：文件名改成「<16 位构建号>.txt」或首行加 BID=<构建号> 才能编进 iPhone 包。"))
+        with mock.patch.object(cheats, "os", SimpleNamespace(name="posix")):
+            it = cheats.listing(self.c, self.game)["items"][0]
+        self.assertEqual((it["ok"], it["reason"]), (True, ""))
+
     def test_fixed_address_by_opcode(self):
         # 期望按 Atmosphere 指令表手判：0 / 1 型第 3 位区号非 0、5 型区号非 0 且第 5 位（以寄存器为基址）为 0 → 写死地址
         text = ("[Coins]\n02100000 5C27B318 0000270f\n\n[Health]\n11160000 5C3BE7DC 00000000\n01100000 5C3BE7DC 00000006\n20000000\n\n"

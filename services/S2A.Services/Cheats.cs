@@ -104,6 +104,7 @@ namespace S2A.Services
         private sealed class Item
         {
             public Entry Entry; public ITamperProgram Code; public string Status; public bool Off;
+            public bool Shipped;   // 文件是电脑出包时随包带来的（文档根 cheats/.packed 记着，runtime/src/cpatch.c seed_cheats）：改代码的条目没编进包 ≠ 手机上导入的
         }
 
         private static void Run(string dir, CancellationToken stop)
@@ -150,7 +151,8 @@ namespace S2A.Services
                     }
                     if (p.Code.Process.TamperedCodeMemory)
                     {
-                        p.Off = true; p.Status = "改代码，不支持"; changed = true;
+                        // #1321：随包带来、却没编进包的（槽 2046 位用尽 / 同点变体超 8 路等，原因在电脑出包完成页）与手机上自己导入的分开说
+                        p.Off = true; p.Status = p.Shipped ? "改代码，没编进包" : "改代码，不支持"; changed = true;
                         Console.Error.WriteLine($"金手指：{p.Entry.Key} 要改代码页（苹果上是签名只读页），已停用");
                     }
                     else if (p.Status == "地址未就绪") { p.Status = "生效中"; changed = true; }
@@ -192,6 +194,8 @@ namespace S2A.Services
             files.Sort(StringComparer.Ordinal);
             int nfiles = 0;
             seenNative = new HashSet<string>(StringComparer.Ordinal);
+            string packedList = Path.Combine(dir, ".packed");   // 随包放进文档根的文件名，一行一个（runtime/src/cpatch.c seed_cheats 写）
+            var shipped = new HashSet<string>(File.Exists(packedList) ? File.ReadAllLines(packedList) : Array.Empty<string>(), StringComparer.Ordinal);
             foreach (string path in files)
             {
                 string name = Path.GetFileName(path);
@@ -206,7 +210,7 @@ namespace S2A.Services
                 entries = entries.FindAll(x => x.Master).Concat(entries.FindAll(x => !x.Master)).ToList();   // 主代码排在同文件普通条目之前执行（Atmosphere 约定），其余保持文件顺序
                 foreach (Entry e in entries)
                 {
-                    var p = new Item { Entry = e };
+                    var p = new Item { Entry = e, Shipped = shipped.Contains(name) };
                     bool on = e.Master ? fileOn : enabled.Contains(e.Key);
                     bool packed = match && exe != 0 && l != null && ToNative(e, on);
                     if (!match) { p.Status = "版本不符"; p.Off = true; }
