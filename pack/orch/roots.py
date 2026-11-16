@@ -876,6 +876,21 @@ class Transaction:
             raise
         return live
 
+    def replaced(self, name):
+        """本阶段把共用数据树 name 整目录换掉了（只有 aoc 阶段这么做）：提交时不再核它（见 commit 开头的守护）"""
+        self.shared.pop(name, None)
+
+    def _check_shared(self):
+        """守护「共用数据树只许整目录替换、不许原地改」（硬链接的前提，11-16）：begin 记的指纹（shared_print）与现在比，没声明换掉（replaced）却变了 = 原地改了，报冲突不提交。
+        在提交一开始、重放之前核：只核本阶段自己做的事（重放会合法地换成新现行的那份）。
+        不按树目录 inode 判「换没换」：ext4 上删掉的目录 inode 会马上被新目录复用（11-16 Linux 门禁误报），换掉要由换的一方显式声明"""
+        now = shared_print(self.path)
+        for name, (ino, files) in self.shared.items():
+            got = now.get(name, (None, {}))[1]
+            if got != files:
+                diff = sorted(set(files.items()) ^ set(got.items()))
+                raise Conflict(f'原地改了共用数据 {name}/{diff[0][0] if diff else ""}（{name}/ 只许由 aoc 阶段整目录替换，roots.SHARED_TREES；硬链接下会连带改坏别的版本）')
+
     def commit(self, *, replay=()):
         if self.closed or not self.path.is_dir():
             raise Conflict('事务已结束或缺失')
@@ -883,6 +898,7 @@ class Transaction:
         final = roots.path / f'{self.game}@{self.tag}'
         activation = roots.path / f'.{self.game}.current-{uuid.uuid4().hex}'
         try:
+            self._check_shared()   # 先核本阶段有没有原地改共用数据（重放之前）
             with roots.locked(self.game):
                 current = roots.cur(self.game, pin=False)
                 base = read(self.path / '.root_base')
@@ -898,11 +914,6 @@ class Transaction:
                         raise Conflict('更新 main 已改过本阶段；共享现行不回退')
                     self._replay(current, tuple(replay))
                 roots._validate(self.path, self.game)
-                now_shared = shared_print(self.path)
-                for name, (ino, files) in self.shared.items():
-                    if name in now_shared and now_shared[name][0] == ino and now_shared[name][1] != files:   # 树目录没换却变了：原地改了共用数据
-                        diff = sorted(set(files.items()) ^ set(now_shared[name][1].items()))
-                        raise Conflict(f'原地改了共用数据 {name}/{diff[0][0]}（{name}/ 只许整目录替换，roots.SHARED_TREES；硬链接下会连带改坏别的版本）')
                 roots._intern(self.path, self.game)
                 if roots.plain:
                     final = self._activate_plain(current)

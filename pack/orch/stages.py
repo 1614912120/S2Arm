@@ -1439,7 +1439,7 @@ class Stages:
                     copy_file(source / 'aoc.log', tx.path / 'aoc.log')
                     if keep:
                         return self._light_commit(tx, 'aoc', start, None, ('aoc.log',))
-                    remove_owned(tx.path / 'aoc')
+                    remove_owned(tx.path / 'aoc'); tx.replaced('aoc')   # 整目录替换（roots.Transaction.replaced：提交时不按原地改核这棵）
                     if (source / 'aoc').is_dir():
                         self.roots._copy_tree(source / 'aoc', tx.path / 'aoc', hardlink=True)   # 缓存同样不原地改（roots.SHARED_TREES）
                     (tx.path / 'aoc.tsv').unlink(missing_ok=True)

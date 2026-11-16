@@ -309,13 +309,19 @@ class RootsTest(unittest.TestCase):
         self.assertIn('aoc/d1/a.bin', str(cm.exception).replace(os.sep, '/'))
         self.assertEqual((self.store.cur('原创'), (base / 'aoc/d1/a.bin').read_bytes()), (base, b'dlc a'))
         tx = self.store.begin('原创', 'aoc2')
-        roots.remove_owned(tx.path / 'aoc'); (tx.path / 'aoc').mkdir(); (tx.path / 'aoc/c.bin').write_bytes(b'dlc c')
+        roots.remove_owned(tx.path / 'aoc'); tx.replaced('aoc'); (tx.path / 'aoc').mkdir(); (tx.path / 'aoc/c.bin').write_bytes(b'dlc c')
         two = tx.commit()
         self.assertEqual(sorted(p.name for p in (two / 'aoc').iterdir()), ['c.bin'])
         tx = self.store.begin('原创', 'aoc3')
         (tx.path / 'exefs/main').write_bytes(b'new main')
         self.assertEqual((tx.commit() / 'aoc/c.bin').read_bytes(), b'dlc c')
         self.assertNotEqual(first, two)
+        # ④ 整目录换掉却没声明（tx.replaced）→ 照样报冲突：不靠树目录 inode 判「换没换」（ext4 上删掉的目录 inode 会马上被新目录复用，11-16 Linux 门禁误报）
+        tx = self.store.begin('原创', 'aoc4')
+        roots.remove_owned(tx.path / 'aoc'); (tx.path / 'aoc').mkdir(); (tx.path / 'aoc/c.bin').write_bytes(b'dlc C changed')
+        with self.assertRaises(roots.Conflict):
+            tx.commit()
+        self.assertEqual((self.store.cur('原创') / 'aoc/c.bin').read_bytes(), b'dlc c')
 
     def test_shared_trees_hardlinked_on_windows_and_fall_back_to_copy(self):
         # 11-16 出包轻阶段：追加内容（aoc）各版本共用、不原地改，阶段事务克隆现行时 Windows 上逐个建硬链接，不逐个块克隆。
