@@ -115,6 +115,7 @@ static unsigned g_desc_sets_total;
 uint64_t nvn_vk_dbg_dset_stat(int which);
 uint64_t nvn_vk_dbg_dyn_stat(int which);   // C208：0 = 选了动态 UBO 的管线条数、1 = 建过的带 UBO 的管线条数（进程内累计）、2 = 当前的动态 UBO 上限（设备值，或被下面压低后的值）、3 = 绑定表里「只换偏移」直接放过的项数（进程内累计）
 void nvn_vk_dbg_dyn_limit(uint32_t v);     // C208：把上限压低到 v（只降不升），0 = 还原设备值
+void nvn_vk_dbg_dyn_split(uint32_t bits);  // C208：把动态偏移的拆分点（低位走动态偏移、高位放描述符）从 32 位压到 bits 位，0 = 还原 32 位
 uint64_t nvn_vk_dbg_dlay_get(const uint32_t *k4, uint32_t nb);   // 直接按结构取一个布局（不经管线）：nb 条 {binding, 类型, 数量, 阶段}，返回布局句柄的数值，0 = 失败
 void nvn_vk_dbg_dset_hold(int on);     // 1 = 测试线程自己持着回收表的锁（取组碰锁退回老路径）；0 = 放开。持着期间只能读 nvn_vk_dbg_dset_stat(9 / 11)
 void nvn_vk_dbg_dset_inject(int mode);   // 0 不注入；1 一批（> 1 组）向驱动要组时回「池耗尽」；2 任何一次向增长池要组都回「池耗尽」
@@ -5536,6 +5537,37 @@ static void c208_p34(struct c208_env *E, nvn_gpu_pipe pipe) {
     c208_finish(c, E, 240, 4, (const uint8_t (*)[4])want, "P34");
     CHECK(nvn_vk_dbg_dyn_stat(3) == f0, "C208 P34（静态，34 个 UBO）：「只换偏移」直接放过的绑定项数期望 0 → %llu", (unsigned long long)(nvn_vk_dbg_dyn_stat(3) - f0));
 }
+// C208 拆分点用例（#1292 评审补两条：偏移高位非 0、对齐边界上的偏移拼回逐字节对）。宿主设备（lavapipe）单次分配上限 2 GiB、maxBufferSize 4 GiB − 1，
+// 造不出 ≥ 4 GiB 的缓冲，偏移的高 32 位在宿主上恒为 0；这里用测试钩子 nvn_vk_dbg_dyn_split 把拆分点从 32 位降到 20 位（偏移低 20 位走动态偏移、其余放描述符），
+// 同一段代码、同一套判据，4 MiB 缓冲里的偏移就有了非 0 的「高位」：缓冲整个填毒值（1.0 → 像素 255），只在九个偏移处放标记（项号 j：x = y = 0.2 j → 像素 51 j）；
+// 九个偏移取在高位边界（1 MiB 的整倍数）两侧、都按 256 对齐（≥ minUniformBufferOffsetAlignment，和静态同一条）：低位最大（…FFF00）与低位为 0、为 0x100 各有。
+// 拼错（高位丢了、低位多加一遍、两段拼反）读到的不是毒值就是别的标记，或者越过缓冲尾被校验层报错。
+static const uint64_t c208_mo[9] = {0x000000, 0x0FFF00, 0x100000, 0x100100, 0x1FFF00, 0x200000, 0x2FFF00, 0x3FFF00, 0x300100};
+static const int c208_mj[9] = {0, 1, 2, 3, 4, 1, 2, 3, 4};
+static void c208_split(struct c208_env *E, nvn_gpu_buf bh, nvn_gpu_pipe pipe, int dyn, uint64_t sig0) {
+    // 十笔的（A 偏移项, B 偏移项）；「只换偏移」直接放过的项：同缓冲、同范围、高位相同、偏移不同 = 第 1 笔 A、第 4 笔 B、第 5 笔 A、第 7 笔 A + B、第 9 笔 A + B，共 7 项；
+    // 高位变的（第 2、3、6、8 笔）走脏组重写，不算。两轮各一个命令段（第 2 轮首笔所有组重新取）。
+    static const int seq[10][2] = {{0, 1}, {1, 1}, {1, 2}, {3, 2}, {3, 4}, {4, 4}, {5, 6}, {6, 5}, {7, 8}, {8, 7}};
+    for (int round = 0; round < 2; round++) {
+        char tag[96]; snprintf(tag, sizeof tag, "拆分点 20 位 动态 %d 第 %d 轮", dyn, round);
+        const uint64_t f0 = nvn_vk_dbg_dyn_stat(3);
+        nvn_gpu_cmd c; c208_begin(&c, E, pipe);
+        uint8_t want[10][4];
+        for (int i = 0; i < 10; i++) {
+            c208_pixel_draw(c, i);
+            nvn_gpu_binding bs[2];
+            memset(bs, 0, sizeof bs);
+            bs[0].ent = 0; bs[0].cls = NVN_GPU_RES_UBO; bs[0].u.b.buf = bh; bs[0].u.b.off = c208_mo[seq[i][0]]; bs[0].u.b.len = 16;
+            bs[1].ent = 1; bs[1].cls = NVN_GPU_RES_UBO; bs[1].u.b.buf = bh; bs[1].u.b.off = c208_mo[seq[i][1]]; bs[1].u.b.len = 16;
+            nvn_gpu_bind(c, NVN_GPU_SH_FS, bs, 2);
+            c208_draw(c);
+            want[i][0] = (uint8_t)(51 * c208_mj[seq[i][0]]); want[i][1] = (uint8_t)(51 * c208_mj[seq[i][1]]); want[i][2] = 0; want[i][3] = 255;
+        }
+        c208_finish(c, E, sig0 + (uint64_t)round, 10, (const uint8_t (*)[4])want, tag);
+        const uint64_t fast = nvn_vk_dbg_dyn_stat(3) - f0;
+        CHECK(fast == (dyn ? 7u : 0u), "C208 %s：「只换偏移」直接放过的绑定项数期望 %u → %llu", tag, dyn ? 7u : 0u, (unsigned long long)fast);
+    }
+}
 static void c208_arm(const char *dir, uint32_t lim2, uint32_t lim9) {
     if (!open_backend()) { CHECK(0, "C208 (%u,%u) 开会话失败", lim2, lim9); return; }
     struct c208_env E; memset(&E, 0, sizeof E);
@@ -5596,11 +5628,26 @@ static void c208_arm(const char *dir, uint32_t lim2, uint32_t lim9) {
         c208_p9(&E, pipe9, dyn9, eff9);
         c208_p2(&E, pipe2, dyn2, eff2, 230);   // 回到 P2：动态 ↔ 静态管线切换后偏移不串
         c208_p34(&E, pipe34);
+        {   // 拆分点用例：4 MiB 缓冲，毒值 1.0 铺满，九个标记偏移处放 0.2 j（x、y 两个分量；z、w 清 0）
+            enum { HS = 4 << 20 };
+            float *th = malloc(HS);
+            if (!th) { CHECK(0, "C208 (%u,%u) 拆分点用例：4 MiB 分配失败", lim2, lim9); goto done; }
+            for (size_t k = 0; k < HS / sizeof(float); k++) th[k] = 1.0f;
+            for (int k = 0; k < 9; k++) { float *q = th + c208_mo[k] / sizeof(float); q[0] = q[1] = 0.2f * (float)c208_mj[k]; q[2] = q[3] = 0.0f; }
+            nvn_gpu_buf bh = make_buf(HS, NVN_GPU_MEM_SHARED, th);
+            free(th);
+            if (!bh) { CHECK(0, "C208 (%u,%u) 拆分点用例：建 4 MiB 缓冲失败", lim2, lim9); goto done; }
+            nvn_vk_dbg_dyn_split(20);
+            c208_split(&E, bh, pipe2, dyn2, 250);
+            nvn_vk_dbg_dyn_split(0);
+            nvn_gpu_buf_release(bh, NULL, NULL);
+        }
         printf("C208 (%u,%u) 臂：设备动态 UBO 上限 %llu，压到 %u / %u 后 P2 动态 %d、P9 动态 %d\n", lim2, lim9, (unsigned long long)devlim, eff2, eff9, dyn2, dyn9);
         if (lim9 >= 9 && eff9 < 9) printf("C208 注意：宿主动态 UBO 上限 %llu < 9，(%u,%u) 臂里「刚好在上限」的 P9 退化成超限臂\n", (unsigned long long)devlim, lim2, lim9);
     }
 done:
     nvn_vk_dbg_dyn_limit(0);   // 还原设备真值
+    nvn_vk_dbg_dyn_split(0);   // 还原 32 位拆分点
     if (E.rb) nvn_gpu_buf_release(E.rb, NULL, NULL);
     if (E.ov) nvn_gpu_view_release(E.ov);
     if (E.out) nvn_gpu_tex_release(E.out);
@@ -5624,7 +5671,8 @@ static void c208_dyn_ubo(const char *dir) {
         CHECK(g_memo_dflt_seen == 1, "C208 nvk_desc_memo 的缺省值期望 1（缺省开）→ %d（-1 = 后端没读过）", g_memo_dflt_seen);
     c208_arm(dir, 2, 9);   // 两条都刚好在上限上：备忘开时全动态
     c208_arm(dir, 2, 8);   // P2 刚好 / P9 超 1 个：一动一静
-    printf("C208 动态 UBO 偏移（备忘%s）：三个臂（全静态 / 全动态 / 一动一静）已核对\n", g_memo_on ? "开" : "关，一律静态");
+    c208_arm(dir, 8, 8);   // 设备只报规范最小值 8（不少 Mali 如此，#1292 评审补）：2 个 UBO 的 P2 动态、9 个 UBO 的 P9 超 1 个保持静态；像素与全静态臂的期望相同、校验层 0 条
+    printf("C208 动态 UBO 偏移（备忘%s）：四个臂（全静态 / 全动态 / 一动一静 / 上限 8）与拆分点 20 位的高位偏移已核对\n", g_memo_on ? "开" : "关，一律静态");
 }
 
 // C67：origin_ll=1（NVN 窗口原点在左下）时后端不翻视口：这种约定下图是自下而上存的，行号 0 就是「下」，

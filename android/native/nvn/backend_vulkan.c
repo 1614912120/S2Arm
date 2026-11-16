@@ -343,6 +343,10 @@ static void pc_destroy_all(void);
 enum { PIPE_HT_N = 1024 };
 static uint64_t g_desc_ns[4], g_desc_nw, g_desc_sets, g_desc_hit;   // 描述符四步：分配 / 构造写入项 / 写入 / 绑定；写入的描述符条数；重写的组数
 static uint32_t g_max_dyn_ubo, g_max_dyn_ubo_dev;   // 设备 maxDescriptorSetUniformBuffersDynamic（开会话时读；契约头不动，只在本后端里存）；后一个是设备真值（宿主用例压低前者之后还原用）
+// 动态 UBO 偏移的拆分掩码：偏移 & 掩码 = 低位，走 vkCmdBindDescriptorSets 的动态偏移（Vulkan 的动态偏移只有 32 位）；偏移 & ~掩码 = 高位，放进描述符。
+// 生产恒为 0xffffffff（低 32 位 / 高 32 位）；只有宿主用例经 nvn_vk_dbg_dyn_split 压低它：宿主设备（lavapipe）单次分配上限 2 GiB，造不出 ≥ 4 GiB 的缓冲，
+// 要让「高位非 0」真的读到数据，只能把拆分点从 32 位降到 20 位，同一段代码、同一套判据。
+static uint64_t g_dyn_lo_mask = 0xffffffffull;
 static uint64_t g_dyn_rebind, g_dyn_pipes[2], g_dyn_fast;   // 诊断：只换动态偏移、不重写组、只重绑的次数；用动态 UBO 的管线条数 / 建过的带 UBO 的管线条数；绑定表里「只换偏移」直接放过的项数（用例钉这条近路）
 // 描述符组备忘开关 nvk_desc_memo（缺省开；0 = 关，回到「静态 UBO、不备忘」的老路径）。开 = 段内备忘 + 动态 UBO 偏移（备忘的键里没有偏移才有命中，见 pipe_build / write_binds）。
 // 建管线时读一次（决定这条管线的 UBO 用不用动态偏移），绑定时按段读（bind_descriptor_groups 里有短缓存）；两处读到不一样也能正确：动态与否是管线自己的属性，备忘与否只是这一笔要不要查表。
@@ -4505,7 +4509,7 @@ void nvn_gpu_bind(nvn_gpu_cmd ch, nvn_gpu_stage st, const nvn_gpu_binding *b, ui
             if (old && next && binding_equal(old, next)) continue;
             if (old && next && c->pipe->stage_dyn[st] && old->cls == NVN_GPU_RES_UBO && next->cls == NVN_GPU_RES_UBO && old->ent == next->ent && old->elem == next->elem
                 && old->ent < c->pipe->stage_nent[st] && c->pipe->stage_dyn[st][old->ent] >= 0 && old->u.b.buf == next->u.b.buf && old->u.b.len == next->u.b.len
-                && (old->u.b.off >> 32) == (next->u.b.off >> 32)) {   // 偏移的高 32 位在描述符里（write_binds），不同就是内容变了，走脏组
+                && ((old->u.b.off ^ next->u.b.off) & ~g_dyn_lo_mask) == 0) {   // 偏移的高位（缺省高 32 位）在描述符里（write_binds），不同就是内容变了，走脏组
                 c->dyn_dirty = 1;   // 动态 UBO 只换了偏移的低 32 位：组内容没变，不重写，只用新偏移重绑（见 bind_descriptor_groups）
                 __atomic_fetch_add(&g_dyn_fast, 1, __ATOMIC_RELAXED);
                 continue;
@@ -4680,7 +4684,7 @@ static int write_binds(struct nvn_gpu_cmd_s *c, const struct nvn_gpu_pipe_s *p, 
         if (dynb) {
             const uint32_t di = (uint32_t)p->stage_dyn[st][b->ent] + b->elem;
             if (e->set >= 4 || b->elem >= (e->count ? e->count : 1u) || di >= p->ndyn[e->set]) { set_sticky(c, NVN_GPU_E_LAYOUT, "动态 UBO 绑定项 ent %u 的数组下标 %u 越界", b->ent, b->elem); return -1; }
-            c->dyn_off[e->set][di] = (uint32_t)b->u.b.off;
+            c->dyn_off[e->set][di] = (uint32_t)(b->u.b.off & g_dyn_lo_mask);
         }
         const int live = (int)(dirty >> e->set & 1u);
         if (!live && e->cls != NVN_GPU_RES_TBUF && e->cls != NVN_GPU_RES_IMAGE_TBUF) continue;
@@ -4728,7 +4732,7 @@ static int write_binds(struct nvn_gpu_cmd_s *c, const struct nvn_gpu_pipe_s *p, 
         case NVN_GPU_RES_SSBO:
             memset(bf, 0, sizeof *bf);
             bf->buffer = b->u.b.buf ? b->u.b.buf->buffer : VK_NULL_HANDLE;
-            bf->offset = dynb ? (b->u.b.off & ~0xffffffffull) : b->u.b.off;
+            bf->offset = dynb ? (b->u.b.off & ~g_dyn_lo_mask) : b->u.b.off;
             bf->range = b->u.b.len;
             if (e->cls == NVN_GPU_RES_UBO && b->u.b.len > g.caps.max_ubo_range) {   // UBO 没有 WHOLE_SIZE 例外：超过范围上限只能准确拒绝
                 set_sticky(c, NVN_GPU_E_ARG, "常量缓冲范围 %llu 超过 maxUniformBufferRange %llu", (unsigned long long)b->u.b.len, (unsigned long long)g.caps.max_ubo_range);
@@ -7161,6 +7165,12 @@ uint64_t nvn_vk_dbg_dyn_stat(int which) {
 void nvn_vk_dbg_dyn_limit(uint32_t v);
 void nvn_vk_dbg_dyn_limit(uint32_t v) {
     g_max_dyn_ubo = (v && v < g_max_dyn_ubo_dev) ? v : g_max_dyn_ubo_dev;
+}
+// 用例把动态 UBO 偏移的拆分点压到 bits 位（偏移的低 bits 位走动态偏移、其余高位放描述符；bits = 0 或 ≥ 32 还原成生产的 32 位）。
+// 只在没有命令段在录的时候调（用例线程同步录、同步等完成）。
+void nvn_vk_dbg_dyn_split(uint32_t bits);
+void nvn_vk_dbg_dyn_split(uint32_t bits) {
+    g_dyn_lo_mask = (bits && bits < 32) ? ((1ull << bits) - 1) : 0xffffffffull;
 }
 // 描述符组按布局回收的用例读数钩子（只给宿主单测）：0 新分（向驱动）/ 1 复用 / 2 放回 / 3 放弃的段还给池 / 4 交给 alloc_sets 的总数 /
 // 5 空闲串里现有的组（沿登记表遍历数出来的）/ 6 表项数（登记的计数）/ 7 增长池个数 / 8 dead 的表项数（一组也放不进空池的布局）/ 9 回收开着吗（开会话时读的开关）/
