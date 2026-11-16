@@ -72,7 +72,12 @@ static void display_focus_publish_ex(BOOL active, BOOL may_freeze) {
 static void display_focus_publish(BOOL active) { display_focus_publish_ex(active, YES); }
 // 游戏窗口对游戏算不算前台（#279）：我们自己挂在游戏窗口上的系统输入框是 key window 时照旧算前台，否则游戏收到失焦会把输入当取消
 int s2a_text_input_mac_is_input_window(NSWindow *w);   // macos/textinput_mac.m
+// 真窗口单测静默跑（S2A_FRONT_BACKGROUND=1，只由 t_present_residency / t_fps_limit / t_present_settings 起局时设；维护者 11-15：门禁里窗口弹出来晃眼、抢焦点）：
+//   不进 Dock（Accessory）、不激活、不抢键盘焦点；窗口照常 orderFrontRegardless 上屏，遮挡位 / drawable / 显示时钟与正常起局相同。
+//   焦点按「游戏窗口在前台」发布：这些单测量的是节拍与上屏，不是系统焦点（真失焦探针 FPS_TEST_FOCUS 不设这个变量，照旧真激活）
+static BOOL front_background(void) { static int v = -1; if (v < 0) { const char *e = getenv("S2A_FRONT_BACKGROUND"); v = e && !strcmp(e, "1"); } return v; }
 static BOOL game_window_focused(NSWindow *game) {
+    if (front_background()) return game != nil;
     NSWindow *key = NSApp.keyWindow;
     return s2a_mac_game_focused(NSApp.isActive, game && game.isKeyWindow, s2a_text_input_mac_is_input_window(key), game && key.sheetParent == game);
 }
@@ -1848,7 +1853,7 @@ void s2a_front_run(void (*guest_main)(void)) {
                                     decoded.back_buttons[1] < 0 ? 0 : (1u << decoded.back_buttons[1]));
         apply_mouse_options();
         NSApplication *app = NSApplication.sharedApplication;
-        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+        [app setActivationPolicy:front_background() ? NSApplicationActivationPolicyAccessory : NSApplicationActivationPolicyRegular];
         S2AMacDelegate *delegate = [S2AMacDelegate new]; app.delegate = delegate; g_delegate = delegate;
         // 心跳（#1050）：每 10 秒一行实占 / 出帧 / 读写盘 / 缺页读入（macos/heartbeat_mac.c s2a_heartbeat_mac；只此一处用，不进 native.h），后台串行队列上打，不占主线程
         { void s2a_heartbeat_mac(void); static dispatch_source_t hb; dispatch_queue_t q = dispatch_queue_create("s2a.heartbeat", DISPATCH_QUEUE_SERIAL);
@@ -1929,10 +1934,11 @@ void s2a_front_run(void (*guest_main)(void)) {
             };
             tick(); [NSTimer scheduledTimerWithTimeInterval:0.5 repeats:YES block:^(NSTimer *t) { (void)t; tick(); }];
         }
-        [view setNeedsLayout:YES]; [window center]; [window makeKeyAndOrderFront:nil]; [window makeFirstResponder:view];
+        [view setNeedsLayout:YES]; [window center]; if (front_background()) [window orderFrontRegardless]; else [window makeKeyAndOrderFront:nil]; [window makeFirstResponder:view];
         // 启动即全屏（#575，S2A_FULLSCREEN=1）：窗口出来后走系统原生全屏，同菜单「进入全屏幕」，退出后回到窗口
         { const char *fs = getenv("S2A_FULLSCREEN"); if (fs && !strcmp(fs, "1")) { fprintf(stderr, "[s2a] 启动即全屏（S2A_FULLSCREEN=1）\n"); dispatch_async(dispatch_get_main_queue(), ^{ if (!window_fullscreen(window)) window_fullscreen_toggle(window); }); } }
-        [app activateIgnoringOtherApps:YES]; focused = YES; input_mute_refresh();
+        if (!front_background()) [app activateIgnoringOtherApps:YES];
+        focused = YES; input_mute_refresh();
         s2a_pad_set_active(1);
         install_pad_handlers();
         display_focus_publish(game_window_focused(window));

@@ -73,6 +73,7 @@ for backend in mtl3 mtl4; do
                 S2A_ANTI_ALIASING="$aa" S2A_SCALING_FILTER="$filter" S2A_RES_SCALE=1 S2A_FPS=0 \
                 MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=assert)
             [[ "$backend" != mtl3 ]] || run_env+=(NXGAL_BE=mtl3)
+            run_env+=(S2A_FRONT_BACKGROUND="${S2A_FRONT_BACKGROUND:-1}")  # 静默跑：不进 Dock、不激活、不抢焦点（macos/front_mac.m front_background；对照时外面给 0 = 原样激活）
             # macOS 26 的 Metal 调试层与 Metal 4 + MetalFX 不兼容（11-07 本机 26.4.1 实测：MetalFX 在 MTL4DebugRenderCommandEncoder 上调
             #   globalTraceObjectID → unrecognized selector，进程 abort 134；Xcode 26.6 / 27.1 编都一样；不开调试层 3/3 全过 69/69；macOS 27 上开调试层全过）。
             #   这三格在 macOS 27 以下不开调试层跑，判据不变，并打一行说明
