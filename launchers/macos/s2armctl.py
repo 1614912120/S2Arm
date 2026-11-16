@@ -54,6 +54,7 @@ USAGE = """s2armctl —— 让 AI 助手操作 S2Arm（每条命令 = 玩家点�
   library <目录> [--move]            换游戏库位置（外接盘也行）；--move 把现有游戏、成品、缓存和存档一起搬到这个空文件夹
   cloud-folder [<iCloud 云盘里的文件夹>]   开 iCloud 存档同步（不给路径 = 关闭）；iPhone / iPad 上选同一个文件夹
   cloud-sync <游戏号>   这款立即同步一次（开局前 / 退出后会自动做）
+  mods <游戏号> [--import 路径]… [--off 名字]… [--on 名字]… [--remove 名字]…   资源替换 mod：列出 / 导入（zip 或文件夹）/ 关掉 / 打开 / 删除，下次开始游戏生效（同启动设置「资源 Mod」，Windows 同游戏库「Mod…」页）
   display <游戏号> [--<设置项> on|off|default|<选项>]…   看 / 改这款的启动设置（设置项见 game_settings.v1.json，如 --quality MetalFX --docked handheld），下次启动生效
   errors [游戏号]                    最近失败任务的错误码、原因、建议、日志位置和日志末尾
   retry <任务号> | cancel <任务号>    重试 / 取消任务
@@ -644,7 +645,7 @@ def diag_body(rest, now=None):
 NEEDS_ARG = {'install', 'uninstall', 'launch', 'cancel', 'retry', 'delete', 'customize', 'ipa', 'prepare',
              'build', 'wait', 'install-check', 'logs', 'device', 'push-pack', 'snapshot', 'select',
              'onboarding', 'target', 'keys', 'games',
-             'cloud-sync', 'display', 'library', 'restore-iphone', 'show'}   # 合入时补：这几条同样直接取 rest[0]
+             'cloud-sync', 'display', 'library', 'restore-iphone', 'show', 'mods'}   # 合入时补：这几条同样直接取 rest[0]
 
 def main():
     a = sys.argv[1:]
@@ -722,6 +723,14 @@ def main():
         print(json.dumps(call('POST', '/cloudFolder', {'path': os.path.abspath(os.path.expanduser(rest[0])) if rest else ''}), ensure_ascii=False)); return
     if cmd == 'cloud-sync':
         print(json.dumps(call('POST', '/cloudSync', {'gameId': rest[0]}), ensure_ascii=False)); return
+    if cmd == 'mods':
+        body = {'gameId': rest[0], 'import': [], 'remove': [], 'enable': {}}
+        for flag, value in zip(rest[1::2], rest[2::2]):
+            if flag == '--import': body['import'].append(os.path.abspath(os.path.expanduser(value)))
+            elif flag == '--remove': body['remove'].append(value)
+            elif flag in ('--on', '--off'): body['enable'][value] = flag == '--on'
+            else: print(USAGE); sys.exit(2)
+        print(json.dumps(call('POST', '/mods', body, timeout=600), ensure_ascii=False, indent=1)); return
     if cmd == 'display':
         # 启动设置：--<设置项> <值>，设置项 = launchers/shared/game_settings.v1.json 的 id；on / off 是开关，default 回缺省，其余原样当选项值
         settings = {}
