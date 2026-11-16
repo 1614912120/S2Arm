@@ -1263,9 +1263,9 @@ internal static unsafe class Program
             else partial["limits"][field] = 0;
             byte[] partialProfile = DirectProfileComposer.Compose(Encoding.UTF8.GetBytes(partial.ToJsonString()),
                 DirectBuildIdentity.TranslatorClosure);
-            using JsonDocument result = ParseResult(DirectShaderCompiler.Compile(RequestJson(
+            using JsonDocument partialLinkedResult = ParseResult(DirectShaderCompiler.Compile(RequestJson(
                 partialProfile, "graphics", 1, 1, "linked-partial", vs, fs, linked: true)));
-            Check(result.RootElement.GetProperty("content").GetProperty("stages").GetArrayLength() == 2,
+            Check(partialLinkedResult.RootElement.GetProperty("content").GetProperty("stages").GetArrayLength() == 2,
                 "linked accepts unknown/zero limit " + field + "; missing=" + missing);
         }
         foreach (string field in new[] { "maxVertexOutputComponents", "maxFragmentInputComponents" })
