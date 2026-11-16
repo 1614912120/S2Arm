@@ -74,6 +74,28 @@ class PatchIndexTests(unittest.TestCase):
         self.assertEqual(got, sorted(hashlib.sha256(x).hexdigest() for x in (plain, wide, wide + b"// 2\n")))
         self.assertEqual(sorted(h for _, _, h in patch_index.HALVES), sorted(hashlib.sha256(x).hexdigest() for x in (p1800, big)))
 
+    def test_widescreen_that_raises_render_resolution_is_not_indexed(self):
+        # 11-16 #b824d1（阿尔宙斯「3440x1440」变体把内部渲染分辨率提到 3440×1440，渲染目标放大、堆放不下 → 空指针崩）。期望手写：
+        #   ① pchtxt 写 movz w8,#3440 / movz w9,#1440 → 不收；② IPS 写同样两条 → 不收；③ 只改画幅的（movz #1920 / #1080、浮点画幅）→ 照收；
+        #   ④ 名字带 3440x1440、正文没写分辨率常数 → 照收（名字只是目标显示器）；⑤ 注释掉的行不算
+        mz = lambda rd, imm: (0x52800000 | (imm << 5) | rd).to_bytes(4, "little").hex().upper()
+        up = f"@nsobid-CCDDEEFF00112233445566778899AABB\n@enabled\n00001000 {mz(8, 3440)}\n00001004 {mz(9, 1440)}\n".encode()
+        ok = f"@nsobid-CCDDEEFF00112233445566778899AABB\n@enabled\n00001000 {mz(8, 1920)}\n00001004 {mz(9, 1080)}\n00002000 3F2AAAAB\n".encode()
+        named = b"@nsobid-CCDDEEFF00112233445566778899AABB\n@enabled\n00002000 3F2AAAAB\n"
+        commented = f"@nsobid-CCDDEEFF00112233445566778899AABB\n@enabled\n//00001000 {mz(8, 3440)}\n//00001004 {mz(9, 1440)}\n00002000 3F2AAAAC\n".encode()
+        ips = b"PATCH" + (0x1100).to_bytes(3, "big") + (8).to_bytes(2, "big") + bytes.fromhex(mz(8, 2560) + mz(9, 1440)) + b"EOF"
+        g = self.m / "orig__mods" / "Arceus [01001F5010DFA000]"
+        for d, data in (("[3440x1440 Ultrawide]/exefs/1.1.1.pchtxt", up), ("[21x9 Ultrawide]/exefs/1.1.1.pchtxt", ok), ("[21.9 (3440x1440)]/exefs/1.1.1.pchtxt", named),
+                        ("[21x9 Commented]/exefs/1.1.1.pchtxt", commented), ("[2560x1440 Ultrawide]/exefs/CCDDEEFF00112233.ips", ips)):
+            (g / d).parent.mkdir(parents=True, exist_ok=True); (g / d).write_bytes(data)
+        o = self.m / "other__mods" / "Arceus [01001F5010DFA000]/[4K Docked]/exefs"; o.mkdir(parents=True)   # ⑥ 同一份内容在别的库里被分成画面类 → 也不收
+        (o / "1.1.1.pchtxt").write_bytes(up)
+        (self.m / "SOURCES.tsv").write_text("来源\tURL\t提交号\n" + "".join(f"{r}\tu\t{'c' * 40}\n" for r in ("orig__mods", "ADEMOLA200__mods", "other__mods")))
+        rows = [r for r in patch_index.dedupe(patch_index.scan(str(self.m))) if "01001F5010DFA000" in r["gids"]]
+        self.assertEqual(sorted(r["sha256"] for r in rows if r["cat"] == "widescreen"), sorted(hashlib.sha256(x).hexdigest() for x in (ok, named, commented)))
+        self.assertNotIn(hashlib.sha256(up).hexdigest(), {r["sha256"] for r in rows})
+        self.assertEqual(sorted(x[2] for x in patch_index.UPRES), [(2560, 1440), (3440, 1440)])
+
     def test_cheat_libraries_are_not_indexed_twice(self):
         os.rename(self.m / "orig__mods", self.m / "ChanseyIsTheBest__NX-60FPS-RES-GFX-Cheats")
         (self.m / "SOURCES.tsv").write_text("来源\tURL\t提交号\n" + "".join(f"{r}\tu\t{'c' * 40}\n" for r in ("ChanseyIsTheBest__NX-60FPS-RES-GFX-Cheats", "ADEMOLA200__mods")))

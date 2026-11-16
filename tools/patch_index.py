@@ -141,6 +141,39 @@ def gfx_dir(path, text=''):
     return ''
 
 
+# 改内部渲染分辨率的满屏补丁（11-16 #b824d1：阿尔宙斯「3440x1440」变体把渲染分辨率提到 3440×1440，和 1800p（D-Q3QJ）同机制——渲染目标放大、
+#   游戏自己的堆放不下 → 空指针崩）。按内容判：补丁写进的 movz 立即数里同时有一个高（> 1080 的常见高度）和一个宽（≥ 1.3 倍高）。
+#   只看名字不算：名字里写 3440x1440 的多是目标显示器，正文只改画幅（11-16 普查 116 份名字带分辨率的，正文 0 份写分辨率常数）
+UPRES_HEIGHTS = frozenset((1152, 1200, 1440, 1536, 1600, 1620, 1800, 2160, 2880, 4320))
+
+
+def words_of(kind, data):
+    """补丁写进的 4 字节字（小端）：pchtxt 每行「偏移 十六进制」（// 注释掉的不算），IPS 按记录（偏移 3 字节 + 长度 2 字节 + 数据；长度 0 = RLE，不是指令）"""
+    out = []
+    if kind == 'ips':
+        i = 5 if data[:5] in (b'PATCH', b'IPS32') else 0
+        wide = data[:5] == b'IPS32'
+        while i + (4 if wide else 3) + 2 <= len(data):
+            n0 = 4 if wide else 3
+            if data[i:i + n0] in (b'EOF', b'EEOF'): break
+            size = int.from_bytes(data[i + n0:i + n0 + 2], 'big'); i += n0 + 2
+            if size == 0: i += 3; continue
+            out += [int.from_bytes(data[i + k:i + k + 4], 'little') for k in range(0, size - 3, 4)]; i += size
+        return out
+    for line in data.decode('utf-8', 'replace').splitlines():
+        m = re.match(r'\s*[0-9A-Fa-f]{8}\s+([0-9A-Fa-f]{8,})\b', line)
+        if m:
+            hx = m.group(1)
+            out += [int.from_bytes(bytes.fromhex(hx[k:k + 8]), 'little') for k in range(0, len(hx) - 7, 8)]
+    return out
+
+
+def upres(words):
+    """→ (宽, 高)：这些字里有 movz 写一对渲染分辨率（见 UPRES_HEIGHTS）；没有 → None"""
+    imms = {(w >> 5) & 0xFFFF for w in words if (w & 0x7F800000) == 0x52800000 and not (w >> 21) & 3}   # movz w/x，不移位
+    return next(((w, h) for h in sorted(imms & UPRES_HEIGHTS) for w in sorted(imms) if 1.3 * h <= w <= 8192), None)
+
+
 def bids_of(path, data):
     name = os.path.splitext(os.path.basename(path))[0]
     if path.lower().endswith('.ips'):
@@ -177,6 +210,7 @@ def half(path, roots):
     return '/exefs/' in low and path.lower().endswith(('.pchtxt', '.ips')) and mod_root(path) in roots
 
 
+UPRES = []    # 本次扫描不收的改内部分辨率满屏补丁：(路径, 包内路径, (宽, 高), sha256)；同一份内容在别处（被分成别的类）也不收
 HALVES = []   # 本次扫描不收的半边：(文件, 包内路径或空, sha256)；scan 收尾按 sha256 把别的库里同一份内容也去掉
 
 
@@ -255,7 +289,7 @@ def scan(mirror, keep_local=False, cheat_libs=False):
     """keep_local：每行另记 _local（镜像里的本地相对路径，tools/patch_pack.py 取字节用；不进索引）；汇总库 JSON 拆出的金手指另记 _data（内容是拼出来的，按路径取不回）。
     cheat_libs：金手指专门库（CHEAT_LIBS）的金手指也收（统一包用：11-13 起金手指也由我们的下载站分发，不再由出包端逐库去 GitHub 取）"""
     rows, pinned = [], {}
-    HALVES.clear()
+    HALVES.clear(); UPRES.clear()
     src = os.path.join(mirror, 'SOURCES.tsv')
     if os.path.isfile(src):
         for line in open(src, encoding='utf-8'):
@@ -289,6 +323,8 @@ def scan(mirror, keep_local=False, cheat_libs=False):
                 cat, tfps, aspect = classify(rel + '/' + name if extra else rel, text, repo)
                 gdir = gfx_dir(rel + '/' + name if extra else rel, text) if cat == 'gfx' else ''
                 bids = bids_of(name, data)
+                if cat == 'widescreen' and (wh := upres(words_of(kind, data))):   # 改内部分辨率的满屏补丁不收（见 upres）
+                    UPRES.append((rel, name, wh, hashlib.sha256(data).hexdigest())); return
             rows.append(dict(repo=repo, commit=commit, path=rel, size=len(data), sha256=hashlib.sha256(data).hexdigest(), kind=kind, cat=cat,
                              target_fps=tfps, aspect=aspect, **({'dir': gdir} if gdir else {}), gids=sorted({g.upper() for g in GID.findall(rel + '/' + name)}), bids=bids, license=lic, **(extra or {})))
             if keep_local:
@@ -343,8 +379,9 @@ def scan(mirror, keep_local=False, cheat_libs=False):
                         rows[-1]['_local'] = local
                 else:
                     row(rel, rel, data)
-    gone = {h for _, _, h in HALVES}
+    gone = {h for _, _, h in HALVES} | {h for *_, h in UPRES}
     kept = [r for r in rows if r['kind'] == 'cheat' or r['sha256'] not in gone]
+    print(f'改内部渲染分辨率的满屏补丁不收：{len(UPRES)} 份', file=sys.stderr)
     print(f'配套是显存 / 堆配置、只能收到 exefs 半边的补丁不收：{len(HALVES)} 份（去掉 {len(rows) - len(kept)} 行，含别的库里同一份内容）', file=sys.stderr)
     return kept
 
