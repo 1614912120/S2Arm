@@ -9750,9 +9750,5 @@
  {
   "source": "NUP 程序号 {0} 与游戏库 {0} 不一致",
   "en": "The NUP's title ID {0} doesn't match the library's {0}"
- },
- {
-  "source": "mod 开关格式不对。",
-  "en": "Invalid mod switch request."
  }
 ]

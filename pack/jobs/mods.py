@@ -16,8 +16,6 @@ from pathlib import Path
 from core import Failure
 
 DIR = "mods"
-OFF = ".off-"   # 关掉的 mod：文件夹改名为 mods/.off-<名字>（11-15 v0.5.0 收口「导入、关掉、删掉」）。服务层 RomFsMods.cs 跳过 . 开头的文件夹、
-                #   装机推送（install.push_mods）也不推 . 开头的 → 关掉 = 起局不叠、手机上那份删掉；打开改回原名即恢复，内容不动
 MAX_BYTES = 16 << 30          # 一次导入解开后的总大小上限（大号资源 mod 也就几 GB；防压缩炸弹）
 MAX_FILES = 200_000
 GID_RE = re.compile(r"^[0-9A-Fa-f]{16}$")
@@ -117,57 +115,31 @@ def import_paths(c, game, paths):
                 shutil.rmtree(tmp, ignore_errors=True)
                 shutil.copytree(rd, tmp / "romfs", symlinks=True, ignore=lambda d, ns: [n for n in ns if Path(d, n).is_symlink()])
                 dst = home / name
-                for old in (dst, home / (OFF + name)):   # 同名整份替换：关着的那份也换掉，新导入的是开着的
-                    if old.exists():
-                        shutil.rmtree(old)
+                if dst.exists():
+                    shutil.rmtree(dst)
                 tmp.rename(dst)
                 imported.append(name)
     return dict(imported=imported, notes=notes)
 
 
-def _folders(home):
-    """→ {名字: (文件夹, 开着?)}；关着的是 .off-<名字>，别的 . 开头（导入中的临时目录）不算"""
-    out = {}
-    if home.is_dir():
-        for d in home.iterdir():
-            if not d.is_dir():
-                continue
-            if d.name.startswith(OFF):
-                out.setdefault(d.name[len(OFF):], (d, False))
-            elif not d.name.startswith("."):
-                out[d.name] = (d, True)
-    return out
-
-
 def listing(c, game):
-    """→ [{name, enabled, files, bytes}]（按叠加顺序：名字升序；关着的照列，enabled 为假）"""
+    """→ [{name, files, bytes}]（按叠加顺序：文件夹名升序）"""
+    home = mods_dir(c, game["id"].upper(), create=False)
     out = []
-    for name, (d, on) in sorted(_folders(mods_dir(c, game["id"].upper(), create=False)).items()):
-        files = [f for f in (d / "romfs").rglob("*") if f.is_file()] if (d / "romfs").is_dir() else []
-        out.append(dict(name=name, enabled=on, files=len(files), bytes=sum(f.stat().st_size for f in files)))
+    if home.is_dir():
+        for d in sorted(p for p in home.iterdir() if p.is_dir() and not p.name.startswith(".")):
+            files = [f for f in (d / "romfs").rglob("*") if f.is_file()] if (d / "romfs").is_dir() else []
+            out.append(dict(name=d.name, files=len(files), bytes=sum(f.stat().st_size for f in files)))
     return out
 
 
 def remove(c, game, names):
-    have = _folders(mods_dir(c, game["id"].upper(), create=False))
+    home = mods_dir(c, game["id"].upper(), create=False)
+    have = {it["name"] for it in listing(c, game)}
     for n in names:
         if n not in have:
             raise Failure("没有这个 mod：%s。" % n, code="job_failed")
-        shutil.rmtree(have[n][0])
-
-
-def set_enabled(c, game, want):
-    """{名字: 真 / 假} → 改名在 <名字> 与 .off-<名字> 之间切换（下次开始游戏生效；装到 iPhone 时机上跟着增删）"""
-    if not isinstance(want, dict) or not all(isinstance(v, bool) for v in want.values()):
-        raise Failure("mod 开关格式不对。", code="job_failed")
-    home = mods_dir(c, game["id"].upper(), create=False)
-    have = _folders(home)
-    for n, on in want.items():
-        if n not in have:
-            raise Failure("没有这个 mod：%s。" % n, code="job_failed")
-        d, cur = have[n]
-        if cur != on:
-            d.rename(home / (n if on else OFF + n))
+        shutil.rmtree(home / n)
 
 
 def fingerprint(d):

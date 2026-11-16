@@ -74,11 +74,6 @@ import S2ArmAppleAdapter
         XCTAssertEqual(full.5.notes.count, 1)
         _ = try await model.launchSettingsFull(gid, modsRemove: ["HD Textures"])
         XCTAssertEqual(runner.requests.last?["modsRemove"] as? [String], ["HD Textures"])
-        XCTAssertEqual(full.5.items.map(\.enabled), [true], "作业层没给 enabled = 开着（旧作业层）")
-        runner.mods = [["name": "HD Textures", "enabled": false, "files": 2, "bytes": 3]]
-        let off = try await model.launchSettingsFull(gid, modsEnable: ["HD Textures": false])
-        XCTAssertEqual(runner.requests.last?["modsEnable"] as? [String: Bool], ["HD Textures": false])
-        XCTAssertEqual(off.5.items.map(\.enabled), [false])
     }
 
     /// 上次开着某几条时异常退出（11-13 维护者改定：不问）：作业层已关掉；开始游戏照常开局，同时通知关了什么、回 crashAnswer=ack 清记录
