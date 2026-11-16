@@ -422,8 +422,12 @@ s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" \
     "$android_dir/app/src/main/java/org/s2arm/android/GameStorage.java" \
     "$android_dir/app/src/main/java/org/s2arm/android/GameResume.java" \
     "$android_dir/app/src/main/java/org/s2arm/android/GameSession.java" \
-    "$android_dir/tests/GameSessionTest.java"
+    "$android_dir/app/src/main/java/org/s2arm/android/GameMods.java" \
+    "$android_dir/tests/GameSessionTest.java" \
+    "$android_dir/tests/GameModsTest.java"
 s2a_gate_step java -cp "$out/java" org.s2arm.android.GameSessionTest
+# 资源替换类 mod 导入（口径同 pack/jobs/mods.py）：发布结构 / 别的程序号 / 逃逸与符号链接 / 上限 / 开关 / 删除 / zip64
+s2a_gate_step java -ea -cp "$out/java" org.s2arm.android.GameModsTest
 # The shell's BootSpec against boot-spec.v1.schema.json (with and without a region).
 s2a_gate_step "$PY" - "$android_dir/contracts" "$out/boot-spec" <<'PY'
 import importlib.util, os, sys
