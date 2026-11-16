@@ -103,7 +103,8 @@ public sealed partial class EnvironmentWindow
             var name = it.TryGetProperty("name", out var n) ? n.GetString() ?? "" : "";
             long bytes = it.TryGetProperty("bytes", out var b) && b.TryGetInt64(out var bv) ? bv : 0;
             int files = it.TryGetProperty("files", out var f) && f.TryGetInt32(out var fv) ? fv : 0;
-            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 10 };
+            bool on = !(it.TryGetProperty("enabled", out var en) && en.ValueKind == JsonValueKind.False);   // 关掉 = 作业层改名为 mods/.off-<名字>（不叠、不推）
+            var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto,Auto"), ColumnSpacing = 10 };
             var text = new StackPanel { Spacing = 2 };
             text.Children.Add(new TextBlock { Text = name, FontSize = 13.5, FontWeight = FontWeight.SemiBold, TextWrapping = TextWrapping.Wrap });
             text.Children.Add(Muted(T("display.mods.files").Replace("{0}", files.ToString()).Replace("{1}", $"{bytes / 1048576.0:0.#} MB"), 12));
@@ -112,6 +113,10 @@ public sealed partial class EnvironmentWindow
             AutomationId(remove, "mods.remove." + name);
             remove.VerticalAlignment = VerticalAlignment.Center;
             Grid.SetColumn(remove, 1); row.Children.Add(remove);
+            var toggle = new CheckBox { IsChecked = on, IsEnabled = !modsLoading && !libraryBusy, VerticalAlignment = VerticalAlignment.Center };
+            toggle.IsCheckedChanged += (_, _) => _ = RunModsAsync(new Dictionary<string, object?> { ["modsEnable"] = new Dictionary<string, object?> { [name] = toggle.IsChecked == true } });
+            AutomationId(toggle, "mods.toggle." + name);
+            Grid.SetColumn(toggle, 2); row.Children.Add(toggle);
             box.Children.Add(row);
         }
         body.Children.Add(Card(box));

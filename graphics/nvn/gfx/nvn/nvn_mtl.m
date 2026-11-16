@@ -3609,6 +3609,49 @@ static uint64_t mem_readable(const void *p, uint64_t n) {
     }
     return (cur > e ? e : cur) - a;
 }
+// 宿主 CPU 读客体贴图存储前一律按「当前权限可读」判（诊断#f83b30 / #a4a895 / #b5a081 一族）：游戏只映射用到的那段，其余是 PROT_NONE 的预留块；
+//   页被写过、之后又被改成不可访问时，mincore 仍报「在内存里」——拿驻留当可读，tp_fp_u / gob_hash_w 照读，SIGBUS。驻留只用来判「没碰过 = 0」，可读与否只看这里
+static int span_readable(const void *p, size_t n) { return !n || mem_readable(p, n) >= n; }
+// [p, p + n 页) 逐页能不能读（按权限，vm_region 一次走完）：不可读的页在 v[i] 清零（调用方把 0 当「不读、按 0」）
+static void pages_mask_readable(uintptr_t p, uint64_t n, uintptr_t pg, unsigned char *v) {
+    vm_address_t cur = p, e = p + n * pg;
+    while (cur < e) {
+        vm_address_t ra = cur; vm_size_t rs = 0; vm_region_basic_info_data_64_t bi; mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t obj = MACH_PORT_NULL;
+        int ok = vm_region_64(mach_task_self(), &ra, &rs, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&bi, &cnt, &obj) == KERN_SUCCESS;
+        if (ok && obj != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), obj);
+        vm_address_t hole_end = !ok || ra >= e ? e : ra;   // [cur, hole_end) 没映射
+        for (vm_address_t q = cur; q < hole_end; q += pg) v[(q - p) / pg] = 0;
+        if (!ok || ra >= e) break;
+        if (!(bi.protection & VM_PROT_READ)) for (vm_address_t q = MAX(ra, p); q < MIN(ra + rs, e); q += pg) v[(q - p) / pg] = 0;
+        cur = ra + rs;
+    }
+}
+// 宿主 CPU 整段读贴图存储的唯一入口（pkg 上传、初始内容掩码、局部重传、ReadTexels、诊断转储都走它）：整段可读 → 直接用 t->mem；
+//   否则拷可读的前缀、其余按 0（同稀疏池的未映射页），*part 交调用方 free，记一次红。#b5a081 / #a4a895 / #f83b30 都是某一处整段读没先问
+// 逐页安全拷（vm_read_overwrite：读不了只回错、不会触发缺页信号）：读不了的页按 0，返回读到的字节数
+static uint64_t safe_copy(uint8_t *dst, const uint8_t *src, uint64_t n) {
+    uintptr_t pg = (uintptr_t)getpagesize(); uint64_t got = 0;
+    for (uint64_t o = 0; o < n;) {
+        uintptr_t a = (uintptr_t)src + o; size_t m = (size_t)MIN((uint64_t)(((a & ~(pg - 1)) + pg) - a), n - o); vm_size_t r = 0;
+        if (vm_read_overwrite(mach_task_self(), (vm_address_t)host_rd((const uint8_t *)a), m, (vm_address_t)(dst + o), &r) == KERN_SUCCESS && r == m) got += m; else memset(dst + o, 0, m);
+        o += m;
+    }
+    return got;
+}
+// 宿主 CPU 整段读贴图存储的唯一入口（pkg 上传、初始内容掩码、局部重传、ReadTexels、诊断转储都走它）：
+//   存储在已登记内存池里且按权限整段可读 → 直接用 t->mem；否则（不在池里的 CPU 回退路，或有不可读的页）→ 逐页安全拷进副本，读不了的按 0，*part 交调用方 free，记一次红。
+//   诊断#f83b30 / 常驻冒烟一台测试设备上稳定复现（v0.4.3，move ← pkg_upload）：不在池里的存储按权限判「可读」、读的时候照样 SIGBUS（背后的存储已不在），所以这条路不靠判、一律安全拷。
+//   副本多给 64 字节：去混排按 16 字节宽读，末尾不越出分配
+static const uint8_t *tex_src(const tex_t *t, uint64_t n, uint8_t **part) {
+    *part = NULL;
+    void *mb; uint64_t mo;
+    if (mem_readable(t->mem, n) >= n && nvn_be_addr((uint64_t)(uintptr_t)t->mem, n, &mb, &mo)) return t->mem;
+    if (!(*part = calloc(1, n + 64))) MDIE("texture copy of %llu bytes failed", (unsigned long long)n);
+    uint64_t rd = safe_copy(*part, t->mem, n);
+    if (rd < n) RED_ONCE(193, "texture ser=%llu %ux%u format %#x not readable from a memory pool buffer: only %llu of its %llu storage bytes are mapped; the rest is read as 0", (unsigned long long)t->serial,
+             t->d.width, t->d.height, t->d.format, (unsigned long long)rd, (unsigned long long)n);
+    return *part;
+}
 static void page_span(const tex_t *t, size_t k, const uint8_t **lo, size_t *n) {   // the texture's bytes in host page k of its storage (pages counted from the one holding t->mem)
     uintptr_t pg = nvn_dirty_page_size(), a = (uintptr_t)t->mem, e = a + tex_rd_size(t), p0 = a & ~(pg - 1);
     uintptr_t b = MAX(a, p0 + k * pg), c = MIN(e, p0 + (k + 1) * pg); *lo = (const uint8_t *)b; *n = c > b ? c - b : 0;
@@ -3658,7 +3701,7 @@ static uint64_t tp_fp_u(const tex_t *t, int *untouched) {
             const uint8_t *g = t->mem + a; uintptr_t pe = ((uintptr_t)g & ~(pg - 1)) + pg; size_t m = (size_t)MIN((uint64_t)(pe - (uintptr_t)g), e - a);
             const uint8_t *hp = host_rd(g); unsigned char v = 0;
             if (!file && !mincore((void *)((uintptr_t)hp & ~(pg - 1)), 1, (char *)&v) && !(v & (MINCORE_INCORE | MINCORE_PAGED_OUT))) { memset(buf + o, 0, m); if (untouched) *untouched = 1; }
-            else memcpy(buf + o, hp, m);
+            else if (safe_copy(buf + o, g, m) < m && untouched) *untouched = 1;   // 诊断#f83b30：驻留不等于可读、权限可读也不等于读得到（背后存储可能已不在）——安全拷，读不了按 0
             o += m; a += m;
         }
     return span_hash(buf, o) ^ len;
@@ -3944,7 +3987,7 @@ static void zb_report(const tex_t *t, unsigned base, const char *why) {
     const char *dir = getenv("DM_NVN_ZBLOCK"); static int nd; static uint64_t seen[16];   // DM_NVN_ZBLOCK=<folder>: also the raw storage of the first such texture of each format and size (up to 16), zb_<serial>.bin (unmapped pages as 0)
     uint64_t kind = (uint64_t)t->d.format << 48 | (uint64_t)t->d.width << 24 | t->d.height; int dup = 0; for (int i = 0; i < nd; i++) dup |= seen[i] == kind;
     if (dir && dir[0] == '/' && nd < 16 && !dup) { seen[nd] = kind; uint64_t n = sp ? MAX(t->L.size, 2u << 20) : t->L.size; uint8_t *m = malloc(n); char fp[1024]; FILE *f;   // a sparse texture: 2 MB, and zbm_<serial>.bin a byte per 4 KB page (1 mapped)
-        if (m) { if (sp) nvn_sparse_copy(t->pool, m, (uint64_t)(uintptr_t)t->mem, n); else memcpy(m, t->mem, n);
+        if (m) { if (sp) nvn_sparse_copy(t->pool, m, (uint64_t)(uintptr_t)t->mem, n); else { uint8_t *pp; memcpy(m, tex_src(t, n, &pp), n); free(pp); }
             snprintf(fp, sizeof fp, "%s/zb_%llu.bin", dir, (unsigned long long)t->serial); if ((f = fopen(fp, "wb"))) { fwrite(m, 1, n, f); fclose(f); nd++; }
             if (sp) { for (uint64_t o = 0; o < n; o += 0x1000) m[o >> 12] = (uint8_t)nvn_sparse_mapped(t->pool, (uint64_t)(uintptr_t)t->mem + o, 0x1000);
                 snprintf(fp, sizeof fp, "%s/zbm_%llu.bin", dir, (unsigned long long)t->serial); if ((f = fopen(fp, "wb"))) { fwrite(m, 1, n >> 12, f); fclose(f); } }
@@ -4084,13 +4127,7 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
     //   可读的不到全长：可读部分进副本、其余按 0（同稀疏池的未映射页），记一次红
     //   诊断#a4a895（0.4.1 仍崩）：贴图挂着池指针、存储却不在池登记的缓冲里（同样打「not in a memory pool」），起点落在没映射的块里——
     //   原先只在没有池指针时截短，这种跳过了、块线性拷贝直接从起点读，提交线程 SIGBUS。CPU 拷贝前一律先问可读长度（不看有没有池指针）
-    else { uint64_t rd = mem_readable(t->mem, t->L.size);
-        if (rd < t->L.size) {
-            if (!(part = calloc(1, t->L.size ? t->L.size : 1))) MDIE("texture copy of %llu bytes failed", (unsigned long long)t->L.size);
-            memcpy(part, t->mem, rd); src = part;
-            RED_ONCE(193, "texture ser=%llu %ux%u format %#x not readable from a memory pool buffer: only %llu of its %llu storage bytes are mapped; the rest is read as 0", (unsigned long long)t->serial,
-                     t->d.width, t->d.height, t->d.format, (unsigned long long)rd, (unsigned long long)t->L.size);
-        } }
+    else src = tex_src(t, t->L.size, &part);
     up_begin();
     id<MTLBuffer> stg = [g_dev newBufferWithLength:total ? total : 16 options:MTLResourceStorageModeShared];
     res_add(stg); up_keep_add(stg);
@@ -4243,11 +4280,12 @@ static uint64_t gob_zero_hash(void) { static uint64_t h; static dispatch_once_t 
 static gob_win gob_win_new(void) { return (gob_win){.off = s2a_guest_fd() >= 0}; }
 static uint64_t gob_hash_w(gob_win *w, uint64_t g, uint64_t ge) {   // = gob_hash(g)；ge：调用方这一趟走到哪个 GOB 为止（决定往前查多少页）
     const uint8_t *h = host_rd((const uint8_t *)(uintptr_t)(g << 9));
-    if (w->off) return span_hash(h, 512);
     uint64_t pg = (uint64_t)getpagesize(), p = (uint64_t)(uintptr_t)h & ~(pg - 1);
     if (p < w->a || p >= w->a + w->n * pg) {
         uint64_t n = MIN(((ge - g) * 512 + pg - 1) / pg + 1, (uint64_t)sizeof w->v);
-        if (mincore((void *)(uintptr_t)p, (size_t)(n * pg), (char *)w->v) && (n = 1, mincore((void *)(uintptr_t)p, (size_t)pg, (char *)w->v))) w->v[0] = MINCORE_INCORE;   // 查不了：当碰过、照读
+        if (w->off) memset(w->v, MINCORE_INCORE, (size_t)n);   // 文件后备：不按驻留判（文件页总算碰过），只按下面的可读判
+        else if (mincore((void *)(uintptr_t)p, (size_t)(n * pg), (char *)w->v) && (n = 1, mincore((void *)(uintptr_t)p, (size_t)pg, (char *)w->v))) w->v[0] = MINCORE_INCORE;   // 查不了：当碰过，再看可读
+        pages_mask_readable((uintptr_t)p, n, (uintptr_t)pg, w->v);   // 诊断#f83b30：驻留不等于可读，不可读的页按「没碰过」= 0，不读
         w->a = p; w->n = n;
     }
     if (!(w->v[(p - w->a) / pg] & (MINCORE_INCORE | MINCORE_PAGED_OUT))) { g_gob_untouched++; return gob_zero_hash(); }
@@ -4418,20 +4456,32 @@ static void bcal_drop_pool(const void *pool) {   // 内存池 Finalize：这段�
 // 记账留住的写入者贴图只在它的字节还在这段存储上时有用：别的贴图在它最后一次写之后 GPU 写过这段存储（与存储接管 alias_take_over 同一判据），
 //   字节已不是它的，放掉贴图、这一项的各层写入作废（BC 贴图照常按游戏内存取）。不放的话，每帧换尺寸、换位置的渲染目标一张张被这里留住，
 //   直到内存池释放才走：11-14 Duo 长局 18 分钟实占 1.3 → 7.9 GB、图形内存压缩部分 74 → 3960 MB 后被系统杀。提交末尾每 16 次扫一遍；先 g_bcal_mu 后 g_smu（与 bcal_note 同序）
-static uint64_t g_bcal_dropped, g_bcal_dropped_b;
+static uint64_t g_bcal_dropped, g_bcal_dropped_b, g_bcal_dropped_live, g_bcal_dropped_alias;   // live：放掉时仍被序号 / 定稿 / 共享存储表点名，只放引用的；alias：连同共享存储表里过期的同键一项一起摘掉的
 static void bcal_sweep_overwritten(void) {
     if (!atomic_load_explicit(&g_bcal_n, memory_order_relaxed) || (g_fence & 15)) return;
-    void **drop = NULL; uint32_t nd = 0, cap = 0;
+    void **drop = NULL; uint8_t *live = NULL; uint32_t nd = 0, cap = 0;
     pthread_mutex_lock(&g_bcal_mu); pthread_mutex_lock(&g_smu);
     for (uint32_t i = 0; i < g_bcal.cap; i++) { bcal_e *e = g_bcal.vals[i]; if (!e || !e->wtex) continue;
         alias_key k; alias_key_of(&k, &e->w); nvn_texlayout L; nvn_tex_layout(&e->w.d, &L);
         if (!L.size || !alias_overwritten(&k, k.off, k.off + (int64_t)L.size, atomic_load_explicit(&e->wfence, memory_order_relaxed))) continue;
-        if (nd == cap) { uint32_t c = cap ? 2 * cap : 64; void **q = realloc(drop, c * sizeof *q); if (!q) break; drop = q; cap = c; }
+        if (nd == cap) { uint32_t c = cap ? 2 * cap : 64; void **q = realloc(drop, c * sizeof *q); if (!q) break; drop = q; uint8_t *lq = realloc(live, c); if (!lq) break; live = lq; cap = c; }
+        // #1220：别名表只放掉自己那份引用。写入贴图常常仍是某个序号 / 定稿记录 / 共享存储表的现行贴图（之后照样被取用、绑定）：那时只能 unref，
+        //   留在驻留集；原先一律 defer_obj_release，GPU 做完那次提交就出驻留集，之后的绘制读它 → 缺页 / 挂死（诊断开关实测同一张贴图退役后又被取用上百次）。
+        //   没有别处点名的照旧退役（11-14 长局内存涨到被系统杀的那条修复不变）
+        id wo = (__bridge id)e->wtex; live[nd] = (uint8_t)(serial_holds(&g_by_serial, wo) || serial_holds(&g_ghost, wo) || serial_holds(&g_ghost_active, wo));
+        //   共享存储表同一个键上挂的就是它：这一项也过期了（同存储接管 alias_take_over 的判据：字节已被别的贴图写过），一并摘掉（下次同描述的贴图按游戏内存新建）；
+        //   挂在别的键上的照样算被点名、只放引用
+        if (!live[nd] && nvn_hm_get(&g_alias, &k) == e->wtex) {
+            void *old = nvn_hm_del(&g_alias, &k); nvn_hm_del(&g_alias_seen, &k); nvn_hm_del(&g_alias_wrote, &k);
+            if (g_alias_set) CFSetRemoveValue(g_alias_set, old);
+            CFRelease(old); g_ser_gen++; g_bcal_dropped_alias++;   // 引用在 drop 里还有一份（下面 defer_obj_release 等那次提交做完才放）
+        } else if (!live[nd]) live[nd] = (uint8_t)serial_holds(&g_alias, wo);
         drop[nd++] = e->wtex; e->wtex = NULL;
         atomic_fetch_add(&e->seq, 1); for (int l = 0; l < 16; l++) atomic_store(&e->lgen[l], 0); atomic_fetch_add(&e->seq, 1); }
     pthread_mutex_unlock(&g_smu); pthread_mutex_unlock(&g_bcal_mu);
-    for (uint32_t i = 0; i < nd; i++) { id<MTLTexture> w = CFBridgingRelease(drop[i]); g_bcal_dropped++; g_bcal_dropped_b += w.allocatedSize; defer_obj_release(w); }   // GPU 可能还在用：做完再放
-    free(drop);
+    for (uint32_t i = 0; i < nd; i++) { id<MTLTexture> w = CFBridgingRelease(drop[i]); g_bcal_dropped++; g_bcal_dropped_b += w.allocatedSize;
+        if (live[i]) { g_bcal_dropped_live++; defer_obj_unref(w); } else defer_obj_release(w); }   // GPU 可能还在用：做完再放（还被点名的只放引用）
+    free(drop); free(live);
 }
 static void bcal_forget(uint64_t serial) {   // BC 贴图对象没了：它的同步记录作废
     if (!atomic_load(&g_bcal_n)) return;
@@ -4543,7 +4593,8 @@ static int tex_init_fill(const tex_t *t, id<MTLTexture> mt) {
             (unsigned long long)t->serial, t->d.width, t->d.height, t->d.depth, t->d.format, (unsigned long long)sb, (unsigned long long)t->L.size, nr, can ? "zero there" : "zero instead (all of it, or a format the zeroing cannot copy into)", (unsigned long long)k);
         if (!can) { free(runs); return 0; }
         if (!(masked = malloc(t->L.size))) MDIE("initial content check copy of %llu bytes failed", (unsigned long long)t->L.size);
-        memcpy(masked, t->mem, t->L.size); for (int i = 0; i < nr; i++) memset(masked + runs[2 * i], 0, runs[2 * i + 1] - runs[2 * i]);
+        { uint8_t *pp; const uint8_t *ss = tex_src(t, t->L.size, &pp); memcpy(masked, ss, t->L.size); free(pp); }   // 诊断#f83b30：按可读截短
+        for (int i = 0; i < nr; i++) memset(masked + runs[2 * i], 0, runs[2 * i + 1] - runs[2 * i]);
         src = masked;
     }
     if (!(masked ? mem_any(src, t->L.size) : mem_any_touched(src, t->L.size))) { free(masked); free(runs); return 0; }   // 游戏内存直接判：不读未触碰页（mem_any_touched）
@@ -4817,7 +4868,8 @@ static int pkg_upload_rects(const tex_t *t, id<MTLTexture> mt, const rect_list *
         id<MTLBuffer> stg = [g_dev newBufferWithLength:pitch * rows * z options:MTLResourceStorageModeShared];
         if (!stg) return 1;
         res_add(stg); up_keep_add(stg);
-        if (nvn_deswizzle(&t->d, q->level, q->layer, t->mem, stg.contents, pitch)) { RED_ONCE(98, "partial re-upload: deswizzle failed format %#x target %d", t->d.format, t->d.target); return 1; }
+        { uint8_t *pp; const uint8_t *ss = tex_src(t, t->L.size, &pp); int bad = nvn_deswizzle(&t->d, q->level, q->layer, ss, stg.contents, pitch); free(pp);   // 诊断#f83b30：按可读截短
+          if (bad) { RED_ONCE(98, "partial re-upload: deswizzle failed format %#x target %d", t->d.format, t->d.target); return 1; } }
         for (int j = i; j < L->n; j++) { const up_rect *r = &L->r[j]; if (r->level != q->level || r->layer != q->layer) continue;
             size_t off = (size_t)(r->y / bh) * pitch + (size_t)(r->x / bw) * bpb; g_bp_up_bytes += (size_t)((r->w + bw - 1) / bw) * bpb * ((r->h + bh - 1) / bh) * z;
             up_blit_add_at(stg, off, pitch, pitch * rows, MTLSizeMake(r->w, r->h, z), mt, t->d.target == 2 ? 0 : r->layer, r->level, r->x, r->y); }
@@ -5032,7 +5084,8 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
                     if (pk->nph > ncap) { uint64_t *a = realloc(nh, pk->nph * sizeof *a), *b = a ? realloc(gens, pk->nph * sizeof *b) : NULL; if (a) nh = a; if (b) { gens = b; ncap = pk->nph; } }
                     int changed = 0, gpu = pk->pgpu != NULL;   // the texture holds GPU-written content (pgpu goes with a whole re-upload)
                     for (long k = 0; k < np && ncap >= pk->nph; k++) if (bits[k >> 6] >> (k & 63) & 1) {
-                        const uint8_t *lo; size_t m; page_span(t, (size_t)k, &lo, &m); nh[k] = span_hash(host_rd(lo), m);
+                        const uint8_t *lo; size_t m; page_span(t, (size_t)k, &lo, &m);
+                        nh[k] = span_readable(host_rd(lo), m) ? span_hash(host_rd(lo), m) : ~pk->ph[k];   // 写过又不可读（诊断#f83b30）：不读，按「变了」走整张重传（重传路径按可读截短）
                         if (nh[k] != pk->ph[k]) changed = 1; else bits[k >> 6] &= ~(1ull << (k & 63));   // bits now: pages whose bytes changed
                     }
                     if (!changed) { pk->stamp = st; pk->seen = nvn_dirty_now(); clean = 1; g_pkg_same++; }
@@ -5330,8 +5383,8 @@ void nvn_be_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
         pthread_mutex_unlock(&g_bcal_mu);
         for (id<MTLTexture> m in ev) { evb += m.allocatedSize; if (CFSetContainsValue(ws, (__bridge const void *)m)) { inn++; inb += m.allocatedSize; } }
         CFRelease(ws);
-        MLOG("textures dropped on storage takeover still alive up to frame %llu: %lu, %llu MB (of %llu dropped in total; held by the block-compressed alias table %llu, %llu MB); that table: %llu entries, %llu writer textures kept, %llu MB, let go as overwritten %llu, %llu MB in total",
-             frame, (unsigned long)ev.count, (unsigned long long)(evb >> 20), (unsigned long long)evn, (unsigned long long)inn, (unsigned long long)(inb >> 20), (unsigned long long)bn, (unsigned long long)wn, (unsigned long long)(wb >> 20), (unsigned long long)g_bcal_dropped, (unsigned long long)(g_bcal_dropped_b >> 20)); }
+        MLOG("textures dropped on storage takeover still alive up to frame %llu: %lu, %llu MB (of %llu dropped in total; held by the block-compressed alias table %llu, %llu MB); that table: %llu entries, %llu writer textures kept, %llu MB, let go as overwritten %llu, %llu MB in total (still named elsewhere, reference only %llu; stale shared-storage entry taken out with it %llu)",
+             frame, (unsigned long)ev.count, (unsigned long long)(evb >> 20), (unsigned long long)evn, (unsigned long long)inn, (unsigned long long)(inb >> 20), (unsigned long long)bn, (unsigned long long)wn, (unsigned long long)(wb >> 20), (unsigned long long)g_bcal_dropped, (unsigned long long)(g_bcal_dropped_b >> 20), (unsigned long long)g_bcal_dropped_live, (unsigned long long)g_bcal_dropped_alias); }
     { void mtl_vc_stats(unsigned *, uint64_t *, uint64_t *), mtl_tb2_stats(uint64_t *, uint64_t *, uint64_t *, uint64_t *); uint64_t mtl_tex_mis_count(void); unsigned vn; uint64_t vh, vm, tb, tm, tf, tt;
       mtl_vc_stats(&vn, &vh, &vm); mtl_tb2_stats(&tb, &tm, &tf, &tt);
       MLOG("texture views by texture (vc_get): %u textures hold cached views; %llu views reused, %llu made in total; texture buffers bound as 2D rows for wrapped 1D fetches %llu times, %llu made, %llu failed, "
@@ -15276,7 +15329,8 @@ void nvn_be_read_texels(const tex_t *t, unsigned level, unsigned layer0, const N
         uint8_t *lin = malloc(lp * lr * lz);
         for (int z = 0; z < nz; z++) {
             unsigned layer = is3d ? 0 : layer0 + r->zoffset + z;
-            if ((is3d && z == 0) || !is3d) if (nvn_deswizzle(&t->d, level, layer, t->mem, lin, lp)) { RED_ONCE(32, "ReadTexels deswizzle failed"); free(lin); return; }
+            if ((is3d && z == 0) || !is3d) { uint8_t *pp; const uint8_t *ss = tex_src(t, t->L.size, &pp); int bad = nvn_deswizzle(&t->d, level, layer, ss, lin, lp); free(pp);   // 诊断#f83b30：按可读截短
+                if (bad) { RED_ONCE(32, "ReadTexels deswizzle failed"); free(lin); return; } }
             const uint8_t *src = lin + (is3d ? (size_t)(r->zoffset + z) * lp * lr : 0);
             for (size_t y = 0; y < hb; y++) memcpy(dst + z * img + y * row, src + (y0 + y) * lp + x0, wb);
         }

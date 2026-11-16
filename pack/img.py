@@ -49,6 +49,8 @@ def toc_bytes(entries):
     while slots < max(1, len(entries)) * 2: slots <<= 1
     table = [None] * slots; paths = bytearray()
     for path, off, size in entries:
+        # 目录表只放文件（11-16 D-4VAX：手机上按目录表逐项建父目录再改名，一条「/」结尾的项会把目标建成目录、改名 errno 21，整款装不上）
+        if not path or path.endswith('/') or path.startswith('/'): raise Red(f'目录表只放文件，不收这种路径：{path!r}')
         h = fnv(path); k = h & (slots - 1)
         while table[k] is not None:
             if table[k][0] == h and table[k][5] == path: raise Red(f'目录表路径重复：{path}')

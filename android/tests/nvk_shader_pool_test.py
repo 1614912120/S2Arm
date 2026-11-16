@@ -89,7 +89,7 @@ def main():
         assert before_lines[1] == after_lines[1], 'legacy S2AI1 bytes changed'
         print(f'legacy request and canonical identity byte-for-byte unchanged versus {base_sha}')
         return 0
-    if len(sys.argv) == 6 and sys.argv[1] in ('--emit-reuse-texture', '--emit-reuse-rt', '--emit-reuse-inactive', '--emit-real', '--emit-real-tbuf', '--execute-tbuf', '--emit-compute-tbuf', '--execute-compute-tbuf'):
+    if len(sys.argv) == 6 and sys.argv[1] in ('--emit-reuse-texture', '--emit-reuse-rt', '--emit-reuse-inactive', '--emit-real', '--emit-real-tbuf', '--execute-tbuf', '--emit-compute-tbuf', '--execute-compute-tbuf', '--reject-graphics-tbufu', '--reject-compute-tbufu'):
         result = run('emit-real', original, args=sys.argv[1:])
         sys.stdout.write(result.stdout); sys.stderr.write(result.stderr)
         return result.returncode
@@ -110,14 +110,41 @@ def main():
             result = subprocess.run([str(exe), path, *extra], capture_output=True, text=True, timeout=30)
             assert result.returncode == 1 and 'FAIL: BUFFER layout must be TBUF' in result.stderr, result.stderr
         print('NEGATIVE CONTROL PASS: removing TBUF layout fails graphics and compute assertions')
-        guard = 'if (le->cls == NVN_GPU_RES_TBUF) { red1("texture_buffer_replay_unsupported",'
-        assert code.count(guard) == 2
-        mutated = out/'tbuf-withdraw-replay.c'
-        mutated.write_text(code.replace(guard, guard.replace('le->cls ==', '0 && le->cls ==')))
+        type_anchor = 'else if (dim == 5 && !arrayed && !ms) target = NVN_TEXTURE_TARGET_BUFFER;'
+        assert code.count(type_anchor) == 1
+        mutated = out/'tbuf-withdraw-type.c'
+        mutated.write_text(code.replace(type_anchor, type_anchor.replace('dim == 5', '0 && dim == 5')))
         for mode, path in [('--execute-tbuf', gfx_result), ('--execute-compute-tbuf', cs_result)]:
-            result = run('tbuf-withdraw-replay', mutated, args=(mode, profile, closure, src_dir, path))
-            assert result.returncode == 1 and 'FAIL: real' in result.stderr and 'refuses unsupported replay' in result.stderr, result.stderr
-        print('NEGATIVE CONTROL PASS: removing TBUF replay guards fails graphics and compute assertions')
+            result = run('tbuf-withdraw-type', mutated, args=(mode, profile, closure, src_dir, path))
+            assert result.returncode == 1 and 'FAIL: real' in result.stderr and 'declared TBUF layout' in result.stderr, result.stderr
+        print('NEGATIVE CONTROL PASS: unproven TBUF shader type rejects graphics and compute')
+        # Mutate the actual dependency cache header independently for each
+        # guard; the compiler sees the copied producer and copied header.
+        cache = (native/'gfx_plat/nvk_shader_fact_cache.h').read_text()
+        base.append('-I'+str(native/'gfx_plat'))
+        for name, before, after in [
+            ('input', ' || t->is_buffer || ', ' || '),
+            ('reflection', 'e->src_kind == NVN_RB_TBUF || ', ''),
+        ]:
+            assert cache.count(before) == 1, (name, 'mutation anchor')
+            directory = out/('tbuf-cache-' + name)
+            directory.mkdir(exist_ok=True)
+            shader = directory/'nvk_shader.c'
+            shader.write_text(code)
+            (directory/'nvk_shader_fact_cache.h').write_text(cache.replace(before, after))
+            if name == 'input':
+                result = run('tbuf-cache-input-test', shader)
+                expected = 'TBUF input fact prevents dependency identity reuse'
+            else:
+                fixture = directory/'tbuf-layout-test.c'
+                fixture.write_text((ROOT/'android/tests/tbuf_layout_test.c').read_text().replace(
+                    '#include "../native/gfx_plat/nvk_shader.c"', '#include "' + str(shader) + '"'))
+                exe = directory/'test'
+                host_link.run(base + [str(p) for p in [fixture, *libs]] + [strip, '-lm', '-o', str(exe)], check=True, timeout=60)
+                result = subprocess.run([str(exe), gfx_result], capture_output=True, text=True, timeout=30)
+                expected = 'reflected TBUF prevents dependency identity reuse'
+            assert result.returncode == 1 and expected in result.stderr, (name, result.stdout, result.stderr)
+            print('NEGATIVE CONTROL PASS: TBUF cache ' + name + ' guard -> ' + expected, flush=True)
         return 0
 
     if len(sys.argv) == 6 and sys.argv[1] == '--execute-reuse':
