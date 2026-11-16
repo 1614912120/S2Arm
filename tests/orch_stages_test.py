@@ -166,7 +166,7 @@ class StageTest(unittest.TestCase):
         try:
             (tx.path / 'ui_overlay/romfs/Layout').mkdir(parents=True)
             (tx.path / 'ui_overlay/romfs/Layout/x.zs').write_bytes(b'widened layout bytes')
-            pre = self.home / 'pre'; (pre / 'romfs').mkdir(parents=True); (pre / 'romfs/romfs_index.dll').write_bytes(b'')
+            pre = self.home / 'pre'; (pre / 'romfs').mkdir(parents=True); (pre / ('romfs/romfs_index.exe' if os.name == 'nt' else 'romfs/romfs_index')).write_bytes(b'')
             with patch.dict(os.environ, {'S2A_PREBUILT_TOOLS': str(pre), 'DOTNET': sys.executable}), patch.object(stages, 'run', side_effect=fake_run):
                 stages.Stages(self.store)._romfsidx(tx, deps)
             rows = dict(r.split('\t', 1)[::-1] for r in seen['list'].splitlines())

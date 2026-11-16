@@ -215,6 +215,7 @@ public sealed partial class EnvironmentWindow
             // 更新哪台：自动更新（PhoneAutoUpdate.cs）带连着的那台；否则壳旧了的那台（phoneUpdates 的设备记录键），作业层不自己挑
             if (device is { Length: > 0 }) extra["device"] = device;
             else if (PhoneUpdateTarget is { Device.Length: > 0 } target) extra["device"] = target.Device;
+            if (!HomeWidget) extra["widget"] = false;   // 玩家关了「装到 iPhone 时带主屏小组件」
             var job = await PackJobClient.RunAsync(PackRequest("installUpdate", "", extra.Count > 0 ? extra : null),
                 e => Dispatcher.UIThread.Post(() => IngestUpdateEvent(e)), front.Token, front.Next());
             succeeded = job.Report.Succeeded;

@@ -109,7 +109,8 @@
 "settings.fps.patchTitle" = "フレームレート";
 "settings.fps.patchNote" = "コミュニティパッチ · 最大 %ld fps";
 "settings.fps.pick" = "フレームレート レベル";
-"settings.fps.pick.auto" = "自動（画面に合わせる）";
+"settings.fps.pick.auto" = "自動（60 fps）";
+"settings.fps.pick.note" = "120 fps は端末が実際に追いつく必要があります。追いつかないとゲームが遅くなります。";
 "settings.fps.pick.level" = "%ld fps";
 "settings.patchNote" = "コミュニティパッチ";
 "settings.fullscreen.patchNote" = "コミュニティ全画面パッチ";

@@ -23,6 +23,7 @@ import S2ArmAppleAdapter
                 navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
                 window.makeKeyAndOrderFront(nil)
                 defer { navigation.detach(); window.close() }
+                try await settle(window, navigation, fixture.model.gamepad)
                 let players = navigation.controlTargets(in: window).filter { abs($0.frame.height - 30) < 0.5 }
                     .sorted { $0.frame.minX < $1.frame.minX }
                 XCTAssertEqual(players.count, 4)
@@ -58,7 +59,7 @@ import S2ArmAppleAdapter
                     if player == 3 && target == "X" { try snapshot(host, "input-shared-faces-" + language.code) }
                 }
                 navigation.focus("input.gamepad"); navigation.handle(.confirm)
-                try await Task.sleep(for: .milliseconds(80))
+                try await waitUntil { navigation.controlTargets(in: window).contains { $0.id == "dropdown.leftShoulder" } }
                 let ids = navigation.controlTargets(in: window).map(\.id)
                 for code in InputConfig.padCodes.prefix(4) {
                     XCTAssertFalse(ids.contains("dropdown." + code), "所有玩家都不能用逐游戏配置覆盖实体四键")
@@ -526,7 +527,7 @@ import S2ArmAppleAdapter
                 XCTAssertTrue(platforms.contains { $0.id == navigation.focusedID }, "向下应离开复选框进入可选平台")
                 let before = fixture.model.sgradeOn(game.id)
                 navigation.focus(checkbox.id); navigation.handle(.confirm)
-                try await Task.sleep(for: .milliseconds(100))
+                try await waitUntil { fixture.model.sgradeOn(game.id) != before }
                 XCTAssertEqual(fixture.model.sgradeOn(game.id), !before)
                 XCTAssertEqual(navigation.focusedID, checkbox.id, "切换勾选后仍保持有效焦点")
                 navigation.handle(.down)
@@ -632,8 +633,12 @@ import S2ArmAppleAdapter
                     pad.rightShoulder.setValue(1); navigation.source.tick(now: time)
                     pad.rightShoulder.setValue(0); navigation.source.tick(now: time + 0.01)
                     time += 0.1
-                    try await Task.sleep(for: .milliseconds(100))
                     let id = "home.group." + expected.rawValue
+                    try await waitUntil {
+                        guard fixture.model.home.group == expected, navigation.focusedID == id,
+                              let tab = navigation.controlTargets(in: window).first(where: { $0.id == id }) else { return false }
+                        return navigation.focusRingFrame(in: window) == tab.frame
+                    }
                     XCTAssertEqual(fixture.model.home.group, expected)
                     XCTAssertEqual(navigation.focusedID, id, "肩键切页后焦点应与新 tab 同步，包括空分组")
                     let tab = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == id })
@@ -642,7 +647,7 @@ import S2ArmAppleAdapter
                 navigation.focus("card.fixture")
                 pad.leftShoulder.setValue(1); navigation.source.tick(now: time)
                 pad.leftShoulder.setValue(0); navigation.source.tick(now: time + 0.01)
-                try await Task.sleep(for: .milliseconds(100))
+                try await waitUntil { fixture.model.home.group == .favorites && navigation.focusedID == "home.group.favorites" }
                 XCTAssertEqual(fixture.model.home.group, .favorites)
                 XCTAssertEqual(navigation.focusedID, "home.group.favorites", "从卡片切页也应聚焦新 tab")
                 navigation.source.controllers = { [] }
@@ -874,6 +879,12 @@ import S2ArmAppleAdapter
         }
     }
 
+    /// 屏幕键盘已出现且面板上的按键已登记（可以按键 / 提交）
+    private func keyboardReady(_ navigation: LauncherPadNavigation) -> Bool {
+        guard let k = navigation.keyboard else { return false }
+        return navigation.activeWindow === k.panel && navigation.controlTargets(in: k.panel).contains { $0.id == "pad.key.q" }
+    }
+
     private func waitUntil(_ ready: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async throws {
         for _ in 0..<100 {
             if ready() { return }
@@ -990,7 +1001,8 @@ import S2ArmAppleAdapter
             navigation.focus("home.search")
             pad.buttonA.setValue(1); navigation.source.tick(now: 0.01)
             pad.buttonA.setValue(0); navigation.source.tick(now: 0.02)
-            try await Task.sleep(for: .milliseconds(350))
+            // 键盘出来还不够：要等键盘面板上的按键已登记（面板布局完），否则按键 / 提交落在半成品面板上，关键盘时焦点回不到输入框
+            try await waitUntil { keyboardReady(navigation) && navigation.controlTargets(in: window).contains { $0.id == "home.search.field" } }
             let keyboard = try XCTUnwrap(navigation.keyboard, "手柄确认展开搜索时应自动弹出屏幕键盘")
             XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" }, "键盘不能使搜索框失焦收起")
             XCTAssertTrue(navigation.activeWindow === keyboard.panel)
@@ -999,25 +1011,25 @@ import S2ArmAppleAdapter
             XCTAssertEqual(keyboard.value, "Originalq")
             try snapshot(try XCTUnwrap(keyboard.panel.contentView), "search-keyboard-" + language.code)
             navigation.handle(.submit)
-            try await Task.sleep(for: .milliseconds(350))
+            try await waitUntil { navigation.keyboard == nil && navigation.focusedID == "home.search.field" && window.firstResponder is NSTextView }
             XCTAssertNil(navigation.keyboard)
             XCTAssertEqual(fixture.model.home.search, "Originalq")
             XCTAssertTrue(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" })
             XCTAssertEqual(navigation.focusedID, "home.search.field", "关闭键盘后，手柄焦点应回到输入框")
             XCTAssertTrue(window.firstResponder is NSTextView, "关闭键盘后恢复原生文本焦点")
             navigation.handle(.confirm)
-            try await Task.sleep(for: .milliseconds(100))
+            try await waitUntil { keyboardReady(navigation) }
             let cancelled = try XCTUnwrap(navigation.keyboard)
             cancelled.value = "discarded"
             navigation.handle(.back)
-            try await Task.sleep(for: .milliseconds(150))
+            try await waitUntil { navigation.keyboard == nil && window.firstResponder is NSTextView }
             XCTAssertEqual(fixture.model.home.search, "Originalq", "B 取消不改变查询")
             XCTAssertTrue(window.firstResponder is NSTextView)
             navigation.handle(.back)
-            try await Task.sleep(for: .milliseconds(300))
+            try await waitUntil { !navigation.controlTargets(in: window).contains { $0.id == "home.search.field" } }
             XCTAssertFalse(navigation.controlTargets(in: window).contains { $0.id == "home.search.field" })
             navigation.handle(.search)
-            try await Task.sleep(for: .milliseconds(150))
+            try await waitUntil { keyboardReady(navigation) }
             let shortcutKeyboard = try XCTUnwrap(navigation.keyboard, "搜索快捷键与搜索按钮共用屏幕键盘入口")
             let key = try XCTUnwrap(navigation.controlTargets(in: shortcutKeyboard.panel).first { $0.id == "pad.key.q" })
             let rect = shortcutKeyboard.panel.convertFromScreen(key.frame)
@@ -1634,10 +1646,24 @@ import S2ArmAppleAdapter
         window.isReleasedWhenClosed = false
         window.contentView = host
         window.orderBack(nil)
-        host.layoutSubtreeIfNeeded()
-        try await Task.sleep(for: .milliseconds(250))
-        host.layoutSubtreeIfNeeded()
+        try await settle(window, fixture.navigation, fixture.model.gamepad)
         return (host, window)
+    }
+
+    /// 等页面布局稳定再量：手柄可操作的控件已登记、位置连续 3 次采样（约 90 ms）不变；一个控件都没有的页面，空着连续约 300 ms 也算稳。
+    /// 设置类页面的控件登记在 fixture.navigation，首页（LauncherView）登记在 model.gamepad，两张表都看。
+    /// 固定等 250 ms 在整套 / 门禁高负载下会量到还没登记的控件（XCTUnwrap 落空）或还在挪的位置（点歪、焦点框差几 pt）。最多等 5 秒，超时交给后面的断言报真实状态
+    private func settle(_ window: NSWindow, _ registries: LauncherPadNavigation...) async throws {
+        var last = "", same = 0
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            window.contentView?.layoutSubtreeIfNeeded()
+            let now = registries.flatMap { $0.controlTargets(in: window) }.map { "\($0.id)@\($0.frame)" }.joined(separator: ";")
+            same = now == last ? same + 1 : 0
+            if same >= (now.isEmpty ? 10 : 3) { return }
+            last = now
+            try await Task.sleep(for: .milliseconds(30))
+        }
     }
 
     /// 常显滚动条占掉的宽度（浮层滚动条为 0）。

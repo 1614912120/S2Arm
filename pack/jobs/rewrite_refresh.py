@@ -196,10 +196,15 @@ def _original_nup_exefs(c, game, packages, work):
 
 def rewrite_env(c, kit, exefs, target):   # exefs None：不带随包代码补丁（补丁按主程序构建号认，只改 exefs 模块）
     env = dict(c.env(), S2A_TARGET=target, S2A_REWRITE_SPIN=os.environ.get("S2A_REWRITE_SPIN", "1"))
-    for k in ("S2A_FPS_TSV", "S2A_CPATCH_TSV", "S2A_CODE_PATCH", "S2A_CODE_BUILD"):
+    for k in ("S2A_FPS_TSV", "S2A_CPATCH_TSV", "S2A_CODE_PATCH", "S2A_CODE_BUILD", "S2A_FIX_TSV"):
         env.pop(k, None)
     if (kit / "fps.tsv").is_file():
         env["S2A_FPS_TSV"] = str(kit / "fps.tsv")
+    # 游戏缺陷修补表：同 stage_rewrite.sh（引擎里的 runtime/fix/<main 构建号前 16 位>.tsv）
+    if exefs is not None and (exefs / "main").is_file():
+        fix = Path(c.engine) / "runtime/fix" / ((exefs / "main").read_bytes()[0x40:0x48].hex() + ".tsv")
+        if fix.is_file():
+            env["S2A_FIX_TSV"] = str(fix)
     # 随包代码补丁：同 stage_rewrite.sh（S2A_PATCH_DIR/<程序号>/patch.tsv，构建号 = main 头 0x40 起 16 字节）
     pdir = env.get("S2A_PATCH_DIR")
     if pdir and exefs is not None:

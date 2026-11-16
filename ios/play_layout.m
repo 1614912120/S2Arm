@@ -205,9 +205,9 @@ CGRect S2APlayDivision(UIView *view) {
     UIViewController *top=self; while (top.presentedViewController) top=top.presentedViewController;
     [top setNeedsUpdateOfSupportedInterfaceOrientations];
     [scene requestGeometryUpdateWithPreferences:[[UIWindowSceneGeometryPreferencesIOS alloc] initWithInterfaceOrientations:mask] errorHandler:^(NSError *error) {
-        self->_orientationRefused=YES;
-        fprintf(stderr,"[S2A 布局] 系统未接受方向请求，按实际窗口布局：%s\n",error.localizedDescription.UTF8String);
-        [self.view setNeedsLayout];
+        // 系统在后台队列调这个回调（7 份「后台线程改自动布局」闪退崩前都有下面这行、4181 份没有这行的 0 崩）：改界面派回主线程
+        fprintf(stderr,"[S2A 布局] 系统未接受方向请求，按实际窗口布局：%s（回调在%s线程）\n",error.localizedDescription.UTF8String,NSThread.isMainThread?"主":"后台");
+        dispatch_async(dispatch_get_main_queue(), ^{ self->_orientationRefused=YES; [self.view setNeedsLayout]; });
     }];
 }
 - (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator {

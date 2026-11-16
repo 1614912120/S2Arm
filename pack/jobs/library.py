@@ -37,7 +37,9 @@ import sizes
 #   中间另捞心跳行与最后一次崩溃现场，manifest.json 的 truncated 写明每份原长、留了多少、截掉多少。
 #   原先每份只留头尾各 16 KB + 心跳行，帧读数整段丢，玩家只能再传完整日志（#41）
 DELETE_LOCK_WAIT_S = 120   # 删除等执行锁的上限：启动器发删除前先取消这款在跑的任务，它杀子进程组收尾比短作业排队（core.LOCK_WAIT_S）久
-DIAGNOSTIC_LOG_LIMIT = 200 << 20     # 单份原文上限（压缩后约 20 MB）
+DIAGNOSTIC_LOG_LIMIT = 12 << 20     # 单份原文上限：诊断收件按成员解开后的大小收（tools/diag_contract/diag_contract.json limits.member_bytes 16 MB），
+#   超了整包被拒、玩家丢整份诊断（11-16 原先 200 MB，长局 Mac 日志整包 400）。头尾 12 MB + 中间心跳 / 现场段（≤ 约 160 KB）+ 脱敏与非法字节替换的余量仍在 16 MB 内；
+#   tests/diag_contract_test.sh 核「上限 + 中间段 + 余量 ≤ 契约 member_bytes」并真打超长日志过收件判定
 DIAGNOSTIC_LOG_HEAD = DIAGNOSTIC_LOG_LIMIT // 8
 DIAGNOSTIC_LOG_TAIL = DIAGNOSTIC_LOG_LIMIT - DIAGNOSTIC_LOG_HEAD
 DIAGNOSTIC_LOG_BEATS = 64000         # 中间心跳行最多保留这么多字节（10 秒一行，约一小时）

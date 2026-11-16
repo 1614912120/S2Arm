@@ -80,7 +80,7 @@ public sealed partial class EnvironmentWindow
         if (availableUpdate is not { } update) return;
         var version = update.GetProperty("version").GetString() ?? "";
         var notes = update.TryGetProperty("notes", out var n) ? n.GetRawText() : "null";
-        using var doc = JsonDocument.Parse($"{{\"kind\":\"update\",\"version\":{JsonSerializer.Serialize(version)},\"notes\":{notes}}}");
+        using var doc = JsonDocument.Parse($"{{\"kind\":\"update\",\"version\":{JsonOut.Serialize(version)},\"notes\":{notes}}}");
         updatePopup = doc.RootElement.Clone(); Render();
     }
 
