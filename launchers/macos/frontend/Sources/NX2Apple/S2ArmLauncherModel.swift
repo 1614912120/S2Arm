@@ -437,7 +437,7 @@ public final class S2ArmLauncherModel: ObservableObject {
         if busy { return false }
         guard let r = try? await provider.client.perform("phoneKeptPull").result else { return false }
         let kept = (r["kept"] as? [String]) ?? [], device = r["device"] as? String ?? ""
-        // 启动器升级顺带更新 iPhone App（11-16 jhz「点一次完成整个流程」）：连着的这台壳比本版旧、且没有要按新版重出包的款（shellUpdate），
+        // 启动器升级顺带更新 iPhone App（11-16 维护者「点一次完成整个流程」）：连着的这台壳比本版旧、且没有要按新版重出包的款（shellUpdate），
         //   开关开着（缺省开）就同样自动更新；要重出的款照旧留给顶栏按钮问
         let shellUpdate = (r["shellUpdate"] as? Bool ?? false) && Self.autoUpdatePhoneOn()
         if (kept.isEmpty && !shellUpdate) || device.isEmpty { return false }
