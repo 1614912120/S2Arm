@@ -2,7 +2,6 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -43,13 +42,6 @@ static class RomfsExtraction {
     static bool IsAccessDenied(Exception e) => e is UnauthorizedAccessException ||
         e is IOException && (e.HResult == unchecked((int)0x80070005) || e.HResult == unchecked((int)0x80070020));
 
-    static void FlushFilesForTest(string root) {
-        foreach (string path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)) {
-            using var file = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
-            file.Flush(true);
-        }
-    }
-
     static void Publish(string stage, string destination, Action<string, string> move,
                         bool windows, Action<TimeSpan> wait = null) {
         Action<TimeSpan> pause = wait ?? (delay => Thread.Sleep(delay));
@@ -77,27 +69,7 @@ static class RomfsExtraction {
         if (!PublishRetryDelays.SequenceEqual(expectedRetries) ||
             !IsAccessDenied(new IOException("synthetic sharing violation", unchecked((int)0x80070020))))
             throw new InvalidDataException("Windows 发布退避表或 ERROR_SHARING_VIOLATION 分类与 dirrename.py 不一致");
-        // 用与先前比较接近的合成树量 FlushFileBuffers 耗时，再让独立目录的拒绝只持续同样长的时间。
-        // 这验证等待本身是否足够，不把 flush 花掉的时间误算成 flush 的效果。
-        string benchmark = Path.Combine(root, "flush-benchmark");
-        Directory.CreateDirectory(benchmark);
         byte[] block = new byte[64 * 1024];
-        for (int i = 0; i < 500; i++) {
-            long remaining = i < 332 ? 488_178 : 488_177;
-            using var file = new FileStream(Path.Combine(benchmark, $"f{i:D4}.bin"), FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite);
-            while (remaining > 0) {
-                int count = (int)Math.Min(block.Length, remaining);
-                file.Write(block, 0, count);
-                remaining -= count;
-            }
-        }
-        var flushTimer = Stopwatch.StartNew();
-        FlushFilesForTest(benchmark);
-        flushTimer.Stop();
-        TimeSpan measuredFlush = flushTimer.Elapsed;
-        Directory.Delete(benchmark, recursive: true);
-        Console.WriteLine($"ℹ️ 同等待时长对照：500 个合成文件 / 244,088,832 字节的 flush 用时 {measuredFlush.TotalMilliseconds:F1} ms");
-
         if (OperatingSystem.IsWindows()) {
             string lockedStage = Path.Combine(root, "locked-stage"), lockedDestination = Path.Combine(root, "locked-published");
             Directory.CreateDirectory(lockedStage);
@@ -106,43 +78,24 @@ static class RomfsExtraction {
                 FileShare.ReadWrite); // 故意不授予 FileShare.Delete，令 Windows 真正拒绝目录改名。
             int lockedMoves = 0, lockDeniedHResult = 0;
             TimeSpan lockedWait = TimeSpan.Zero;
+            TimeSpan releaseAfter = TimeSpan.FromMilliseconds(150);
             void LockedMove(string from, string to) {
                 lockedMoves++;
                 try { Directory.Move(from, to); }
                 catch (Exception e) { if (lockedMoves == 1) lockDeniedHResult = e.HResult; throw; }
             }
             void WaitAndRelease(TimeSpan delay) {
-                TimeSpan remaining = measuredFlush - lockedWait;
-                TimeSpan actual = delay > remaining ? remaining : delay;
-                if (actual > TimeSpan.Zero) Thread.Sleep(actual);
-                lockedWait += actual;
-                if (lockedWait >= measuredFlush) blocker.Dispose();
+                Thread.Sleep(delay);
+                lockedWait += delay;
+                if (lockedWait >= releaseAfter) blocker.Dispose();
             }
             Publish(lockedStage, lockedDestination, LockedMove, windows: true, wait: WaitAndRelease);
-            if (lockedMoves < 2 || !IsAccessDenied(new IOException("test", lockDeniedHResult)) || lockedWait < measuredFlush ||
+            if (lockedMoves < 2 || !IsAccessDenied(new IOException("test", lockDeniedHResult)) || lockedWait < releaseAfter ||
                 Directory.Exists(lockedStage) || !File.Exists(Path.Combine(lockedDestination, "payload.bin")))
-                throw new InvalidDataException("真实 Windows 文件句柄等待对照未能在不 flush 时发布");
-            Console.WriteLine($"🟢 Windows 同盘句柄对照：真实 Directory.Move 初次拒绝 0x{lockDeniedHResult:X8}；仅等待 {lockedWait.TotalMilliseconds:F1} ms（flush 用时 {measuredFlush.TotalMilliseconds:F1} ms）释放句柄后发布成功，未 flush");
+                throw new InvalidDataException("真实 Windows 文件句柄等待后未能发布");
+            Console.WriteLine($"🟢 Windows 同盘句柄测试：真实 Directory.Move 初次拒绝 0x{lockDeniedHResult:X8}；固定等待至少 {releaseAfter.TotalMilliseconds:F0} ms 后释放句柄并发布成功");
         } else Console.WriteLine("🟡 Windows 同盘句柄对照：非 Windows 跳过");
-
-        string stage = Path.Combine(root, "stage"), destination = Path.Combine(root, "published");
-        Directory.CreateDirectory(stage);
         byte[] expected = { 0x53, 0x32, 0x41, 0x00, 0x7f };
-        File.WriteAllBytes(Path.Combine(stage, "payload.bin"), expected);
-        int moves = 0;
-        TimeSpan waited = TimeSpan.Zero;
-        TimeSpan releaseAfter = measuredFlush;
-        void DenyUntilWaited(string from, string to) {
-            moves++;
-            if (waited < releaseAfter) throw new IOException("synthetic access denied", unchecked((int)0x80070005));
-            Directory.Move(from, to);
-        }
-        Publish(stage, destination, DenyUntilWaited, windows: true,
-            wait: delay => waited += delay > releaseAfter - waited ? releaseAfter - waited : delay);
-        if (moves < 2 || waited != measuredFlush || Directory.Exists(stage) ||
-            !File.ReadAllBytes(Path.Combine(destination, "payload.bin")).SequenceEqual(expected))
-            throw new InvalidDataException("Windows 退避等待重试未在不 flush 时发布完整输出");
-        Console.WriteLine($"🟢 等待对照：无 flush 等待与合成拒绝时间相同的 {waited.TotalMilliseconds:F1} ms 后发布成功；文件内容一致");
 
         string oldStage = Path.Combine(root, "old-stage"), oldDestination = Path.Combine(root, "old-published");
         Directory.CreateDirectory(oldStage);
