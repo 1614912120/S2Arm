@@ -4418,20 +4418,32 @@ static void bcal_drop_pool(const void *pool) {   // 内存池 Finalize：这段�
 // 记账留住的写入者贴图只在它的字节还在这段存储上时有用：别的贴图在它最后一次写之后 GPU 写过这段存储（与存储接管 alias_take_over 同一判据），
 //   字节已不是它的，放掉贴图、这一项的各层写入作废（BC 贴图照常按游戏内存取）。不放的话，每帧换尺寸、换位置的渲染目标一张张被这里留住，
 //   直到内存池释放才走：11-14 Duo 长局 18 分钟实占 1.3 → 7.9 GB、图形内存压缩部分 74 → 3960 MB 后被系统杀。提交末尾每 16 次扫一遍；先 g_bcal_mu 后 g_smu（与 bcal_note 同序）
-static uint64_t g_bcal_dropped, g_bcal_dropped_b;
+static uint64_t g_bcal_dropped, g_bcal_dropped_b, g_bcal_dropped_live, g_bcal_dropped_alias;   // live：放掉时仍被序号 / 定稿 / 共享存储表点名，只放引用的；alias：连同共享存储表里过期的同键一项一起摘掉的
 static void bcal_sweep_overwritten(void) {
     if (!atomic_load_explicit(&g_bcal_n, memory_order_relaxed) || (g_fence & 15)) return;
-    void **drop = NULL; uint32_t nd = 0, cap = 0;
+    void **drop = NULL; uint8_t *live = NULL; uint32_t nd = 0, cap = 0;
     pthread_mutex_lock(&g_bcal_mu); pthread_mutex_lock(&g_smu);
     for (uint32_t i = 0; i < g_bcal.cap; i++) { bcal_e *e = g_bcal.vals[i]; if (!e || !e->wtex) continue;
         alias_key k; alias_key_of(&k, &e->w); nvn_texlayout L; nvn_tex_layout(&e->w.d, &L);
         if (!L.size || !alias_overwritten(&k, k.off, k.off + (int64_t)L.size, atomic_load_explicit(&e->wfence, memory_order_relaxed))) continue;
-        if (nd == cap) { uint32_t c = cap ? 2 * cap : 64; void **q = realloc(drop, c * sizeof *q); if (!q) break; drop = q; cap = c; }
+        if (nd == cap) { uint32_t c = cap ? 2 * cap : 64; void **q = realloc(drop, c * sizeof *q); if (!q) break; drop = q; uint8_t *lq = realloc(live, c); if (!lq) break; live = lq; cap = c; }
+        // #1220：别名表只放掉自己那份引用。写入贴图常常仍是某个序号 / 定稿记录 / 共享存储表的现行贴图（之后照样被取用、绑定）：那时只能 unref，
+        //   留在驻留集；原先一律 defer_obj_release，GPU 做完那次提交就出驻留集，之后的绘制读它 → 缺页 / 挂死（诊断开关实测同一张贴图退役后又被取用上百次）。
+        //   没有别处点名的照旧退役（11-14 长局内存涨到被系统杀的那条修复不变）
+        id wo = (__bridge id)e->wtex; live[nd] = (uint8_t)(serial_holds(&g_by_serial, wo) || serial_holds(&g_ghost, wo) || serial_holds(&g_ghost_active, wo));
+        //   共享存储表同一个键上挂的就是它：这一项也过期了（同存储接管 alias_take_over 的判据：字节已被别的贴图写过），一并摘掉（下次同描述的贴图按游戏内存新建）；
+        //   挂在别的键上的照样算被点名、只放引用
+        if (!live[nd] && nvn_hm_get(&g_alias, &k) == e->wtex) {
+            void *old = nvn_hm_del(&g_alias, &k); nvn_hm_del(&g_alias_seen, &k); nvn_hm_del(&g_alias_wrote, &k);
+            if (g_alias_set) CFSetRemoveValue(g_alias_set, old);
+            CFRelease(old); g_ser_gen++; g_bcal_dropped_alias++;   // 引用在 drop 里还有一份（下面 defer_obj_release 等那次提交做完才放）
+        } else if (!live[nd]) live[nd] = (uint8_t)serial_holds(&g_alias, wo);
         drop[nd++] = e->wtex; e->wtex = NULL;
         atomic_fetch_add(&e->seq, 1); for (int l = 0; l < 16; l++) atomic_store(&e->lgen[l], 0); atomic_fetch_add(&e->seq, 1); }
     pthread_mutex_unlock(&g_smu); pthread_mutex_unlock(&g_bcal_mu);
-    for (uint32_t i = 0; i < nd; i++) { id<MTLTexture> w = CFBridgingRelease(drop[i]); g_bcal_dropped++; g_bcal_dropped_b += w.allocatedSize; defer_obj_release(w); }   // GPU 可能还在用：做完再放
-    free(drop);
+    for (uint32_t i = 0; i < nd; i++) { id<MTLTexture> w = CFBridgingRelease(drop[i]); g_bcal_dropped++; g_bcal_dropped_b += w.allocatedSize;
+        if (live[i]) { g_bcal_dropped_live++; defer_obj_unref(w); } else defer_obj_release(w); }   // GPU 可能还在用：做完再放（还被点名的只放引用）
+    free(drop); free(live);
 }
 static void bcal_forget(uint64_t serial) {   // BC 贴图对象没了：它的同步记录作废
     if (!atomic_load(&g_bcal_n)) return;
@@ -5330,8 +5342,8 @@ void nvn_be_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
         pthread_mutex_unlock(&g_bcal_mu);
         for (id<MTLTexture> m in ev) { evb += m.allocatedSize; if (CFSetContainsValue(ws, (__bridge const void *)m)) { inn++; inb += m.allocatedSize; } }
         CFRelease(ws);
-        MLOG("textures dropped on storage takeover still alive up to frame %llu: %lu, %llu MB (of %llu dropped in total; held by the block-compressed alias table %llu, %llu MB); that table: %llu entries, %llu writer textures kept, %llu MB, let go as overwritten %llu, %llu MB in total",
-             frame, (unsigned long)ev.count, (unsigned long long)(evb >> 20), (unsigned long long)evn, (unsigned long long)inn, (unsigned long long)(inb >> 20), (unsigned long long)bn, (unsigned long long)wn, (unsigned long long)(wb >> 20), (unsigned long long)g_bcal_dropped, (unsigned long long)(g_bcal_dropped_b >> 20)); }
+        MLOG("textures dropped on storage takeover still alive up to frame %llu: %lu, %llu MB (of %llu dropped in total; held by the block-compressed alias table %llu, %llu MB); that table: %llu entries, %llu writer textures kept, %llu MB, let go as overwritten %llu, %llu MB in total (still named elsewhere, reference only %llu; stale shared-storage entry taken out with it %llu)",
+             frame, (unsigned long)ev.count, (unsigned long long)(evb >> 20), (unsigned long long)evn, (unsigned long long)inn, (unsigned long long)(inb >> 20), (unsigned long long)bn, (unsigned long long)wn, (unsigned long long)(wb >> 20), (unsigned long long)g_bcal_dropped, (unsigned long long)(g_bcal_dropped_b >> 20), (unsigned long long)g_bcal_dropped_live, (unsigned long long)g_bcal_dropped_alias); }
     { void mtl_vc_stats(unsigned *, uint64_t *, uint64_t *), mtl_tb2_stats(uint64_t *, uint64_t *, uint64_t *, uint64_t *); uint64_t mtl_tex_mis_count(void); unsigned vn; uint64_t vh, vm, tb, tm, tf, tt;
       mtl_vc_stats(&vn, &vh, &vm); mtl_tb2_stats(&tb, &tm, &tf, &tt);
       MLOG("texture views by texture (vc_get): %u textures hold cached views; %llu views reused, %llu made in total; texture buffers bound as 2D rows for wrapped 1D fetches %llu times, %llu made, %llu failed, "
