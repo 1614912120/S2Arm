@@ -1319,7 +1319,34 @@ def fill(im, o):
 
 def flow_hazard(im, text_end, mod, changed, text_cache):
     """changed：{字地址: (原字, 新字)}（本份补丁代码段里真改了的字）→ 不收原因（空串 = 安全）"""
-    if all(nw == 0xd503201f for _, nw in changed.values()): return ''   # 全是 nop：不引入读写
+    # 把调用（bl / blr）改成 nop、整数返回值被换成调用前的 32 位参数（11-15 奥德赛 1.3.0「Disable Dynamic Resolution」，上游注明 not device-validated）：
+    #   +0x5ee438 原是 ldr w0,[x19,#0xa0]（枚举）→ bl（返回字符串指针）→ mov x20,x0 → 当字符串比较；改成 nop 后 x20 = 那个枚举小整数，读 0x2 段错误
+    #   （开场动画第 10367 帧）。「全是 nop 不引入读写」只对删掉的指令本身不写活寄存器成立，调用不在此列。
+    #   只认这一形状，不泛化到所有「删调用」：上游满屏补丁常有意删掉一个浮点调用、让参数 v0 直接当结果用（21:9 / 32:9 的 +0x73de88），那是对的。
+    #   判法：被删调用前顺着落下来的路上最后写 x0 的是 32 位写（w0），删后同一顺序段里第一次读 x0 是按 64 位读（x0）= 整数被当指针用 → 不收
+    def _ins(a):
+        _dec(P0(a), a)   # 初始化反汇编器
+        return next(_cs.disasm(struct.pack('<I', P0(a)), a), None)
+    P0 = lambda a: changed[a][1] if a in changed else (struct.unpack_from('<I', im, a)[0] if 0 <= a and a + 4 <= text_end else 0)
+    for a in sorted(changed):
+        ow, nw = changed[a]
+        if nw != 0xd503201f or not (_dec(ow, a)[2] == 'call' or (ow & 0xfffffc1f) == 0xd63f0000): continue
+        before = None
+        for k in range(1, 17):   # 往前：顺着落下来的那条路（条件跳转照落下走；无条件跳 / 调用 / 返回就停）里最后写 x0 的那条
+            b = a - 4 * k; ins = _ins(b)
+            if ins is None or _dec(P0(b), b)[2] not in ('seq', 'cond'): break
+            if 0 in _dec(P0(b), b)[1]: before = ins.op_str.split(',')[0].strip(); break
+        if before != 'w0': continue
+        after = None
+        for k in range(1, 17):   # 往后：删掉调用后同一顺序段里第一次读 x0
+            b = a + 4 * k; ins = _ins(b); d = _dec(P0(b), b)
+            if ins is None: break
+            ops = [o.strip() for o in ins.op_str.replace('[', ',').replace(']', ',').split(',') if o.strip()]
+            if 0 in d[0]: after = 'x0' if 'x0' in ops[1:] or (d[2] != 'seq' and 'x0' in ops) else 'w0'; break
+            if 0 in d[1] or d[2] != 'seq': break
+        if after == 'x0':
+            return f'调用改成空：{mod}+{a:#x} 原是调用（{ow:08x}），改成 nop 后返回值换成了调用前的 32 位参数 w0，接着按 64 位 x0 用（整数当指针）'
+    if all(nw == 0xd503201f for _, nw in changed.values()): return ''   # 全是 nop（且没有上面那种整数当指针的删调用）：不引入读写
     addrs = sorted(changed); iv = []
     for a in addrs:
         if iv and a - iv[-1][1] <= _GAP: iv[-1][1] = a + 4
