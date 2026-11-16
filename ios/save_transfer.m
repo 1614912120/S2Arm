@@ -18,7 +18,9 @@ static NSString *const ManageKey = @"S2ASaveManageOnOpen";
 // 「下次打开先进存档管理」分两级：ManageKey 是 App 级（iOS 设置开关、主屏快捷操作冷启动置，下次开哪款都进）；
 //   游戏内「退出并管理存档」只记这一款：多款容器按游戏号另起一个键，开别的游戏不弹；单款包一个进程只一款，就是 ManageKey 本身
 static NSString *game_manage_key(void) {
-    const s2a_launch_ctx *c = s2a_launch_ctx_container() ? s2a_launch_ctx_get() : NULL;
+    // 启动上下文里有本款模块目录就用它（多款容器选了游戏；或直接按 S2A_LAUNCH_CTX 起的那一款——那时 s2a_launch_ctx_container() 判「不是容器」，
+    //   原先就去包根找 save-identity.json，多款容器包根没有，存档页 / iCloud 同步 / 测试开关都取不到本款身份）
+    const s2a_launch_ctx *c = s2a_launch_ctx_get();
     return c && c->game_id[0] ? [ManageKey stringByAppendingFormat:@".%s", c->game_id] : ManageKey;
 }
 
@@ -100,7 +102,9 @@ char *s2a_shell_save_request(const char *json) {
 //   export:<路径> = 把本款当前存档导出成 .s2asave；restore:<路径>（相对路径按 App 容器根） = 先 inspect 再按它给的指纹 restore（同界面「检查 → 确认」两步）。
 //   起局前（ios/app.m startHost 开头：游戏已选定、宿主还没起）跑一次，走与存档页同一个服务层入口；结果一行进日志。只认环境变量，玩家从图标打开不带
 static NSString *test_save_call(NSDictionary *extra) {
-    char *ctx = s2a_shell_save_context(); if (!ctx) return @"no save context (no game selected or no service layer)";
+    char *ctx = s2a_shell_save_context();
+    if (!ctx) return [NSString stringWithFormat:@"no save context: dataRoot=%@ game=%@ S2A_SaveTransfer=%s", data_root() ?: @"nil", game_identity() ? @"ok" : @"nil",
+                      S2A_SaveTransfer && S2A_SaveTransferFree ? "linked" : "missing"];
     NSMutableDictionary *req = [[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:ctx length:strlen(ctx)] options:NSJSONReadingMutableContainers error:nil] mutableCopy]; free(ctx);
     [req addEntriesFromDictionary:extra];
     NSData *json = [NSJSONSerialization dataWithJSONObject:req options:0 error:nil]; NSString *js = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
