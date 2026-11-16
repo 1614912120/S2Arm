@@ -1262,6 +1262,7 @@ static void cloud_sync_done(void *ctx) {
 - (void)startHost {
     s2a_boot_entry entry = s2a_host_boot_take();
     if (!entry) return;   // 先领取，再启动；后续激活只走现有恢复路径
+    { void s2a_ios_test_save_op(void); s2a_ios_test_save_op(); }   // 测试开关 S2A_TEST_SAVE_OP（ios/save_transfer.m）：游戏已选定、宿主还没起，导出 / 导回一次存档
     int inputError = s2a_ios_input_config_load();
     if (inputError) { LOG("【红】iOS 输入配置损坏，拒绝启动（%d: %s）", inputError, s2a_input_config_error_message(inputError)); exit(2); }
     s2a_log_session_start();

@@ -576,7 +576,6 @@ void s2a_ios_load_graphics_settings(void) {
                     player[@"name"].length ? player[@"name"].UTF8String : "没改过名", getenv("S2A_SAVE_FOLDER"));
         }
         s2a_ios_apply_diag_run(NSUserDefaults.standardUserDefaults);
-        { void s2a_ios_test_save_op(void); s2a_ios_test_save_op(); }   // 测试开关 S2A_TEST_SAVE_OP（ios/save_transfer.m）：服务层起来之前导出 / 导回一次存档
     }
 }
 
