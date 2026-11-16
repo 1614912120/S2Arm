@@ -156,7 +156,7 @@ def scan(index_dirs, exefs, log=None):
         seen = set(); rd = csv.DictReader(open(idx, encoding='utf-8', errors='replace'), delimiter='\t')
         # 编号（同启动器 pack/jobs/community.py：表头有 aspect 的是 widescreen、有 target_fps 的是 fps、其余 gfx；补丁内容 sha256 前 16 位，没有就用包内路径散列）
         kind_id = 'widescreen' if 'aspect' in (rd.fieldnames or []) else 'fps' if 'target_fps' in (rd.fieldnames or []) \
-            else 'mod' if 'mod' in (rd.fieldnames or []) else 'gfx'   # mod：玩家导入的 mod 带的代码补丁（pack/jobs/mods.py code_index），运行时跟 mod 开关走（runtime/src/cpatch.c）
+            else 'mod' if 'mod' in (rd.fieldnames or []) else 'other' if cat == 'other' else 'gfx'   # mod：玩家导入的 mod 带的代码补丁（pack/jobs/mods.py code_index），运行时跟 mod 开关走（runtime/src/cpatch.c）
         rows = list(rd)
         romfs_roots = {(r.get('path') or '').split('/romfs/')[0] for r in rows if (r.get('title_id') or '').upper()[:13] == pid and '/romfs/' in (r.get('path') or '')}
         for r in rows:
