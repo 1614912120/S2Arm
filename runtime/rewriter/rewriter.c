@@ -3824,15 +3824,23 @@ static void fps_rows(int phase) {
  *   p <模块> <偏移> <原字> <新字> <位>   分析后编双路跳板：原字换成 B 跳板；跳板先下移 sp 再存 x16（str x16,[sp,#-16]!：存在新 sp 之上、不在 sp 以下——
  *     AArch64 没有红区，信号帧若压在客体栈上只会落在新 sp 以下；我方信号处理器另都带 SA_ONSTACK 落备用栈，两层都不踩；单测 ⑥ 每步灌乱码验），读键页槽 2046
  *     （本模块补丁位掩码，装载器按设置写），TBNZ 测本补丁的位分路，恢复 x16 后执行重定位过的原指令或补丁指令，再跳回下一条；TBNZ / LDR 不动标志位
- * 原字不符、点已被别的改写占用、指令要翻译（x18 / svc / 读写 tpidr）或解不出，记缺口 cpatch（措辞同 patch_nso.py），pack/cpatch.py 据此剔掉整份补丁重来 */
+ * 原字不符、点已被别的改写占用、指令要翻译（x18 / svc / 读写 tpidr）或解不出，记缺口 cpatch（措辞同 patch_nso.py），pack/cpatch.py 据此剔掉整份补丁重来
+ * 自适应画幅（11-12，pack/cpatch.py adapt_family）：
+ *   同一点可有多行 p（宽 / 窄两套模板各占一位、互斥开），跳板依次 TBNZ 各位分到各自的补丁路，都不开走原指令；同点各行原字须一致
+ *   p 行第 7 列「@k」：这一路先 adrp x16, <本模块键页> 再执行补丁指令（补丁指令以 x16 为基址读键页里的画幅值槽，runtime/src/cpatch.c 按当前屏幕比写），
+ *     然后恢复 x16；补丁指令须是 ldr <Rt>, [x16, #imm] 且不写 x16
+ *   w 行第 6 列「@k」：新字是 adrp Xd, …，按本点位置改成 adrp Xd, <本模块键页>（填充区补丁代码读键页值槽；同 fps 表 adrp_slot） */
 #define CP_SLOT 2046
+#define CP_VAR_MAX 8
 static const char* cp_check(uint32_t w, A a) {
   if ((w & 0x7c000000u) == 0x14000000u || (w & 0xff000010u) == 0x54000000u || (w & 0x7e000000u) == 0x34000000u ||
       (w & 0x7e000000u) == 0x36000000u || (w & 0x1f000000u) == 0x10000000u)
     return NULL;
   if ((w & 0x3b000000u) == 0x18000000u) return ((w >> 26) & 1) && (w >> 30) == 3 ? "字面量编码不认" : NULL;
-  Ins x = dis(w, a);
-  if (!x.valid) return "解不出";
+  /* 解不出要回「解不出」记缺口（pack/cpatch.py prune 剔掉那份补丁重来），不能走 dis()：它对解不出的字 REQUIRE 整个改写器断言退出
+     （诊断 D-Z5E3 / #1234：画面补丁往代码段写浮点常数 0x3f800000，整款出包红在「条件不成立：decode(w, a, &x)」） */
+  Ins x;
+  if (!decode(w, a, &x)) return "解不出";
   if (has18(&x) || eq(x.m, "svc") || ((eq(x.m, "mrs") || eq(x.m, "msr")) && strstr(operand_text(&x), "tpidr"))) return "要翻译";
   return NULL;
 }
@@ -3872,26 +3880,44 @@ static void cp_emit(uint32_t w, A a) { /* 把原在 a 的指令字 w 等价地�
 }
 typedef struct {
   A off;
-  uint32_t orig, nw;
-  int bit;
+  uint32_t orig;
+  int n;
+  uint32_t nw[CP_VAR_MAX];
+  int bit[CP_VAR_MAX];
+  char key[CP_VAR_MAX]; /* 1 = 这一路先 adrp x16 到本模块键页 */
 } CpRow;
 static void gen_cpatch(void* q) {
   CpRow* c = q;
   A off = c->off, start = here();
-  int bit = c->bit;
   emit(STRPRE(16u, 31u, -16)); emit(adrp(16, here(), g->key)); emit(LDR(16u, 16u, (uint32_t)CP_SLOT));
-  size_t tb = g->patch.n; emit(0);
+  size_t tb[CP_VAR_MAX];
+  for (int i = 0; i < c->n; i++) { tb[i] = g->patch.n; emit(0); }
   emit(LDRPOST(16u, 31u, 16)); cp_emit(c->orig, off); emit(branch(here(), off + 4));
-  A p = here(); emit(LDRPOST(16u, 31u, 16)); cp_emit(c->nw, off); emit(branch(here(), off + 4));
-  int64_t d = (p - (g->po + (A)tb * 4)) >> 2;
-  REQUIRE(d < (1 << 13));
-  g->patch.v[tb] = 0x37000000u | ((uint32_t)(bit >> 5) << 31) | ((uint32_t)(bit & 31) << 19) | (((uint32_t)d & 0x3fff) << 5) | 16u;
+  for (int i = 0; i < c->n; i++) {
+    A p = here();
+    if (c->key[i]) { emit(adrp(16, here(), g->key)); emit(c->nw[i]); emit(LDRPOST(16u, 31u, 16)); }
+    else { emit(LDRPOST(16u, 31u, 16)); cp_emit(c->nw[i], off); }
+    emit(branch(here(), off + 4));
+    int64_t d = (p - (g->po + (A)tb[i] * 4)) >> 2;
+    REQUIRE(d < (1 << 13));
+    g->patch.v[tb[i]] = 0x37000000u | ((uint32_t)(c->bit[i] >> 5) << 31) | ((uint32_t)(c->bit[i] & 31) << 19) | (((uint32_t)d & 0x3fff) << 5) | 16u;
+  }
   put(off, branch(off, start));
   done(off);
   bump("cpatch_p");
 }
+/* 社区补丁认领的指令（cpatch_rows(0) 收全部 w / p 行的偏移）：widen() 跳过落在这里的宽屏候选点——补丁表只在本款没有我方宽屏表时才放行
+   宽屏候选点（pack/cpatch.py taken_at），同一条指令让给补丁，不两套叠改 */
+static A g_cpclaim[4096];
+static int g_ncpclaim;
+static int cp_claimed(A off, A n) {
+  for (int i = 0; i < g_ncpclaim; i++)
+    if (g_cpclaim[i] >= off && g_cpclaim[i] < off + n) return 1;
+  return 0;
+}
 static void cpatch_rows(int phase) {
   const char* path = g->r.cpatch_tsv;
+  if (phase == 0) g_ncpclaim = 0;
   if (!path || !*path) return;
   FILE* f = fopen(path, "rb");
   if (!f) {
@@ -3901,37 +3927,70 @@ static void cpatch_rows(int phase) {
     return;
   }
   char line[512];
+  CpRow* cps = NULL;
+  int ncp = 0, ccp = 0;
   while (fgets(line, sizeof(line), f)) {
     char* h = strchr(line, '#');
     if (h) *h = 0;
     char *k = strtok(line, " \t\r\n"), *mod = strtok(NULL, " \t\r\n"), *offs = strtok(NULL, " \t\r\n"), *origs = strtok(NULL, " \t\r\n"),
          *news = strtok(NULL, " \t\r\n"), *bits = strtok(NULL, " \t\r\n");
     if (!k || !(eq(k, "w") || eq(k, "p")) || !mod || !eq(mod, g->r.module) || !offs || !origs || !news) continue;
-    if (eq(k, "p") != (phase == 1)) continue;
     A off = strtoll(offs, NULL, 16);
+    if (phase == 0 && g_ncpclaim < (int)(sizeof g_cpclaim / sizeof g_cpclaim[0])) g_cpclaim[g_ncpclaim++] = off;
+    if (eq(k, "p") != (phase == 1)) continue;
     uint32_t orig = (uint32_t)strtoul(origs, NULL, 16), nw = (uint32_t)strtoul(news, NULL, 16);
     if (phase == 0) {
-      if (off < 0 || off % 4 || off + 4 > (A)g->text) { gap(off, "cpatch", "w 点不在代码段"); continue; }
+      /* 代码段结尾到 ro 开头之间的填充（同在代码段末页，装载器按宿主页封成只读可执行）也收：金手指往这里写新代码（暗黑 3 0xC72Fxx）。
+         只收原字是全 0 / udf 的字、不越过 ro 开头；这里的字本改写器不分析不翻译，要翻译的指令（x18 / svc / tpidr）由 pack/cpatch.py 先挡掉 */
+      int tail = off >= (A)g->text && off + 4 <= (A)g->ro && (orig == 0 || orig >> 16 == 0);
+      if (off < 0 || off % 4 || (off + 4 > (A)g->text && !tail)) { gap(off, "cpatch", "w 点不在代码段"); continue; }
       if (iw(off) != orig) { gap(off, "cpatch", "w 点原字 0x%x，表里 0x%x", iw(off), orig); continue; }
+      if (bits && eq(bits, "@k")) {
+        if ((nw & 0x9f000000u) != 0x90000000u) { gap(off, "cpatch", "w 行 @k 的新字不是 adrp"); continue; }
+        nw = adrp((int)(nw & 31), off, g->key);
+      }
       put(off, nw);
       bump("cpatch_w");
       continue;
     }
     if (!bits) { gap(off, "cpatch", "p 行缺位号"); continue; }
     int bit = atoi(bits);
+    char* bases = strtok(NULL, " \t\r\n");
+    int base = 0;
+    if (bases) {
+      if (!eq(bases, "@k")) { gap(off, "cpatch", "p 行第 7 列不认：%s", bases); continue; }
+      base = 1;
+    }
     if (off < 0 || off % 4 || off + 4 > (A)g->text || bit < 0 || bit > 63) { gap(off, "cpatch", "p 点不在代码段或位号不在 0–63"); continue; }
     if (iw(off) != orig) { gap(off, "cpatch", "p 点原字 0x%x，表里 0x%x", iw(off), orig); continue; }
+    const char* why2 = base ? NULL : cp_check(nw, off);
+    if (base) { /* 以 x16 为基址的读：只认 LDR（无符号偏移，整数 / 浮点）且基址是 x16、目标不是 x16 */
+      if ((nw & 0x3b400000u) != 0x39400000u || ((nw >> 5) & 31) != 16 || (!((nw >> 26) & 1) && (nw & 31) == 16)) why2 = "取值指令不是 ldr <Rt>, [x16, #imm]";
+    }
+    if (why2) { gap(off, "cpatch", "p 点补丁指令%s", why2); continue; }
+    int j = 0;
+    while (j < ncp && cps[j].off != off) j++;
+    if (j == ncp) {
+      if (ncp == ccp) { ccp = ccp ? ccp * 2 : 256; cps = realloc(cps, (size_t)ccp * sizeof *cps); if (!cps) fail("社区补丁行分配失败"); }
+      memset(&cps[ncp], 0, sizeof *cps); cps[ncp].off = off; cps[ncp].orig = orig; ncp++;
+    }
+    if (cps[j].n == CP_VAR_MAX) { gap(off, "cpatch", "p 点变体超过 %d 个", CP_VAR_MAX); continue; }
+    cps[j].nw[cps[j].n] = nw; cps[j].bit[cps[j].n] = bit; cps[j].key[cps[j].n] = (char)base; cps[j].n++;
+  }
+  fclose(f);
+  /* 同点各行收齐后再生成（同点多变体编进同一个跳板） */
+  for (int k = 0; k < ncp; k++) {
+    A off = cps[k].off;
     if (site_at(off) || consumed(off)) { gap(off, "cpatch", "p 点已是改写点（宽屏点 / x18 / 跳转表等），两套改动叠在同一条指令上"); continue; }
-    const char *why = cp_check(orig, off), *why2 = cp_check(nw, off);
-    if (why || why2) { gap(off, "cpatch", "p 点%s%s", why ? "原指令" : "补丁指令", why ? why : why2); continue; }
+    const char* why = cp_check(cps[k].orig, off);
+    if (why) { gap(off, "cpatch", "p 点原指令%s", why); continue; }
     /* 单点生成失败（如补丁区离本点超 ±128 MB）只撤本点、记缺口，同 patch_nso.py guarded(off, 'cpatch', gen)；pack/cpatch.py 据缺口剔掉那份补丁重来 */
-    CpRow c = {off, orig, nw, bit};
     g->guarding = 1;
-    if (!unit_run(off, gen_cpatch, &c, NULL))
+    if (!unit_run(off, gen_cpatch, &cps[k], NULL))
       gap(off, "cpatch", "AssertionError: %s", g->error);
     g->guarding = 0;
   }
-  fclose(f);
+  free(cps);
 }
 /* 补丁包 [code] 段（补丁包_v1设计.md 12.11；一次成功线 11-02，首款马力欧激战前锋：NuCachedSource2 缓存上限 20 MB → 8 MB）：
  *   <模块> <偏移> orig=<原字节> new=<新字节，同长> [sig=<前>|<后>]（十六进制，?? 通配，点本身不写进 sig；# 起注释）
@@ -4068,6 +4127,22 @@ static void gen_widen(void* p) {
   }
   put(off, branch(off, start));
 }
+/* f2h / i2h（打包宽高的高半）的搭档：往回 16 条内第一条写 Xd 的指令（同 runtime/src/widen.c 配对规则）。高半跳板装整个 8 字节，
+   低半只能从搭档来：搭档是已收下的 f2w / movz 宽屏点（取它的值槽），或原样留着的 MOVZ Xd。搭档让给了社区补丁 / 别的改写点
+   （那条指令被换成跳转，运行时认不出）、或找不到，高半也不改——否则低半无从得知，装成 0 → 宽 0 黑屏（#1180） */
+static int wide_partner_ok(A off, uint32_t w, int fl) {
+  uint32_t d = w & 31, mz = (fl ? 0xd2a00000u : 0xd2800000u) | d;
+  const char* pk = fl ? "f2w" : "movz";
+  for (A j = 1; j <= 16 && off >= 4 * j; j++) {
+    A o = off - 4 * j;
+    for (int i = 0; i < (int)g->wide.n; i++)
+      if (g->wide.v[i].off == o && eq(g->wide.v[i].kind, pk) && (g->wide.v[i].w & 31) == d) return 1;
+    uint32_t z = iw(o);
+    if ((z & 0xffe0001f) == mz) return !site_at(o) && !consumed(o) && !cp_claimed(o, 4);
+    if ((z & 31) == d) return 0;
+  }
+  return 0;
+}
 static void widen(void) {
   if (!g->r.widen_tsv)
     return;
@@ -4121,6 +4196,10 @@ static void widen(void) {
       wskip(off, "%s 点不在可改代码里或已是改写点", kind);
       continue;
     }
+    if (cp_claimed(off, in(kind, "asp|aspcap|aspcaps") ? 8 : 4)) {   /* 成对的点（asp / aspcap / aspcaps）占两条：任一条在补丁表里都让 */
+      wskip(off, "%s 点让给社区补丁（补丁表改同一条指令）", kind);
+      continue;
+    }
     int valid = 1;
     if (in(kind, "movz|movzh")) {   // movzh：配对的显示高度（graphics/widen/scan/wide_scan.py），跳板同 movz
       if ((w & 0x7f800000) != 0x52800000 || (w & 31) == 31) {
@@ -4136,10 +4215,16 @@ static void widen(void) {
       if ((w & 0xffe00000) != 0xf2e00000 || (w & 31) == 31) {
         wskip(off, "f2h 点原字 0x%x 不是 MOVK Xd,#imm,LSL#48", w);
         valid = 0;
+      } else if (!wide_partner_ok(off, w, 1)) {
+        wskip(off, "f2h 点的搭档 MOVZ 没收下（让给社区补丁 / 别的改写点或找不到），高半不改");
+        valid = 0;
       }
     } else if (eq(kind, "i2h")) {   // 整数宽高打包的高半：MOVK Xd,#imm,LSL#32 → 同 f2h 装整个 8 字节
       if ((w & 0xffe00000) != 0xf2c00000 || (w & 31) == 31) {
         wskip(off, "i2h 点原字 0x%x 不是 MOVK Xd,#imm,LSL#32", w);
+        valid = 0;
+      } else if (!wide_partner_ok(off, w, 0)) {
+        wskip(off, "i2h 点的搭档 MOVZ 没收下（让给社区补丁 / 别的改写点或找不到），高半不改");
         valid = 0;
       }
     } else if (eq(kind, "asp")) {
@@ -4955,7 +5040,7 @@ static int outputs(void) {
   closeout();
   if (g->wide.n) {
     f = output("widen.tsv");
-    for (size_t i = 0; i < g->wide.n; i++) {
+    for (int i = 0; i < (int)g->wide.n; i++) {
       Wide* x = g->wide.v + i;
       fprintf(f, "%d\t", x->idx);
       hex(f, x->off);

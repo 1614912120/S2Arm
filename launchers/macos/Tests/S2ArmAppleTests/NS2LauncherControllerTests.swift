@@ -16,7 +16,7 @@ final class NS2LauncherControllerTests: XCTestCase {
         // 连接通知从主队列交给模型；不接管手柄的输入回调。
         await Task.yield()
         await Task.yield()
-        XCTAssertEqual(controller.title(simplifiedChinese: true), "DualSense Wireless Controller (test)")
+        XCTAssertEqual(controller.title(lang: "zh"), "DualSense Wireless Controller (test)")
         XCTAssertEqual(controller.buttonStatus, "已连接")
         XCTAssertEqual(controller.buttonColor, .systemGreen)
         XCTAssertFalse(controller.detail.contains("SYNC"))
@@ -35,7 +35,7 @@ final class NS2LauncherControllerTests: XCTestCase {
         let controller = NS2LauncherController(socketURL: URL(fileURLWithPath: "/tmp/s2arm-controller-test.sock"),
                                               systemControllers: { [pad] }, notifications: NotificationCenter())
         controller.startIfEnabled()
-        XCTAssertEqual(controller.title(simplifiedChinese: true), "DualSense Wireless Controller")
+        XCTAssertEqual(controller.title(lang: "zh"), "DualSense Wireless Controller")
         XCTAssertEqual(controller.buttonStatus, "已连接")
         controller.gameDidStart()
         controller.gameDidExit()
@@ -53,11 +53,11 @@ final class NS2LauncherControllerTests: XCTestCase {
         let notifications = NotificationCenter()
         let controller = NS2LauncherController(socketURL: URL(fileURLWithPath: "/tmp/s2arm-controller-test.sock"),
                                               systemControllers: { connected }, notifications: notifications)
-        XCTAssertEqual(controller.title(simplifiedChinese: false), "DualSense Wireless Controller")
+        XCTAssertEqual(controller.title(lang: "en"), "DualSense Wireless Controller")
         notifications.post(name: .GCControllerDidDisconnect, object: dualSense)
         await Task.yield()
         await Task.yield()
-        XCTAssertEqual(controller.title(simplifiedChinese: false), "Xbox Wireless Controller")
+        XCTAssertEqual(controller.title(lang: "en"), "Xbox Wireless Controller")
         XCTAssertEqual(controller.buttonStatus, "已连接")
         connected = [xbox] // 枚举仍包含本次断开的设备，不能靠快照假定它还连着。
         notifications.post(name: .GCControllerDidDisconnect, object: xbox)
@@ -68,16 +68,16 @@ final class NS2LauncherControllerTests: XCTestCase {
         notifications.post(name: NSApplication.didBecomeActiveNotification, object: nil)
         await Task.yield()
         await Task.yield()
-        XCTAssertEqual(controller.title(simplifiedChinese: false), "DualSense Wireless Controller")
+        XCTAssertEqual(controller.title(lang: "en"), "DualSense Wireless Controller")
     }
 
     func testTitleFollowsKind() {
-        XCTAssertEqual(NS2LauncherController.title(kind: 2, simplifiedChinese: true), "Joy-Con 2 (L)")
-        XCTAssertEqual(NS2LauncherController.title(kind: 3, simplifiedChinese: false), "Joy-Con 2 (R)")
-        XCTAssertEqual(NS2LauncherController.title(kind: 4, simplifiedChinese: true), "Joy-Con 2 (L + R)")
-        XCTAssertEqual(NS2LauncherController.title(kind: 1, simplifiedChinese: true), "Switch 2 Pro")
-        XCTAssertEqual(NS2LauncherController.title(kind: 0, simplifiedChinese: true), "Switch 手柄")
-        XCTAssertEqual(NS2LauncherController.title(kind: 0, simplifiedChinese: false), "Switch Controller")
+        XCTAssertEqual(NS2LauncherController.title(kind: 2, lang: "zh"), "Joy-Con 2 (L)")
+        XCTAssertEqual(NS2LauncherController.title(kind: 3, lang: "en"), "Joy-Con 2 (R)")
+        XCTAssertEqual(NS2LauncherController.title(kind: 4, lang: "zh"), "Joy-Con 2 (L + R)")
+        XCTAssertEqual(NS2LauncherController.title(kind: 1, lang: "zh"), "Switch 2 Pro")
+        XCTAssertEqual(NS2LauncherController.title(kind: 0, lang: "zh"), "Switch 手柄")
+        XCTAssertEqual(NS2LauncherController.title(kind: 0, lang: "en"), "Switch Controller")
     }
 
     func testKindFromStatusLine() throws {
@@ -121,9 +121,49 @@ final class NS2LauncherControllerTests: XCTestCase {
         let took = Date().timeIntervalSince(t0)
         XCTAssertFalse(stubborn.isRunning); XCTAssertGreaterThanOrEqual(took, 0.5); XCTAssertLessThan(took, 2.5)
     }
+
+    @MainActor
+    func testConnectNotificationShowsBeforeInputProfileIsReady() async {
+        // #934：蓝牙手柄刚接上那一下输入描述（physicalInputProfile）可能还没就绪——连接通知是本次事件的真值，照常显示「已连接」，
+        //   不等描述就绪（系统蓝牙已连上、面板却一直「未连接」）；断开通知照旧清掉
+        let notifications = NotificationCenter()
+        let controller = NS2LauncherController(socketURL: URL(fileURLWithPath: "/tmp/s2arm-controller-test.sock"),
+                                              systemControllers: { [] }, notifications: notifications)
+        let pad = BareSystemController("Bare pad (test)")
+        notifications.post(name: .GCControllerDidConnect, object: pad)
+        await Task.yield()
+        await Task.yield()
+        XCTAssertTrue(controller.hasSystemController)
+        XCTAssertEqual(controller.title(lang: "zh"), "Bare pad (test)")
+        XCTAssertEqual(controller.buttonStatus, "已连接")
+        XCTAssertEqual(controller.buttonColor, .systemGreen)
+        notifications.post(name: .GCControllerDidDisconnect, object: pad)
+        await Task.yield()
+        await Task.yield()
+        XCTAssertFalse(controller.hasSystemController)
+        XCTAssertEqual(controller.buttonStatus, "未连接")
+    }
+
+    @MainActor
+    func testSystemControllersRefreshListsNotifiedControllerBeforeProfileIsReady() {
+        // #934：枚举快照还没更新时，连接通知里的那只就是真值；输入描述没就绪也照列（晚一拍补）——
+        //   系统已连上的手柄不能因为快照滞后 / 描述未就绪就一直不出现
+        let systems = SystemControllers(observe: false)
+        let pad = BareSystemController("Bare pad (refresh)")
+        systems.refresh(connected: pad)
+        XCTAssertTrue(systems.pads.contains { $0.name == "Bare pad (refresh)" })
+        systems.refresh(connected: nil)
+        XCTAssertFalse(systems.pads.contains { $0.name == "Bare pad (refresh)" }, "通知没带上它时照枚举快照，不残留")
+    }
 }
 
-private final class NamedSystemController: GCController {
+private final class BareSystemController: GCController {
+    private let name: String
+    init(_ name: String) { self.name = name; super.init() }
+    override var vendorName: String? { name }
+}
+
+final class NamedSystemController: GCController {   // 面板截图测试（NS2PanelSnapshotTests #1151）也用
     private let name: String
     private let gamepadSnapshot = GCController.withExtendedGamepad()
 

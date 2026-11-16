@@ -11,7 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
-from bundle_engine import bundle
+from bundle_engine import bundle, seal_runtime
 from runtime_audit import verify_minimum_macos, verify_portable_runtime
 import runtime_sources
 from bundle_runtime import TOOLS, runtime_deps_fingerprint
@@ -98,6 +98,8 @@ def bundle_shell(engine_json, dest, env):
         raise SystemExit(f"【红】发版壳 {cache} 链接的 iOS SDK 是 {linked_sdk(cache / 'root/S2Arm')}，不是本机最新 Xcode 的 {want}")
     print(f"发版壳：{sid}，iOS SDK {'.'.join(map(str, want))}（{newest}）")
     shutil.copytree(cache, dest, symlinks=True)
+    if os.environ.get("S2A_SYMBOLS_OUT") and (cache.parent / (cache.name + ".symbols")).is_dir():   # 壳的未去符号原件（pack/shell_build.sh 放在壳目录旁）随发版存档
+        shutil.copytree(cache.parent / (cache.name + ".symbols"), Path(os.environ["S2A_SYMBOLS_OUT"]) / "Shell", dirs_exist_ok=True)
 
 
 SPARKLE_FEED = "https://dl.s2arm.com/appcast/mac.xml"
@@ -122,6 +124,8 @@ def main():
                SWIFTPM_MODULECACHE_OVERRIDE=str(output / "swift-cache"))
     sdk_version = subprocess.check_output(["xcrun", "--sdk", "macosx", "--show-sdk-version"],
                                           env=env, text=True).strip()
+    # Sparkle 二进制包不在仓库里（公开仓扫描不收二进制包）：构建前按钉死的校验值备到 frontend/Vendor/（本机缓存有就拷，没有下一次）
+    subprocess.run([sys.executable, str(ROOT / "launchers/macos/sparkle_vendor.py")], check=True)
     # --disable-keychain：拉 Sparkle 二进制包时 SwiftPM 缺省去钥匙串找 github.com 凭据，钥匙串弹授权框等人点，无人值守的出包机就一直挂着（11-13 v0.3.10 候选卡 14 分钟）
     command = ["swift", "build", "--disable-sandbox", "--disable-keychain", "--cache-path", str(output / "spm-cache"),
                "--package-path", str(ROOT / "launchers/macos"), "--scratch-path", str(output / "spm"), "-c", "release",
@@ -170,6 +174,11 @@ def main():
         print(f"补丁库：收 {len(took)} 款（{' '.join(took) or '无'}），跳过 {len(skipped)} 款（没验过）")
     else:
         print("🟡 没设 S2A_RELEASE_PATCHES：本版启动器不带补丁库")
+    # 社区补丁与金手指本地库（11-13 维护者：随启动器装在本地、云端兜底）：完整快照放 Resources/CommunityPatches/patches-v2.tar，
+    #   出包时 pack/jobs/patches.py 本地优先、按云端清单增量。来源 S2A_PATCH_SNAPSHOT（本机文件）> 下载站；取不到不挡打包（出包时照样向云端要）
+    sys.path.insert(0, str(ROOT / "tools")); import patch_pack
+    why = patch_pack.stage_snapshot(str(resources / "CommunityPatches"))
+    print("社区补丁快照：" + ("已放进 Resources/CommunityPatches" if not why else f"🟡 {why}，本版启动器不带本地补丁库"))
     # 脱敏规则只有一份（tools/redact.py，诊断报告与任务日志共用）：任务代码在引擎准备好之前也要脱敏，随 Jobs 一起带
     shutil.copy2(ROOT / "tools/redact.py", resources / "Jobs" / "redact.py")
     shutil.copy2(ROOT / "tools/sha256_fast.py", resources / "Jobs" / "sha256_fast.py")   # 导入算原件 SHA（pack/jobs/core.py digest，Windows 走 CNG）
@@ -184,6 +193,7 @@ def main():
     # 内置 Python 一律带 -B：-I 会忽略 PYTHONDONTWRITEBYTECODE，不带 -B 就往 App 包里写 __pycache__，签名封存被破坏（11-02 beta.4 走查：
     #   AI 用 s2armctl 后 codesign 报「a sealed resource is missing or invalid」，系统按新身份看待 App，文件访问授权可能失效）
     shutil.copy2(ROOT / "launchers/macos/Branding/wordmark-transparent.png", resources / "wordmark-transparent.png")   # 没封面时的字标
+    shutil.copy2(ROOT / "launchers/macos/Branding/s-gold.png", resources / "s-gold.png")   # 出包页 S 级优化卡片的金色 S（make_s_gold.py 由应用图标生成）
     # App 图标（#882 定稿 D「交错双柄」）
     subprocess.run(["bash", str(ROOT / "launchers/macos/make_icns.sh"), str(resources / "S2Arm.icns")], check=True)
     # 开源替代共享字体随应用分发（维护者 10-23：玩家不用找字体、不作检测项）：pack/fonts/make_open_fonts.py 生成（来源钉版本 + sha256，产物可重现），
@@ -204,18 +214,28 @@ def main():
     expected = dict(line.split("==") for line in (ROOT / "launchers/macos/requirements-runtime.txt").read_text().splitlines() if "==" in line and not line.startswith("#"))
     versions = json.loads((runtime / "versions.json").read_text()) if (runtime / "versions.json").is_file() else {}
     # Runtime 跨次复用：schema、依赖指纹或 C 改写器源码变了都要重收。
-    # schema 3 的目录仍带 oead 和 GNU timeout，requirements 版本对得上也不许复用。
+    # schema 3 的目录仍带 oead 和 GNU timeout，schema 4 的仍带 .NET 运行时（5 起出包工具全为引擎 Binaries/ 里的 NativeAOT 单文件，不再带），
+    # requirements 版本对得上也不许复用。
     # 按包导入（不把 pack/ 目录放进模块路径：那样 pack/pack.py 会顶替 pack 包，后面 bundle_engine.write_manifest 的 from pack.shell import 报
     #   「'pack' is not a package」，11-07 本机打 App 实测）
     os.sys.path.insert(0, str(ROOT))
     from pack import rewriter
-    if (versions.get("runtimeSchema") != 4 or versions.get("runtimeDeps") != runtime_deps_fingerprint()
-            or versions.get("rewriter") != rewriter.source_digest()
-            or any(versions.get(name) != version for name, version in expected.items())
-            or any(not (runtime / "bin" / name).is_file() for _, name in TOOLS)):   # 工具表加了新命令（10-26 bash / spirv-cross / glslangValidator）旧运行环境也要重打
-        subprocess.run([os.sys.executable, str(ROOT / "launchers/macos/bundle_runtime.py")], env=env, check=True)
+
+    if (
+        versions.get("runtimeSchema") != 5
+        or versions.get("runtimeDeps") != runtime_deps_fingerprint()
+        or versions.get("rewriter") != rewriter.source_digest()
+        or any(versions.get(name) != version for name, version in expected.items())
+        or any(not (runtime / "bin" / name).is_file() for _, name in TOOLS)
+    ):  # 工具表加了新命令（10-26 bash / spirv-cross / glslangValidator）旧运行环境也要重打
+        subprocess.run(
+            [os.sys.executable, str(ROOT / "launchers/macos/bundle_runtime.py")],
+            env=env,
+            check=True,
+        )
     verify_portable_runtime(runtime)
     shutil.copytree(runtime, resources / "Runtime", symlinks=True, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    seal_runtime(resources)   # 预编 .pyc 签进包 + 内置 Python 关写字节码：运行时谁调都写不进包（Engine 在 bundle 里写清单前预编）
     bundle(resources / "Engine", args.developer_dir)
     bundle_shell(resources / "Engine/engine.json", resources / "Shell", env)
     info = dict(**frontend_layout.info_identity(front), CFBundlePackageType="APPL",
@@ -229,7 +249,11 @@ def main():
         UTTypeConformsTo=["public.zip-archive"], UTTypeTagSpecification={"public.filename-extension": ["s2asave"]})]
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     # 启动器本体同样去掉调试映射（见 bundle_engine.strip_debug_maps），再签整个 App
-    subprocess.run(["xcrun", "strip", "-S", str(app / "Contents/MacOS" / front["executable"])], env=env, check=True)
+    exe = app / "Contents/MacOS" / front["executable"]
+    if os.environ.get("S2A_SYMBOLS_OUT"):   # 未去符号原件随发版存档（同 bundle_engine.strip_debug_maps）
+        (Path(os.environ["S2A_SYMBOLS_OUT"]) / "MacOS").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(exe, Path(os.environ["S2A_SYMBOLS_OUT"]) / "MacOS" / exe.name)
+    subprocess.run(["xcrun", "strip", "-S", "-x", str(exe)], env=env, check=True)
     subprocess.run(["codesign", "--force", "--sign", "-", str(macos / "S2ArmNS2Connection")], env=env, check=True)
     # Sparkle 里面的程序由里往外签（发版签名 sign_release.sh 同样由里往外）：XPC 服务 / Updater.app / Autoupdate → 框架本身
     fw = app / "Contents/Frameworks/Sparkle.framework"

@@ -37,7 +37,7 @@ S2Arm 本身以 Apache License 2.0 授权（仓库根目录 [LICENSE](LICENSE) �
 | dmgbuild | 1.6.7 | MIT | https://github.com/dmgbuild/dmgbuild ，仅维护者 DMG 打包用，钉在 `launchers/macos/requirements-dmg.txt`；不修改上游文件，许可随安装包保存在 `dmgbuild-1.6.7.dist-info/licenses/LICENSE` | 否 | 否 |
 | ds-store | 1.3.3 | MIT | https://github.com/dmgbuild/ds_store ，DMG 的 Finder 布局元数据；不修改上游文件，许可随安装包保存在 `ds_store-1.3.3.dist-info/licenses/LICENSE` | 否 | 否 |
 | mac-alias | 2.2.3 | MIT | https://github.com/dmgbuild/mac_alias ，DMG 背景文件引用；不修改上游文件，许可随安装包保存在 `mac_alias-2.2.3.dist-info/licenses/LICENSE` | 否 | 否 |
-| .NET 运行时 | 10.x（构建机已装的 10.* 最新补丁） | MIT | https://github.com/dotnet/runtime | 是（Runtime/dotnet） | 是（NativeAOT 把运行时代码静态编进 iOS 宿主；不带共享运行时目录） |
+| .NET 运行时 | 10.x（构建机已装的 10.* 最新补丁） | MIT | https://github.com/dotnet/runtime | 是（NativeAOT 把运行时代码静态编进 Mac 宿主与出包工具：Engine/Binaries 里的读取器 / RomFS 索引 / 着色器烘焙器 / 直连批量进程全为单文件；不带共享运行时目录） | 是（NativeAOT 把运行时代码静态编进 iOS 宿主；不带共享运行时目录） |
 | zstd 命令行与 libzstd | Homebrew 构建时的版本 | BSD-3-Clause | https://github.com/facebook/zstd | 是 | 否 |
 | libvpx | 1.17.0 | BSD-3-Clause（附专利授权） | https://chromium.googlesource.com/webm/libvpx ，由 `services/vpx/build.sh` 按 sha256 取，不入库，构建时打 S2Arm 补丁 `services/vpx/patches/`（Nvdec VP9 作业接口，不改未调用时的解码结果）；VP9 重打包压缩头的写出顺序与默认概率表镜像其 BSD 实现（`Vp9CompressedHeader.cs`、`android/codecs/vpxbench/hdr.c`，出处 `vp9_decodeframe.c::read_compressed_header`/`vp9_entropymode.h`）；发版时 iOS arm64 / macOS arm64 静态库预编进 App（`Engine/Binaries/Prepare/libs/vpx/`），玩家出包只链接 | 是（静态链进 Mac 宿主；预编库随 App） | 是（静态链进 iOS 宿主） |
 | libopus | 1.6.1 | BSD-3-Clause（附专利授权） | https://opus-codec.org ，由 `services/opus/build.sh` 按 sha256 取，不入库 | 是 | 是 |
@@ -73,6 +73,7 @@ S2Arm 本身以 Apache License 2.0 授权（仓库根目录 [LICENSE](LICENSE) �
 | .NET 运行时（linux-bionic） | 10.x | MIT | https://github.com/dotnet/runtime | 是（NativeAOT 静态编进单库） |
 | libopus / libvpx | 同上表 1.6.1 / 1.17.0 | BSD-3-Clause（附专利授权） | 按 sha256 取固定源码，不入库 | 是 |
 | Ryujinx 树、Ryujinx 子集、直连图形层等共用组件 | 同上表 | 同上表 | 同上表 | 是（安卓单库共用同一份托管代码与原生层） |
+| libadrenotools / liblinkernsbypass | Eden 分支 `8ba23b42d7` / liblinkernsbypass `aa3975893d`，经 BananaNative `3d43275` vendored | BSD-2-Clause（© 2021 Billy Laws）；`adreno_binder_compat.c` 来自 BananaNative（MIT） | https://github.com/bylaws/libadrenotools 、https://github.com/bylaws/liblinkernsbypass ；源码 `android/third_party/libadrenotools`，许可全文该目录 `LICENSE` 与 `lib/linkernsbypass/LICENSE` | 是（编成 `libadrenotools.so` / `libhook_impl.so` / `libmain_hook.so`；只在选择外挂驱动时加载。驱动二进制本身不进 APK、不入库） |
 
 ## 已经从出包路径拿掉的 GPL
 

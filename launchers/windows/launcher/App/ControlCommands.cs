@@ -104,12 +104,13 @@ public sealed partial class EnvironmentWindow
         return ControlReply.Ok();
     }
 
-    private ControlReply ControlInstall(LibraryGame game, IReadOnlySet<string> accept)
+    /// <param name="export">mode = export（同游戏库「导出自签包」）：不连手机、出到文件夹</param>
+    private ControlReply ControlInstall(LibraryGame game, IReadOnlySet<string> accept, bool export = false)
     {
         if (ControlBusy) return Busy();
         selectedGame = game.Id;
+        _ = InstallAsync(game, accept, ask: false, export: export);
         Navigate("install");
-        _ = InstallAsync(game, accept, ask: false);
         return ControlReply.Ok();
     }
 
@@ -154,6 +155,11 @@ public sealed partial class EnvironmentWindow
             }
             case ("POST", "/ipa"):
                 return ControlGame(r) is { } ipaGame ? ControlExport(ipaGame, r.Flag("spaceOverride")) : NoGame;
+            case ("POST", "/selfsign"):   // 同游戏库「导出自签包」（同 Mac 控制口）
+                if (ControlBusy) return Busy();
+                if (ControlGame(r) is not { } selfSignGame) return NoGame;
+                ExportSelfSign(selfSignGame);
+                return ControlReply.Ok();
             case ("POST", "/batch"):   // 批量出包（同 Mac 控制口、同界面清单页）：建批次后一款接一款地出，进度看 GET /state 的 batch
             {
                 if (ControlBusy || batchRunning) return Busy();
@@ -170,7 +176,9 @@ public sealed partial class EnvironmentWindow
                 var skipped = batchDraft.Where(row => row.Problem is not null)
                     .Select(row => new Dictionary<string, object?> { ["gameId"] = row.Id, ["reason"] = row.Problem }).ToList();
                 if (batchDraft.All(row => row.Problem is not null)) { batchControlPlatforms = null; return ControlReply.Json(new Dictionary<string, object?> { ["ok"] = false, ["skipped"] = skipped }, 409); }
-                _ = StartBatchAsync();
+                // 等批次真建成、编排作业起了再回 ok（审计 P1-166：原先先回 ok、后台才建，建失败时 s2armctl batch 空等或按上一批退出；同 Mac createBatch）
+                if (!await StartBatchAsync())
+                    return ControlReply.Json(new Dictionary<string, object?> { ["ok"] = false, ["error"] = batchError.Length > 0 ? batchError : "批次没建成", ["skipped"] = skipped }, 409);
                 return ControlReply.Json(new Dictionary<string, object?> { ["ok"] = true, ["skipped"] = skipped });
             }
             case ("POST", "/build"):
@@ -216,7 +224,7 @@ public sealed partial class EnvironmentWindow
                 return ControlReply.Ok();
             }
             case ("POST", "/install"):
-                return ControlGame(r) is { } installGame ? ControlInstall(installGame, AcceptFlags(r)) : NoGame;
+                return ControlGame(r) is { } installGame ? ControlInstall(installGame, AcceptFlags(r), r.Text("mode") == "export") : NoGame;
             case ("POST", "/uninstall"):
             {
                 if (ControlGame(r) is not { } game) return NoGame;

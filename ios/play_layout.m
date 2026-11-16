@@ -12,6 +12,7 @@ int s2a_ios_split_active(void) { return atomic_load(&g_split_active); }
 //   非 iOS 编译（Mac 单测 t_play_layout 也编本文件）没有分屏，回空矩形 = 调用方用视图自身
 #if !TARGET_OS_IPHONE
 CGRect s2a_ios_game_area(void) { return CGRectNull; }
+int s2a_ios_game_top(void) { return 0; }
 #endif
 
 NSString *const S2APlaySplitKey=@"splitScreen", *const S2APlayOrientationKey=@"screenOrientation", *const S2APlayLayoutChanged=@"S2APlayLayoutChanged";
@@ -40,17 +41,26 @@ static BOOL finite_rect(CGRect r) {
 }
 S2APlayLayout S2APlayLayoutMake(CGRect b, CGRect safe, S2APlaySplitMode mode, BOOL half, CGRect division) {
     BOOL split=S2APlaySplitEnabled(mode,half);
-    S2APlayLayout l={b,CGRectIntersection(b,safe),CGRectNull,split};
-    if (!finite_rect(b) || CGRectIsEmpty(b)) return (S2APlayLayout){CGRectZero,CGRectZero,CGRectNull,split};
+    S2APlayLayout l={b,CGRectIntersection(b,safe),CGRectNull,split,NO};
+    if (!finite_rect(b) || CGRectIsEmpty(b)) return (S2APlayLayout){CGRectZero,CGRectZero,CGRectNull,split,NO};
     if (!finite_rect(division)) division=CGRectNull;
     if (!CGRectIsNull(division)) l.division=CGRectIntersection(b,division);
     if (!split) return l;
-    CGFloat top=CGRectGetMidY(b), bottom=top;
+    CGFloat top=CGRectGetMidY(b), bottom=top; BOOL hinge=NO;
     if (!CGRectIsNull(l.division) && division.size.width>division.size.height &&
         l.division.size.width>=b.size.width*.9 && CGRectGetMinY(division)>CGRectGetMinY(b) && CGRectGetMaxY(division)<CGRectGetMaxY(b)) {
-        top=CGRectGetMinY(division); bottom=CGRectGetMaxY(division);
+        top=CGRectGetMinY(division); bottom=CGRectGetMaxY(division); hinge=YES;
     }
     l.game=CGRectIntersection(safe,CGRectMake(b.origin.x,b.origin.y,b.size.width,top-b.origin.y));
+    // 竖屏分屏、上区没有折痕可依（手动分屏）、安全区左右有缩进（iPhone Duo 外屏竖着用：系统报右 84 点，11-15 真机读数 视图 466×678、安全区 右 84 下 34）：
+    //   原先取安全区 ∩ 上半屏只有 382 点宽，16:9 画面再上下居中，外屏左上一小块、右边和顶上空着。改成横向按整屏宽、竖向仍按安全区，画面贴顶放
+    //   （上面没有要躲的东西；手柄在下半区）。别的机型竖屏左右缩进都是 0、半折内屏走折痕分支，区域不变
+    CGRect sg=CGRectIntersection(b,safe);
+    if (!hinge && b.size.height>b.size.width && !CGRectIsNull(sg) &&
+        (CGRectGetMinX(sg)>CGRectGetMinX(b) || CGRectGetMaxX(sg)<CGRectGetMaxX(b))) {
+        CGFloat y=MAX(CGRectGetMinY(sg),b.origin.y);
+        l.game=top>y ? CGRectMake(b.origin.x,y,b.size.width,top-y) : CGRectNull; l.top=YES;
+    }
     l.controls=CGRectIntersection(safe,CGRectMake(b.origin.x,bottom,b.size.width,CGRectGetMaxY(b)-bottom));
     if (CGRectIsNull(l.game)) l.game=CGRectZero;
     if (CGRectIsNull(l.controls)) l.controls=CGRectZero;
@@ -73,8 +83,10 @@ CGRect S2APlayControlsRect(S2APlayLayout l, CGRect b) {
 static S2APlayLayout g_layout;
 static _Atomic BOOL g_half;
 static _Atomic double g_view_ratio;
+static _Atomic int g_max_fps;   // 屏幕最高刷新率（帧率补丁按档默认取不超过它的最高一档，runtime/src/cpatch.c fps_pick；布局时在主线程记）
 S2APlayLayout s2a_ios_play_layout(void) { return g_layout; }
 CGRect s2a_ios_game_area(void) { return g_layout.game; }
+int s2a_ios_game_top(void) { return g_layout.top; }
 UIInterfaceOrientationMask s2a_ios_play_orientations(void) {
     NSUserDefaults *d=NSUserDefaults.standardUserDefaults;
     BOOL split=S2APlaySplitEnabled(S2APlayReadSplit(d),g_half);
@@ -88,13 +100,24 @@ static double screen_ratio(void) {
     double r=atomic_load(&g_view_ratio);
     if (!(r>0) && !NSThread.isMainThread) for (int i=0;i<500 && !((r=atomic_load(&g_view_ratio))>0);i++) usleep(10000);
     if (r>0) return r;
-    CGSize s=UIScreen.mainScreen.nativeBounds.size;
+    // 还没排过版：按当前前台场景所在的那块屏算。不用 UIScreen.mainScreen——iPhone Duo 内屏亮着时它仍报外屏 1398×2034（11-13 真机读数）
+    CGSize s=CGSizeZero;
+    if (NSThread.isMainThread) for (UIScene *sc in UIApplication.sharedApplication.connectedScenes)
+        if ([sc isKindOfClass:UIWindowScene.class] && sc.activationState==UISceneActivationStateForegroundActive) { s=((UIWindowScene *)sc).coordinateSpace.bounds.size; break; }
+    if (!(s.width>0 && s.height>0)) s=UIScreen.mainScreen.nativeBounds.size;
     BOOL portrait=s2a_ios_play_orientations()==UIInterfaceOrientationMaskPortrait;
     CGRect b=CGRectMake(0,0,portrait?fmin(s.width,s.height):fmax(s.width,s.height),portrait?fmax(s.width,s.height):fmin(s.width,s.height));
     CGRect a=S2APlayLayoutMake(b,b,S2APlayReadSplit(NSUserDefaults.standardUserDefaults),g_half,CGRectNull).game;
     return a.size.width>0 && a.size.height>0 ? a.size.width/a.size.height : 16.0/9;
 }
 int s2a_ios_screen_known(void) { return atomic_load(&g_view_ratio)>0; }
+// 屏幕最高刷新率（Hz；Info.plist 有 CADisableMinimumFrameDurationOnPhone，ProMotion 机回 120）：主线程布局时记下；还没记（游戏线程早问）等最多 5 秒，仍没有回 60
+int s2a_ios_screen_max_fps(void) {
+    int v=atomic_load(&g_max_fps);
+    if (!v && NSThread.isMainThread) { v=(int)UIScreen.mainScreen.maximumFramesPerSecond; atomic_store(&g_max_fps,v); }
+    for (int i=0;!v && i<500;i++) { usleep(10000); v=atomic_load(&g_max_fps); }
+    return v>0 ? v : 60;
+}
 int s2a_ios_screen_w(void) { return S2APlayTargetSize(CGSizeMake(screen_ratio(),1)).width; }
 int s2a_ios_screen_h(void) { return S2APlayTargetSize(CGSizeMake(screen_ratio(),1)).height; }
 
@@ -218,6 +241,7 @@ CGRect S2APlayDivision(UIView *view) {
         });
     }
     if (l.game.size.width>0 && l.game.size.height>0 && settled) atomic_store(&g_view_ratio,l.game.size.width/l.game.size.height);
+    { UIScreen *sc=s.window.windowScene.screen; if (sc) atomic_store(&g_max_fps,(int)sc.maximumFramesPerSecond); }
     if (changed) {
         fprintf(stderr,"[S2A 布局] 分屏 %s，游戏 %.1f,%.1f %.1fx%.1f，按键 %.1f,%.1f %.1fx%.1f\n",l.split?"开":"关",l.game.origin.x,l.game.origin.y,l.game.size.width,l.game.size.height,l.controls.origin.x,l.controls.origin.y,l.controls.size.width,l.controls.size.height);
         [NSNotificationCenter.defaultCenter postNotificationName:S2APlayLayoutChanged object:nil];

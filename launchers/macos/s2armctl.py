@@ -34,6 +34,7 @@ USAGE = """s2armctl —— 让 AI 助手操作 S2Arm（每条命令 = 玩家点�
   games <文件或文件夹>...            放游戏（本体、更新、DLC 放一个文件夹传文件夹即可；多个更新自动用最新版本），等导入完成再返回
   prepare <游戏号>                   Mac 编译（排队）
   ipa <游戏号> [--space-override]    打 iPhone 包（出 IPA + 资源包）；--space-override 同界面「仍然继续」，磁盘预检不够也照出（先征得玩家同意）
+  selfsign <游戏号>                  导出自签包（同游戏库按钮）：能直接导出的直接导出；没出过 / 旧格式的先打 iPhone 包再导出
   build <游戏号> [ios|mac|android|harmony] [--space-override]   出包，按目标：ios = iPhone / iPad（缺省）、mac = Mac；安卓、鸿蒙即将上线
   batch <游戏号>[:mac,iphone] … [--location 文件夹]
                                     批量出包：几款一起，每款可指定平台（缺省 iphone；同一款先 Mac 后 iPhone，解包只做一次）、一批共用一个存放位置；
@@ -53,7 +54,7 @@ USAGE = """s2armctl —— 让 AI 助手操作 S2Arm（每条命令 = 玩家点�
   library <目录> [--move]            换游戏库位置（外接盘也行）；--move 把现有游戏、成品、缓存和存档一起搬到这个空文件夹
   cloud-folder [<iCloud 云盘里的文件夹>]   开 iCloud 存档同步（不给路径 = 关闭）；iPhone / iPad 上选同一个文件夹
   cloud-sync <游戏号>   这款立即同步一次（开局前 / 退出后会自动做）
-  display <游戏号> [--<设置项> on|off|default|<选项>]…   看 / 改这款的启动设置（设置项见 game_settings.v1.json，如 --enhance on --docked handheld），下次启动生效
+  display <游戏号> [--<设置项> on|off|default|<选项>]…   看 / 改这款的启动设置（设置项见 game_settings.v1.json，如 --quality MetalFX --docked handheld），下次启动生效
   errors [游戏号]                    最近失败任务的错误码、原因、建议、日志位置和日志末尾
   retry <任务号> | cancel <任务号>    重试 / 取消任务
   launch <游戏号>                    在 Mac 上启动游戏
@@ -257,7 +258,7 @@ def task_log(task_id):
     d = logs_root()
     # Mac 构建各阶段写 logs/<任务>/，起游戏等作业写 logs/<任务>-*.log；两种布局都查。
     prefix = os.path.join(glob.escape(d), glob.escape(task_id))
-    fs = glob.glob(prefix + '*.log') + glob.glob(os.path.join(prefix, '*.log'))
+    fs = glob.glob(glob.escape(prefix) + '*.log') + glob.glob(os.path.join(glob.escape(prefix), '*.log'))
     fs = [f for f in fs if os.path.isfile(f)]
     return max(fs, key=os.path.getmtime) if fs else None
 
@@ -736,7 +737,6 @@ def main():
     if cmd == 'build':
         args = [a for a in rest if a != '--space-override']
         target = args[1] if len(args) > 1 else 'ios'
-        if target in ('android', 'harmony'): print('即将上线，敬请期待'); sys.exit(2)
         print(json.dumps(call('POST', '/build', {'gameId': args[0], 'target': target, **space_flag(rest)}), ensure_ascii=False)); return
     if cmd == 'diag':
         body = diag_body(rest)
@@ -779,10 +779,9 @@ def main():
         return
     if cmd == 'update-phone':
         before = {t['id'] for t in call('GET', '/state')['tasks'] if t['operation'] == 'installUpdate'}
-        body = {**({'acceptStale': True} if '--accept-stale' in rest else {}), **({'repack': True} if '--repack' in rest else {}), **({'ask': True} if '--ask' in rest else {}),
+        body = {**accept_flags(rest), **({'repack': True} if '--repack' in rest else {}), **({'ask': True} if '--ask' in rest else {}),
                 **({'device': rest[rest.index('--device') + 1]} if '--device' in rest else {}),   # 连着多台时指定哪台（同 install --device）
-                **({'acceptDropped': True} if '--accept-dropped' in rest else {}),   # 同 install --accept-dropped：玩家同意让别的电脑装的款这次带不上
-                **({'acceptNoBackup': True} if '--accept-no-backup' in rest else {})}   # 玩家同意这次不先备份存档照装（装机原则 11-11，save_backup_failed）
+                }   # 玩家同意的确认（--accept-dropped / --accept-no-backup / --accept-stale / --accept-low-space…）由 accept_flags 原样交给 App
         r = call('POST', '/update-phone', body); print(json.dumps(r, ensure_ascii=False), flush=True)   # 409（已是本版 / 有要重出的款没确认）在 call 里带原因退非 0
         if r.get('asked'): print('窗口里弹了三选一，等玩家选'); return   # --ask：同点按钮，有要重出的款时由玩家在窗口里选
         wait_op('installUpdate', before, 3600); return
@@ -792,20 +791,24 @@ def main():
         wait(rest[0], op, lim); return
     simple = {
               'fonts': ('/fonts', lambda r: {'path': os.path.abspath(r[0]) if r and r[0] else ''}),
-              'prepare': ('/prepare', lambda r: {'gameId': r[0], **space_flag(r)}), 'ipa': ('/ipa', lambda r: {'gameId': r[0], **space_flag(r)}), 'install': ('/install', lambda r: simple_body('install', r)), 'uninstall': ('/uninstall', lambda r: {'gameId': r[0], **({'acceptDropped': True} if '--accept-dropped' in r else {}), **({'acceptNoBackup': True} if '--accept-no-backup' in r else {}), **({'acceptStale': True} if '--accept-stale' in r else {})}), 'restore-iphone': ('/restore-iphone', lambda r: {'gameId': r[0]}), 'launch': ('/launch', lambda r: {'gameId': r[0]}),
+              'prepare': ('/prepare', lambda r: {'gameId': r[0], **space_flag(r)}), 'ipa': ('/ipa', lambda r: {'gameId': r[0], **space_flag(r)}), 'install': ('/install', lambda r: simple_body('install', r)), 'uninstall': ('/uninstall', lambda r: {'gameId': r[0], **accept_flags(r)}), 'restore-iphone': ('/restore-iphone', lambda r: {'gameId': r[0]}), 'launch': ('/launch', lambda r: {'gameId': r[0]}),
               'cancel': ('/cancel', lambda r: {'taskId': r[0]}), 'retry': ('/retry', lambda r: {'taskId': r[0]}),
               'select': ('/select', lambda r: {'selection': r[0], **({'gameId': r[1]} if len(r) > 1 else {})}),
               'onboarding': ('/onboarding', lambda r: {'action': r[0], **({'step': int(r[1])} if len(r) > 1 else {})}),
               'target': ('/target', lambda r: {'action': 'probe'} if r[:1] == ['probe'] else {'productType': r[0], 'os': int(r[1])}),
               'env': ('/environment', lambda r: {}), 'show': ('/show', lambda r: {'page': r[0], **({'gameId': r[1]} if len(r) > 1 else {})}), 'refresh': ('/refresh', lambda r: {}), 'dismiss': ('/dismiss', lambda r: {})}
-    if cmd not in simple: sys.exit(f'不认识 {cmd}')
+    if cmd not in simple:   # 客户端不拦不认识的命令（11-15）：原样 POST /<命令>，App 不认识回 404「不认识」，由 call 带原因退非 0
+        print(json.dumps(call('POST', '/' + cmd, {'args': rest}), ensure_ascii=False)); return
     path, mk = simple[cmd]; print(json.dumps(call('POST', path, mk(rest)), ensure_ascii=False))
 
 def simple_body(cmd, rest):
     if cmd == 'install':
         r = rest
-        return {'gameId': r[0], **({'teamId': r[r.index('--team') + 1]} if '--team' in r else {}), **({'device': r[r.index('--device') + 1]} if '--device' in r else {}), **({'acceptDropped': True} if '--accept-dropped' in r else {}), **({'acceptNoBackup': True} if '--accept-no-backup' in r else {}), **({'acceptStale': True} if '--accept-stale' in r else {})}
+        return {'gameId': r[0], **({'teamId': r[r.index('--team') + 1]} if '--team' in r else {}), **({'device': r[r.index('--device') + 1]} if '--device' in r else {}), **accept_flags(r)}
     raise KeyError(cmd)
+
+def accept_flags(args):   # --accept-<词>… → accept<词>: true 原样交给 App（11-15：不在客户端按名字挑，漏一个就静默丢，如 --accept-low-space）
+    return {'accept' + ''.join(w.capitalize() for w in a[len('--accept-'):].split('-')): True for a in args if a.startswith('--accept-') and len(a) > 9}
 
 def space_flag(args): return {'spaceOverride': True} if '--space-override' in args else {}
 

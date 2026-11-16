@@ -53,6 +53,7 @@ __attribute__((weak)) int s2a_front_is_running(void) { return 0; }   // iOS 壳 
 #include "s2a_lan_discovery.h"
 // Hosts without a discovery implementation leave LAN unavailable explicitly.
 __attribute__((weak)) const s2a_lan_discovery_v1 *s2a_ldn_lan_provider(void) { return NULL; }
+__attribute__((weak)) void s2a_window_span_arm(void) {}   // vawin.c（Apple）强定义：低区碰底死的局记跨度用的路径先备好（#1143）
 void s2a_crash_install(void); void s2a_term_install(void);
 uint64_t s2a_mem_init(const char *npdm);
 void s2a_boot_mark(const char *stage);
@@ -261,6 +262,13 @@ static int host_run(int argc, char **argv) {
 #if TARGET_OS_IPHONE
     s2a_ios_load_graphics_settings();
 #endif
+    // 开着只改主机档渲染尺寸的社区宽屏补丁 → 主机模式（11-13 实机：宽屏补丁是给模拟器写的、只改主机档渲染宽高；掌机档下渲染目标按掌机 1280×720 分配、
+    //   视口却按补丁的主机宽高算成 2064×864，每遍只画进左上一块，整局画面放大错位）。出包已把另一档补齐的自适应满屏（模式 both）不切，运行模式归玩家；
+    //   要在档位梯子、服务层、宽屏装表读 S2A_DOCKED 之前
+    { int s2a_cpatch_ws_needs_docked(const char *dir);
+      const char *dk = getenv("S2A_DOCKED");
+      if (lc->module_dir[0] && !(dk && !strcmp(dk, "1")) && s2a_cpatch_ws_needs_docked(lc->module_dir)) {
+          setenv("S2A_DOCKED", "1", 1); LOG("运行模式：开着社区宽屏补丁，按主机模式跑（补丁只改主机档渲染宽高；原 S2A_DOCKED=%s）", dk ? dk : "未设"); } }
     // 档位梯子（runtime/src/qladder_host.c）：要在 iOS 画面设置注入之后（玩家选的运行模式是梯子的上限，#352），服务层 / 宽屏装表读 S2A_DOCKED 之前
     { void s2a_ql_boot(void); s2a_ql_boot(); }
 #if TARGET_OS_OSX
@@ -400,6 +408,7 @@ static int host_run(int argc, char **argv) {
           fn, (unsigned long long)fs, (unsigned long long)fh); }
     { void s2a_vm_top(const char *); s2a_vm_top("C# 初始化后"); void s2a_vm_low(const char *); s2a_vm_low("C# 初始化后"); }
     { void s2a_guest_va_report(const char *); s2a_guest_va_report("C# 初始化后"); }
+    s2a_window_span_arm();   // 低区碰底死的局在崩溃处理里记跨度：路径与取数函数这里先备好（vawin.c，#1143）
     if (s2a_dev_on()) { void s2a_va_watch_start(void); s2a_va_watch_start(); }   // 地址走势（30 秒一行）：开发设施，玩家口径不起
     s2a_lowva_start();   // 低区统一记账巡检（lowva.c）：每秒实测保留量、余量不够叫可腾退的腾
     LOG("S2A 就绪");   // 测试层契约第 4 节：运行时（原生层 + C#）已起来

@@ -19,7 +19,7 @@ struct PhoneJobPanel: View {
     var notes: [String] = []
     @State private var showDetails = false
 
-    private var language: String { loc.lang == .zh ? "zh-Hans" : "en" }
+    private var language: String { loc.lang.sharedCode }
     /// 共用体验表的文案；查不到（不该发生，单测守着）退回 fallback，不把键名上屏
     private func t(_ id: String, _ fallback: String = "") -> String {
         let s = BackendText.launcherText(id, language: language)
@@ -31,11 +31,11 @@ struct PhoneJobPanel: View {
         return d.isEmpty ? model.installTargetLabel : d
     }
 
-    /// 导出模式（装法「导出，自己签名安装」）：装机 / 更新作业不连手机、出到文件夹。完成后看结果，进行中看当前装法
+    /// 导出自签包（游戏库「导出自签包」、S 级升级页「自签导出」）：装机 / 更新作业不连手机、出到文件夹。完成后看结果，进行中看这次会话
     private var exporting: Bool {
         guard session.kind == .install || session.kind == .installUpdate else { return false }
         if case .finished(.completed) = session.phase { return !(model.phoneOutcome?.exportFolder ?? "").isEmpty }
-        return model.installMode.mode == "export"
+        return model.selfSigning
     }
 
     var body: some View {
@@ -148,6 +148,7 @@ struct PhoneJobPanel: View {
                     }
                 }
             }
+            if let o { SGradeResultView(results: o.sgrade, text: { t($0) }) }   // 补进 S 级优化的各款：打上 / 没打上（11-14）
         }
         .accessibilityIdentifier("phone.done")
     }
@@ -173,6 +174,12 @@ struct PhoneJobPanel: View {
                     .font(.manrope(16)).foregroundStyle(.secondary).underline().fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
             }
             .buttonStyle(.plain).accessibilityIdentifier("phone.export.path")
+            // #1132：有沿用上次导出的款才点名（第一次导出全是新写的，不多这一句）
+            if o.exportReused > 0 {
+                Text(o.exportFresh.isEmpty ? t("phone.done.export.same")
+                     : t("phone.done.export.fresh").replacingOccurrences(of: "{0}", with: o.exportFresh.joined(separator: "、")).replacingOccurrences(of: "{1}", with: "\(o.exportReused)"))
+                    .font(.manrope(15, .semibold)).fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("phone.export.fresh")
+            }
             HStack(alignment: .top, spacing: 52) {
                 ForEach(Array(stats.enumerated()), id: \.offset) { _, s in
                     VStack(alignment: .leading, spacing: 6) {
@@ -204,6 +211,7 @@ struct PhoneJobPanel: View {
                     .buttonStyle(.plain).disabled(model.exportPushing).accessibilityIdentifier("phone.export.push")
                 }
             }
+            SGradeResultView(results: o.sgrade, text: { t($0) })   // 补进 S 级优化的各款：打上 / 没打上（11-14）
         }
         .accessibilityIdentifier("phone.done")
     }
@@ -212,7 +220,7 @@ struct PhoneJobPanel: View {
     private var failure: some View {
         VStack(alignment: .leading, spacing: 24) {
             headline(seal: AnyView(StatusSeal(symbol: "exclamationmark", color: LauncherPalette.danger)),
-                     title: t("phone.failed." + session.kind.rawValue, t("phone.failed.install")), subtitle: loc.backend(session.message))
+                     title: exporting ? t("phone.failed.export") : t("phone.failed." + session.kind.rawValue, t("phone.failed.install")), subtitle: loc.backend(session.message))
             if !session.suggestion.isEmpty {
                 PhoneJobFact(label: t("phone.next"), text: loc.backend(session.suggestion))
             }
@@ -281,9 +289,8 @@ struct PhoneJobPanel: View {
 
     /// 「1 分 5 秒」「45 秒」/「1 min 5 s」
     static func duration(_ seconds: Double, language: String) -> String {
-        let s = max(0, Int(seconds.rounded())), m = s / 60, r = s % 60
-        if language == "en" { return m > 0 ? "\(m) min \(r) s" : "\(r) s" }
-        return m > 0 ? "\(m) 分 \(r) 秒" : "\(r) 秒"
+        let s = max(0, Int(seconds.rounded()))
+        return ExportSessionView.duration(seconds: s, exact: true, language: language)   // 同出包页一套写法（共享文案表 duration.*）
     }
 }
 

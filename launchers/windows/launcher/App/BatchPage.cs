@@ -268,19 +268,21 @@ public sealed partial class EnvironmentWindow
 
     /// <summary>点「出包（N 款）」：后端建批次（一批共用出包页选的存放位置），起出包编排作业一款接一款地出</summary>
     /// <param name="installAfter">「更新并重新出这几款」排的批：整批出完逐款装到 iPhone（InstallModePage.cs BatchFinishedAsync）</param>
-    private async Task StartBatchAsync(bool installAfter = false)
+    /// <returns>批次建成、编排作业起了 → true；没起（忙 / 没有可出的款 / 建批次失败，原因在 batchError）→ false（控制口按它回 ok / 409，审计 P1-166）</returns>
+    private async Task<bool> StartBatchAsync(bool installAfter = false)
     {
-        if (batchRunning || PackBusy) return;
+        if (batchRunning || PackBusy) return false;
         batchInstallAfter = installAfter;   // 每批自己定：界面 / 控制口建的批不接着装
         var control = batchControlPlatforms; batchControlPlatforms = null;
         var entries = control is null
-            ? batchDraft.Where(r => r.Iphone).Select(r => new BatchClient.Entry(r.Id, r.Name, ["iphone"])).ToList()
-            : batchDraft.Where(r => control.ContainsKey(r.Id)).Select(r => new BatchClient.Entry(r.Id, r.Name, control[r.Id])).ToList();
-        if (entries.Count == 0) return;
+            ? batchDraft.Where(r => r.Iphone).Select(r => new BatchClient.Entry(r.Id, r.Name, ["iphone"], SGradeOff().Contains(r.Id))).ToList()
+            : batchDraft.Where(r => control.ContainsKey(r.Id)).Select(r => new BatchClient.Entry(r.Id, r.Name, control[r.Id], SGradeOff().Contains(r.Id))).ToList();   // 出包页取消过「出包时打入」的款按款带上
+        if (entries.Count == 0) return false;
         var location = locationsFor == batchDraft[0].Id && exportLocation.Length > 0 ? exportLocation : null;
-        if (!await BatchRunAsync("create", ["--json", BatchClient.CreateJson(entries, location)]) || batchState is null) { Render(); return; }
+        if (!await BatchRunAsync("create", ["--json", BatchClient.CreateJson(entries, location)]) || batchState is null) { Render(); return false; }
         batchDraft = []; batchUnrecognized = [];
         RunBatchExport();
+        return true;
     }
 
     /// <summary>按批次文件起出包编排作业（剃刀 H13，pack/jobs/export_plan.py）：下一个出谁、记账、磁盘满暂停、这台电脑出不了的平台都在后端；

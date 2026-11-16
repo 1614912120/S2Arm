@@ -6,7 +6,7 @@ import Foundation
 /// |---|---|
 /// | inspect | import（读原件、登记进游戏库）+ catalog（读回这几款） |
 /// | build | Mac：build（作业层的 prepare，出运行文件）；iPhone：ipa（缺 .NET SDK 先 installDotnet） |
-/// | settingsSchema | 空表：没有每款的游戏选项（11-07 维护者：语言跟系统、Mac 主机模式、60 帧 / 满屏缺省开 + 自动降级，作业层定） |
+/// | settingsSchema | 空表：每款的游戏选项不走这里，在启动设置（共享定义表 game_settings.v1.json + 作业层 community；游戏语言 11-14 维护者确认玩家可选） |
 /// | run | launch（作业层校验运行文件、恢复存档、起 s2arm-host 并等它退出） |
 /// | control | stop = 请 launch 作业停（SIGTERM） |
 ///
@@ -146,12 +146,14 @@ public final class S2ArmEngineProvider: EngineProvider {
     /// 出包编排（剃刀 H13，pack/jobs/export_plan.py）：plan = {source: inline, items, location, deviceTarget, spaceOverride} 或 {source: batch}。
     /// 每一步是作业层的普通子作业，事件经 sink 原样过来（step / child / stepEnded）；终态 paused 时抛 JobFailure（state = .paused，结果里有 pausedReason / stoppedAt）。
     /// 计划里有 iPhone 时先确认 .NET SDK（同 build：玩家只点一次）
-    public func export(plan: [String: Any], hasIPhone: Bool, events: EventSink) async throws -> JobOutcome {
+    public func export(plan: [String: Any], hasIPhone: Bool, mode: String? = nil, events: EventSink) async throws -> JobOutcome {
         if hasIPhone, dotnetMissing {
             _ = try await environment.repair("installDotnet", events: events)
             if dotnetMissing { throw JobClientError(Self.dotnetRecheckFailed) }
         }
-        return try await client.perform("export", extra: ["plan": plan], events: events)
+        var extra: [String: Any] = ["plan": plan]
+        if let mode { extra["mode"] = mode }   // 子作业照带（export_plan._run_step 复制父请求）
+        return try await client.perform("export", extra: extra, events: events)
     }
 
     private var dotnetMissing: Bool { environment.checks?.first { $0.action == "installDotnet" }?.ok == false }
@@ -270,16 +272,18 @@ public final class S2ArmEngineProvider: EngineProvider {
     public func devCertUse(_ active: Bool) async throws { try await installer.devCertUse(active) }
     public func devCertDelete() async throws { try await installer.devCertDelete() }
 
-    public func install(gameId: String, teamId: String? = nil, device: String? = nil, acceptDropped: Bool = false, accept: Set<String> = [], events: EventSink = .discard) async throws -> InstallResult {
-        try await installer.install(gameId: gameId, teamId: teamId, device: device, acceptDropped: acceptDropped, accept: accept, events: events)
+    public func install(gameId: String, teamId: String? = nil, device: String? = nil, acceptDropped: Bool = false, accept: Set<String> = [], mode: String? = nil,
+                        events: EventSink = .discard) async throws -> InstallResult {
+        try await installer.install(gameId: gameId, teamId: teamId, device: device, acceptDropped: acceptDropped, accept: accept, mode: mode, events: events)
     }
 
     public func exportPush(gameId: String?, device: String? = nil, events: EventSink = .discard) async throws -> [String] {
         try await installer.exportPush(gameId: gameId, device: device, events: events)
     }
-    public func installMode(set mode: String? = nil) async throws -> InstallModeInfo { try await installer.installMode(set: mode) }
-    public func updatePhone(acceptStale: Bool = false, acceptDropped: Bool = false, accept: Set<String> = [], device: String? = nil, events: EventSink = .discard) async throws -> [String: Any] {
-        try await installer.updatePhone(acceptStale: acceptStale, acceptDropped: acceptDropped, accept: accept, device: device, events: events)
+    public func installMode() async throws -> InstallModeInfo { try await installer.installMode() }
+    public func updatePhone(acceptStale: Bool = false, acceptDropped: Bool = false, accept: Set<String> = [], mode: String? = nil, sgradeUpgrade: Bool = false,
+                            device: String? = nil, events: EventSink = .discard) async throws -> [String: Any] {
+        try await installer.updatePhone(acceptStale: acceptStale, acceptDropped: acceptDropped, accept: accept, mode: mode, sgradeUpgrade: sgradeUpgrade, device: device, events: events)
     }
 
     public func restorePhone(device: String? = nil, events: EventSink = .discard) async throws {

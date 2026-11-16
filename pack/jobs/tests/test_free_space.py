@@ -326,7 +326,8 @@ class FreeSpace(JobCase):
         for bad in (["saves"], ["logs"], ["ipa", "games"]):
             with self.subTest(parts=bad), self.assertRaises(Failure):
                 library.space_free(self.context("spaceFree", gameId=GID, library=str(self.c.library), parts=bad))
-        with (self.c.library / ".execution.lock").open("a") as f:   # 另一个任务在跑
+        import core
+        with (self.c.library / ".execution.lock").open("a") as f, patch.object(core, "LOCK_WAIT_S", 0.3):   # 另一个任务在跑   # 排队上限调短（同 test_filelock / test_probe_jobs 的 0.3 秒口径）：这里核的是「锁被占 → 报忙、不动东西」，不是等满产品缺省 30 秒（11-14 门禁提速：原先每例白等 30 秒）
             filelock.try_lock(f)
             try:
                 with self.assertRaises(Failure) as e:

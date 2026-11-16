@@ -226,7 +226,7 @@ def env_items(target, shell):
     add('tzdata', (R / 'Binaries/Prepare/Tzdata/output').is_dir() or (tz and Path(tz, 'output').is_dir()),
         '钉版时区离线产物（S2A_TZDATA_CACHE/output，Mac 上 services/systemdata/make_tzdata.sh 生成后带来）')
     fonts = os.environ.get('S2A_FONTS')
-    add('fonts', fonts and len(glob.glob(os.path.join(fonts, '*.bfttf'))) == 7, '开源共享字体 7 份（S2A_FONTS，Mac 上 pack/fonts/make_open_fonts.py 生成后带来）')
+    add('fonts', fonts and len(glob.glob(os.path.join(glob.escape(fonts), '*.bfttf'))) == 7, '开源共享字体 7 份（S2A_FONTS，Mac 上 pack/fonts/make_open_fonts.py 生成后带来）')
     if pre:
         from pack import rewriter
         rw = rewriter.bundled()
@@ -266,7 +266,10 @@ class Run:
         self.evf = open(events, 'w', encoding='utf-8', newline='\n') if events else None; self.k = 0
 
     def ev(self, kind, **kw):   # 事件流一行（--events，见文件头）；没给就不写
-        kw = {k: shortroot.show(v) if isinstance(v, str) else v for k, v in kw.items()}   # 事件给界面：玩家只看到自己选的路径
+        # 事件给界面：玩家只看到自己选的路径。show 逐字替换（文案中间的路径），to_long 再按不分大小写、不分 / \\ 换前缀
+        #   （诊断#0e3bd5：result 的 ipa 路径大小写 / 分隔符和登记的短入口不一致，show 没换回，子进程退出拆了联接，父进程拷 ipa 报 WinError 3）
+        tbl = shortroot.table_now()
+        kw = {k: shortroot.to_long(shortroot.show(v), tbl) if isinstance(v, str) else v for k, v in kw.items()}
         if self.evf: self.evf.write(json.dumps({'ev': kind, 't': int(time.time()), **kw}, ensure_ascii=False) + '\n'); self.evf.flush()
 
     def say(self, msg):
@@ -304,7 +307,7 @@ def log_reason(text, limit=600):
 
 def nx_unpack_id():   # 源码身份（现编目录名与预编件 .src_digest 共用）
     import hashlib
-    src = b''.join(Path(f).read_bytes() for f in sorted(glob.glob(str(R / 'pack/nx_unpack/*.cs')) + glob.glob(str(R / 'pack/nx_unpack/*.csproj'))))
+    src = b''.join(Path(f).read_bytes() for f in sorted(glob.glob(os.path.join(glob.escape(str(R / 'pack/nx_unpack')), '*.cs')) + glob.glob(os.path.join(glob.escape(str(R / 'pack/nx_unpack')), '*.csproj'))))
     return hashlib.sha256(src).hexdigest()[:12]
 
 
@@ -355,8 +358,8 @@ def unpack(run, sources, title_id, program_index=0):
     exe = run.step('编 nx_unpack', lambda: nx_unpack(run))
     env = dict(os.environ, PYTHONUTF8='1', S2A_NX_UNPACK=str(exe))
     s = Path(sources[0])
-    nup = [p for p in sources if p.lower().endswith('.nup')] or (glob.glob(os.path.join(sources[0], '*.nup')) if s.is_dir() else [])
-    export = next((d for d in [s] + ([Path(p) for p in glob.glob(os.path.join(sources[0], '*'))] if s.is_dir() else []) if (d / 'base/exefs/main.npdm').is_file()), None)
+    nup = [p for p in sources if p.lower().endswith('.nup')] or (glob.glob(os.path.join(glob.escape(sources[0]), '*.nup')) if s.is_dir() else [])
+    export = next((d for d in [s] + ([Path(p) for p in glob.glob(os.path.join(glob.escape(sources[0]), '*'))] if s.is_dir() else []) if (d / 'base/exefs/main.npdm').is_file()), None)
     drop_seed_link(x)
     shutil.rmtree(x, ignore_errors=True)
     if export is None and nup:   # Switch 2 NUP 容器：先展开成导出目录
@@ -369,7 +372,7 @@ def unpack(run, sources, title_id, program_index=0):
     else:   # Switch 1 原件：按内容清单认款（pack/source_pick.py，与 Mac 一键出包同一份规则），本体 + 更新 + DLC 一起解
         keys = os.environ.get('S2A_KEYS') or os.path.expanduser('~/.switch/prod.keys')
         if not os.path.isfile(keys): raise Fail(f'prod.keys 不在：{keys}', 75)
-        files = sorted(f for d in sources for f in ([d] if os.path.isfile(d) else glob.glob(os.path.join(d, '**', '*'), recursive=True)) if f.lower().endswith(SRC_EXT))
+        files = sorted(f for d in sources for f in ([d] if os.path.isfile(d) else glob.glob(os.path.join(glob.escape(d), '**', '*'), recursive=True)) if f.lower().endswith(SRC_EXT))
         if not files: raise Fail(f'{sources} 下没有 {"/".join(SRC_EXT)}')
         def pick():
             with tempfile.TemporaryDirectory() as t:
@@ -605,7 +608,7 @@ def junction(dst, src):
     """工作根里联到现行各项 / 直连库。游戏库所在盘建不了联接（exFAT / FAT32，v0.3.1 玩家确认过照用，pack/orch/roots.py links_supported）时整份拷过来：
     多占一份空间（空间预算已按这类盘多算），产物一样"""
     target = shortroot.to_long(src, shortroot.table_now())
-    if WIN and shortroot.is_unc_path(target):
+    if WIN and shortroot.is_network_path(target):
         shutil.copytree(src, dst)
         return
     try:

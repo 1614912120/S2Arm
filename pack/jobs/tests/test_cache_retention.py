@@ -16,7 +16,8 @@ class CompilerRetentionTests(unittest.TestCase):
     def _preflight_fixture(self, root):
         import os
         import time
-        c = SimpleNamespace(private=root / 'private', work_root=root / 'private', library=root / 'library', emit=lambda *a, **k: None)
+        c = SimpleNamespace(private=root / 'private', work_root=root / 'private', library=root / 'library', emit=lambda *a, **k: None, warnings=[])
+        c.diagnostic = lambda *a, **k: c.warnings.append((a, k))
         c.library.mkdir()
         paths = []
         for i in range(4):
@@ -54,10 +55,10 @@ class CompilerRetentionTests(unittest.TestCase):
             c, paths, game = self._preflight_fixture(Path(directory))
             with patch.object(library, 'selected_packages', return_value=[{'sha256': 'synthetic', 'size': 4 << 30}]), \
                  patch('shutil.disk_usage', return_value=SimpleNamespace(free=12 << 30)):
-                with self.assertRaises(Failure) as error:
-                    library.check_pack_space(c, game, compiler_policy=cache_retention.retention_policy())
-            self.assertEqual(error.exception.code, 'disk_full')
-            self.assertNotIn('逻辑字节', str(error.exception))   # 玩家提示不露内部词
+                library.check_pack_space(c, game, compiler_policy=cache_retention.retention_policy())   # 11-14 不许堵门：不拦，只记警告
+            [(args, kw)] = c.warnings
+            self.assertEqual((kw.get('code'), kw.get('severity')), ('disk_full', 'warning'))
+            self.assertNotIn('逻辑字节', args[0])   # 玩家提示不露内部词
             self.assertTrue(all(p.exists() for p in paths[:3]))
             self.assertFalse(paths[3].exists())
 
@@ -82,8 +83,7 @@ class CompilerRetentionTests(unittest.TestCase):
             with patch.object(library, 'space_budget', return_value=budget), \
                  patch.object(Path, 'stat', stat), \
                  patch('shutil.disk_usage', return_value=SimpleNamespace(free=1 << 30)):
-                with self.assertRaises(Failure):
-                    library.check_pack_space(c, game, compiler_policy=cache_retention.retention_policy())
+                library.check_pack_space(c, game, compiler_policy=cache_retention.retention_policy())   # 不拦，只记警告
             self.assertTrue(all(p.exists() for p in paths), 'another volume cannot reclaim this cache volume')
 
     def test_success_cleanup_keeps_compiler_inputs(self):
@@ -486,6 +486,7 @@ class ExecutionLockTests(unittest.TestCase):
             c = Context(request)
             c.r['libraryId'] = library.setup(c)['libraryId']
             other = Context(dict(c.r, taskId='other'))
+            other.lock_wait = 0.3   # 排队上限调短（同 test_filelock / test_probe_jobs 的 0.3 秒口径）：这里核的是「锁被占 → 报忙、不动东西」，不是等满产品缺省 30 秒（11-14 门禁提速：原先每例白等 30 秒）
             def fail_while_locked(actual):
                 self.assertIs(actual, c)
                 with self.assertRaises(Failure):

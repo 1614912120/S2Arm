@@ -324,6 +324,7 @@ namespace S2A.Services
             else Register();
             InputPump.Start(Host.Device);
             Cheats.Start();   // 金手指：$S2A_DOCS/cheats 有开着的条目才执行（缺省全关）
+            FpsLocker.Start();   // FPSLocker 帧率配置的定期写入（出包时编进包的 fpslocker.json；跟 60 帧开关）
             AfterBoot?.Invoke(Host.Device, Dispatcher.Instance.Memory.Tracking);
             Native.Mark("服务：输入泵与渲染循环起\0"u8);
         }
@@ -495,6 +496,8 @@ namespace S2A.Services
             if (guestJoined) MemDiag.Stop();
             ShutdownStep(mode, "停止图形生产", () => BeforeShutdown?.Invoke());
             ShutdownStep(mode, "停止输入泵", InputPump.Stop);
+            // 金手指 / FPSLocker 线程读写游戏内存：在停 Horizon、关设备之前停；下一局 Start 重新加载、把编进包的开关重新交原生层（审计 P1-185）
+            ShutdownStep(mode, "停止金手指与帧率写入", () => { Cheats.Stop(); FpsLocker.Stop(); });
             ShutdownStep(mode, "收起系统键盘", TextInput.CancelAll);   // 还开着的输入框按取消交回并收框，不留迟到的回复给下一局
             // 输入泵停止后不会再次复位音频事件；先唤醒 DSP，再等待服务/设备关停。
             ShutdownStep(mode, "唤醒音频处理", Host.ResumeAudioForShutdown);

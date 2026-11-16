@@ -50,6 +50,10 @@ static void untar_child(const char *tar, const char *root, char *out, size_t n) 
     if (WIFSIGNALED(st)) snprintf(out, n, "崩溃（信号 %d）", WTERMSIG(st)); else snprintf(out, n, "返回 -%d", WEXITSTATUS(st));
 }
 static int same(const char *a, const char *b) { char c[4096]; snprintf(c, sizeof c, "cmp -s '%s' '%s'", a, b); return sh(c) == 0; }
+// 程序描述（#1059）：解包核对要求 <资源包根>/exefs/main.npdm 是非空普通文件，且要列进 index.tsv（不列会被清旧文件删掉）。
+//   夹具统一放 4 字节「npdm」；NPDM_ROW 是对应的 index.tsv 行（写在 shell printf 的格式串里）
+#define NPDM_ROW "exefs/main.npdm\\t4\\tx\\n"
+static void put_npdm(const char *root) { char c[2400]; snprintf(c, sizeof c, "mkdir -p '%s/exefs' && printf npdm > '%s/exefs/main.npdm'", root, root); CHECK(sh(c) == 0, "放程序描述失败：%s", root); }
 // Original synthetic tar headers; no game or user data. Lengths and expected rc are hand-written.
 static void tar_entry(FILE *f, const char *name, char type, const char *data, size_t n) {
     uint8_t h[512], zero[512] = {0}; tar_hdr(h, name, (unsigned)n, type);
@@ -111,10 +115,11 @@ int main(void) {
     char c[8192];
     snprintf(c, sizeof c, "cd %s && mkdir -p src/romfs/很长的中文目录名用来超过一百个字节的老式头部限制很长的中文目录名用来超过一百个字节/子 docs/资源包/.incoming && "
         "head -c 70000 /dev/urandom > 'src/romfs/很长的中文目录名用来超过一百个字节的老式头部限制很长的中文目录名用来超过一百个字节/子/文件.bin' && : > src/空.txt && printf abc > src/a.txt && "
-        "cd src && COPYFILE_DISABLE=1 tar " TAR_OPTIONS " -cf ../docs/资源包/.incoming/1_000.tar romfs a.txt && "
+        "mkdir -p src/exefs && printf npdm > src/exefs/main.npdm && "
+        "cd src && COPYFILE_DISABLE=1 tar " TAR_OPTIONS " -cf ../docs/资源包/.incoming/1_000.tar romfs a.txt exefs && "
         "COPYFILE_DISABLE=1 tar " TAR_OPTIONS " -cf ../docs/资源包/.incoming/1_001.tar 空.txt && cd .. && "
         "printf '{\"version\":2,\"index_sha256\":\"deadbeef01\"}' > docs/资源包/manifest.json && "
-        "printf 'a.txt\\t3\\tx\\n空.txt\\t0\\tx\\nromfs/很长的中文目录名用来超过一百个字节的老式头部限制很长的中文目录名用来超过一百个字节/子/文件.bin\\t70000\\tx\\n' > docs/资源包/index.tsv && "
+        "printf 'a.txt\\t3\\tx\\n空.txt\\t0\\tx\\n" NPDM_ROW "romfs/很长的中文目录名用来超过一百个字节的老式头部限制很长的中文目录名用来超过一百个字节/子/文件.bin\\t70000\\tx\\n' > docs/资源包/index.tsv && "
         "mkdir -p docs/资源包/old && head -c 3000 /dev/zero > docs/资源包/old/part000 && printf p > docs/资源包/.pushed && mkdir -p docs/资源包/shaders/direct/b-0a7dae3c1e7b docs/资源包/.hid/空", T);
     CHECK(sh(c) == 0, "造包失败");
     char docs[512]; snprintf(docs, sizeof docs, "%s/docs", T);
@@ -126,7 +131,8 @@ int main(void) {
     struct stat st; snprintf(d, sizeof d, "%s/docs/资源包/空.txt", T); CHECK(!stat(d, &st) && st.st_size == 0, "空文件没解出来");
     snprintf(d, sizeof d, "%s/docs/资源包/.incoming/1_000.tar", T); CHECK(stat(d, &st) != 0, "解完的 tar 没删");
     snprintf(c, sizeof c, "grep -qx deadbeef01 %s/docs/资源包/.applied", T); CHECK(sh(c) == 0, ".applied 不对");
-    snprintf(c, sizeof c, "grep -q '解开 2 个包 3 个文件' %s/docs/unpack.log && ! grep -q '返回 -' %s/docs/unpack.log", T, T); CHECK(sh(c) == 0, "unpack.log 行不对");
+    // 4 个文件 = 文件.bin、a.txt、exefs/main.npdm（1_000.tar）+ 空.txt（1_001.tar）；目录不计
+    snprintf(c, sizeof c, "grep -q '解开 2 个包 4 个文件' %s/docs/unpack.log && ! grep -q '返回 -' %s/docs/unpack.log", T, T); CHECK(sh(c) == 0, "unpack.log 行不对");
     snprintf(c, sizeof c, "test $(grep -c '进度：解开 1_00' %s/docs/unpack.log) = 2 && grep -q '清掉不在 index.tsv 里的旧文件 1 个' %s/docs/unpack.log", T, T); CHECK(sh(c) == 0, "进度行（每个 tar 一行）或清旧文件行不对");
     snprintf(d, sizeof d, "%s/docs/资源包/old/part000", T); CHECK(stat(d, &st) != 0, "不在 index.tsv 里的旧分卷没删");
     snprintf(d, sizeof d, "%s/docs/资源包/.pushed", T); CHECK(stat(d, &st) == 0, "执行器记账文件 .pushed 被误删");
@@ -141,13 +147,31 @@ int main(void) {
     CHECK(s2a_pack_apply(docs) != 0, "含 .. 的包应判失败");
     snprintf(c, sizeof c, "tail -1 %s/docs/unpack.log | grep -q '返回 -3'", T); CHECK(sh(c) == 0, "失败行应含「返回 -3」");
     snprintf(d, sizeof d, "%s/docs/逃逸.txt", T); CHECK(stat(d, &st) != 0, "路径逃逸写出了资源包目录");
-    // 写失败要带现场（10-20 测试设备2 巫师3 连续「返回 -4」看不出哪个条目）：资源包下已有同名普通文件 aoc，包里要建 aoc/ 目录 →
-    // 期望「返回 -4」，且同一行带「现场：建目录 <…>/aoc：errno 20 Not a directory」（ENOTDIR = 20）
+    // 旧布局挡路（「0.3.10 → 0.4.3 重装装不上」：同一位置旧版是文件、新版要目录，每次重解都在建目录那步 -4，点重试没用）：
+    //   资源包下已有同名普通文件 aoc，包里要建 aoc/d.bin → 期望不再 -4：挡路的旧文件删掉、aoc/d.bin 解出来，host 日志记一句「已删」
     snprintf(c, sizeof c, "cd %s && rm -f docs/资源包/.incoming/2_000.tar && printf x > docs/资源包/aoc && mkdir -p src2/aoc && printf y > src2/aoc/d.bin && "
         "cd src2 && COPYFILE_DISABLE=1 tar " TAR_OPTIONS " -cf ../docs/资源包/.incoming/3_000.tar aoc/d.bin", T);
     CHECK(sh(c) == 0, "造冲突包失败");
-    CHECK(s2a_pack_apply(docs) != 0, "同名文件挡路应判失败");
-    snprintf(c, sizeof c, "tail -1 %s/docs/unpack.log | grep -q '返回 -4.*现场：建目录 .*/资源包/aoc：errno 20 Not a directory'", T); CHECK(sh(c) == 0, "失败行应含「返回 -4」与建目录现场（errno 20）");
+    { char lg[1100]; snprintf(lg, sizeof lg, "%s/host_stale.log", T); int lfd = open(lg, O_WRONLY | O_CREAT | O_TRUNC, 0644), keep = g_s2a_logfd; g_s2a_logfd = lfd;
+      s2a_pack_apply(docs); g_s2a_logfd = keep; close(lfd);
+      snprintf(c, sizeof c, "! grep -q '返回 -4' %s/docs/unpack.log.last 2>/dev/null; tail -1 %s/docs/unpack.log | grep -vq '返回 -4'", T, T); CHECK(sh(c) == 0, "旧布局挡路：不应再「返回 -4」");
+      snprintf(c, sizeof c, "grep -q '旧布局的文件 aoc 挡着新目录，已删' %s", lg); CHECK(sh(c) == 0, "旧布局挡路：host 日志应记「旧布局的文件 aoc 挡着新目录，已删」"); }
+    // 反过来：资源包下已有同名目录 big（里面还有旧文件），包里要放文件 big → 目录整棵删掉、文件解出来
+    snprintf(c, sizeof c, "cd %s && rm -f docs/资源包/.incoming/*.tar && mkdir -p docs/资源包/big/old && printf o > docs/资源包/big/old/x && mkdir -p src3 && printf z > src3/big && "
+        "cd src3 && COPYFILE_DISABLE=1 tar " TAR_OPTIONS " -cf ../docs/资源包/.incoming/3_001.tar big", T);
+    CHECK(sh(c) == 0, "造反向冲突包失败");
+    s2a_pack_apply(docs);
+    snprintf(c, sizeof c, "tail -1 %s/docs/unpack.log | grep -vq '返回 -4'", T); CHECK(sh(c) == 0, "旧目录占着新文件的位置：不应再「返回 -4」");
+    // 写失败要带现场（10-20 测试设备2 巫师3 连续「返回 -4」看不出哪个条目）：资源包下 locked/ 只读，包里要往里写 locked/e.bin →
+    //   期望「返回 -4」，unpack.log 与 host 日志同一行都带「现场：建临时文件 <…>/locked/e.bin.part：errno 13 Permission denied」（EACCES = 13）
+    snprintf(c, sizeof c, "cd %s && rm -f docs/资源包/.incoming/*.tar && mkdir -p docs/资源包/locked src4/locked && chmod 0555 docs/资源包/locked && printf w > src4/locked/e.bin && "
+        "cd src4 && COPYFILE_DISABLE=1 tar " TAR_OPTIONS " -cf ../docs/资源包/.incoming/3_002.tar locked/e.bin", T);
+    CHECK(sh(c) == 0, "造只读目录包失败");
+    { char lg[1100]; snprintf(lg, sizeof lg, "%s/host_locked.log", T); int lfd = open(lg, O_WRONLY | O_CREAT | O_TRUNC, 0644), keep = g_s2a_logfd; g_s2a_logfd = lfd;
+      CHECK(s2a_pack_apply(docs) != 0, "只读目录应判失败"); g_s2a_logfd = keep; close(lfd);
+      snprintf(c, sizeof c, "tail -1 %s/docs/unpack.log | grep -q '返回 -4.*现场：建临时文件 .*/资源包/locked/e.bin.part：errno 13'", T); CHECK(sh(c) == 0, "失败行应含「返回 -4」与建临时文件现场（errno 13）");
+      snprintf(c, sizeof c, "grep -q '资源包收推送：失败.*现场：建临时文件 .*locked/e.bin.part：errno 13' %s", lg); CHECK(sh(c) == 0, "host 日志的失败行也应带现场（errno 原文）"); }
+    snprintf(c, sizeof c, "cd %s && chmod 0755 docs/资源包/locked && rm -rf docs/资源包/locked docs/资源包/.incoming/*.tar", T); sh(c);
     // 已应用索引：解包成功时 index.tsv 整份存成 index.applied.tsv（执行器据它算补推）
     snprintf(c, sizeof c, "cmp -s %s/docs/资源包/index.tsv %s/docs/资源包/index.applied.tsv", T, T); CHECK(sh(c) == 0, "解包成功后 index.applied.tsv 应与 index.tsv 相同");
     // 截短包（推送中途被杀留下的）：① 截在条目边界——条目完整、只少了归档尾两块全零（旧代码当成解完）；② 截在条目中间。
@@ -170,7 +194,7 @@ int main(void) {
     //   v0.3.1 缺件照玩：缺的是核心文件（exefs/ 程序、ctl/control.nacp、game.img / romfs.img）→ 照旧判失败「返回 -8」、行里写明缺几个和第一个的路径；
     //   .applied / index.applied.tsv 不动（执行器下次按旧的已应用索引补推）；核对在清旧文件之前：核不过不删任何文件（旧包的文件都还在）
     snprintf(c, sizeof c, "cd %s && rm -f docs/资源包/.incoming/*.tar && cp docs/资源包/index.applied.tsv ia.bak && "
-        "printf 'a.txt\\t3\\tx\\nexefs/main\\t504067\\tx\\n' > docs/资源包/index.tsv && "
+        "printf 'a.txt\\t3\\tx\\n" NPDM_ROW "exefs/main\\t504067\\tx\\n' > docs/资源包/index.tsv && "
         "printf '{\"version\":2,\"index_sha256\":\"deadbeef03\"}' > docs/资源包/manifest.json", T);
     CHECK(sh(c) == 0, "造缺文件夹具失败");
     CHECK(s2a_pack_apply(docs) != 0, "索引里的核心文件机上不在，应判失败");
@@ -181,13 +205,13 @@ int main(void) {
     snprintf(d, sizeof d, "%s/docs/资源包/空.txt", T); CHECK(stat(d, &st) == 0, "核对没过不应清旧文件（空.txt 被删了）");
     // 缺的只是非核心文件（着色器库、旧形态 romfs 散文件等）→ 部分可玩：不判失败；写 .partial（第一行 = 清单 sha），.applied / index.applied.tsv 不动
     //   （执行器下次照样补推缺的）；unpack.log 写「缺 N 个非必需文件（例：…），部分可玩 = <sha>」（tools/push_pack.py 认这一行）
-    snprintf(c, sizeof c, "cd %s && printf 'a.txt\\t3\\tx\\nshaders/direct/keys.tsv\\t504067\\tx\\n' > docs/资源包/index.tsv && "
+    snprintf(c, sizeof c, "cd %s && printf 'a.txt\\t3\\tx\\n" NPDM_ROW "shaders/direct/keys.tsv\\t504067\\tx\\n' > docs/资源包/index.tsv && "
         "printf '{\"version\":2,\"index_sha256\":\"deadbeef04\"}' > docs/资源包/manifest.json", T); sh(c);
     CHECK(s2a_pack_apply(docs) == 0, "只缺非核心文件：应判部分可玩、不判失败");
     snprintf(c, sizeof c, "tail -1 %s/docs/unpack.log | grep -q '缺 1 个非必需文件（例：shaders/direct/keys.tsv（不在））.*部分可玩 = deadbeef04'", T); CHECK(sh(c) == 0, "部分可玩行应写明缺几个、例子、清单 sha");
     snprintf(c, sizeof c, "head -1 %s/docs/资源包/.partial | grep -qx deadbeef04", T); CHECK(sh(c) == 0, ".partial 第一行应是本清单 sha");
     snprintf(c, sizeof c, "grep -qx deadbeef01 %s/docs/资源包/.applied && cmp -s %s/ia.bak %s/docs/资源包/index.applied.tsv", T, T, T); CHECK(sh(c) == 0, "部分可玩时 .applied / index.applied.tsv 不应变（电脑照样补推）");
-    snprintf(c, sizeof c, "cd %s && printf 'a.txt\\t4\\tx\\n' > docs/资源包/index.tsv && printf '{\"version\":2,\"index_sha256\":\"deadbeef05\"}' > docs/资源包/manifest.json", T); sh(c);
+    snprintf(c, sizeof c, "cd %s && printf 'a.txt\\t4\\tx\\n" NPDM_ROW "' > docs/资源包/index.tsv && printf '{\"version\":2,\"index_sha256\":\"deadbeef05\"}' > docs/资源包/manifest.json", T); sh(c);
     CHECK(s2a_pack_apply(docs) == 0, "非核心文件大小不符：也是部分可玩");
     snprintf(c, sizeof c, "tail -1 %s/docs/unpack.log | grep -q '例：a.txt（大小不符）.*部分可玩 = deadbeef05'", T); CHECK(sh(c) == 0, "部分可玩行应写明 a.txt 大小不符");
     // pax 扩展头记录缺空格（11-01 审计 P2-17）：头数据 "4abc\0"（长度 5），记录「4abc」长度 4 合法、没有空格；旧代码 strchr 到 \0 得 NULL、+1 后解引用崩。
@@ -214,10 +238,10 @@ int main(void) {
       int bad1 = s2a_pack_check(R, first, sizeof first);
       CHECK(bad1 == 1 && strstr(first, "d（不是文件）"), "同名目录占位：闸门核对应判 1 个不符、例「d（不是文件）」→ %d「%s」", bad1, first); }
     // .applied 不先截断（11-01 审计 P2-16）：旧 .applied = oldmark；这次 manifest 的 index_sha256 是 64 字符，子进程把单文件上限设成 32 字节（SIGXFSZ 忽略），
-    //   index.applied.tsv（10 字节）写得下、.applied（64 字节）写不下。期望按语义手写：解包判失败（退出码 1）、.applied 仍是 oldmark、不留 .applied.tmp。
+    //   index.applied.tsv（a.txt 行 10 + 程序描述行 20 = 30 字节）写得下、.applied（64 字节）写不下。期望按语义手写：解包判失败（退出码 1）、.applied 仍是 oldmark、不留 .applied.tmp。
     //   旧代码 fopen("w") 先把 .applied 截成 0 字节再写失败 → 旧标记丢了
     { char D[2100], c2[4096], ap[2200], got[128] = ""; struct stat s2; snprintf(D, sizeof D, "%s/atom", T);
-      snprintf(c2, sizeof c2, "mkdir -p '%s/资源包' && cd '%s/资源包' && printf abc > a.txt && printf 'a.txt\\t3\\tx\\n' > index.tsv && printf oldmark > .applied && "
+      snprintf(c2, sizeof c2, "mkdir -p '%s/资源包' && cd '%s/资源包' && printf abc > a.txt && mkdir -p exefs && printf npdm > exefs/main.npdm && printf 'a.txt\\t3\\tx\\n" NPDM_ROW "' > index.tsv && printf oldmark > .applied && "
           "printf '{\"version\":2,\"index_sha256\":\"%%064d\"}' 7 > manifest.json", D, D);
       CHECK(sh(c2) == 0, "造 .applied 夹具失败");
       pid_t pid = fork(); if (pid == 0) { signal(SIGXFSZ, SIG_IGN); struct rlimit rl = {32, 32}; setrlimit(RLIMIT_FSIZE, &rl); _exit(s2a_pack_apply(D)); }
@@ -231,7 +255,7 @@ int main(void) {
     //   ⑤ 只有「资源包」没有 manifest、没有 tar → 2；⑥ 空「资源包」+ 可用的「smg2资源包」→ 仍是 2、两个都不动（原先把空的挪开、改用后者）
     { char D[2100], c2[4096]; struct stat s2;
       snprintf(D, sizeof D, "%s/imp1", T); mkdir(D, 0755); CHECK(s2a_import_state(D) == 2, "① 空 Documents 应判没有资源");
-      snprintf(c2, sizeof c2, "cd %s && mkdir -p src2 '%s/资源包/.incoming' && echo hi > src2/a.txt && cd src2 && COPYFILE_DISABLE=1 tar " TAR_OPTIONS " -cf '%s/资源包/.incoming/1_000.tar' a.txt && cd .. && cp '%s/资源包/.incoming/1_000.tar' '%s/资源包/.incoming/1_001.tar' && printf 'a.txt\\t3\\tx\\n' > '%s/资源包/index.tsv' && printf '{\"version\":2,\"index_sha256\":\"cafe01\"}' > '%s/资源包/manifest.json'", T, D, D, D, D, D, D);
+      snprintf(c2, sizeof c2, "cd %s && mkdir -p src2 '%s/资源包/.incoming' && echo hi > src2/a.txt && mkdir -p src2/exefs && printf npdm > src2/exefs/main.npdm && cd src2 && COPYFILE_DISABLE=1 tar " TAR_OPTIONS " -cf '%s/资源包/.incoming/1_000.tar' a.txt exefs && cd .. && cp '%s/资源包/.incoming/1_000.tar' '%s/资源包/.incoming/1_001.tar' && printf 'a.txt\\t3\\tx\\n" NPDM_ROW "' > '%s/资源包/index.tsv' && printf '{\"version\":2,\"index_sha256\":\"cafe01\"}' > '%s/资源包/manifest.json'", T, D, D, D, D, D, D);
       CHECK(sh(c2) == 0, "造导入夹具失败");
       CHECK(s2a_import_state(D) == 1, "② 有待导入的 tar 应判待导入");
       s2a_pack_apply_progress = prog; int r = s2a_pack_apply(D); s2a_pack_apply_progress = NULL;
@@ -451,6 +475,27 @@ int main(void) {
       snprintf(c, sizeof c, "printf '\\011' | dd of='%s/game.img' bs=1 seek=8 conv=notrunc 2>/dev/null && rm -rf '%s/exefs' && printf '' > '%s/.applied'", G, G, G); sh(c);
       CHECK(s2a_pack_apply(D) != 0, "⑬e 格式号 9 → 解包失败");
       snprintf(c, sizeof c, "grep -q '格式号' '%s/unpack.log'", D); CHECK(sh(c) == 0, "⑬e 解包日志带「格式号」"); 
+      { // ⑬f D-4VAX（本体目录表路径区错位：表里出现「…/0100000000000823/」这种相邻两条路径首尾拼成的一截，原先当文件写 → 每次同一处 -4 EISDIR）：
+        //   读表自检，路径以「/」结尾 / 有重复路径 = 本体被改坏 → 不硬解，判 IMG 坏（码 ios_install_img_corrupt），现场写明。期望手写
+        // 两条都先用 img.py 造合法表、再在文件里改字节（img.py 自己不写「/」结尾项、也不写重复项，见 pack/img.py toc_bytes）：
+        //   0：末字符 X 改成「/」；1：npdX 改成 npdm，和第一行重复
+        const char *bad8[2] = {"823/ac_2_b1_nxsystemdata/0100000000000823X", "exefs/main.npdX"};
+        const char *from8[2] = {"0100000000000823X", "exefs/main.npdX"}, *to8[2] = {"0100000000000823/", "exefs/main.npdm"};
+        const char *expect8[2] = {"IMG 目录表路径不对", "IMG 目录表有重复路径"};
+        for (int v = 0; v < 2; v++) {
+            char D8[1300], G8[1400]; snprintf(D8, sizeof D8, "%s/img_docs8_%d", T, v); snprintf(G8, sizeof G8, "%s/资源包", D8);
+            snprintf(c, sizeof c, "mkdir -p '%s' && : > '%s/src/empty' && printf 'exefs/main.npdm\t%s/src/npdm\nctl/control.nacp\t%s/src/nacp\n%s\t%s/src/empty\n' > '%s/src/others_bad%d.tsv'"
+                     " && python3 '%s/pack/img.py' build - '%s/src/others_bad%d.tsv' '%s/game.img' --gid 0100abcd0000000a --pack-id img8 > /dev/null"
+                     " && printf 'game.img\t%%s\tx\n' $(stat -f %%z '%s/game.img' 2>/dev/null || stat -c %%s '%s/game.img') > '%s/index.tsv'"
+                     " && printf '{\"version\":3,\"format\":\"img\",\"imgFile\":\"game.img\",\"index_sha256\":\"img8\"}' > '%s/manifest.json'",
+                     G8, D, D, D, bad8[v], D, D, v, R, D, v, G8, G8, G8, G8, G8);
+            int built = sh(c) == 0;
+            if (built) { snprintf(c, sizeof c, "python3 -c \"import sys;p=sys.argv[1];b=open(p,'rb').read();assert b.count(b'%s')==1;open(p,'wb').write(b.replace(b'%s',b'%s'))\" '%s/game.img'", from8[v], from8[v], to8[v], G8); built = sh(c) == 0; }
+            int r8 = built ? s2a_pack_apply(D8) : 99;
+            CHECK(built && r8 != 0 && !strcmp(s2a_pack_apply_code(), "ios_install_img_corrupt") && strstr(s2a_pack_apply_failure(), expect8[v]),
+                  "⑬f 坏表 %d：不硬解、判 IMG 坏、现场写「%s」（造 %d、返回 %d、码 %s「%s」）", v, expect8[v], built, r8, s2a_pack_apply_code(), s2a_pack_apply_failure());
+        }
+      }
       // ⑭ 玩家把 IMG 放进「文件」里 S2Arm 的「放这里导入」文件夹：s2a_img_scan 挪进 games/<头里的游戏号>/资源包/game.img、写 manifest（资源包号同头）与 index.tsv；
       //   拷到一半的（长度不等于头里的整个文件长）不动；导入文件夹以外的（Documents/下载）不扫、不动（v0.3.0）；挪好后应用成功
       char D3[1300]; snprintf(D3, sizeof D3, "%s/scan_docs", T);   // 小文件清单借 ⑬ 的夹具（exefs/main.npdm = 随机 5000 字节、ctl = NACP）
@@ -475,6 +520,19 @@ int main(void) {
         CHECK(g_phn[1] == 0, "⑭ 没有推送包不报 ①（报了 %d 次）", g_phn[1]);
         snprintf(c, sizeof c, "cmp -s '%s/src/npdm' '%s/资源包/exefs/main.npdm'", D, g3); CHECK(sh(c) == 0, "⑭ 小文件逐字节解出"); }
       CHECK(s2a_img_scan(D3) == 0, "⑭ 再扫一次：没有新的（拷到一半的仍不动）");
+      { // ⑭h D-4VAX 复现：拷贝方先把目标撑到全长、再从头往后填（长度已等于头里的总长，尾巴的目录表还是 0）——原先照样认领挪走，
+        //   之后解包 / 套更新包读到半截目录表。期望手写：撑到全长只写了前一半 → 认领 0 个、文件原样留在导入文件夹；补写完 → 认领 1 个
+        char D9[1300]; snprintf(D9, sizeof D9, "%s/scan_docs9", T);
+        snprintf(c, sizeof c, "mkdir -p '%s/放这里导入' && python3 '%s/pack/img.py' build - '%s/src/others.tsv' '%s/full.img' --gid 0100abcd0000000b --pack-id img9 > /dev/null"
+                 " && python3 -c \"import os,sys;s,d=sys.argv[1],sys.argv[2];b=open(s,'rb').read();fd=os.open(d,os.O_WRONLY|os.O_CREAT,0o644);os.ftruncate(fd,len(b));os.write(fd,b[:len(b)//2]);os.close(fd)\" '%s/full.img' '%s/放这里导入/半截.img'",
+                 D9, R, D, D9, D9, D9);
+        CHECK(sh(c) == 0, "⑭h 造撑到全长的半截 IMG");
+        int h0 = s2a_img_scan(D9);
+        snprintf(c, sizeof c, "test -e '%s/放这里导入/半截.img'", D9); int stay = sh(c) == 0;
+        CHECK(h0 == 0 && stay, "⑭h 半截（长度对、目录表还是 0）：认领 0 个（实际 %d）、原样留着（%s）", h0, stay ? "留着" : "被挪走了");
+        snprintf(c, sizeof c, "cp '%s/full.img' '%s/放这里导入/半截.img'", D9, D9); sh(c);
+        CHECK(s2a_img_scan(D9) == 1, "⑭h 补写完：认领 1 个"); }
+
       CHECK(!*s2a_img_scan_code(), "⑭ 认领没失败：码为空（实际 %s）", s2a_img_scan_code());
       // ⑭b 认领时有没有着色器库（诊断 D-9864 / D-F6W7 / D-9ZF9：自签玩家把电脑资源包文件夹里的 game.img 直接放进来）。物理上做得下去（现编），
       //   一律认领、不拦（不许堵门）；不带着色器库的只记一行【黄】（换完整包的提示由游戏库那边弹）。期望手写：三个都认领；
@@ -513,6 +571,12 @@ int main(void) {
         CHECK(sh(c) == 0, "⑭c 造完整包");
         CHECK(s2a_img_scan(D6) == 1, "⑭c 完整包认领");
         char g6[1500]; snprintf(g6, sizeof g6, "%s/games/0100ABCD00000008", D6);
+        { // ⑭d 本体认领了还没解开时放更新包：不套、不报错、原样留着（诊断#fe33c2：套到一半被解开时的目录整理删掉 → ENOENT）；解开后下一次扫描再套（见下面 ⑭c）
+          snprintf(c, sizeof c, "python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/先到的更新包.img' --gid 0100abcd00000008 --pack-id img801 > /dev/null"
+                   " && printf '\002' | dd of='%s/放这里导入/先到的更新包.img' bs=1 seek=8 conv=notrunc 2>/dev/null", R, D, D6, D6);
+          CHECK(sh(c) == 0, "⑭d 造更新包");
+          CHECK(s2a_img_scan(D6) == 0 && !s2a_img_scan_code()[0], "⑭d 本体没解开：更新包不套、不给失败码（实际 %s「%s」）", s2a_img_scan_code(), s2a_img_scan_failure());
+          snprintf(c, sizeof c, "test -e '%s/放这里导入/先到的更新包.img' && rm '%s/放这里导入/先到的更新包.img'", D6, D6); CHECK(sh(c) == 0, "⑭d 更新包原样留着"); }
         CHECK(s2a_pack_apply(g6) == 0, "⑭c 完整包解开");
         snprintf(c, sizeof c, "test \"$(cat '%s/资源包/shaders/a.metallib')\" = x", g6); CHECK(sh(c) == 0, "⑭c 完整包解出 a.metallib = x");
         snprintf(c, sizeof c, "python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/某游戏 着色器更新包.img' --gid 0100abcd00000008 --pack-id img801 > /dev/null"
@@ -526,6 +590,69 @@ int main(void) {
         CHECK(sh(c) == 0, "⑭c 更新包删掉、a.metallib = y、本体目录表没有 shaders/、本体整长 = 文件长、index.tsv 记新派生件");
         CHECK(s2a_pack_apply(g6) == 0, "⑭c 套更新包后解包成功");
         snprintf(c, sizeof c, "test \"$(cat '%s/资源包/shaders/a.metallib')\" = y", g6); CHECK(sh(c) == 0, "⑭c 再次应用后 a.metallib 仍是 y（旧的没回写）");
+        { // ⑭g D-4VAX（「文件」导入：完整包与着色器更新包同时放进导入文件夹，一次扫描「认出并放好 2 个」，之后每次解开都 -4）：
+          //   期望手写：一次扫描只认领完整包（更新包要等本体解开后再套）→ 返回 1、更新包留在导入文件夹；随后解开成功（返回 0）、a.metallib = x；
+          //   再扫一次套上更新包 → a.metallib = y，再解开仍成功
+          char D7[1300]; snprintf(D7, sizeof D7, "%s/img_docs7", T);
+          snprintf(c, sizeof c, "mkdir -p '%s/放这里导入' && python3 '%s/pack/img.py' build - '%s/src/others_sh.tsv' '%s/放这里导入/完整.img' --gid 0100abcd00000009 --pack-id img901 > /dev/null"
+                   " && python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/完整 着色器更新包.img' --gid 0100abcd00000009 --pack-id img901 > /dev/null"
+                   " && printf '\002' | dd of='%s/放这里导入/完整 着色器更新包.img' bs=1 seek=8 conv=notrunc 2>/dev/null", D7, R, D, D7, R, D, D7, D7);
+          CHECK(sh(c) == 0, "⑭g 造：完整包 + 更新包同时在导入文件夹");
+          char g7[1500]; snprintf(g7, sizeof g7, "%s/games/0100ABCD00000009", D7);
+          char lg[1500]; snprintf(lg, sizeof lg, "%s/host_g.log", T); int lfd = open(lg, O_WRONLY | O_CREAT | O_TRUNC, 0644), keep = g_s2a_logfd; g_s2a_logfd = lfd;
+          int pg = s2a_img_scan(D7);
+          int ra = s2a_pack_apply(g7);
+          g_s2a_logfd = keep; close(lfd);
+          snprintf(c, sizeof c, "test -e '%s/放这里导入/完整 着色器更新包.img'", D7); int left = sh(c) == 0;
+          snprintf(c, sizeof c, "cat '%s'; tail -2 '%s/unpack.log'", lg, g7); if (pg != 1 || ra != 0) sh(c);
+          CHECK(pg == 1 && left, "⑭g 一次扫描：只认领完整包（实际 %d）、更新包留着（%s）", pg, left ? "留着" : "被套了");
+          CHECK(ra == 0, "⑭g 随后解开成功（实际 %d）", ra);
+          CHECK(s2a_img_scan(D7) == 1 && s2a_pack_apply(g7) == 0, "⑭g 解开后再扫：套上更新包、再解开仍成功");
+          snprintf(c, sizeof c, "test \"$(cat '%s/资源包/shaders/a.metallib')\" = y", g7); CHECK(sh(c) == 0, "⑭g 最终 a.metallib = y"); }
+        { // ⑭f 审计 P1-169：更新包写派生件失败（派生件 shaders/a.metallib 的位置被一个非空目录占着，改名进不去）→ 失败、不能把这款从库里弄没：
+          //   期望手写：返回 0 个、给失败码；清单 manifest.json 与 .applied 都还在、内容不变；本体 game.img 逐字节不变；更新包留在导入文件夹
+          snprintf(c, sizeof c, "set -e; g='%s/资源包'; cp \"$g/manifest.json\" '%s/mf.bak'; cp \"$g/.applied\" '%s/ap.bak'; cp \"$g/game.img\" '%s/img.bak';"
+                   " rm -f \"$g/shaders/a.metallib\"; mkdir -p \"$g/shaders/a.metallib/占位\"; echo z > \"$g/shaders/a.metallib/占位/f\";"
+                   " python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/坏更新包.img' --gid 0100abcd00000008 --pack-id img801 > /dev/null"
+                   " && printf '\\002' | dd of='%s/放这里导入/坏更新包.img' bs=1 seek=8 conv=notrunc 2>/dev/null", g6, T, T, T, R, D, D6, D6);
+          CHECK(sh(c) == 0, "⑭f 造：派生件位置被目录占着 + 一个更新包");
+          int pf = s2a_img_scan(D6);
+          snprintf(c, sizeof c, "g='%s/资源包'; cmp -s \"$g/manifest.json\" '%s/mf.bak' && cmp -s \"$g/.applied\" '%s/ap.bak' && cmp -s \"$g/game.img\" '%s/img.bak' && test -e '%s/放这里导入/坏更新包.img'", g6, T, T, T, D6);
+          CHECK(pf == 0 && s2a_img_scan_code()[0] && sh(c) == 0, "⑭f 写派生件失败：认领 0 个（实际 %d）、给码（%s）、清单 / .applied / 本体都不变、更新包留着", pf, s2a_img_scan_code());
+          snprintf(c, sizeof c, "rm -rf '%s/资源包/shaders/a.metallib' '%s/放这里导入/坏更新包.img'", g6, D6); sh(c); }
+        { // ⑭e 审计 P1-169：认领完整包时改名进不去（资源包里 game.img 的位置被一个非空目录占着）→ 失败，这款不能从库里消失：
+          //   期望手写：认领 0 个、给失败码；manifest.json 与 .applied 都还在、内容不变；源 IMG 留在导入文件夹
+          snprintf(c, sizeof c, "set -e; g='%s/资源包'; cp \"$g/manifest.json\" '%s/mf2.bak'; cp \"$g/.applied\" '%s/ap2.bak'; mv \"$g/game.img\" '%s/img2.bak'; mkdir -p \"$g/game.img/占位\"; echo z > \"$g/game.img/占位/f\";"
+                   " python3 '%s/pack/img.py' build - '%s/src/others_sh.tsv' '%s/放这里导入/新完整.img' --gid 0100abcd00000008 --pack-id img802 > /dev/null", g6, T, T, T, R, D, D6);
+          CHECK(sh(c) == 0, "⑭e 造：game.img 位置被目录占着 + 一个新完整包");
+          int pe = s2a_img_scan(D6);
+          snprintf(c, sizeof c, "g='%s/资源包'; cmp -s \"$g/manifest.json\" '%s/mf2.bak' && cmp -s \"$g/.applied\" '%s/ap2.bak' && test -e '%s/放这里导入/新完整.img'", g6, T, T, D6);
+          CHECK(pe == 0 && s2a_img_scan_code()[0] && sh(c) == 0, "⑭e 改名失败：认领 0 个（实际 %d）、给码（%s）、清单 / .applied 不变、源 IMG 留着", pe, s2a_img_scan_code());
+          snprintf(c, sizeof c, "g='%s/资源包'; rm -rf \"$g/game.img\" '%s/放这里导入/新完整.img'; mv '%s/img2.bak' \"$g/game.img\"", g6, D6, T); sh(c); }
+        { // ⑭g 审计 P1-169 兄弟站点：更新包换上本体 / 派生件之后才失败（index.tsv 的临时位置被非空目录占着，写不出）→ 已换上的全部退回：
+          //   期望手写：认领 0 个、给码；manifest.json / .applied / index.tsv / 本体 game.img 逐字节不变；派生件 shaders/a.metallib 退回到套之前（不存在）；
+          //   资源包里不留 .s2a-prev / .upd.tmp；更新包留在导入文件夹
+          snprintf(c, sizeof c, "set -e; g='%s/资源包'; rm -rf \"$g/shaders/a.metallib\"; for f in manifest.json .applied index.tsv game.img; do cp \"$g/$f\" '%s/g_'\"$f\"; done;"
+                   " mkdir -p \"$g/index.tsv.tmp/占位\"; echo z > \"$g/index.tsv.tmp/占位/f\";"
+                   " python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/晚失败更新包.img' --gid 0100abcd00000008 --pack-id img801 > /dev/null"
+                   " && printf '\\002' | dd of='%s/放这里导入/晚失败更新包.img' bs=1 seek=8 conv=notrunc 2>/dev/null", g6, T, R, D, D6, D6);
+          CHECK(sh(c) == 0, "⑭g 造：index.tsv 临时位置被目录占着 + 一个更新包");
+          int pg = s2a_img_scan(D6);
+          snprintf(c, sizeof c, "g='%s/资源包'; for f in manifest.json .applied index.tsv game.img; do cmp -s \"$g/$f\" '%s/g_'\"$f\" || exit 1; done;"
+                   " test ! -e \"$g/shaders/a.metallib\" && test -z \"$(find \"$g\" -name '*.s2a-prev' -o -name '*.upd.tmp')\" && test -e '%s/放这里导入/晚失败更新包.img'", g6, T, D6);
+          CHECK(pg == 0 && s2a_img_scan_code()[0] && sh(c) == 0, "⑭g 换上后写 index.tsv 失败：认领 0 个（实际 %d）、给码（%s）、清单 / .applied / 目录表 / 本体不变、派生件退回、不留中间件、更新包留着", pg, s2a_img_scan_code());
+          snprintf(c, sizeof c, "rm -rf '%s/资源包/index.tsv.tmp' '%s/放这里导入/晚失败更新包.img'", g6, D6); sh(c); }
+        { // ⑭h 审计 P1-169 兄弟站点：认领完整包时新 game.img 已经换上、之后写 index.tsv 失败 → 新包挪回导入文件夹、旧本体换回：
+          //   期望手写：认领 0 个、给码；本体 game.img / index.tsv / manifest.json / .applied 逐字节不变；源 IMG 回到导入文件夹；不留 game.img.s2a-prev
+          snprintf(c, sizeof c, "set -e; g='%s/资源包'; for f in manifest.json .applied index.tsv game.img; do cp \"$g/$f\" '%s/h_'\"$f\"; done;"
+                   " mkdir -p \"$g/index.tsv.tmp/占位\"; echo z > \"$g/index.tsv.tmp/占位/f\";"
+                   " python3 '%s/pack/img.py' build - '%s/src/others_sh.tsv' '%s/放这里导入/晚失败完整.img' --gid 0100abcd00000008 --pack-id img803 > /dev/null", g6, T, R, D, D6);
+          CHECK(sh(c) == 0, "⑭h 造：index.tsv 临时位置被目录占着 + 一个新完整包");
+          int ph = s2a_img_scan(D6);
+          snprintf(c, sizeof c, "g='%s/资源包'; for f in manifest.json .applied index.tsv game.img; do cmp -s \"$g/$f\" '%s/h_'\"$f\" || exit 1; done;"
+                   " test ! -e \"$g/game.img.s2a-prev\" && test -s '%s/放这里导入/晚失败完整.img'", g6, T, D6);
+          CHECK(ph == 0 && s2a_img_scan_code()[0] && sh(c) == 0, "⑭h 换上后写 index.tsv 失败：认领 0 个（实际 %d）、给码（%s）、本体 / 目录表 / 清单 / .applied 不变、源 IMG 回到导入文件夹", ph, s2a_img_scan_code());
+          snprintf(c, sizeof c, "rm -rf '%s/资源包/index.tsv.tmp' '%s/放这里导入/晚失败完整.img'", g6, D6); sh(c); }
         snprintf(c, sizeof c, "python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/错版.img' --gid 0100abcd00000008 --pack-id img999 > /dev/null"
                  " && printf '\002' | dd of='%s/放这里导入/错版.img' bs=1 seek=8 conv=notrunc 2>/dev/null", R, D, D6, D6);
         CHECK(sh(c) == 0, "⑭c 造资源包号不同的更新包");
@@ -535,7 +662,18 @@ int main(void) {
                  " && printf '\002' | dd of='%s/放这里导入/没本体.img' bs=1 seek=8 conv=notrunc 2>/dev/null", D6, D6, R, D, D6, D6);
         CHECK(sh(c) == 0, "⑭c 错版原样留着；造本机没本体的更新包");
         CHECK(s2a_img_scan(D6) == 0 && !strcmp(s2a_img_scan_code(), "ios_import_update_no_base") && strstr(s2a_img_scan_failure(), "完整"),
-              "⑭c 没本体：不收、给码、原因说先导完整包（实际 %s「%s」）", s2a_img_scan_code(), s2a_img_scan_failure()); } }
+              "⑭c 没本体：不收、给码、原因说先导完整包（实际 %s「%s」）", s2a_img_scan_code(), s2a_img_scan_failure());
+        // ⑭e 完整包与更新包同一次放（诊断#0787f1 D-YY32）：更新包放在先扫的「放这里导入」、完整包放在后扫的「Import Here」，旧代码按目录顺序先看更新包 → 报 no_base。
+        //   期望手写：认领 1 个（完整包）、不给失败码、更新包原样留着等本体解开后再套
+        { char D7[1300]; snprintf(D7, sizeof D7, "%s/img_docs7", T);
+          snprintf(c, sizeof c, "mkdir -p '%s/放这里导入' '%s/Import Here'"
+                   " && python3 '%s/pack/img.py' build - '%s/src/others_sh.tsv' '%s/Import Here/某游戏.img' --gid 0100abcd0000000a --pack-id imga01 > /dev/null"
+                   " && python3 '%s/pack/img.py' build - '%s/src/upd.tsv' '%s/放这里导入/某游戏 着色器更新包.img' --gid 0100abcd0000000a --pack-id imga01 > /dev/null"
+                   " && printf '\002' | dd of='%s/放这里导入/某游戏 着色器更新包.img' bs=1 seek=8 conv=notrunc 2>/dev/null", D7, D7, R, D, D7, R, D, D7, D7);
+          CHECK(sh(c) == 0, "⑭e 造同时放的完整包与更新包");
+          int n7 = s2a_img_scan(D7);
+          CHECK(n7 == 1 && !s2a_img_scan_code()[0], "⑭e 同时放：认领完整包 1 个、不报没本体（实际 %d、%s「%s」）", n7, s2a_img_scan_code(), s2a_img_scan_failure());
+          snprintf(c, sizeof c, "test -e '%s/放这里导入/某游戏 着色器更新包.img'", D7); CHECK(sh(c) == 0, "⑭e 更新包原样留着、等本体解开"); } } }
     // iOS 装机剃刀 #27 / #38：闸门与游戏库同一条快判。夹具：.applied = 清单、程序描述在、.incoming 里还留着一个写完的包（推送端盖残批的空包）。
     //   期望 s2a_import_state 判就绪 0（旧闸门先看 .incoming 判待导入 1，库却说能玩）。
     // 剃刀 #29：有 game.img、清单被推送开头置空、index.tsv 里的文件都在 → 期望不判就绪（旧代码清单读不出时当「不用解」→ 就绪 0）
@@ -551,10 +689,26 @@ int main(void) {
     //   期望解开成功且 unpack.log 建在文档根、带完成行「.applied = <清单 sha>」（电脑端 tools/push_pack.py 只认这一行；旧代码日志建不了，电脑端白等 180 秒误报）
     { char cdocs[1100], croot[1300]; snprintf(cdocs, sizeof cdocs, "%s/ctr/Documents/games/0100000000000002", T);
       snprintf(croot, sizeof croot, "%s/ctr/Library/Application Support/S2Arm/games/0100000000000002/资源包", T);
-      snprintf(c, sizeof c, "mkdir -p '%s' && printf '{\"index_sha256\":\"cc02\"}' > '%s/manifest.json' && : > '%s/index.tsv'", croot, croot, croot);
-      CHECK(sh(c) == 0, "造多款容器夹具失败");
+      snprintf(c, sizeof c, "mkdir -p '%s' && printf '{\"index_sha256\":\"cc02\"}' > '%s/manifest.json' && printf '" NPDM_ROW "' > '%s/index.tsv'", croot, croot, croot);
+      CHECK(sh(c) == 0, "造多款容器夹具失败"); put_npdm(croot);
       CHECK(s2a_pack_apply(cdocs) == 0, "多款容器文档根不在：资源包应照样解开（%s）", s2a_pack_apply_failure());
       snprintf(c, sizeof c, "grep -q '\\.applied = cc02' '%s/unpack.log'", cdocs); CHECK(sh(c) == 0, "多款容器文档根不在：期望建出文档根、unpack.log 有完成行 .applied = cc02"); }
+    // #1059 D-PB7S：index.tsv 全部核对通过，但清单没列 exefs/main.npdm、机上也没有 → 旧代码报「解开了」写 .applied，游戏库却按缺程序描述判等解开、每秒重解。
+    //   期望按规则手写：解包判失败、原因含「exefs/main.npdm 不在」、给码 ios_install_files_missing、不写 .applied；
+    //   变体：main.npdm 在但是 0 字节（清单列为 0 字节，index 核对照样通过）→ 原因含「是空的」，仍不写 .applied
+    { char nd[1100], nr[1200], ap[1300]; struct stat ns; snprintf(nd, sizeof nd, "%s/npdm_gate", T); snprintf(nr, sizeof nr, "%s/资源包", nd); snprintf(ap, sizeof ap, "%s/.applied", nr);
+      snprintf(c, sizeof c, "mkdir -p '%s' && printf abc > '%s/a.txt' && printf 'a.txt\\t3\\tx\\n' > '%s/index.tsv' && printf '{\"index_sha256\":\"nn01\"}' > '%s/manifest.json'", nr, nr, nr, nr);
+      CHECK(sh(c) == 0, "造缺程序描述夹具失败");
+      CHECK(s2a_pack_apply(nd) != 0, "清单全对、没列也没有 exefs/main.npdm：应判失败");
+      CHECK(strstr(s2a_pack_apply_failure(), "exefs/main.npdm 不在") != NULL, "缺程序描述：原因应含「exefs/main.npdm 不在」→「%s」", s2a_pack_apply_failure());
+      CHECK(!strcmp(s2a_pack_apply_code(), "ios_install_files_missing"), "缺程序描述：给码 ios_install_files_missing（实际 %s）", s2a_pack_apply_code());
+      CHECK(stat(ap, &ns) != 0, "缺程序描述：不应写 .applied");
+      snprintf(c, sizeof c, "mkdir -p '%s/exefs' && : > '%s/exefs/main.npdm' && printf 'a.txt\\t3\\tx\\nexefs/main.npdm\\t0\\tx\\n' > '%s/index.tsv'", nr, nr, nr);
+      CHECK(sh(c) == 0, "造空程序描述夹具失败");
+      CHECK(s2a_pack_apply(nd) != 0, "程序描述是 0 字节：应判失败");
+      CHECK(strstr(s2a_pack_apply_failure(), "exefs/main.npdm 是空的") != NULL, "空程序描述：原因应含「是空的」→「%s」", s2a_pack_apply_failure());
+      CHECK(!strcmp(s2a_pack_apply_code(), "ios_install_files_missing"), "空程序描述：给码 ios_install_files_missing（实际 %s）", s2a_pack_apply_code());
+      CHECK(stat(ap, &ns) != 0, "空程序描述：不应写 .applied"); }
     // #540：游戏目录（多款容器 Documents/games/<游戏号>/）根本不在：解包先把它建出来，失败行照样写进 unpack.log、失败原因照样填上。
     //   日志真建不了（文档根挡在一个普通文件下面）时原因注明「unpack.log 建不了」。先跑一次成功的同名目录，核成功后原因清空（不留上一次的失败原因）
     { char gone[1100]; snprintf(gone, sizeof gone, "%s/games/0100000000000000", T); struct stat gs;
@@ -570,9 +724,9 @@ int main(void) {
       CHECK(s2a_pack_apply(blocked) != 0, "文档根挡在普通文件下应判失败");
       why = s2a_pack_apply_failure();
       CHECK(why && strstr(why, "unpack.log 建不了") && strstr(why, "Not a directory"), "日志建不了：期望原因注明 unpack.log 建不了（Not a directory）→ 「%s」", why ? why : "(null)");
-      char ok[1100]; snprintf(ok, sizeof ok, "%s/ok", T); snprintf(c, sizeof c, "mkdir -p %s/资源包 && printf '{\"index_sha256\":\"aa\"}' > %s/资源包/manifest.json && : > %s/资源包/index.tsv", ok, ok, ok);
-      CHECK(sh(c) == 0, "造空包夹具失败");
-      CHECK(s2a_pack_apply(ok) == 0, "空索引的包应解开");
+      char ok[1100]; snprintf(ok, sizeof ok, "%s/ok", T); snprintf(c, sizeof c, "mkdir -p %s/资源包 && printf '{\"index_sha256\":\"aa\"}' > %s/资源包/manifest.json && printf '" NPDM_ROW "' > %s/资源包/index.tsv", ok, ok, ok);
+      CHECK(sh(c) == 0, "造空包夹具失败"); { char okr[1200]; snprintf(okr, sizeof okr, "%s/资源包", ok); put_npdm(okr); }
+      CHECK(s2a_pack_apply(ok) == 0, "索引只有程序描述的包应解开");
       CHECK(!*s2a_pack_apply_failure(), "成功后失败原因应清空 →「%s」", s2a_pack_apply_failure());
       CHECK(!*s2a_pack_apply_code(), "成功后码应清空 →「%s」", s2a_pack_apply_code()); }
     // #569 游戏目录 App 写不进（玩家机上 games 一串归 root、0755）：解包一个包都不解、直接报目录与属主；s2a_games_repair 克隆进新树、
@@ -610,6 +764,26 @@ int main(void) {
         CHECK(r2 == 1 && !stat(okf, &st2) && stat(fifo, &st2) && stat(locked, &st2) && !access(g2, W_OK) && sh(c) != 0,
               "读不到的跳过、读得到的照搬：返回 1、ok.bin 在新目录、管道与 000 文件不在、新目录可写、新树没残留（实际 %d「%s」）", r2, s2a_games_repair_detail());
         snprintf(c, sizeof c, "chmod -R u+rw '%s'/.s2a-unwritable-* 2>/dev/null", base); sh(c);
+        { // 审计 P1-180：读不到的是存档（S2A/ 下，000），目录又写不进 → 不换树（换上去活动目录里就没有这份存档了），资源包读不到照旧可跳过。
+          //   期望手写：返回负数；活动目录 games 原样（存档文件还在原处、还是 000 读不到）；没留 .s2a-games-new-*；原因里写「存档」
+          char g3[600]; snprintf(g3, sizeof g3, "%s/games/0100000000FED000", base);
+          snprintf(c, sizeof c, "mkdir -p '%s/S2A/ryujinx/bis/user/save/1' && printf sv > '%s/S2A/ryujinx/bis/user/save/1/data' && chmod 0 '%s/S2A/ryujinx/bis/user/save/1/data' && chmod 555 '%s'", g3, g3, g3, g3);
+          CHECK(sh(c) == 0, "P1-180 造：写不进的游戏目录里一份读不到的存档");
+          int r3 = s2a_games_repair(base);
+          char sv[700]; snprintf(sv, sizeof sv, "%s/S2A/ryujinx/bis/user/save/1/data", g3); struct stat st3;
+          snprintf(c, sizeof c, "ls -d '%s'/.s2a-games-new-* >/dev/null 2>&1", base);
+          CHECK(r3 < 0 && !stat(sv, &st3) && st3.st_size == 2 && sh(c) != 0 && strstr(s2a_games_repair_detail(), "存档"),
+                "P1-180 存档读不到：不换树（返回 %d）、存档还在原处、没残留新树、原因写存档（「%s」）", r3, s2a_games_repair_detail());
+          snprintf(c, sizeof c, "chmod 755 '%s'; chmod 644 '%s'; rm -rf '%s'", g3, sv, g3); sh(c); }
+        { // D-QCTB：每款目录本身写得进、只有下面的 cheats/ 写不进（玩家机上归 root），金手指写 status.txt 被拒。
+          //   期望手写：查得出（返回 1）、新 cheats/ 可写、里面的玩家文件 a.txt 内容「hi」照搬
+          char g4[600], ch[700], ct[760], buf4[8] = ""; snprintf(g4, sizeof g4, "%s/games/0100000000ABC000", base); snprintf(ch, sizeof ch, "%s/cheats", g4); snprintf(ct, sizeof ct, "%s/a.txt", ch);
+          snprintf(c, sizeof c, "mkdir -p '%s' && printf hi > '%s' && chmod 555 '%s'", ch, ct, ch);
+          CHECK(sh(c) == 0, "D-QCTB 造：每款下 cheats/ 写不进");
+          int r4 = s2a_games_repair(base);
+          FILE *f4 = fopen(ct, "r"); if (f4) { size_t k = fread(buf4, 1, sizeof buf4 - 1, f4); buf4[k] = 0; fclose(f4); }
+          CHECK(r4 == 1 && !access(ch, W_OK) && !strcmp(buf4, "hi"), "D-QCTB cheats/ 写不进 → 迁好：返回 1、新 cheats/ 可写、a.txt 内容一致（实际 %d / 内容「%s」）", r4, buf4);
+          snprintf(c, sizeof c, "chmod -R u+rw '%s'/.s2a-unwritable-* 2>/dev/null; rm -rf '%s'", base, g4); sh(c); }
 #endif
         chmod(root, 0755);
         snprintf(c, sizeof c, "chmod -R u+w '%s' 2>/dev/null; rm -rf '%s'", base, base); sh(c);
@@ -635,6 +809,22 @@ int main(void) {
         CHECK(!access(fp, W_OK), "搬过来的文件 App 可写（源文件 0444；实际 access W_OK = %d）", access(fp, W_OK));
         CHECK(s2a_games_repair(pd) == 0, "搬过之后再查：不再动（返回 0）");
         snprintf(c, sizeof c, "chmod -R u+w '%s' 2>/dev/null; rm -rf '%s'", base, base); sh(c);
+    }
+    // 审计 P1-180 兄弟站点（repair_pack_base 搬去备用位置）：主位置整条写不进、树里有一份读不到的存档（S2A/ 下，000）→ 不换上新树。
+    //   期望手写：返回负数；备用位置 Library/S2Arm/games 没建出来（资源包根不切过去）；不留 .s2a-games-new-*；存档原处还在；原因写「存档」
+    if (getuid() != 0) {
+        char base[] = "/tmp/s2a_t_altsave_XXXXXX"; if (!mkdtemp(base)) return 1;
+        char c[4096], pd[600], sup[700], sv[900], altg[800]; const char *gid = "0100F8D01A06F000";
+        snprintf(pd, sizeof pd, "%s/Documents", base); snprintf(sup, sizeof sup, "%s/Library/Application Support/S2Arm", base);
+        snprintf(sv, sizeof sv, "%s/games/%s/S2A/ryujinx/bis/user/save/1/data", sup, gid); snprintf(altg, sizeof altg, "%s/Library/S2Arm/games", base);
+        snprintf(c, sizeof c, "mkdir -p '%s/games/%s' '%s/games/%s/资源包' \"$(dirname '%s')\" && printf hello > '%s/games/%s/资源包/romfs.img' && printf sv > '%s' && chmod 0 '%s' && chmod -R a-w '%s'",
+                 pd, gid, sup, gid, sv, sup, gid, sv, sv, sup);
+        CHECK(sh(c) == 0, "P1-180 备用位置 造：主位置写不进、里面一份读不到的存档");
+        int r = s2a_games_repair(pd); struct stat ss;
+        snprintf(c, sizeof c, "ls -d '%s/Library/S2Arm'/.s2a-games-new-* >/dev/null 2>&1", base);
+        CHECK(r < 0 && stat(altg, &ss) && !stat(sv, &ss) && ss.st_size == 2 && sh(c) != 0 && strstr(s2a_games_repair_detail(), "存档"),
+              "P1-180 备用位置 存档读不到：不换树（返回 %d）、备用位置没建 games、存档还在原处、没残留新树、原因写存档（「%s」）", r, s2a_games_repair_detail());
+        snprintf(c, sizeof c, "chmod -R u+rw '%s' 2>/dev/null; rm -rf '%s'", base, base); sh(c);
     }
 #endif
     // ⑮ 资源包挪出 Documents（v0.3.0）：容器形状的临时目录 <容器>/Documents/games/<游戏号>；期望按规则手写（s2a_docs.h s2a_pack_root、pack_apply.c s2a_pack_migrate_one）
@@ -669,7 +859,7 @@ int main(void) {
         CHECK(sh(c) == 0, "⑮⑧ 造：新位置就绪（q0）+ 旧位置一份清单 q9 的新推送");
         snprintf(c, sizeof c, "grep -q q9 '%s/manifest.json' && test -s '%s/n' && test ! -e '%s/资源包'", N1, N1, G1);
         CHECK(s2a_pack_migrate_one(G1) == 1 && sh(c) == 0, "⑮⑧ 清单不同：旧位置的新推送换掉新位置（新位置清单 = q9、旧位置没了）");
-        snprintf(c, sizeof c, "set -e; printf q9 > '%s/.applied'; mkdir -p '%s/资源包/.incoming'; head -c 1024 /dev/zero > '%s/资源包/.incoming/1_000.tar'", N1, G1, G1);
+        snprintf(c, sizeof c, "set -e; printf q9 > '%s/.applied'; mkdir -p '%s/资源包/.incoming'; echo t > '%s/资源包/.incoming/t.txt'; tar -cf '%s/资源包/.incoming/1_000.tar' -C '%s/资源包/.incoming' t.txt; rm '%s/资源包/.incoming/t.txt'", N1, G1, G1, G1, G1, G1);
         sh(c);
         snprintf(c, sizeof c, "test -s '%s/.incoming/1_000.tar' && test ! -e '%s/资源包'", N1, G1);
         CHECK(s2a_pack_migrate_one(G1) == 1 && sh(c) == 0, "⑮⑧ 旧位置有待解包：换掉新位置（待解包到了新位置、旧位置没了）");
@@ -683,6 +873,14 @@ int main(void) {
         snprintf(c, sizeof c, "rm -rf '%s/资源包'", G1); sh(c);
         snprintf(c, sizeof c, "set -e; printf '{\"index_sha256\": \"abc\"}' > '%s/manifest.json'; printf abc > '%s/.applied'; mkdir -p '%s/exefs'; head -c 100 /dev/urandom > '%s/exefs/main.npdm'; rm -rf '%s/.incoming'", N1, N1, N1, N1, N1);
         sh(c);
+        // ⑧e 审计 P1-169 余项（改前读数要的那一款）：新位置已就绪（清单 abc、.applied abc、本体 game.img 在），旧位置 .incoming 里只有一个 1024 字节全零 tar
+        //   （空包：只有归档结束块，没有一个条目）、没有清单。期望按规则手写：空包不算新推送 → 新位置已就绪 → 删旧的重复（返回 1）；新位置的 game.img 还在、清单还是 abc
+        snprintf(c, sizeof c, "set -e; printf img > '%s/game.img'; mkdir -p '%s/资源包/.incoming'; head -c 1024 /dev/zero > '%s/资源包/.incoming/1_000.tar'", N1, G1, G1);
+        CHECK(sh(c) == 0, "⑮⑧e 造：新位置就绪带 game.img + 旧位置只有一个空 tar");
+        int r8e = s2a_pack_migrate_one(G1);
+        snprintf(c, sizeof c, "test \"$(cat '%s/game.img')\" = img && grep -q abc '%s/manifest.json' && test ! -e '%s/资源包'", N1, N1, G1);
+        CHECK(r8e == 1 && sh(c) == 0, "⑮⑧e 空 tar 不算新推送：返回 1（实际 %d）、新位置 game.img 与清单都在、旧位置删掉", r8e);
+        snprintf(c, sizeof c, "rm -f '%s/game.img'", N1); sh(c);
         // ⑤ 迁到一半被杀：30 款，子进程迁、几毫秒后 SIGKILL，再迁一次 → 30 款都在新位置、每款 50 个文件一个不少、存档都在
         snprintf(c, sizeof c, "set -e; for i in $(seq 10 39); do d='%s/games/0100BBBB000000'$i; mkdir -p \"$d/资源包/f\" \"$d/S2A/ryujinx/bis/user/save\"; "
                  "for j in $(seq 1 50); do echo $i$j > \"$d/资源包/f/$j\"; done; echo s$i > \"$d/S2A/ryujinx/bis/user/save/s\"; done", P);

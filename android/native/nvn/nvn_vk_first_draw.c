@@ -85,7 +85,7 @@ static void fd_tex_diag_once(const char *request_id, uint32_t tid, const struct 
            "tex=(flags=0x%x stride=%u blk_h=%d set_swz=%d swz=0x%x) "
            "view=(%s) samp=(min=%u mag=%u wrap=%u/%u/%u cmp=%u/%u lod=%.2f..%.2f/%.2f aniso=%.1f)",
            rid, tid, set, binding, slot, target, fmt, w, h, levels, layers,
-           tex ? tex->nvn_flags : 0u, tex ? tex->nvn_stride : 0u, tex ? tex->nvn_pkg_block_h : 0,
+           tex ? tex->nvn_flags : 0u, tex ? tex->nvn_stride : 0u, tex ? tex->nvn_pkg_layout : 0,
            tex ? tex->set_swz : 0, tex ? tex->swz : 0u, view_txt,
            par ? par->minf : 0, par ? par->magf : 0, par ? par->ws : 0, par ? par->wt : 0, par ? par->wr : 0,
            par ? par->cmp_mode : 0, par ? par->cmp_func : 0,
@@ -5248,7 +5248,8 @@ static struct nvn_vk_tex *fd_feedback_tex(const struct fd_program *prog,
     if (!rt || !rt->image) return NULL;
     for (int i = 0; i < prog->binding_count; i++) {
         const struct fd_binding *b = &prog->bindings[i];
-        if (b->kind != 2 || b->tex_slot < 0 || b->stage_idx < 0 || b->stage_idx > 1) continue;
+        // tex_present / tex_handle 只有 32 个组合槽；分离贴图槽（tex_slot 128 + k）不在这张表里，不能拿它去下标
+        if (b->kind != 2 || b->tex_slot < 0 || b->tex_slot >= 32 || b->stage_idx < 0 || b->stage_idx > 1) continue;
         if (!state->tex_present[b->stage_idx][b->tex_slot]) continue;
         uint64_t handle = state->tex_handle[b->stage_idx][b->tex_slot];
         uint32_t tid = (uint32_t)(handle & 0xfffffu);

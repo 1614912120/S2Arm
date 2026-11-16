@@ -71,7 +71,7 @@ void SaveW(string name, Action<EnvironmentWindow> setup)
     setup(welcome);
     SetW(welcome, "page", "library");
     CallW(welcome, "Render");
-    Dispatcher.UIThread.RunJobs();
+    Settle();
     var bmp = welcome.CaptureRenderedFrame();
     if (bmp is not null) { using var s = File.OpenWrite(Path.Combine(outDir, name + ".png")); bmp.Save(s); Console.WriteLine("  saved: " + name); }
     else Console.WriteLine("  WARN no frame: " + name);
@@ -106,6 +106,28 @@ var noticeJson = File.ReadAllText(Path.Combine(noticeDir?.FullName ?? throw new 
 SaveW("06_notice_zh", w => { SetW(w, "notice", (JsonElement?)JsonDocument.Parse(noticeJson).RootElement); SetW(w, "language", "zh-Hans"); });
 SaveW("07_notice_en", w => { SetW(w, "language", "en"); });
 SetW(welcome, "notice", null); SetW(welcome, "language", "zh-Hans");
+// 新功能大窗（大版本首次打开）：内容取仓库里那份 docs/site/feature.json（随包那份），图换成绝对路径（同 updater.py feature_spotlight 给的），每页一张
+var site = Path.Combine(noticeDir!.FullName, "docs/site");
+var featureNode = System.Text.Json.Nodes.JsonNode.Parse(File.ReadAllText(Path.Combine(site, "feature.json")))!.AsObject();
+featureNode["kind"] = "feature";
+foreach (var pageNode in featureNode["pages"]!.AsArray())
+{
+    // 同 updater.py feature_spotlight：image 给成 {zh-Hans, en} 绝对路径，英文缺了用中文
+    var raw = pageNode!["image"]!;
+    string Abs(string rel) => Path.Combine(site, rel);
+    var zhImg = raw is System.Text.Json.Nodes.JsonObject o1 ? Abs(o1["zh-Hans"]!.GetValue<string>()) : Abs(raw.GetValue<string>());
+    var enRel = raw is System.Text.Json.Nodes.JsonObject o2 && o2["en"] is { } e ? Abs(e.GetValue<string>()) : null;
+    pageNode["image"] = new System.Text.Json.Nodes.JsonObject { ["zh-Hans"] = zhImg, ["en"] = enRel is not null && File.Exists(enRel) ? enRel : zhImg };
+    pageNode["layout"] = pageNode["title"] is null ? "poster" : "detail";   // 同 updater.py feature_spotlight：只有图 = 海报页
+}
+var featurePopup = JsonDocument.Parse(featureNode.ToJsonString()).RootElement.Clone();
+for (var i = 0; i < featureNode["pages"]!.AsArray().Count; i++)
+{
+    var at = i;
+    SaveW($"08_feature_zh_{at + 1}", w => { SetW(w, "updatePopup", (JsonElement?)featurePopup); SetW(w, "featureIndex", at); });
+}
+SaveW("09_feature_en_1", w => { SetW(w, "language", "en"); SetW(w, "featureIndex", 0); });
+SetW(welcome, "updatePopup", null); SetW(welcome, "language", "zh-Hans");
 
 welcome.Close();
 Dispatcher.UIThread.RunJobs();
@@ -116,10 +138,18 @@ pack.Width = 1280; pack.Height = 900;
 pack.Show();
 Dispatcher.UIThread.RunJobs();
 
+// 让过渡动画（如折叠箭头 0→180° 旋转）走完再截，否则截到半转的箭头像个「厂」字
+void Settle()
+{
+    Dispatcher.UIThread.RunJobs();
+    var until = DateTime.UtcNow.AddMilliseconds(600);
+    while (DateTime.UtcNow < until) { AvaloniaHeadlessPlatform.ForceRenderTimerTick(); Dispatcher.UIThread.RunJobs(); Thread.Sleep(20); }
+}
+
 void SaveP(string name, Action setup)
 {
     setup();
-    Dispatcher.UIThread.RunJobs();
+    Settle();
     var bmp = pack.CaptureRenderedFrame();
     if (bmp is not null) { using var s = File.OpenWrite(Path.Combine(outDir, name + ".png")); bmp.Save(s); Console.WriteLine("  saved: " + name); }
     else Console.WriteLine("  WARN no frame: " + name);
@@ -127,6 +157,16 @@ void SaveP(string name, Action setup)
 
 InjectMockGame(pack, ready: false);
 SaveP("win_01_export_select", () => Navigate(pack, "build"));
+// S 级优化卡片（Beta）三种状态：直接注入作业层 patchMatch 的结果（不起后端）——这个版本命中 / 只命中游戏的别的版本 / 都没有
+foreach (var (name, json) in new[] {
+    ("win_01b_export_sgrade_hit", "{\"build\":\"d95ec48ffe269b6e\",\"exact\":{\"widescreen\":1,\"fps\":1,\"cheat\":12},\"others\":[]}"),
+    ("win_01c_export_sgrade_others", "{\"build\":\"aa11bb22cc33dd44\",\"exact\":{},\"others\":[{\"version\":\"1.1.0\",\"cats\":[\"fps\",\"widescreen\"]},{\"version\":\"1.0.0\",\"cats\":[\"cheat\"]}]}"),
+    ("win_01d_export_sgrade_none", "{\"build\":\"aa11bb22cc33dd44\",\"exact\":{},\"others\":[]}"),
+    ("win_01e_export_sgrade_ownwiden", "{\"build\":\"aa11bb22cc33dd44\",\"exact\":{\"cheat\":3},\"others\":[],\"ownWiden\":true}") })
+{
+    SaveP(name, () => { Navigate(pack, "build"); SetW(pack, "sgradeFor", MockGame(false).Id); SetW(pack, "sgradeFailed", false);
+        SetW(pack, "sgrade", (JsonElement?)JsonDocument.Parse(json).RootElement); Navigate(pack, "build"); });
+}
 
 InjectMockProgress(pack, fraction: 0.05, stepIndex: 0, running: true);
 SaveP("win_02_export_progress_running", () => Navigate(pack, "progress"));
@@ -140,23 +180,43 @@ SaveP("win_04_export_success", () => Navigate(pack, "progress"));
 // 降级继续（v0.3.1）：出成了，完成卡下方逐条列作业层给的玩家提示
 SetW(pack, "packNotes", (object?)new List<string> { "这款有 27 处用了兼容写法，个别场景可能不稳定，遇到请反馈", "3 支着色器首次遇到时现编，开头可能稍卡" });
 SaveP("win_04b_export_success_notes", () => Navigate(pack, "progress"));
+// S 级加强横幅 + 补丁打入结果（v0.4.0，同 Mac）：注入作业层 boost（条数 + applied / failed）
+SetW(pack, "packBoost", (JsonElement?)JsonDocument.Parse("""{"cheats":12,"fps":1,"widescreen":1,"applied":[{"cat":"widescreen","name":"满屏 21:9"},{"cat":"fps","name":"60 FPS"}],"failed":[{"cat":"gfx","name":"阴影质量","why":"result.why.mismatch"}]}""").RootElement.Clone());
+SaveP("win_04c_export_success_sgrade", () => Navigate(pack, "progress"));
+SetW(pack, "packBoost", null);
 SetW(pack, "packNotes", (object?)new List<string>());
 
-// 两路（维护者 11-13：出包页起分两路）：导出模式的进度页最后一步是「整理 iPhone 版程序与资源包」、完成页主按钮与说明照导出写
-SetW(pack, "installMode", "export");
+// 导出自签包（11-15 起不是装法）：「导出自签包」点在没出过包的款上，出包进度最后一步是「整理 iPhone 版程序与资源包」、完成页主按钮与说明照导出写
+var selfSignSet = (HashSet<string>)GetW(pack, "selfSignAfterPack")!;
+selfSignSet.Add(MockGame(false).Id);
 InjectMockProgress(pack, fraction: 0.85, stepIndex: 2, running: true, exportMode: true);
 SaveP("win_04c_export_selfsign_progress", () => Navigate(pack, "progress"));
 InjectMockProgress(pack, fraction: 1.0, stepIndex: -1, running: false, state: "succeeded",
     ipaBytes: 1_200_000_000L, packBytes: 3_400_000_000L, elapsed: 247, exportMode: true);
 SaveP("win_04d_export_selfsign_success", () => Navigate(pack, "progress"));
-SetW(pack, "installMode", "device");
+selfSignSet.Clear();
 
 InjectMockProgress(pack, fraction: 0.12, stepIndex: 0, running: false, state: "failed",
     summary: "磁盘空间不足，无法继续出包。");
 SaveP("win_05_export_failed", () => Navigate(pack, "progress"));
 
 InjectMockGame(pack, ready: true);
-SaveP("win_06_library_iphone_ready", () => Navigate(pack, "library"));
+SaveP("win_06_library_iphone_ready", () => Navigate(pack, "library"));   // 大卡：装到 iPhone + 导出自签包 + 出包
+// 导出自签包的进度 / 完成（11-15：装机页只画结局卡，不画装机说明、清单、开始装机 / 删除）
+{
+    var g = MockGame(true);
+    SetW(pack, "installExport", true); SetW(pack, "installGameId", g.Id); SetW(pack, "installGameName", g.Name); SetW(pack, "selectedGame", g.Id);
+    var it = GetW(pack, "installTrack")!;
+    void ITrack(string f, object? v) => it.GetType().GetField(f)!.SetValue(it, v);
+    ITrack("Kind", "install"); ITrack("Started", DateTime.UtcNow.AddSeconds(-40));
+    SetW(pack, "installState", "running");
+    SaveP("win_06b_selfsign_running", () => Navigate(pack, "install"));
+    SetW(pack, "installState", "succeeded"); ITrack("Ended", (DateTime?)DateTime.UtcNow);
+    ITrack("ExportFolder", @"D:\S2Arm Games\S2Arm 自签导出"); ITrack("ExportGames", 3); ITrack("ExportBytes", (long?)9_800_000_000L);
+    SaveP("win_06c_selfsign_done", () => Navigate(pack, "install"));
+    ITrack("ExportFolder", ""); ITrack("ExportGames", 0); ITrack("ExportBytes", (long?)null);
+    SetW(pack, "installExport", false); SetW(pack, "installState", ""); SetW(pack, "installGameId", null);
+}
 
 InjectMockGame(pack, ready: false);
 InjectMockProgress(pack, fraction: 0.35, stepIndex: 1, running: true);
@@ -190,6 +250,11 @@ TrackField("Started", DateTime.UtcNow.AddSeconds(-47)); TrackField("Ended", (Dat
 TrackField("PackBytes", (long?)0L); TrackField("PackFiles", (int?)0); TrackField("Version", "0.3.0");
 SetW(pack, "updateState", "succeeded");
 SaveP("win_21_phone_update_done", () => Navigate(pack, "phoneupdate"));
+// 导出模式完成（#1132）：3 款里 2 款沿用上次导出，只新写了丙 → 路径下点名「.img 只要拷这次新写的：丙.img」
+TrackField("ExportFolder", @"D:\S2Arm Games\S2Arm 自签导出"); TrackField("ExportGames", 3); TrackField("ExportBytes", (long?)9_800_000_000L);
+TrackField("ExportFresh", new List<string> { "丙.img" }); TrackField("ExportReused", 2);
+SaveP("win_21b_export_done_copy_only_new", () => Navigate(pack, "phoneupdate"));
+TrackField("ExportFolder", ""); TrackField("ExportGames", 0); TrackField("ExportBytes", (long?)null); TrackField("ExportFresh", new List<string>()); TrackField("ExportReused", 0);
 // 失败示例用真正做不下去的情况（签名失败）；认得出的风险走 drop 态让玩家确认，不当失败（维护者 11-11）
 TrackField("Suggestion", "在 Impactor 里重新登录你的 Apple ID，再点一次。");
 SetW(pack, "updateMessage", "签名没成功：Impactor 里的 Apple ID 登录已过期。");
@@ -276,6 +341,16 @@ SetW(pack, "libraryDiagnostics", "");
 SetW(pack, "report", FakeReport(true));
 SetW(pack, "summaryKey", "environment.ready");
 SaveP("tidy_01_library_connected", () => Navigate(pack, "library"));
+// 顶部大图用商店横图（11-14）：S2A_SNAP_BANNER=<一张 1920×1080 的 jpg>（仓库里不放商店图）时拷进这款文件夹，再截一张看清晰度
+if (Environment.GetEnvironmentVariable("S2A_SNAP_BANNER") is { Length: > 0 } snapBanner && File.Exists(snapBanner))
+{
+    Directory.CreateDirectory(atDefault.Location!.Folder);
+    var bannerPath = Path.Combine(atDefault.Location.Folder, "banner.jpg");
+    File.Copy(snapBanner, bannerPath, true);
+    SetW(pack, "catalog", new LibraryCatalog([atDefault with { Banner = bannerPath }, elsewhere], true, "密钥已就绪"));
+    SaveP("tidy_01b_library_banner", () => Navigate(pack, "library"));
+    SetW(pack, "catalog", new LibraryCatalog([atDefault, elsewhere], true, "密钥已就绪"));
+}
 // 游戏库选到 exFAT 盘（setup 报 library_bad_format，v0.3.1）：原因下面列出能放游戏库的 NTFS / ReFS 盘和剩余空间，点「放到这里」就建
 SetW(pack, "catalog", null); SetW(pack, "connectedFolder", null); SetW(pack, "libraryId", null);
 SetW(pack, "librarySummary", "library.failed");
@@ -291,6 +366,40 @@ SetW(pack, "catalog", new LibraryCatalog([atDefault, elsewhere], true, "密钥�
 SetW(pack, "librarySummary", "library.completed"); SetW(pack, "libraryDiagnostics", "");
 pack.Height = 2100;   // 设置页最长：装机方式 + 环境检查 + 运行路径都要在一张图里
 SaveP("tidy_02_settings", () => Navigate(pack, "settings"));
+// 换游戏库没换成（D-3P26）：失败原因常驻在设置页游戏库一行下面（作业层原句按界面语言翻）
+SetW(pack, "libraryFailure", (string)pack.GetType().GetMethod("LibraryFailed", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+    .Invoke(pack, [@"C:\Program Files\S2Arm\games", "游戏库不能放在 S2Arm 启动器自己的文件夹里，也不能包含它（升级时这个文件夹会整个替换，库会被一起删掉）：换一个文件夹。"])!);
+SaveP("tidy_03_settings_library_failed", () => Navigate(pack, "settings"));
+SetW(pack, "libraryFailure", "");
+// S 级优化（v0.4.0，同 Mac）：封面左上角金色 S、游戏库「S 级优化升级」入口、升级页三态（有可升级 / 都没找到原始程序 / 查找中）
+pack.Height = 1100;
+SetW(pack, "catalog", new LibraryCatalog([atDefault with { SGrade = true }, elsewhere], true, "密钥已就绪"));
+SaveP("sgrade_01_library_badge", () => Navigate(pack, "library"));
+static JsonElement SG(string json) => JsonDocument.Parse(json).RootElement.Clone();
+SetW(pack, "sgradeOpen", true); SetW(pack, "sgradeScanning", true);
+SetW(pack, "sgradeScan", SG("""
+{"games":[
+ {"id":"0100A","name":"暗黑破坏神 III","program":"saved","total":15,"patches":{"widescreen":9,"fps":1,"gfx":3,"cheat":2},"iphone":true,"off":false},
+ {"id":"0100B","name":"空洞骑士：丝之歌","program":"source","total":0,"patches":{},"iphone":true,"off":false},
+ {"id":"0100C","name":"哈迪斯","program":"mac","total":4,"patches":{"gfx":3,"cheat":1},"iphone":false,"off":true},
+ {"id":"0100D","name":"我的世界","program":"none","total":0,"patches":{},"iphone":true,"off":false}],"found":3,"upgradable":1,"noPatch":1,"missing":1}
+"""));
+SaveP("sgrade_02_upgrade_page", () => { SetW(pack, "page", "library"); InvokeW(pack, "Render"); });
+SetW(pack, "sgradeScan", SG("""{"games":[{"id":"0100D","name":"我的世界","program":"none","total":0,"patches":{},"iphone":true,"off":false}]}"""));
+SaveP("sgrade_03_upgrade_nothing", () => InvokeW(pack, "Render"));
+SetW(pack, "sgradeScan", null);
+SaveP("sgrade_04_upgrade_scanning", () => InvokeW(pack, "Render"));
+SetW(pack, "sgradeOpen", false); SetW(pack, "sgradeScanning", false);
+// 金手指页（Windows 对齐 Mac，11-14）：一份公开库的、一份玩家导入的（其中一条版本不对）
+SetW(pack, "cheatsFor", atDefault);
+SetW(pack, "cheatsList", (JsonElement?)SG("""
+{"items":[
+ {"key":"9B9E.txt/无限血","file":"9B9E182991F3F5B5.txt","name":"无限血","from":"library","repo":"bad1dea/NXCheats","author":"Eiffel2018","ok":true,"fixed":false,"reason":""},
+ {"key":"9B9E.txt/秘境进度 1000x","file":"9B9E182991F3F5B5.txt","name":"秘境进度 1000x","from":"library","repo":"bad1dea/NXCheats","author":"Eiffel2018","ok":true,"fixed":true,"reason":""},
+ {"key":"mine.txt/金币锁定","file":"mine.txt","name":"金币锁定","from":"player","repo":"","author":"","ok":false,"fixed":false,"reason":"版本不对：金手指是 2607A74F5DF7754C，这份游戏是 9B9E182991F3F5B5。"}],"reason":""}
+"""));
+SaveP("sgrade_05_cheats_page", () => { SetW(pack, "page", "library"); InvokeW(pack, "Render"); });
+SetW(pack, "cheatsFor", null); SetW(pack, "cheatsList", null);
 pack.Height = 900;
 
 pack.Close();
@@ -298,6 +407,8 @@ Dispatcher.UIThread.RunJobs();
 Console.WriteLine("done.");
 
 // ── 辅助函数 ─────────────────────────────────────────────────────────────
+static void InvokeW(object obj, string method) =>
+    obj.GetType().GetMethod(method, BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public, null, Type.EmptyTypes, null)!.Invoke(obj, null);
 static void SetW(object obj, string field, object? value)
 {
     var fi = obj.GetType().GetField(field, BindingFlags.NonPublic | BindingFlags.Instance);

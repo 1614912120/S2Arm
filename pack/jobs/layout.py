@@ -20,7 +20,7 @@ import shutil
 import time
 from pathlib import Path
 
-from core import Failure, atomic, contained, read
+from core import Failure, atomic, contained, read, resolve_path
 
 VERSION = 4   # 2：每款进 games/<英文名>/；3：iPhone 产物进每款 image/ios、装机产物与设备记录进默认位置根（_upgrade_3）；4：库外的工具缓存 / 日志搬进默认位置（_upgrade_4）
 GAME_JSON = "game.json"
@@ -226,9 +226,9 @@ def indexed_dir(c, gid):
 
 def require_in_location(c, p):
     """路径必须在某个已登记存放位置的 games/ 下（运行镜像校验用，挡住指到库外的路径）"""
-    p = Path(p).resolve()
+    p = resolve_path(p)
     for _, root, ok in locations(c):
-        if ok and p.is_relative_to(games_root(c, root).resolve()):
+        if ok and p.is_relative_to(resolve_path(games_root(c, root))):
             return p
     raise Failure("运行文件不在任何存放位置里。", code="runtime_invalid")
 
@@ -402,6 +402,12 @@ def path(c, gid, *parts, create=True):
     return d.joinpath(*parts)
 
 
+def nro_kept(c, gid, create=False):
+    """运行时留下的 NRO（#8be819：游戏自有加密归档里的 NRO，出包时认不出；宿主 LoadNro 缺表时把游戏解开的那份存成 <SHA-256>.nro，
+    Mac 局收局后 / 装 iPhone 前收回这里），出包改写阶段经 S2A_NRO_KEPT_DIR 读（runtime/rewriter/nro_to_nso.py 第三来源）"""
+    return path(c, gid, "nro_kept", create=create)
+
+
 def image_mac(c, gid, create=True):
     return path(c, gid, "image", "mac", create=create)
 
@@ -439,7 +445,11 @@ def ios_pack(c, gid):
             os.rename(legacy, pack)
             hide(pack)
         except OSError:
-            return legacy   # 改不了名（被占着）：照旧用老位置，下次再改
+            # 审计 P1-183：改名失败可能是另一路（装机页轮询 / 出包）刚改完：.pack 已在就用它，不退回已经不存在的 pack/；
+            #   真被占着（老位置还在）才照旧用老位置，下次再改。不加锁、不要求重新出包
+            if pack.is_dir():
+                return pack
+            return legacy
     return pack
 
 
@@ -541,8 +551,12 @@ def _split_release(c, gid, d):
     link, releases = d / "current", d / "releases"
     image = d / "image" / "mac"
     if os.path.lexists(link) and not image.exists():
-        cur = link.resolve()
-        if cur.parent == releases.resolve() and cur.is_dir():
+        if link.is_symlink() or getattr(os.path, "isjunction", lambda _: False)(link):
+            target = Path(os.readlink(link))
+            cur = resolve_path(target if target.is_absolute() else link.parent / target)
+        else:
+            cur = resolve_path(link)
+        if cur.parent == resolve_path(releases) and cur.is_dir():
             app = cur / "S2ArmGame.app"
             if app.is_dir():
                 sha = _host_digest(app)
@@ -565,7 +579,7 @@ def _split_release(c, gid, d):
         _rm(c, c.library, releases)
 
 
-_NACP_GLOBS = ("games/{gid}/current/ctl/control.nacp", "games/{gid}/current/exefs/control.nacp", "iPhone/{gid}/*资源包/ctl/control.nacp",
+_NACP_GLOBS = ("games/{gid}/current/ctl/control.nacp", "games/{gid}/current/exefs/control.nacp", "iPhone/{gid}/*资源包/ctl/control.nacp",  # 非玩家句
                "iPhone/{gid}/roots/*/ctl/control.nacp", "iPhone/{gid}/container-kit/ctl/control.nacp", "cache/{gid}/*/roots/*/ctl/control.nacp",
                # 新布局里还叫游戏号的文件夹（heal_folder_names）：Mac / iPhone 产物、出包解包目录
                "games/{gid}/image/mac/ctl/control.nacp", "games/{gid}/image/ios/*/ctl/control.nacp", "games/{gid}/build/*/extract/ctl/control.nacp")
@@ -726,7 +740,7 @@ def _upgrade_3(c, marker):
             done.add(gid); atomic(marker, dict(state, iphone=sorted(done))); continue   # 游戏库里已经没有这款：留着的旧产物下面随 iPhone/ 一起删
         kit = d / "container-kit"
         if not (kit / "main.npdm").is_file():
-            root = next((r for r in [*sorted(d.glob("roots/*@现行")), d / "work/pkg/product"] if (r / "main.npdm").is_file()), None)
+            root = next((r for r in [*sorted(d.glob("roots/*@现行")), d / "work/pkg/product"] if (r / "main.npdm").is_file()), None)  # 非玩家句
             if root is not None and any(p.suffix == ".ipa" for p in d.iterdir()):
                 save_container_kit(c, gid, root, dest=d)
         image = image_ios(c, gid)
@@ -987,7 +1001,7 @@ def _relocate_lock(private):
             yield
     except filelock.Busy as busy:
         raise Failure("另一个任务正在使用游戏库，请稍后重试。", code="library_busy", holder=busy.holder,
-                      internal=f"等了 {RELOCATE_LOCK_WAIT} 秒，旧默认游戏库搬家锁仍被占（{busy.holder}）") from None
+                      internal=f"等了 {RELOCATE_LOCK_WAIT} 秒，旧默认游戏库搬家锁仍被占（{busy.holder}）") from None  # 非玩家句
 
 
 def _relocate_locked(private, library):
@@ -1061,7 +1075,7 @@ def _finish_relocate(private, old, new):
 
 def _same_path(text, path):
     try:
-        return Path(str(text)).expanduser().resolve() == Path(path).resolve() or str(text) == str(path)
+        return resolve_path(Path(str(text)).expanduser()) == resolve_path(path) or str(text) == str(path)
     except (OSError, ValueError):
         return False
 

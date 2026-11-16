@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 S2Arm contributors
-// 「怎么签、怎么装」收成一套 + 更新 iPhone 上的 S2Arm（v0.3.0，同 Mac InstallModeViews.swift / S2ArmLauncherModel+InstallMode.swift）。
-//   装到 iPhone 的方式存在作业层 install.json（installMode 作业，Mac / Windows 同一份）：一键装到 iPhone（签名身份 = Apple ID（在 Impactor 里登录）/
-//   我的开发者证书，沿用 DevCertPage.cs 那套）或导出自己签名安装（导出作业合入前置灰）。
-//   InstallModeCard：环境检查里的一张卡；InstallModeLine：出包页原来的「签名方式」二选一换成一行只读 + 「更改」（去环境检查）。
+// 一键装到 iPhone 的签名身份 + 更新 iPhone 上的 S2Arm（v0.3.0，同 Mac InstallModeViews.swift / S2ArmLauncherModel+InstallMode.swift）。
+//   签名身份 = Apple ID（在 Impactor 里登录）/ 我的开发者证书，沿用 DevCertPage.cs 那套。11-15 维护者：导出不再是装法——
+//   游戏库「装到 iPhone」「导出自签包」两个按钮并排（ExportPages.cs ExportSelfSign），设置里没有切换。
+//   InstallModeCard：设置里的一张卡；InstallModeLine：出包页一行只读签名身份 + 「更改」（去设置）。
 //   更新：游戏库顶栏按钮（catalog phoneUpdates：设备记录的壳号比本版旧）→ 有要重新出包的款先三选一 → installUpdate 作业只换壳、不重推资源；
 //   选了「更新并重新出这几款」：更新成功后把它们排进批量出包（只出 iPhone），整批出完逐款装上。
 using Avalonia;
@@ -17,8 +17,7 @@ namespace S2Arm.Launcher;
 
 public sealed partial class EnvironmentWindow
 {
-    private string installMode = "device";      // installMode 作业读回的 mode：device / export（没读到按一键装）
-    private bool exportAvailable;                // 导出作业合入前恒为 false：导出一项置灰
+    private bool exportAvailable;                // 作业层读回的 exportAvailable：只报给控制口（ControlInstallMode），界面不再据它置灰
     private bool installModeTried, installModeLoading;
     // 更新作业：正在跑 / 计数；结果没看过时顶栏留一个可点掉的提示（"" = 成功，否则失败原因）
     private bool phoneUpdating;
@@ -27,14 +26,16 @@ public sealed partial class EnvironmentWindow
     /// <summary>更新手机上的 S2Arm 这一单的状态（running / succeeded / failed / cancelled）：更新页的结局卡（PhoneJobCard）按它画</summary>
     private string updateState = "", updateMessage = "";
     private (bool AcceptStale, IReadOnlyList<string> Repack, IReadOnlySet<string> Accept) lastUpdate = (false, [], new HashSet<string>());
+    private string? lastUpdateMode;
+    private bool lastUpdateSGrade;
     /// <summary>更新页 drop 态问的是哪个码（ConfirmCodes 的键）：「仍然继续」带上它对应的参数</summary>
     private string updateAskCode = "";
 
     /// <summary>更新页（page = "phoneupdate"）：结局卡 + 失败重试 + 挤掉确认（页内）</summary>
     private Control PhoneUpdateCard() => PhoneJobCard(updateTrack, updateState, updateMessage, updateDiagnostics, null,
-        retry: updateState is "failed" or "invalid" or "interrupted" ? () => _ = UpdatePhoneAsync(lastUpdate.AcceptStale, lastUpdate.Repack, lastUpdate.Accept) : null,
+        retry: updateState is "failed" or "invalid" or "interrupted" ? () => _ = UpdatePhoneAsync(lastUpdate.AcceptStale, lastUpdate.Repack, lastUpdate.Accept, mode: lastUpdateMode, sgradeUpgrade: lastUpdateSGrade) : null,
         confirmDrop: () => _ = UpdatePhoneAsync(lastUpdate.AcceptStale, lastUpdate.Repack,
-            new HashSet<string>(lastUpdate.Accept) { ConfirmCodes.GetValueOrDefault(updateAskCode, "acceptDropped") }),
+            new HashSet<string>(lastUpdate.Accept) { ConfirmCodes.GetValueOrDefault(updateAskCode, "acceptDropped") }, mode: lastUpdateMode, sgradeUpgrade: lastUpdateSGrade),
         dropTitle: ConfirmTitle(updateAskCode),
         cancelDrop: () => { updateState = ""; updateOutcome = null; Navigate("library"); });
     private string updateDiagnostics = "";
@@ -44,20 +45,15 @@ public sealed partial class EnvironmentWindow
     /// <summary>顶栏按钮对应的那台（多台时取第一台，同 Mac：作业里按连着的那台自己的记录再判一遍）</summary>
     private PhoneUpdate? PhoneUpdateTarget => catalog?.PhoneUpdates.FirstOrDefault();
 
-    /// <summary>读 / 改装到 iPhone 的方式（installMode 作业：带 mode 就改，不带只读）。游戏库没连上时不读，按一键装显示</summary>
-    private async Task RefreshInstallModeAsync(string? set = null)
+    /// <summary>读签名身份（installMode 作业只读；11-15 维护者：导出不再是装法，游戏库「导出自签包」常驻，旧版的装法设置由作业层迁移删掉）。游戏库没连上时不读</summary>
+    private async Task RefreshInstallModeAsync()
     {
-        if (connectedFolder is null || libraryId is null || (installModeLoading && set is null)) return;
+        if (connectedFolder is null || libraryId is null || installModeLoading) return;
         installModeTried = true; installModeLoading = true;
         try
         {
-            var job = await PackJobClient.RunAsync(PackRequest("installMode", "", set is null ? null : new Dictionary<string, object?> { ["mode"] = set }),
-                null, CancellationToken.None);
-            if (job.Report.Succeeded)
-            {
-                installMode = Str(job.Report.Result, "mode") == "export" ? "export" : "device";
-                exportAvailable = Flag(job.Report.Result, "exportAvailable");
-            }
+            var job = await PackJobClient.RunAsync(PackRequest("installMode", ""), null, CancellationToken.None);
+            if (job.Report.Succeeded) exportAvailable = Flag(job.Report.Result, "exportAvailable");
         }
         catch (Exception error) when (error is LibraryProtocolException or IOException or UnauthorizedAccessException or ArgumentException or
             InvalidOperationException or System.ComponentModel.Win32Exception) { }
@@ -65,62 +61,46 @@ public sealed partial class EnvironmentWindow
         Render();
     }
 
-    /// <summary>页面要用到装法时（出包页那一行、顶栏更新按钮）还没读过就读一次；读失败不反复重试，进环境检查页会再读</summary>
+    /// <summary>页面要用到签名身份时（出包页那一行）还没读过就读一次；读失败不反复重试，进设置页会再读</summary>
     private void EnsureInstallMode()
     {
         if (!installModeTried && !installModeLoading) _ = RefreshInstallModeAsync();
     }
 
-    // ---- 环境检查：装到 iPhone 的方式 ----
+    // ---- 设置：一键装到 iPhone 的签名身份（11-15 起没有装法切换）----
 
     private Control InstallModeCard()
     {
         var panel = new StackPanel { Spacing = 10 };
-        panel.Children.Add(Label(T("install.mode.title"), 16));
-        panel.Children.Add(Muted(T("install.mode.note"), 12.5));
-        panel.Children.Add(InstallModeOption("device", T("install.mode.device"), T("install.mode.device_note"), true));
-        if (installMode == "device")
+        panel.Children.Add(Label(T("install.mode.device"), 16));
+        panel.Children.Add(Muted(T("install.mode.device_note"), 12.5));
+        // 签名身份：开发者证书一栏照用出包页原来那套（导入 / 换 / 删、体检明细）；Apple ID 在随包 Impactor 里登录
+        var identity = new StackPanel { Spacing = 4 };
+        identity.Children.Add(DevCertRow(T("install.mode.identity"), T("install.mode.identity_impactor"), card: false));
+        // 「打开 Impactor」是动作不是选项：做成 Apple ID 那段下面的文字链接（11-14 体验梳理，开发甲定）；用开发者证书签时不需要它，不显示
+        if (!(devCert is { } dc && Flag(dc, "active")))
         {
-            // 签名身份：开发者证书一栏照用出包页原来那套（导入 / 换 / 删、体检明细）；Apple ID 在随包 Impactor 里登录
-            var identity = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 12, Margin = new Thickness(28, 0, 0, 0) };
-            identity.Children.Add(DevCertRow(T("install.mode.identity"), T("install.mode.identity_impactor"), card: false));
-            var impactor = Action("action.open_impactor", OpenBundledImpactor, File.Exists(BundledImpactor));
-            impactor.VerticalAlignment = VerticalAlignment.Top;
+            var impactor = new Button { Content = new TextBlock { Text = T("action.open_impactor"), TextDecorations = TextDecorations.Underline, Foreground = Accent, FontSize = 13 },
+                Background = Brushes.Transparent, Padding = new Thickness(0, 2), HorizontalAlignment = HorizontalAlignment.Right,
+                IsEnabled = File.Exists(BundledImpactor) };
+            impactor.Click += (_, _) => OpenBundledImpactor();
             AutomationId(impactor, "env.installMode.open_impactor");
-            Grid.SetColumn(impactor, 1); identity.Children.Add(impactor);
-            panel.Children.Add(identity);
+            identity.Children.Add(impactor);
         }
-        panel.Children.Add(InstallModeOption("export", T("install.mode.export"),
-            T("install.mode.export_note") + (exportAvailable ? "" : "\n" + T("install.mode.export_soon")), exportAvailable));
+        panel.Children.Add(identity);
         var card = Card(panel);
         AutomationId(card, "env.installMode");
         return card;
     }
 
-    private Control InstallModeOption(string mode, string title, string note, bool enabled)
-    {
-        var text = new StackPanel { Spacing = 3 };
-        text.Children.Add(Label(title, 14));
-        text.Children.Add(Muted(note, 12.5));
-        var option = new RadioButton
-        {
-            GroupName = "installMode", Content = text, IsChecked = installMode == mode, IsEnabled = enabled && !PackBusy && !installModeLoading,
-            Opacity = enabled ? 1 : 0.5, HorizontalAlignment = HorizontalAlignment.Stretch
-        };
-        AutomationId(option, "env.installMode." + mode);
-        option.IsCheckedChanged += (_, _) => { if (option.IsChecked == true && installMode != mode) _ = RefreshInstallModeAsync(mode); };
-        return option;
-    }
-
-    // ---- 出包页：现在按哪种方式装 + 「更改」 ----
+    // ---- 出包页：一键装用谁签名 + 「更改」 ----
 
     private Control InstallModeLine()
     {
         EnsureInstallMode();
         if (devCert is null) EnsureDevCert();
         var devcertOn = devCert is { } st && Flag(st, "active");
-        var summary = installMode == "export" ? T("install.mode.export")
-            : T("install.mode.device") + "（" + T(devcertOn ? "export.sign.devcert" : "export.sign.appleId") + "）";
+        var summary = T(devcertOn ? "export.sign.devcert" : "export.sign.appleId");
         var line = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 12 };
         var text = Muted(T("install.mode.summary").Replace("{0}", summary), 13.5); text.VerticalAlignment = VerticalAlignment.Center;
         AutomationId(text, "export.installMode");
@@ -158,10 +138,9 @@ public sealed partial class EnvironmentWindow
             return result;
         }
         if (PhoneUpdateTarget is null) return null;
-        EnsureInstallMode();
         var button = new Button
         {
-            Content = T(installMode == "export" ? "update.button.export" : "update.button.device"), IsEnabled = !ControlBusy && !batchRunning,
+            Content = T("update.button.device"), IsEnabled = !ControlBusy && !batchRunning,
             Padding = new Thickness(14, 8), CornerRadius = new CornerRadius(8), Background = Brush.Parse("#29292D"), Foreground = Ink
         };
         AutomationId(button, "top.phoneUpdate");
@@ -209,11 +188,14 @@ public sealed partial class EnvironmentWindow
     /// </summary>
     /// acceptDropped / ask 同 InstallAsync：会让手机上别的电脑装的游戏暂时不能玩（container_would_drop）时，界面发起的弹同一个确认框、确认后带 acceptDropped 重跑；
     /// 控制口发起的不弹、原样失败，由调用方带 acceptDropped 再发（v0.3.0 只换壳验收：原先这条路没接确认，提示「确认继续再点一次」却永远过不去）
-    private async Task UpdatePhoneAsync(bool acceptStale, IReadOnlyList<string> repack, IReadOnlySet<string>? accept = null, bool ask = true)
+    /// mode / sgradeUpgrade：「S 级优化升级」页的两个按钮（SGradeUpgradePage.cs，同 Mac）——mode = device / export 这次按它装（不改设置里的装法），
+    /// sgradeUpgrade = 壳已是本版也重组容器、给游戏程序补上 S 级优化（install.update_phone）
+    private async Task UpdatePhoneAsync(bool acceptStale, IReadOnlyList<string> repack, IReadOnlySet<string>? accept = null, bool ask = true, string? mode = null, bool sgradeUpgrade = false)
     {
         if (installBusy || packRunning || connectedFolder is null || libraryId is null) return;
         accept ??= new HashSet<string>();
         lastUpdate = (acceptStale, repack, accept);   // 失败页「重试」/ 挤掉确认的「仍然继续」按同样的参数再来
+        lastUpdateMode = mode; lastUpdateSGrade = sgradeUpgrade;
         var front = BeginJob(JobKind.Phone); phoneUpdating = true; updateOutcome = null; updateDiagnostics = ""; updateDone = updateTotal = null;
         updateState = "running";
         updateTrack.Begin("installUpdate", InstallTargetLabel); updateMessage = "";   // 实际装上的那台作业结束后按结果改（PhoneJobTrack.Finish）
@@ -226,6 +208,8 @@ public sealed partial class EnvironmentWindow
             // 更新哪台：壳旧了的那台（phoneUpdates 的设备记录键），作业层不自己挑
             var extra = new Dictionary<string, object?>();
             if (acceptStale) extra["acceptStale"] = true;
+            if (mode is "device" or "export") extra["mode"] = mode;
+            if (sgradeUpgrade) extra["sgradeUpgrade"] = true;
             foreach (var key in accept) extra[key] = true;
             if (PhoneUpdateTarget is { Device.Length: > 0 } target) extra["device"] = target.Device;
             var job = await PackJobClient.RunAsync(PackRequest("installUpdate", "", extra.Count > 0 ? extra : null),
@@ -281,7 +265,7 @@ public sealed partial class EnvironmentWindow
     }
 
     /// <summary>GET /state 的 installMode / phoneUpdates（形状同 Mac S2ArmControl）</summary>
-    private Dictionary<string, object?> ControlInstallMode() => new() { ["mode"] = installMode, ["exportAvailable"] = exportAvailable };
+    private Dictionary<string, object?> ControlInstallMode() => new() { ["signMode"] = devCert is { } st && Flag(st, "active") ? "devcert" : "appleId", ["exportAvailable"] = exportAvailable };
 
     private List<Dictionary<string, object?>> ControlPhoneUpdates() => (catalog?.PhoneUpdates ?? []).Select(u => new Dictionary<string, object?>
     {

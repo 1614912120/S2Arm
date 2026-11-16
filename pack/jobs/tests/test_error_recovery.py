@@ -119,8 +119,13 @@ class ErrorRecoveryTests(JobCase):
     def test_reader_io_failure_propagates_after_child_exit(self):
         import winproc
         spawn = winproc.popen if os.name == 'nt' else subprocess.Popen
+        fixture = [sys.executable, "-c", "print('fixture')"]
         def unreadable_pipe(*args, **kwargs):
             child = spawn(*args, **kwargs)
+            # 只给被测的那个子进程装坏管道：Popen 是整个 subprocess 模块打的桩，收尾 reap_session 里的 /bin/ps 也走这里，
+            #   原先它也被等 5 秒、输出过管道缓冲（本机进程多时 ps -A 超 64 KB）就超时，两次收尾每例白等 10 秒、残留进程也没真收（11-14 门禁提速）
+            if list(args[0]) != fixture:
+                return child
             child.wait(timeout=5)
             child.stdout = Mock(wraps=child.stdout)
             child.stdout.readline.side_effect = OSError(errno.EIO, "synthetic pipe read failure")
@@ -226,14 +231,14 @@ raise SystemExit(main.main())
         self.assertIn("AttributeError: 'types.SimpleNamespace' object has no attribute 'st_mtime'", got.internal)
         self.assertIn(f"（test_error_recovery.py:{line} in boom）", got.internal)
 
-    def test_pack_space_failure_then_recovery_preserves_old_runtime(self):
+    def test_pack_space_shortfall_warns_and_preserves_old_runtime(self):
+        # 11-14 不许堵门：预估不够只记一条 disk_full 警告、不拦；现有运行版本不动
         game = dict(packages=[])
         old = self.c.library / "games/working/keep"; old.parent.mkdir(parents=True); old.write_text("working")
         with patch("shutil.disk_usage") as usage:
             usage.return_value.free = 1
-            with self.assertRaises(Failure) as raised:
-                library.check_pack_space(self.c, game)
-            self.assertEqual(raised.exception.code, "disk_full")
+            library.check_pack_space(self.c, game)
+            self.assertEqual([(d["code"], d["severity"]) for d in self.c.job["diagnostics"]], [("disk_full", "warning")])
             usage.return_value.free = 100 << 30
             library.check_pack_space(self.c, game)
         self.assertEqual(old.read_text(), "working")

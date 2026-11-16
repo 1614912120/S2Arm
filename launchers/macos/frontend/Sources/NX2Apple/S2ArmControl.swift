@@ -89,6 +89,10 @@ import S2ArmAppleAdapter
             guard let g = game() else { return .bad("没有这个 gameId") }
             return blocked(model.export(g, platforms: [.ios],
                                         deviceTarget: deviceTarget ?? (probe["connected"] as? [[String: Any]])?.first, spaceOverride: spaceOverride))
+        case ("POST", "/selfsign"):   // 同游戏库「导出自签包」：能直接导出的直接导出，没出过 / 旧格式的先出 iPhone 包再导出
+            guard let g = game() else { return .bad("没有这个 gameId") }
+            if let b = busy() { return b }
+            model.exportSelfSign(g); return .ok()
         case ("POST", "/batch"):   // 批量出包（v0.2.4）：同界面清单页——建批次后一款接一款地出，进度看 GET /state 的 batch
             if let r = busy() { return r }
             if model.batchState != nil, model.batchSummary["done"] as? Bool != true {   // 上一批暂停着 / 没出完：不盖掉（审计 P2-270），同 Windows 回 409
@@ -124,11 +128,11 @@ import S2ArmAppleAdapter
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
             // 往设备上装东西一律要说明装到哪台（11-11：作业层不替玩家挑，控制口也不拿界面上选中的那台顶替）；s2armctl targets 列设备号。
-            //   装法是「导出，自己签名安装」时不连手机、出到文件夹，不要 device（同界面按钮、同 Windows 控制口）
-            let device = str("device")
-            if device == nil, model.installMode.mode != "export" { return .bad(Self.deviceRequired) }
+            //   mode = export（同游戏库「导出自签包」）：不连手机、出到文件夹，不要 device（同 Windows 控制口）
+            let device = str("device"), export = str("mode") == "export"
+            if device == nil, !export { return .bad(Self.deviceRequired) }
             model.install(g, teamId: str("teamId"), device: device, acceptDropped: a["acceptDropped"] as? Bool ?? false,
-                          accept: Set(["acceptNoBackup", "acceptStale"].filter { a[$0] as? Bool == true }), ask: false); return .ok()
+                          accept: Self.acceptFlags(a).subtracting(["acceptDropped"]), ask: false, export: export); return .ok()
         case ("POST", "/signingProject"):
             model.openSigningProject(); return .ok()
         case ("POST", "/update-phone"):   // 更新 iPhone 上的 S2Arm（v0.3.0）：同库页右上角按钮；有要重新出包的款没给 acceptStale → 409 列出它们
@@ -144,7 +148,7 @@ import S2ArmAppleAdapter
             }
             model.updatePhone(acceptStale: accept, repack: a["repack"] as? Bool == true ? u.stale.map(\.id) : [], language: "zh-Hans",
                               device: (a["device"] as? String).flatMap { $0.isEmpty ? nil : $0 },   // 同 /install：连着多台时指定哪台
-                              acceptDropped: a["acceptDropped"] as? Bool ?? false, accept: Set(["acceptNoBackup"].filter { a[$0] as? Bool == true }), ask: false)   // 同 /install：会挤掉别的电脑装的款时原样失败，带 acceptDropped 再发
+                              acceptDropped: a["acceptDropped"] as? Bool ?? false, accept: Self.acceptFlags(a).subtracting(["acceptDropped", "acceptStale"]), ask: false)   // 同 /install：会挤掉别的电脑装的款时原样失败，带 acceptDropped 再发
             return .object(["ok": true, "stale": stale])
         case ("POST", "/restore-iphone"):
             guard let g = game() else { return .bad("没有这个 gameId") }
@@ -156,7 +160,7 @@ import S2ArmAppleAdapter
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
             guard let device = str("device") else { return .bad(Self.deviceRequired) }
-            model.removeFromPhone(g, ask: false, device: device, accept: Set(["acceptDropped", "acceptNoBackup"].filter { a[$0] as? Bool == true })); return .ok()
+            model.removeFromPhone(g, ask: false, device: device, accept: Self.acceptFlags(a)); return .ok()
         case ("POST", "/customize"):
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
@@ -215,7 +219,11 @@ import S2ArmAppleAdapter
             let change = a["settings"] as? [String: Any] ?? [:]
             do {
                 let (options, _) = try await model.launchSettings(id, change: change.isEmpty ? nil : change)
-                return .object(options.mapValues { ["available": $0.available, "value": $0.value ?? NSNull(), "reason": $0.reason] })
+                return .object(options.mapValues { o -> [String: Any] in   // 游戏语言另带 choices（这款支持的）/ note（不支持时起局用哪种），同启动设置页
+                    var r: [String: Any] = ["available": o.available, "value": o.value ?? NSNull(), "reason": o.reason]
+                    if let c = o.choices { r["choices"] = c }
+                    if !o.note.isEmpty { r["note"] = o.note }
+                    return r })
             } catch { return .bad(error.localizedDescription) }
         case ("POST", "/cloudFolder"):
             // iCloud 存档同步的云盘文件夹（同环境页「选择文件夹…」）：path 为空 = 关闭
@@ -246,7 +254,12 @@ import S2ArmAppleAdapter
             case "install":   // 装机窗（进度 / 完成页）：同点顶栏「查看结果」
                 guard let g = game() else { return .bad("没有这个 gameId") }
                 model.showEnvironment = false; model.showInstallFor = g.id
-            default: return .bad("page 只认 environment / export / library / install")
+            case "sgradeUpgrade":   // S 级优化升级页（同点游戏库「S 级优化升级」）：截图核界面用
+                model.showEnvironment = false; model.exportFor = nil; model.sgradeUpgradeOpen = true
+            case "launchSettings":   // 这款的启动设置（同点游戏库齿轮）：截图核界面用
+                guard let g = game() else { return .bad("没有这个 gameId") }
+                model.showEnvironment = false; model.exportFor = nil; model.displayRequest = g.id
+            default: return .bad("page 只认 environment / export / library / install / sgradeUpgrade / launchSettings")
             }
             return .ok()
         case ("POST", "/refresh"):
@@ -277,6 +290,9 @@ import S2ArmAppleAdapter
 
     /// 自描述：AI 先 GET /help 就知道能做什么（s2armctl help 打的就是这张表）。
     /// 往设备上装 / 删 / 装回不带 device：拒绝（作业层也拒），告诉怎么查设备号
+    /// 请求里所有为真的 accept* 字段（玩家已同意的确认参数）原样交给作业层，不在控制口按名字挑（11-15：/install 原先只转两个，漏了 acceptLowSpace，
+    ///   AI 收到 device_space_low 替玩家确认也续不上）。认不认这个确认由作业层的失败码决定
+    static func acceptFlags(_ a: [String: Any]) -> Set<String> { Set(a.compactMap { k, v in k.hasPrefix("accept") && (v as? Bool) == true ? k : nil }) }
     static let deviceRequired = "缺 device：说明装到哪台（s2armctl targets 列出连着的设备、设备名和设备号），不替你挑"
 
     static let endpoints: [[String: String]] = [
@@ -345,7 +361,7 @@ import S2ArmAppleAdapter
             "error": (m.actionError ?? (m.libraryError == LibraryProvider.noLibraryMessage ? nil : m.libraryError) ?? m.environmentError ?? m.installError ?? m.aiControlError).map { $0 as Any } ?? NSNull(),
             "installReadiness": rd,
             "update": m.updateStatus,
-            "installMode": ["mode": m.installMode.mode, "exportAvailable": m.installMode.exportAvailable],
+            "installMode": ["signMode": m.installMode.signMode, "exportAvailable": m.installMode.exportAvailable],
             "phoneUpdates": m.phoneUpdates.map { u in ["device": u.device, "games": u.games.map(\.id), "stale": u.stale.map(\.id)] as [String: Any] },
             "batch": m.batchState.map { s -> [String: Any] in ["running": m.batchRunning, "summary": s["summary"] ?? [:], "next": s["next"] ?? NSNull(),
                                                                    "items": ((s["batch"] as? [String: Any])?["items"]) ?? [], "paused": ((s["batch"] as? [String: Any])?["paused"]) ?? NSNull()] } ?? NSNull(),

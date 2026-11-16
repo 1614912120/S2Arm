@@ -123,6 +123,10 @@ void dm_fault_hook_register(int (*fn)(void *addr, int is_write, void *uc)) { s2a
 static void (*g_wprep)(void *addr, size_t len);
 static void wprep_tramp(uint64_t addr, uint64_t len) { g_wprep((void *)(uintptr_t)addr, (size_t)len); }
 void dm_guest_write_prep_register(void (*fn)(void *addr, size_t len)) { g_wprep = fn; s2a_guest_write_prep_register(wprep_tramp); }
+// 远端别名区里的内存池不让 nvn_dirty 写保护（11-14 D-GCMY，见 nvn_dirty.c nvn_dirty_add_range）：判定用原生层的远端表
+int s2a_far_has(uint64_t a, uint64_t n) __attribute__((weak));   // runtime/src/far.c（没开远端时恒 0）；弱引用：只链 libnvn 不链原生层的单测没有它（登记见 nvn_dirty.c）
+extern int (*nvn_dirty_far_fn)(uint64_t a, uint64_t n);
+__attribute__((constructor)) static void dirty_far_init(void) { if (s2a_far_has) nvn_dirty_far_fn = s2a_far_has; }
 // 直连层自己要写游戏内存前（贴图回写）：走 S2Arm 宿主写游戏内存的同一个入口，登记的写前回调从那里收到
 void dm_guest_write_prepare(void *addr, size_t len) { s2a_track_write_quiet((uint64_t)(uintptr_t)addr, (uint64_t)len); }
 // 崩溃等待点 / 资源行：直连层在 Metal 初始化时登记
@@ -175,6 +179,7 @@ UIView *s2a_ios_root_view(void) __attribute__((weak_import));
 UIView *s2a_ios_present_view(void) __attribute__((weak_import));
 static UIView *present_view(void) { return s2a_ios_present_view ? s2a_ios_present_view() : s2a_ios_root_view ? s2a_ios_root_view() : nil; }
 CGRect s2a_ios_game_area(void) __attribute__((weak_import));
+int s2a_ios_game_top(void) __attribute__((weak_import));
 // 出图层摆放的范围（#300 统一游戏区域）：挂在手机根视图上时取 App 壳给的游戏区域（分屏等），挂在外接屏窗口的视图上或壳没这个符号 / 区域为空时取视图自身
 static CGRect game_rect(UIView *v) {
     if (s2a_ios_game_area && s2a_ios_root_view && v == s2a_ios_root_view()) { CGRect r = s2a_ios_game_area(); if (!CGRectIsEmpty(r)) return r; }
@@ -195,7 +200,8 @@ static int out_tall(void) {   // 出的是加高图：直连第三层整套放�
 }
 // 出图宽高比：宽图 / 加高图都按 屏宽 ÷ 屏高（宽屏屏高 1080、窄屏屏宽 1920，一个式子两头都对）。
 //   11-03 维护者 Duo 智慧的再现 v4：窄屏启用高度点后游戏自出加高图（s2a_widen_game 为真）走进宽图分支，旧式 屏宽 ÷ 1080 给 1.778，1280×900 的画面被塞进 16:9 层、上下大黑、界面落进黑区
-static double out_aspect(void) { return pf_out_aspect(out_wide() || out_tall(), s2a_screen_w(), s2a_screen_h()); }
+double s2a_cpatch_present_aspect(void);   // runtime/src/cpatch.c：自适应画幅社区补丁开着时的当前画幅（游戏按它画世界、出 16:9 尺寸的图，层按它铺满）；没开 0
+static double out_aspect(void) { double ca = s2a_cpatch_present_aspect(); if (ca > 0) return ca; return pf_out_aspect(out_wide() || out_tall(), s2a_screen_w(), s2a_screen_h()); }
 static CAMetalLayer *g_layer;
 static double g_out_a;   // 出图宽高比（起局定，游戏内部按它渲染；NVN 直连换屏时跟着换，见 s2a_direct_relayout）
 // 触屏（ios/vpad.m gameRect）按这同一个比例算画面矩形（审计 P1-79：原先触点一律按屏幕宽 : 1080，宽屏没生效 / 窄屏加高时出图是 16:9 / 1920:屏高，手指落点偏）。0 = 还没挂层
@@ -212,6 +218,8 @@ static void layout_layer(UIView *v, CAMetalLayer *l) {
     // 等比居中；出图比例与视图比例差 < 1% 时铺满视图（10-29：宽屏开着时出图比例来自取整后的屏幕宽，如 2346 / 1080 = 2.1722 对屏幕 2.1727，
     //   旧写法层比视图窄零点几个点，右侧露一条 ≤ 1 像素的黑缝；同 the reference port present_viewport 的 1% 容差）
     pf_vp f = pf_viewport(b.size.width, b.size.height, a, 1); CGFloat w = f.w, h = f.h;
+    // 分屏放宽到整屏宽的上区（iPhone Duo 外屏竖屏，ios/play_layout.m S2APlayLayoutMake 的 top）：画面贴顶，空余留在画面与手柄之间
+    if (s2a_ios_game_top && s2a_ios_root_view && v == s2a_ios_root_view() && s2a_ios_game_top()) f.y = 0;
     [CATransaction begin]; [CATransaction setDisableActions:YES];
     l.frame = CGRectMake(b.origin.x + f.x, b.origin.y + f.y, w, h);
     // 出图层像素倍数（S2A_OUT_SCALE，缺省 1 = 屏幕原生；帧率能耗线 10-26 维护者要量）：最后上屏这一层按原生全分辨率画，每帧多一次整屏读写；
@@ -226,13 +234,13 @@ static int g_relayout_due;   // 主线程：后台期间出图层挪回了根视
 void s2a_direct_relayout(void) {   // App 壳视图控制器 viewDidLayoutSubviews、外接屏接上 / 断开（ios/extdisplay.m）调（主线程）；没挂出图层（通用模式 / 还没起）不做
     UIView *v = g_layer ? present_view() : nil; if (!v) return;
     // 外接显示器接上 / 断开：出图层跟着换到外接屏窗口的视图 / 回根视图，照旧垫在最底层；比例与可画尺寸由下面同一条重摆路按新视图算
-    // 挪没挪看层在不在这个视图的层子树里：挂层入口（ios/play_reflection.m，Duo 分屏倒影）把出图层放进视图下的复制层，直接父层不是 v.layer；
-    //   原先比直接父层，每次重摆都判成「挪了」，把层从复制层里拽回根视图，倒影一出就没
+    // 挪没挪看层在不在这个视图的层子树里：挂层入口（ios/play_reflection.m，Duo 分屏倒影）把出图层放进视图下的容器层，直接父层不是 v.layer；
+    //   原先比直接父层，每次重摆都判成「挪了」，把层从容器层里拽回根视图
     int ext = s2a_ios_root_view && v != s2a_ios_root_view(), moved = 1;
     for (CALayer *q = g_layer.superlayer; q; q = q.superlayer) if (q == v.layer) { moved = 0; break; }
     if (moved) {
         [CATransaction begin]; [CATransaction setDisableActions:YES];
-        if (s2a_ios_attach_game_layer) s2a_ios_attach_game_layer(v, g_layer);   // 同建层时：经挂层入口（外接屏视图也一样，那边不分屏、不复制）
+        if (s2a_ios_attach_game_layer) s2a_ios_attach_game_layer(v, g_layer);   // 同建层时：经挂层入口（外接屏视图也一样，那边不分屏、没有倒影）
         else { [g_layer removeFromSuperlayer]; [v.layer insertSublayer:g_layer atIndex:0]; }
         [CATransaction commit];
         LOG("直连：出图层挪到%s（App 状态 %ld，视图所在场景状态 %ld）", ext ? "外接屏" : "手机屏",
@@ -563,7 +571,10 @@ static void *fail_watch(void *arg) {
     unsigned long long last = 0; double idle = 0, wait_first = 0;
     for (;;) {
         sleep(1);
-        if (atomic_load(&g_suspended)) { idle = 0; base = 0; continue; }
+        // 客机冻结（Mac 失焦暂停 / iOS 后台 / 重启屏障，runtime/src/thread.c s2a_guest_frozen）按设计不出帧，不算停住
+        //   （11-15 v0.4.2 候选一局：窗口失焦冻结 45 秒被报「出帧停住 45 秒」假红；停帧救场 runtime/src/ap_host.c 早已同口径）
+        static int (*frozen)(void); static int looked; if (!looked) { frozen = (int (*)(void))dlsym(RTLD_DEFAULT, "s2a_guest_frozen"); looked = 1; }
+        if (atomic_load(&g_suspended) || (frozen && frozen())) { idle = 0; base = 0; continue; }
         unsigned long long f = direct_frames();
         if (!f) {
             if (++wait_first != 90) continue;   // 只在第 90 秒报一次、打一次现场，之后照常等首帧

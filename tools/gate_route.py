@@ -16,7 +16,7 @@
   10-28 出包槽 / sched / remote 三支各被推到 124–128 个文件、几乎每批都跑；清单按执行追踪写，被测脚本新调用了别的脚本同笔补进来），
 「# 门禁闭包：[--table <表>] <入口…>」= 改动落在这些入口经 tools/stage_inputs.py 算出的依赖闭包里就跑（阶段键单测：新文件进了阶段闭包要核登记）。
 钩子与 iOS 编译按各钩子文件头「# 门禁路由：<前缀…>」（tools/gate_decl.py route）；哪个钩子都没声明到的代码目录 = 全跑（宁多勿漏）。"""
-import fnmatch, os, re, subprocess, sys, tempfile
+import fnmatch, json, os, re, subprocess, sys, tempfile
 
 TOK = re.compile(r'(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\.(?:sh|py|c|h|m|mm|cc|cpp|swift|cs|tsv|mk|json)\b')   # 带目录的写法整段取（graphics/tools/shbake/xc_key.sh），见 refs
 LOCAL = ('tools/', 'pack/', 'tests/')   # 本线目录：单测覆盖面只在这里面推
@@ -67,6 +67,9 @@ def drop_docstrings(txt):
 
 QSEG = re.compile(r'"(?:[^"\\\n]|\\.)*"|\'[^\'\n]*\'')   # 一行里的引号段（左起先到先得：双引号段里的单引号不另算）
 CJK = re.compile(r'[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]')   # 中文字与全角标点
+# 11-14：pack/orch/oneclick_win.py 的 run.sh([...]) 是对象 run 的 sh 方法，按文件名挂到仓库全部 run.sh（tests/vulkan/run.sh → shader_cases），
+#   约 70 支单测因此改 tests/shader_cases 就被选中。紧跟括号的「标识符.后缀(」是调用，不是点名文件（引号里写的路径后面是引号、带目录的写法前面是 /、「x.json (」中间有空格，都不匹配）
+PYCALL = re.compile(r'(?<![\w./-])[A-Za-z_]\w*\.(?:sh|py|c|h|m|mm|cc|cpp|swift|cs|tsv|mk|json)(?=\()')
 CODEISH = re.compile(r'\$\(|`|;|&&|\|\||\|\s|\bsource\s|^["\']\s*(?:\.\s|bash\b|sh\b|python3?\b|exec\b|env\b|[\w./$-]+\.(?:sh|py)\b)')   # 像要执行的段：命令替换、语句分隔、管道、source、以命令开头
 
 
@@ -100,6 +103,7 @@ def _refs(path, by_name, direct):
     src = drop_docstrings(txt) if path.endswith('.py') else txt
     code = '\n'.join(re.sub(r'\s#\s.*$', '', l) for l in src.split('\n') if not l.lstrip().startswith('#'))   # 行尾「  # 说明」也去掉
     code = drop_prose(code)
+    if path.endswith('.py'): code = PYCALL.sub('', code)   # Python 方法调用（run.sh(…)、r.json()）不是文件名
     toks = set(TOK.findall(code)) | {m + '.py' for m in re.findall(r'^\s*(?:from|import)\s+(\w+)', code, re.M)}   # Python 同目录模块 import
     for t in toks:
         # 单测自己（direct）带目录点名的文件按仓库路径认，不限本线目录、不按文件名猜：从整段起逐级去掉开头一段，取第一个与仓库文件路径相同的（「$H/graphics/…」取出来是 H/gfx/…）。
@@ -136,6 +140,40 @@ def precheck_test(test):
     return n in PRECHECK_TESTS or fnmatch.fnmatch(n, '*lint*_test')
 
 
+CP_SEG = re.compile(r'(?<![\w-])cp\s[^;&|\n]*')
+WR_SEG = re.compile(r'(?<![>&\d])>\s*"?((?:[\w.-]+/)+[\w.-]+\.(?:sh|py))\b')
+
+
+def copied_only(test, txt):
+    """单测拷进假仓库 / 临时目录跑的脚本（cp "$H/tools/gate.sh" tools/）：它本身是依赖，但它在假仓库里执行，
+    它点名的仓库文件解析到假仓库、不是真依赖，闭包不顺着它展开（11-14 门禁减负：gate_budget_test 只核预算格式，
+    经拷进去的 tools/gate.sh 一路传递吃进 4285 个输入、其中 3873 个 C# 源文件，改一个 .cs 就要跑）。
+    只拷不执行真仓库那份才算：单测文本在 cp 以外的地方带变量前缀点名它（bash $H/x.sh、. "$H"/x.sh）照旧展开"""
+    code = '\n'.join(re.sub(r'\s#\s.*$', '', l) for l in txt.split('\n') if not l.lstrip().startswith('#'))
+    if re.search(r'git\s+clone\b[^\n]*\$\{?H\b', code): return set(), []   # 克隆整个本仓库跑：里面全是真脚本，照旧展开
+    segs = CP_SEG.findall(code)
+    wrote = set(WR_SEG.findall(code))   # 单测在假仓库里自己写出来的（printf … > graphics/gate.sh）：同名真文件不是依赖
+    dirs = []
+    if not segs and not wrote: return set(), dirs
+    rest = WR_SEG.sub(' ', CP_SEG.sub(' ', code))
+    out = set()
+    for sg in segs:   # 拷的源（最后一个参数是目的地，不算）：目录 / 通配按通配并进覆盖面（cp -R "$H/graphics/widen" …：目录里的内容是真输入）
+        args = [a.strip('"\'') for a in sg.split()[1:] if not a.startswith('-')][:-1]
+        for a in args:
+            m = re.match(r'\$\{?\w+\}?"?/(.+)$', a)
+            if not m: continue
+            q = m.group(1).replace('"', '').rstrip('/')
+            if '$' in q: return set(), []   # 源路径里还有变量（for 循环拷一批）：认不全，这支单测照旧全展开
+            if q in DIRNAMES_FULL: dirs.append(q + '/**')
+            elif re.search(r'[*?\[]', q): dirs.append(q)
+    for t in {t for sg in segs for t in TOK.findall(sg) if '/' in t} | wrote:
+        ps = t.split('/')
+        hit = next(('/'.join(ps[i:]) for i in range(len(ps) - 1) if '/'.join(ps[i:]) in FILESET), None)
+        # 拷过的文件再被点名：带变量前缀（$H/tools/x.sh、"${ROOT}"/x.py）= 执行真仓库那份，照旧展开；相对写法（cd 进假仓库后 bash tools/x.sh）= 跑的是拷贝
+        if hit and not re.search(r'\$\{?\w+\}?"?/(?:[\w.-]+/)*' + re.escape(os.path.basename(hit)) + r'\b', rest): out.add(hit)
+    return out - {test}, dirs
+
+
 def test_cover(test, files, by_name, full=False):
     """单测的覆盖面：自身 + 文本里点名的本线文件的传递闭包 + 头部「门禁覆盖」通配。
     full=True（缓存键用）：「门禁只看」不截断闭包，只并进去——路由可以窄，缓存输入只能宽（10-30：train_test「门禁只看」漏 known_red.py，
@@ -156,9 +194,10 @@ def test_cover(test, files, by_name, full=False):
         if gone: sys.exit(f'【红】gate_route：{test} 的「门禁只看」里 {" ".join(gone)} 不在仓库里（改名了要同笔改这行）')
         if not full: return {test} | build_cover([txt] + [read_text(f) for f in FILESET if f.endswith(('.sh', '.py')) and any(fnmatch.fnmatch(f, g) for g in only)]), globs + only, always
         globs = globs + only
+    stub, cpdirs = copied_only(test, txt); globs += cpdirs
     while todo:
         f = todo.pop()
-        if not f.endswith(('.sh', '.py')) and f != test: continue
+        if not f.endswith(('.sh', '.py')) and f != test or f in stub: continue
         got = first if f == test else refs(f, by_name)[0]
         for g in got - seen: seen.add(g); todo.append(g)
     for a in closures:   # 10-27 维护者：#550 改 runtime/run_mac.sh、新增 tools/mac_chain_check.py，落进直连阶段闭包，门禁没选 stage_keys_test，main 红
@@ -230,12 +269,14 @@ def hit(changed, prefixes):
 
 FILESET = set()
 DIRNAMES = set()   # 仓库里出现过的全部目录名（任一层）
+DIRNAMES_FULL = set()   # 仓库里出现过的全部目录路径（copied_only 认 cp -R 的目录用）
 TAIL2 = {}   # 末两段路径 → 以「/<末两段>」结尾的仓库文件（refs 相对目录写法用；逐个 endswith 扫全仓库要 390 万次）
 
 
 def index():
     """读仓库文件表、建 refs 用的索引（在仓库根调；一个进程一次）→ (仓库文件, 文件名 → 本线文件)"""
     files = repo_files(); FILESET.update(files); DIRNAMES.update(d for f in files for d in f.split('/')[:-1])
+    DIRNAMES_FULL.update('/'.join(f.split('/')[:i]) for f in files for i in range(1, f.count('/') + 1))
     for f in files:
         ps = f.split('/')
         if len(ps) >= 3: TAIL2.setdefault('/'.join(ps[-2:]), []).append(f)
@@ -250,6 +291,50 @@ def cover_files(test, files, by_name, full=False):
     seen, globs, always = test_cover(test, files, by_name, full)
     if always: return None
     return set(seen) | {f for f in files for g in globs if fnmatch.fnmatch(f, g)}
+
+
+def tree_key():
+    """仓库内容指纹（cover_table 缓存键）：暂存区的树 + 工作区相对暂存区的改动 + 本文件版本；算不出（不是 git 仓 / 有未解决冲突）→ None 不缓存。
+    覆盖面只读已跟踪文件（FILESET 来自 git ls-files）、make 清单也只取已跟踪的，所以未跟踪文件不进键"""
+    import hashlib
+    try:
+        w = subprocess.run(['git', 'write-tree'], capture_output=True, text=True, check=True).stdout.strip()
+        d = subprocess.run(['git', 'diff', '--no-ext-diff', '--binary'], capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return hashlib.sha1(b'v1\0' + w.encode() + b'\0' + d).hexdigest()
+
+
+def cover_table(tests, files, by_name):
+    """全部单测的覆盖面（与改了什么无关）→ {单测: (覆盖文件集, 通配, 每次跑)}。11-14：一次 tests 路由 6–9 秒，几乎全花在逐个单测算闭包
+    （解析几百份脚本、起 make / stage_inputs 子进程）；同一份仓库内容的结果只算一次，存在 git 公共目录 s2a-gate-route/<指纹>.json，
+    之后同树的调用（预检、门禁规划、gate_route_test 里二十多次）直接读。GATE_ROUTE_CACHE=0 关；最多留 40 份，旧的删"""
+    key = None if os.environ.get('GATE_ROUTE_CACHE') == '0' else tree_key()
+    path = None
+    if key:
+        try:
+            gd = subprocess.run(['git', 'rev-parse', '--git-common-dir'], capture_output=True, text=True, check=True).stdout.strip()
+            path = os.path.join(gd, 's2a-gate-route', key + '.json')
+            with open(path, encoding='utf-8') as f:
+                raw = json.load(f)
+            if set(raw) == set(tests):
+                return {t: (set(v[0]), v[1], v[2]) for t, v in raw.items()}
+        except (OSError, ValueError, subprocess.CalledProcessError):
+            pass
+    table = {t: test_cover(t, files, by_name) for t in tests}
+    if path:
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = f'{path}.{os.getpid()}.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump({t: [sorted(c), list(g), bool(a)] for t, (c, g, a) in table.items()}, f, ensure_ascii=False)
+            os.replace(tmp, path)
+            old = sorted((os.path.getmtime(q), q) for q in (os.path.join(os.path.dirname(path), n) for n in os.listdir(os.path.dirname(path))) if q.endswith('.json'))
+            for _, q in old[:-40]:
+                os.unlink(q)
+        except OSError:
+            pass
+    return table
 
 
 def main():
@@ -274,8 +359,9 @@ def main():
     code = [f for f in changed if f.startswith('tests/visual/') or not (DOC.search(f) or f.startswith(LOCAL + ('scripts/',) + NOHOOK))]   # 代码改动（本线目录与文档以外）
     unknown = [f for f in code if not hit([f], known)]   # 表里没列到的代码路径 → 钩子全跑
     if mode == 'tests':
+        table = cover_table(tests, files, by_name)
         for t in tests:
-            cov, globs, always = test_cover(t, files, by_name)
+            cov, globs, always = table[t]
             if not changed or always or set(changed) & cov or any(fnmatch.fnmatch(c, g) for c in changed for g in globs): print(t)
     elif mode == 'claimed':   # 10-31 合入线：tool 档原先一个钩子都不跑，钩子明写路由的本线目录（pack/jobs/、tests/autoplay/ …）改了也不跑
         for k, ps in table:

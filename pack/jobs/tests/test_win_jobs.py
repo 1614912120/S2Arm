@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 S2Arm contributors
 """Windows 作业层打底（启动器线 11-07）：作业环境只用随包运行时、读取器取预编 nx_unpack、探活不用 os.kill(pid, 0)。
-期望按随包布局手写（launchers/windows/bundle_runtime_win.py：Runtime/{python, python/Scripts, dotnet, mingit/cmd, git/usr/bin, zstd}），不跑被测实现推。"""
+期望按随包布局手写（launchers/windows/bundle_runtime_win.py：Runtime/{python, python/Scripts, dotnet, git/usr/bin, zstd}），不跑被测实现推。"""
 import os
 from pathlib import Path
 import sys
@@ -64,7 +64,7 @@ class RuntimeEnv(unittest.TestCase):
         env = core.win_runtime_env(r"D:\S2Arm\Runtime", r"D:\S2Arm\Engine", r"C:\Windows")
         self.assertEqual(env["PATH"].split(";"), [
             r"D:\S2Arm\Runtime\python", r"D:\S2Arm\Runtime\python\Scripts", r"D:\S2Arm\Runtime\dotnet",
-            r"D:\S2Arm\Runtime\mingit\cmd", r"D:\S2Arm\Runtime\git\usr\bin", r"D:\S2Arm\Runtime\zstd",
+            r"D:\S2Arm\Runtime\git\usr\bin", r"D:\S2Arm\Runtime\zstd",
             r"C:\Windows\system32", r"C:\Windows", r"C:\Windows\System32\WindowsPowerShell\v1.0"])
         self.assertEqual((env["DOTNET_ROOT"], env["S2A_BASH"], env["PYTHONHOME"], env["S2A_PREBUILT_TOOLS"]),
                          (r"D:\S2Arm\Runtime\dotnet", r"D:\S2Arm\Runtime\git\usr\bin\bash.exe",
@@ -213,6 +213,41 @@ class WinOneclick(unittest.TestCase):
         with self.assertRaises(core.Failure) as e:
             self.ipa.bundled_shell(self.c)
         self.assertEqual(e.exception.code, "tool_missing")
+
+
+class ShellEngineMatch(unittest.TestCase):
+    """#1043：应用内更新回滚不完整，Engine/engine.json 新壳号、Shell/manifest.json 旧壳号 → 出包开头就报「没装完整、覆盖安装」（engine_incomplete），
+    不等到 ship_ext 核壳编号才挂。期望手写（壳号取自玩家原报）：对得上 → 照常返回 Shell 目录；对不上 → engine_incomplete、内部原文带两个壳号；
+    任一边没写壳号（开发树 / 旧格式）→ 不拦"""
+    def setUp(self):
+        import ipa
+        self.ipa = ipa
+        self.t = Path(tempfile.mkdtemp()); self.addCleanup(lambda: __import__("shutil").rmtree(self.t, ignore_errors=True))
+        (self.t / "Shell").mkdir(); (self.t / "Engine").mkdir()
+        self.c = types.SimpleNamespace(r={"resources": str(self.t)}, private=self.t, engine=self.t / "Engine")
+
+    def put(self, engine, shell):
+        import json
+        (self.t / "Engine/engine.json").write_text(json.dumps({"shellId": engine} if engine else {}))
+        (self.t / "Shell/manifest.json").write_text(json.dumps({"details": {"shellId": shell}} if shell else {}))
+
+    def test_same_shell_ok(self):
+        self.put("e0c983c072e29416", "e0c983c072e29416")
+        self.assertEqual(self.ipa.bundled_shell(self.c), self.t / "Shell")
+
+    def test_half_updated_app_is_named(self):
+        self.put("e0c983c072e29416", "b96e9b50fef413c0")
+        with self.assertRaises(core.Failure) as e:
+            self.ipa.bundled_shell(self.c)
+        self.assertEqual(e.exception.code, "engine_incomplete")
+        self.assertIn("覆盖安装", str(e.exception))
+        self.assertIn("e0c983c072e29416", e.exception.internal); self.assertIn("b96e9b50fef413c0", e.exception.internal)
+
+    def test_missing_ids_do_not_block(self):
+        for engine, shell in ((None, "b96e9b50fef413c0"), ("e0c983c072e29416", None), (None, None)):
+            with self.subTest(engine=engine, shell=shell):
+                self.put(engine, shell)
+                self.assertEqual(self.ipa.bundled_shell(self.c), self.t / "Shell")
 
 
 class FakeW:

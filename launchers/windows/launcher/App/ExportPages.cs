@@ -8,6 +8,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using S2Arm.Launcher.Protocol;
@@ -61,6 +62,7 @@ public sealed partial class EnvironmentWindow
     private long? packIpaBytes, packPackBytes;
     /// <summary>这一单降级继续的玩家提示（作业层 notes，v0.3.1）：完成卡逐条显示</summary>
     private IReadOnlyList<string> packNotes = [];
+    private JsonElement? packBoost;   // 补丁打入结果（ExportStream.Outcome.Boost，11-14）
     private PackSpace? packSpace;
     // in-progress capsule (shown while session is hidden)
     private bool sessionHidden;
@@ -134,7 +136,9 @@ public sealed partial class EnvironmentWindow
     private Button? PhonePill()
     {
         if (installGameId is null || (!installBusy && installSeen) || (page == "install" && SelectedGame?.Id == installGameId)) return null;
-        var key = installBusy ? "install.pill.running" : installState == "succeeded" ? (installTrack.ExportFolder.Length > 0 ? "install.pill.exported" : "install.pill.done") : installState == "needsPlayer" ? "install.pill.needs_player" : "install.pill.failed";
+        var key = installBusy ? (installExport ? "install.pill.exporting" : "install.pill.running")
+            : installState == "succeeded" ? (installTrack.ExportFolder.Length > 0 ? "install.pill.exported" : "install.pill.done")
+            : installState == "needsPlayer" ? "install.pill.needs_player" : installExport ? "install.pill.exportFailed" : "install.pill.failed";
         var text = T(key).Replace("{0}", installGameName ?? installGameId).Replace("{1}", InstallTargetLabel);
         if (installBusy && installDone is { } d && installTotal is { } t && t > 0) text += " · " + (100 * d / t) + "%";
         var pill = new Button { Content = text, Padding = new Thickness(14, 8), CornerRadius = new CornerRadius(16),
@@ -197,8 +201,9 @@ public sealed partial class EnvironmentWindow
         else if (page == "phoneupdate") contentBody.Children.Add(Card(PhoneUpdateCard()));   // 更新手机上的 S2Arm（InstallModePage.cs）
         else RenderInstall(contentBody);
 
-        // 底部操作栏
-        var bottomBar = RenderBottomBar();
+        // 底部操作栏：出包选择页、装机页左上角已有同去游戏库的「← 游戏库」，不再在底栏重复一个（11-14 体验梳理）；
+        //   进度页（停止 / 回游戏库）与手机更新页（没有别的返回入口）照旧
+        var bottomBar = page is "build" or "install" ? null : RenderBottomBar();
 
         // 出包 / 进度 / 装机页没有游戏库页那条顶栏：胶囊放在这些页顶部，在哪页都找得回装机（#308）；装机进度事件只刷新胶囊这一格
         Control? top = PhonePill() is null ? null
@@ -337,7 +342,7 @@ public sealed partial class EnvironmentWindow
             return;
         }
         body.Children.Add(GameHeader(game));
-        body.Children.Add(Muted(T("batch.hint")));   // 批量出包（v0.2.4）：添加游戏一次放进多款，导入完列成清单连续出包
+        body.Children.Add(SGradeCard(game));   // S 级优化（Beta，11-13，同 Mac SGradeCard.swift）：这款这个版本命中了哪些社区补丁，命中的出包时自动打入
 
         // platforms
         var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
@@ -374,7 +379,7 @@ public sealed partial class EnvironmentWindow
         }
         body.Children.Add(tiles);
         body.Children.Add(LocationRow(game));
-        if (exportIos) body.Children.Add(InstallModeLine());   // 装到 iPhone：一键装（Apple ID / 我的开发者证书）或导出 + 「更改」去环境检查（v0.3.0，InstallModePage.cs）
+        if (exportIos) body.Children.Add(InstallModeLine());   // 一键装用谁签名（Apple ID / 我的开发者证书）+ 「更改」去设置（InstallModePage.cs）
 
         // action bar
         var bar = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 16 };
@@ -440,6 +445,153 @@ public sealed partial class EnvironmentWindow
 
     private LocationSlack? SlackFor(string path) =>
         locations?.Rows.FirstOrDefault(r => SameFolder(r.Path, path)) is { } row ? row.Slack : probedSlack.TryGetValue(path, out var slack) ? slack : null;
+
+    // ---- S 级优化（Beta，11-13 维护者：根据游戏和版本自动匹配社区补丁并展示，命中的默认打上；同 Mac launchers/macos/frontend/Sources/NX2Apple/SGradeCard.swift）----
+    private string? sgradeFor; private JsonElement? sgrade; private bool sgradeFailed;
+
+    // 金色（11-13 维护者：这个功能很牛，做得精致高级、显眼一点，用金色版 logo 的 S）：金色毛玻璃双色 S（上半香槟金、下半玫瑰金，
+    //   launchers/macos/Branding/make_s_gold.py 由应用图标生成），卡片的标题 / 描边 / 图标钮同一套配色；命中时整张亮起来（同 Mac SGradeCard.swift）
+    private static readonly Color SGoldHi = Color.FromRgb(255, 235, 179), SGold = Color.FromRgb(237, 196, 107), SRose = Color.FromRgb(237, 158, 133);
+    private Bitmap? sGoldBitmap;
+    private Bitmap SGoldImage()
+    {
+        if (sGoldBitmap is not null) return sGoldBitmap;
+        using var stream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://S2Arm/Assets/SGold.png"));
+        return sGoldBitmap = Bitmap.DecodeToWidth(stream, 192);
+    }
+    private static Color A(Color c, double alpha) => Color.FromArgb((byte)Math.Round(alpha * 255), c.R, c.G, c.B);
+    private static LinearGradientBrush Diag(params (Color c, double at)[] stops)
+    {
+        var g = new LinearGradientBrush { StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative), EndPoint = new RelativePoint(1, 1, RelativeUnit.Relative) };
+        foreach (var (c, at) in stops) g.GradientStops.Add(new GradientStop(c, at));
+        return g;
+    }
+
+
+    private Control SGradeCard(LibraryGame game)
+    {
+        if (sgradeFor != game.Id) { sgradeFor = game.Id; sgrade = null; sgradeFailed = false; _ = LoadSGradeAsync(game); }
+        var stack = new StackPanel { Spacing = 12 };
+        var title = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 9 };
+        title.Children.Add(new TextBlock { Text = T("export.sgrade.title"), FontSize = 18, FontWeight = FontWeight.Bold, VerticalAlignment = VerticalAlignment.Center,
+            Foreground = new LinearGradientBrush { StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative), EndPoint = new RelativePoint(1, 0, RelativeUnit.Relative),
+                GradientStops = { new GradientStop(SGoldHi, 0), new GradientStop(SGold, 0.5), new GradientStop(SRose, 1) } } });
+        title.Children.Add(new Border { BorderBrush = new SolidColorBrush(A(SGold, 0.55)), BorderThickness = new Thickness(1), CornerRadius = new CornerRadius(999),
+            Padding = new Thickness(7, 1.5), VerticalAlignment = VerticalAlignment.Center,
+            Child = new TextBlock { Text = "BETA", FontSize = 9.5, FontWeight = FontWeight.Bold, LetterSpacing = 1.4, Foreground = new SolidColorBrush(SGold) } });
+        // 出包时打入（v0.4.0 维护者：Beta 功能出包页默认勾上，玩家可取消；取消 = 这次出包不带社区补丁与金手指，同 Mac SGradeCard.swift）
+        var on = !SGradeOff().Contains(game.Id);
+        var check = new CheckBox { Content = T("export.sgrade.toggle"), IsChecked = on, VerticalAlignment = VerticalAlignment.Center, FontSize = 12.5 };
+        check.Click += (_, _) => SetSGrade(game.Id, check.IsChecked == true);
+        var head = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        head.Children.Add(title); Grid.SetColumn(check, 1); head.Children.Add(check);
+        stack.Children.Add(head);
+        var lit = false;
+        if (sgradeFailed) stack.Children.Add(Muted(T("export.sgrade.unknown"), 12));
+        else if (sgrade is not { } r) stack.Children.Add(Muted(T("export.sgrade.loading"), 12.5));
+        else
+        {
+            var exact = r.TryGetProperty("exact", out var e) ? e : default;
+            int Hit(string cat) => exact.ValueKind == JsonValueKind.Object && exact.TryGetProperty(cat, out var n) ? n.GetInt32() : 0;
+            int total = Hit("widescreen") + Hit("fps") + Hit("cheat");
+            // 满屏 / 帧率解锁 / 金手指固定三行（11-15 维护者定：三项金色字 + 金色 S，三端一致）。Windows 不跑游戏：只写会打进包里的东西、
+            //   进了包在哪开关（iPhone 齿轮菜单）；画面补丁只进 Mac 版，Windows 出的是 iPhone 包，不列
+            var rows = new StackPanel { Spacing = 10 };
+            void Row(string titleText, string note, bool dim = false)
+            {
+                var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 11, Opacity = dim ? 0.55 : 1 };
+                row.Children.Add(new Image { Source = SGoldImage(), Width = 22, Height = 22, VerticalAlignment = VerticalAlignment.Top, Margin = new Thickness(0, 1, 0, 0) });
+                var text = new StackPanel { Spacing = 2 };
+                text.Children.Add(new TextBlock { Text = titleText, FontSize = 14, FontWeight = FontWeight.Bold,
+                    Foreground = new LinearGradientBrush { StartPoint = new RelativePoint(0, 0, RelativeUnit.Relative), EndPoint = new RelativePoint(1, 0, RelativeUnit.Relative),
+                        GradientStops = { new GradientStop(SGoldHi, 0), new GradientStop(SGold, 1) } } });
+                text.Children.Add(new TextBlock { Text = note, FontSize = 12, Foreground = new SolidColorBrush(Color.FromRgb(168, 168, 173)), TextWrapping = TextWrapping.Wrap });
+                Grid.SetColumn(text, 1); row.Children.Add(text);
+                rows.Children.Add(row);
+            }
+            // 满屏跨版本（patches.match port，同 Mac SGradeCard）：这份没有同版本的满屏补丁、别的版本有 → 出包时尝试移植
+            var port = r.TryGetProperty("port", out var pp) && pp.ValueKind == JsonValueKind.True;
+            string portText = "";
+            if (port)
+            {
+                var pv = r.TryGetProperty("portVersions", out var pvs) && pvs.ValueKind == JsonValueKind.Array ? pvs.EnumerateArray().Select(v => v.GetString() ?? "").Where(v => v.Length > 0).Take(3).ToList() : new List<string>();
+                portText = T("export.sgrade.port").Replace("{0}", pv.Count > 0 ? string.Join(language == "en" ? ", " : "、", pv) : T("export.sgrade.port.any"));
+            }
+            Row(T("sgrade.row.fs"), Hit("widescreen") > 0 ? T("sgrade.win.patch") : port ? portText : T("sgrade.win.fs.own"));
+            Row(T("sgrade.row.fps"), Hit("fps") > 0 ? T("sgrade.win.patch") : T("sgrade.win.fps.fi"));
+            Row(T("sgrade.row.cheats"), Hit("cheat") > 0 ? T("export.sgrade.hit.cheat").Replace("{0}", Hit("cheat").ToString()) : T("sgrade.cheats.none"), dim: Hit("cheat") == 0);
+            var build = r.TryGetProperty("build", out var b) ? b.GetString() ?? "" : "";
+            // 补丁按版本生效（11-14 维护者）：写明对应玩家这份游戏的哪个版本；列出的别的版本不会打入（同 Mac SGradeCard）
+            var ver = r.TryGetProperty("version", out var vv) ? vv.GetString() ?? "" : "";
+            var mine = ver.Length > 0 ? ver : (build.Length > 16 ? build[..16] : build).ToUpperInvariant();
+            // 满屏（通用满屏）与帧率解锁（补帧）没有补丁也能用：三行总是列出，卡片总是亮
+            lit = true; stack.Children.Add(rows);
+            if (total > 0) stack.Children.Add(Muted(T("export.sgrade.hit.version").Replace("{0}", mine), 12));
+            else if (build.Length == 0) stack.Children.Add(Muted(T("export.sgrade.later"), 12));
+            if (total > 0 || port) stack.Children.Add(Muted(T("export.sgrade.hit.note"), 12));
+            if (total == 0 && !port)
+            {
+                if (build.Length > 0) stack.Children.Add(Muted(T("export.sgrade.none").Replace("{0}", mine), 12));   // 没解过包的「出包时核对」上面已写
+                if (r.TryGetProperty("others", out var others) && others.ValueKind == JsonValueKind.Array && others.GetArrayLength() > 0)
+                {
+                    var sep = language == "en" ? ", " : "、";
+                    var (open, close) = language == "en" ? (" (", ")") : ("（", "）");
+                    var parts = others.EnumerateArray().Take(6).Select(o => o.GetProperty("version").GetString() + open +
+                        string.Join(sep, o.GetProperty("cats").EnumerateArray().Select(c => T("export.sgrade.cat." + c.GetString()))) + close);
+                    stack.Children.Add(Muted(T(build.Length == 0 ? "export.sgrade.listed" : "export.sgrade.others") + string.Join(language == "en" ? "; " : "；", parts), 12));
+                }
+            }
+        }
+        if (!on) { while (stack.Children.Count > 1) stack.Children.RemoveAt(1); stack.Children.Add(Muted(T("export.sgrade.off"), 12)); lit = false; }
+        var size = lit ? 56 : 44;
+        var s = new Image { Source = SGoldImage(), Width = size, Height = size, VerticalAlignment = VerticalAlignment.Top, Opacity = lit || sgrade is null ? 1 : 0.7,
+            Effect = new DropShadowEffect { Color = SGold, BlurRadius = lit ? 22 : 8, OffsetX = 0, OffsetY = 0, Opacity = lit ? 0.55 : 0.18 } };
+        var row0 = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 18 };
+        row0.Children.Add(s); Grid.SetColumn(stack, 1); row0.Children.Add(stack);
+        var glow = new RadialGradientBrush { Center = new RelativePoint(0, 0, RelativeUnit.Relative), GradientOrigin = new RelativePoint(0, 0, RelativeUnit.Relative),
+            RadiusX = new RelativeScalar(0.9, RelativeUnit.Relative), RadiusY = new RelativeScalar(1.6, RelativeUnit.Relative),
+            GradientStops = { new GradientStop(A(SGold, lit ? 0.18 : 0.06), 0), new GradientStop(A(SGold, 0), 1) } };
+        return new Border
+        {
+            CornerRadius = new CornerRadius(16), BorderThickness = new Thickness(1), Background = new SolidColorBrush(Color.FromRgb(26, 26, 28)),
+            BorderBrush = Diag((A(SGoldHi, lit ? 0.75 : 0.30), 0), (A(SGold, 0.12), 0.5), (A(SRose, lit ? 0.55 : 0.18), 1)),
+            BoxShadow = lit ? BoxShadows.Parse("0 6 22 0 #24EDC46B") : default,
+            Child = new Border { CornerRadius = new CornerRadius(16), Background = glow, Padding = new Thickness(22, 20), Child = row0 },
+        };
+    }
+
+    // 「出包时打入」取消过的款（按程序号记在私有目录 sgrade-off.json；没记过 = 勾上）
+    private HashSet<string>? sgradeOff;
+    private string SGradeOffPath => Path.Combine(privateRoot, "sgrade-off.json");
+    private HashSet<string> SGradeOff()
+    {
+        if (sgradeOff is not null) return sgradeOff;
+        try { sgradeOff = JsonSerializer.Deserialize<HashSet<string>>(File.ReadAllText(SGradeOffPath)) ?? []; }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { sgradeOff = []; }
+        return sgradeOff;
+    }
+    private void SetSGrade(string gameId, bool on)
+    {
+        var set = SGradeOff();
+        if (on) set.Remove(gameId); else set.Add(gameId);
+        try { Directory.CreateDirectory(privateRoot); File.WriteAllText(SGradeOffPath, JsonSerializer.Serialize(set)); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }   // 记不住只影响下次进页面的初值；这次出包照当前勾选
+        Render();
+    }
+
+    private async Task LoadSGradeAsync(LibraryGame game)
+    {
+        if (connectedFolder is null || libraryId is null) return;
+        try
+        {
+            var job = await LibraryJobClient.RunAsync(paths, privateRoot, connectedFolder, libraryId, "patchMatch", null, CancellationToken.None, gameId: game.Id);
+            if (sgradeFor != game.Id) return;
+            if (job.Report.Succeeded && job.Report.Result.ValueKind == JsonValueKind.Object) sgrade = job.Report.Result.Clone(); else sgradeFailed = true;
+        }
+        catch (Exception error) when (error is LibraryProtocolException or IOException or UnauthorizedAccessException or ArgumentException or
+            InvalidOperationException or System.ComponentModel.Win32Exception or KeyNotFoundException) { sgradeFailed = true; }
+        if (page is "build" or "batch") Render();
+    }
 
     private async Task LoadLocationsAsync(LibraryGame game, string? probe = null)
     {
@@ -568,29 +720,51 @@ public sealed partial class EnvironmentWindow
     {
         packGame = game; packState = "running"; packTrack = new(); packStarted = DateTime.UtcNow;
         packSeconds = null; packSummary = ""; packDiagnostics = ""; packIpa = null;
-        packIpaBytes = null; packPackBytes = null; packNotes = []; packSpace = null; sessionHidden = false; packFailureCode = null;
+        packIpaBytes = null; packPackBytes = null; packNotes = []; packBoost = null; packSpace = null; sessionHidden = false; packFailureCode = null;
         exportStepEnded = false; exportChildReport = null;
     }
 
     /// <summary>出包页单款：同批量出包走出包编排作业（剃刀 H13），计划只有这一款的 iPhone、不写批次文件</summary>
-    private Task RunPackAsync(LibraryGame game, bool spaceOverride) =>
-        RunExportAsync(ExportStream.InlinePlan(game.Id, game.Name, ["iphone"], packLocation, spaceOverride), batch: false);
+    private Task RunPackAsync(LibraryGame game, bool spaceOverride)
+    {
+        var plan = ExportStream.InlinePlan(game.Id, game.Name, ["iphone"], packLocation, spaceOverride);
+        if (SGradeOff().Contains(game.Id)) plan["sgrade"] = false;   // 出包页取消「S 级优化（Beta）」：这次不带社区补丁与金手指（pack/jobs/patches.py prepare）
+        return RunExportAsync(plan, batch: false, mode: selfSignAfterPack.Contains(game.Id) ? "export" : null);
+    }
 
     // 这一步收到 stepEnded 没有（没收到 = 编排作业在第一步前就结束了：被拒、已有一个在出、取消）；子作业的终态（失败页的原因 / 建议从这里读）
     private bool exportStepEnded;
     private LibraryJobResult? exportChildReport;
 
     /// <summary>跑一个出包编排作业：每一步的开始 / 子作业事件 / 结局都由 OnExportEvent 显示；取消 = 取消这个作业（它把正在出的那步停下）</summary>
-    private LibraryGame? exportAfterPack;   // 导出模式下这次出完要接着导出的那款（出包作业收尾后起导出）
+    private LibraryGame? exportAfterPack;   // 这次出完要接着导出的那款（出包作业收尾后起导出）
+    /// <summary>「导出自签包」点在没出过包的款上：这几款出完 iPhone 包接着导出（不是装机）</summary>
+    private readonly HashSet<string> selfSignAfterPack = new();
+    /// <summary>这次装机作业是导出自签包：进度 / 结局按导出写，装机页只画结局卡、不画装机清单</summary>
+    private bool installExport;
 
-    private async Task RunExportAsync(Dictionary<string, object?> plan, bool batch)
+    /// <summary>游戏库「导出自签包」（11-15 维护者：导出不是装法，按钮常驻、1 下开始导出、不经装机清单）：iPhone 包能直接导出（新格式）的直接导出；
+    ///   没出过、或包是旧格式的先出 iPhone 包再导出（玩家点的是导出，就把导出做完）</summary>
+    private void ExportSelfSign(LibraryGame game)
+    {
+        libraryFolder = libraryFolderBox.Text ?? libraryFolder;
+        selectedGame = game.Id;
+        if (game.IphoneExportable) { _ = InstallAsync(game, export: true); Navigate("install"); return; }
+        selfSignAfterPack.Add(game.Id);
+        if (ExportStops(game)) { selfSignAfterPack.Remove(game.Id); OpenBuild(); return; }   // 出不了（缺文件 / 没勾 iPhone 等）：去出包页看原因
+        StartPack(game);
+    }
+
+    private async Task RunExportAsync(Dictionary<string, object?> plan, bool batch, string? mode = null)
     {
         var front = packJob!;
         LibraryJobOutput? job = null;
         string? error = null, endState = null;
         try
         {
-            job = await PackJobClient.RunAsync(PackRequest("export", "", new Dictionary<string, object?> { ["plan"] = plan }),
+            var extra = new Dictionary<string, object?> { ["plan"] = plan };
+            if (mode is not null) extra["mode"] = mode;   // 这次出包是为了导出自签包：作业层步骤名照自签路写（子作业照带）
+            job = await PackJobClient.RunAsync(PackRequest("export", "", extra),
                 e => Dispatcher.UIThread.Post(() => OnExportEvent(e, batch)), front.Token, front.Next());
         }
         catch (LibraryProtocolException e) { endState = "invalid"; error = e.Message; }
@@ -615,7 +789,8 @@ public sealed partial class EnvironmentWindow
                 EndJob(front); if (packJob == front) packJob = null;
                 Render();
                 if (batch) _ = BatchExportEndedAsync(job?.Report, error);
-                else if (exportAfterPack is { } g) { exportAfterPack = null; _ = InstallAsync(g); }
+                else if (exportAfterPack is { } g) { exportAfterPack = null; selfSignAfterPack.Remove(g.Id); _ = InstallAsync(g, export: true); }
+                else if (packGame is { } pg) selfSignAfterPack.Remove(pg.Id);   // 出包没成（起不来 / 失败 / 取消）：标记清掉，这款以后正常出包不再当导出画
                 if (!batch) PumpExportQueue();
             });
         }
@@ -645,7 +820,7 @@ public sealed partial class EnvironmentWindow
                 var o = ended.Outcome;
                 packTrack.Finish(Clock); packSeconds = (DateTime.UtcNow - packStarted).TotalSeconds;
                 packState = o.State == "completed" ? "succeeded" : o.State;
-                packSummary = o.Message; packIpa = o.Ipa; packIpaBytes = o.IpaBytes; packPackBytes = o.PackBytes; packNotes = o.Notes ?? []; packFailureCode = o.Code;
+                packSummary = o.Message; packIpa = o.Ipa; packIpaBytes = o.IpaBytes; packPackBytes = o.PackBytes; packNotes = o.Notes ?? []; packBoost = o.Boost; packFailureCode = o.Code;
                 packDiagnostics = exportChildReport is { } r
                     ? JobDiagnostics(new LibraryJobOutput(r, new ProbeOutput(r.State == "succeeded" ? 0 : r.State == "cancelled" ? 130 : 1, "", "")))
                     : o.Message;
@@ -658,8 +833,8 @@ public sealed partial class EnvironmentWindow
                 {
                     readinessFor = null;
                     if (packGame is not null) finishedPacks[packGame.Id] = (packState, packIpa ?? "", packIpaBytes, packPackBytes, packSeconds ?? 0);
-                    // 装法是「导出，自己签名安装」：出好就接着导出（D-9ZF9，同 Mac exportSink）；导出不连手机、不签名，等这次出包作业收尾后起
-                    if (!batch && installMode == "export" && packGame is not null) exportAfterPack = packGame;
+                    // 「导出自签包」点在没出过包的款上：出好就接着导出（D-9ZF9，同 Mac exportSink）；导出不连手机、不签名，等这次出包作业收尾后起
+                    if (!batch && packGame is not null && selfSignAfterPack.Contains(packGame.Id)) exportAfterPack = packGame;
                 }
                 if (batch) _ = ReloadBatchAsync();
                 Render();
@@ -715,7 +890,7 @@ public sealed partial class EnvironmentWindow
         // ---- LEFT: game info panel + disk space ----
         var leftCol = new StackPanel { Spacing = 16 };
         leftCol.Children.Add(GameInfoPanel(game));
-        leftCol.Children.Add(LiveSlot(() => packSpace is { } sp ? SpaceCard(sp) : null));   // 空间事件随时到：每秒刷新这一格
+        leftCol.Children.Add(LiveSlot(() => packSpace is { } sp && packState != "succeeded" ? SpaceCard(sp) : null));   // 空间事件随时到：每秒刷新这一格；只在出包成功后收起（11-14 体验梳理：成功页还挂着出包前的「预计占用」）；在出、失败照显示——磁盘满失败时「要多少 / 剩多少」正是点「释放空间」要看的（开发甲核）
         twoCol.Children.Add(leftCol);
 
         // ---- RIGHT: heading + overall + steps / results ----
@@ -1025,6 +1200,54 @@ public sealed partial class EnvironmentWindow
 
     // ---- result section (success / failure / cancelled) ----
 
+    /// <summary>出包完成页「S 级加强已就位」（同 Mac BoostBanner：金色 S + 标题 + 这次配好的条数 + 去哪开）；条数全是 0 = null（不出）</summary>
+    private Control? BoostBanner(JsonElement? boost)
+    {
+        if (boost is not { ValueKind: JsonValueKind.Object } b) return null;
+        int N(string k) => b.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : 0;
+        var parts = new[] { ("cheats", "export.boost.cheats"), ("fps", "export.boost.fps"), ("widescreen", "export.boost.widescreen"), ("gfx", "export.boost.gfx") }
+            .Where(p => N(p.Item1) > 0).Select(p => T(p.Item2).Replace("{0}", N(p.Item1).ToString())).ToList();
+        if (parts.Count == 0) return null;
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 22 };
+        row.Children.Add(new Image { Source = SGoldImage(), Width = 84, Height = 84, Stretch = Stretch.Uniform, VerticalAlignment = VerticalAlignment.Center });
+        var text = new StackPanel { Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
+        text.Children.Add(new TextBlock { Text = T("export.boost.title"), FontSize = 24, FontWeight = FontWeight.Black, Foreground = Diag((SGoldHi, 0), (SGold, 0.5), (SRose, 1)) });
+        text.Children.Add(new TextBlock { Text = string.Join(" · ", parts), FontSize = 15, FontWeight = FontWeight.SemiBold, Foreground = Ink, TextWrapping = TextWrapping.Wrap });
+        text.Children.Add(WrappedMuted(T("export.boost.hint.win"), 13));   // 金手指在哪开按平台各写各的（Mac 版 export.boost.hint 写 Mac 启动设置）
+        Grid.SetColumn(text, 1); row.Children.Add(text);
+        var card = new Border { Child = row, Padding = new Thickness(22, 18), CornerRadius = new CornerRadius(18), BorderThickness = new Thickness(1),
+            Background = new SolidColorBrush(A(SGold, 0.08)), BorderBrush = new SolidColorBrush(A(SGold, 0.35)) };
+        AutomationId(card, "result.boost");
+        return card;
+    }
+
+    /// 补丁打入结果（11-14 维护者：哪些打上了、哪些没打上和为什么；不影响成败）：每份 = (名字, {applied, failed, error})，名字空 = 不写标题行。
+    ///   同 Mac SGradeResultView（launchers/macos/frontend/Sources/NX2Apple/SGradeResult.swift）；都没有内容 = null（不出这块）
+    internal Control? SGradeResultPanel(IEnumerable<(string Name, JsonElement Res)> results, bool cheats = true)
+    {
+        string Cat(string c) => T("export.sgrade.cat." + (c is "widescreen" or "fps" or "gfx" or "cheat" ? c : "gfx"));
+        IEnumerable<JsonElement> Arr(JsonElement r, string k) => r.TryGetProperty(k, out var a) && a.ValueKind == JsonValueKind.Array ? a.EnumerateArray() : [];
+        string S(JsonElement e, string k) => e.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+        int Cheats(JsonElement r) => cheats && r.TryGetProperty("cheats", out var n) && n.ValueKind == JsonValueKind.Number ? n.GetInt32() : 0;
+        var list = results.Where(r => Arr(r.Res, "applied").Any() || Arr(r.Res, "failed").Any() || S(r.Res, "error").Length > 0 || Cheats(r.Res) > 0).ToList();
+        if (list.Count == 0) return null;
+        var box = new StackPanel { Spacing = 8 };
+        AutomationId(box, "result.sgrade");
+        var title = Label(T("sgrade.result.title"), 15); title.FontWeight = FontWeight.SemiBold; box.Children.Add(title);
+        foreach (var (name, res) in list)
+        {
+            if (list.Count > 1 && name.Length > 0) { var h = Label(name, 13.5); h.FontWeight = FontWeight.SemiBold; box.Children.Add(h); }
+            if (S(res, "error").Length > 0) box.Children.Add(WrappedMuted("✕ " + T("sgrade.result.error"), 13));
+            var applied = Arr(res, "applied").Select(a => Cat(S(a, "cat")) + " · " + S(a, "name")).ToList();
+            if (applied.Count > 0) box.Children.Add(WrappedMuted("✓ " + T("sgrade.result.applied") + string.Join(language == "en" ? ", " : "、", applied), 13));
+            if (Cheats(res) > 0) box.Children.Add(WrappedMuted("✓ " + T("export.sgrade.hit.cheat").Replace("{0}", Cheats(res).ToString()), 13));
+            foreach (var f in Arr(res, "failed"))
+                box.Children.Add(WrappedMuted("⚠ " + T("sgrade.result.failed").Replace("{0}", S(f, "name")).Replace("{1}", Cat(S(f, "cat"))).Replace("{2}", T("sgrade." + S(f, "why"))), 13));
+        }
+        box.Children.Add(WrappedMuted(T("sgrade.result.note"), 12));
+        return new Border { Child = box, Padding = new Thickness(16), CornerRadius = new CornerRadius(14), Background = new SolidColorBrush(Color.FromArgb(10, 255, 255, 255)) };
+    }
+
     private Control ResultSection(LibraryGame game, double elapsed, MilestoneEstimate? estimate = null)
     {
         var result = new StackPanel { Spacing = 20, VerticalAlignment = VerticalAlignment.Center };
@@ -1063,13 +1286,16 @@ public sealed partial class EnvironmentWindow
                 foreach (var note in packNotes) notes.Children.Add(WrappedMuted(note, 13));
                 result.Children.Add(notes);
             }
+            if (BoostBanner(packBoost) is { } bb) result.Children.Add(bb);   // 「S 级加强已就位」（同 Mac ExportSessionView BoostBanner）
+            if (SGradeResultPanel(packBoost is { } pbst ? [("", pbst)] : [], cheats: false) is { } sgr) result.Children.Add(sgr);   // 金手指条数横幅里已写   // 补丁打入结果：打上 / 没打上（同 Mac SGradeResultView，11-14）
 
             // 两个大按钮
             var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
-            // 导出模式：按钮与说明照导出写（不写「一键装到 iPhone」），点了直接导出（D-9ZF9）
-            var install = installMode == "export"
-                ? Primary(T("export.done.export"), () => { if (packGame is { } g) _ = InstallAsync(g); })
-                : Primary(T(PadKey("export.done.install")), () => { readinessFor = null; Navigate("install"); });
+            // 这次出包是为了导出自签包：按钮与说明照导出写（不写「一键装到 iPhone」），点了直接导出（D-9ZF9）
+            var selfSign = packGame is not null && selfSignAfterPack.Contains(packGame.Id);
+            var install = selfSign
+                ? Primary(T("library.hero.selfSign"), () => { if (packGame is { } g) ExportSelfSign(g); })
+                : Primary(T(PadKey("export.done.install")), () => { readinessFor = null; if (!installBusy) installExport = false; Navigate("install"); });
             AutomationId(install, "progress.install");
             install.Margin = new Thickness(0, 0, 12, 0); buttons.Children.Add(install);
             // IPA 是装机时组装、整个游戏库共用一份（默认位置根 S2Arm.ipa）：出包这步没有 IPA，只给「打开游戏文件夹」（按索引找这款实际所在的位置）
@@ -1083,7 +1309,7 @@ public sealed partial class EnvironmentWindow
             folder.Margin = new Thickness(0, 0, 12, 0); buttons.Children.Add(folder);
             result.Children.Add(buttons);
             if (revealProblem.Length > 0) result.Children.Add(Muted(revealProblem, 13));
-            result.Children.Add(Muted(T(installMode == "export" ? "export.done.exportNote" : "export.win.done.installNote"), 12));
+            result.Children.Add(Muted(T(selfSign ? "export.done.exportNote" : "export.win.done.installNote"), 12));
 
             // 详细记录（折叠步骤列表）
             if (estimate is not null)
@@ -1145,15 +1371,15 @@ public sealed partial class EnvironmentWindow
     {
         var lines = new List<string>
         {
-            "S2Arm 出包失败报告", "",
-            "游戏：" + game.Name,
-            "版本：" + game.Version,
-            "程序号：" + game.Id,
-            "原包大小：" + FormatBytes(game.TotalBytes),
+            T("failcopy.title"), "",
+            T("failcopy.game").Replace("{0}", game.Name),
+            T("failcopy.version").Replace("{0}", game.Version),
+            T("failcopy.titleId").Replace("{0}", game.Id),
+            T("failcopy.size").Replace("{0}", FormatBytes(game.TotalBytes)),
             "",
-            "本体 / 更新 / DLC：" + (game.BaseVersion ?? "-") + " / " + (game.UpdateVersion ?? "-") + " / " + game.DlcCount,
+            T("failcopy.parts").Replace("{0}", game.BaseVersion ?? "-").Replace("{1}", game.UpdateVersion ?? "-").Replace("{2}", game.DlcCount.ToString()),
             "",
-            "错误：", packSummary,
+            T("failcopy.error"), B(packSummary),
             "", packDiagnostics
         };
         return string.Join("\n", lines);
@@ -1192,7 +1418,15 @@ public sealed partial class EnvironmentWindow
         if (game is null || connectedFolder is null || libraryId is null) { body.Children.Add(Label(T("export.no_game"), 18)); return; }
         if (readinessFor != game.Id && !installChecking) { readinessFor = game.Id; readiness = null; installCheckFailed = false; _ = CheckInstallAsync(); }
         body.Children.Add(GameHeader(game));
-        body.Children.Add(Label(installMode == "export" ? T("install.mode.export") : T(PadKey("install.title")), 22));   // 导出模式：标题照导出写
+        if (installExport && installState != "" && installGameId == game.Id)
+        {
+            // 导出自签包的进度 / 完成（11-15 维护者：不出现 Apple ID、数据线、检查清单、装回、删除）：标题 + 结局卡（导出文件夹可点、怎么自签安装）
+            body.Children.Add(Label(T("library.hero.selfSign"), 22));
+            if (!installBusy) installSeen = true;
+            body.Children.Add(LiveSlot(() => InstallStateCard(game)));
+            return;
+        }
+        body.Children.Add(Label(T(PadKey("install.title")), 22));
         body.Children.Add(Muted(T("install.description"), 14));
         body.Children.Add(Muted(T("install.container_note"), 14));
         body.Children.Add(Muted(T("install.legacy_note"), 14));
@@ -1348,15 +1582,19 @@ public sealed partial class EnvironmentWindow
     private static HashSet<string> AcceptFlags(ControlRequest r) => ConfirmCodes.Values.Where(r.Flag).ToHashSet();
 
     /// <summary>accept：玩家已同意的确认参数（ConfirmCodes 的值，逐次累积）。ask = false（控制口）原样失败、不弹确认，由调用方带参数再发。</summary>
-    private async Task InstallAsync(LibraryGame game, IReadOnlySet<string>? accept = null, bool ask = true)
+    /// <param name="export">游戏库「导出自签包」：不连手机、不签名，出到文件夹（作业层 install 请求带 mode = export，不带设备）</param>
+    private async Task InstallAsync(LibraryGame game, IReadOnlySet<string>? accept = null, bool ask = true, bool export = false)
     {
         if (installBusy) return;
         accept ??= new HashSet<string>();
+        installExport = export;
         var front = BeginPhoneJob(game, "");
         string? dropAsk = null, askCode = null;
         try
         {
-            var job = await PackJobClient.RunAsync(PackRequest("install", game.Id, AcceptExtra(accept, InstallDevice(game))), e => Dispatcher.UIThread.Post(() => IngestPhoneEvent(e)), front.Token, front.Next());
+            var extra = AcceptExtra(accept, export ? "" : InstallDevice(game)) ?? new Dictionary<string, object?>();
+            if (export) extra["mode"] = "export";
+            var job = await PackJobClient.RunAsync(PackRequest("install", game.Id, extra), e => Dispatcher.UIThread.Post(() => IngestPhoneEvent(e)), front.Token, front.Next());
             if (ask && JobCode(job) is { } c && ConfirmCodes.ContainsKey(c)) { dropAsk = job.Report.Message; askCode = c; }
             installedTo = job.Report.Succeeded ? InstalledLabel(job.Report.Result) : "";
             installCode = job.Report.Succeeded ? null : JobCode(job);
@@ -1369,7 +1607,7 @@ public sealed partial class EnvironmentWindow
             installOpenToFinish = job.Report.Succeeded && job.Report.Result.TryGetProperty("openToFinish", out var open) && open.ValueKind == JsonValueKind.True;
             installDiagnostics = JobDiagnostics(job);
             installTrack.Finish(job, GameName);
-            if (job.Report.Succeeded && installTrack.ExportFolder.Length > 0) OpenFolder(installTrack.ExportFolder);   // 导出模式：打开放好的文件夹
+            if (job.Report.Succeeded && installTrack.ExportFolder.Length > 0) OpenFolder(installTrack.ExportFolder);   // 导出自签包：打开放好的文件夹
         }
         catch (LibraryProtocolException error) { installState = "invalid"; installDiagnostics = error.Message; }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or InvalidOperationException or
@@ -1377,7 +1615,7 @@ public sealed partial class EnvironmentWindow
         { installState = "failed"; installDiagnostics = error.Message; }
         finally { EndJob(front); readinessFor = null; Render(); }
         if (dropAsk is not null && await ConfirmInstallActionAsync("install.drop", dropAsk, ConfirmTitle(askCode)))
-            await InstallAsync(game, new HashSet<string>(accept) { ConfirmCodes[askCode!] });
+            await InstallAsync(game, new HashSet<string>(accept) { ConfirmCodes[askCode!] }, export: export);
     }
 
     /// 装到哪台：清单报回来的那台（续签时就是当初那台，在线才有），没有就是装机记录里的那台（不在线时作业层如实说「它不在线」）。

@@ -1,7 +1,6 @@
-// S2Arm（不是上游文件）：「装到 iPhone 的方式」（v0.3.0，维护者 11-11 定「怎么签、怎么装收成一套」，不加顶层入口）。
-//   InstallModeCard：环境检查里的一张卡——一键装到 iPhone（签名身份：Xcode 账号 / 我的开发者证书；Xcode 团队号手填与引导项目从装机页挪来）
-//     或导出、自己签名安装（导出作业合入前置灰写「下一版提供」）。
-//   InstallModeLine：出包页原来的「签名方式」二选一换成这一行只读 + 「更改」（打开环境检查）。
+// S2Arm（不是上游文件）：一键装到 iPhone 的签名身份（v0.3.0；11-15 维护者：导出不再是装法，游戏库「导出自签包」按钮常驻，设置里没有切换）。
+//   InstallModeCard：设置里的一张卡——一键装到 iPhone 用谁签名（Xcode 账号 / 我的开发者证书；Xcode 团队号手填与引导项目从装机页挪来）。
+//   InstallModeLine：出包页一行只读签名身份 + 「更改」（打开设置）。
 //   PhoneUpdateButton：游戏库右上角「更新 iPhone 上的 S2Arm」（壳比本版旧才出现），有要重新出包的款先三选一。
 import AppKit
 import SwiftUI
@@ -10,7 +9,7 @@ import NXModel
 import NXLauncher
 import S2ArmAppleAdapter
 
-private func ix(_ loc: Localizer, _ id: String) -> String { BackendText.launcherText(id, language: loc.lang == .zh ? "zh-Hans" : "en") }
+private func ix(_ loc: Localizer, _ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
 
 struct InstallModeCard: View {
     @ObservedObject var model: S2ArmLauncherModel
@@ -19,37 +18,11 @@ struct InstallModeCard: View {
     @State private var showTeam = false
 
     var body: some View {
-        CardGroup(ix(loc, "install.mode.title"), footnote: ix(loc, "install.mode.note")) {
-            VStack(alignment: .leading, spacing: 10) {
-                option("device", ix(loc, "install.mode.device"), ix(loc, "install.mode.device_note"), enabled: true)
-                if model.installMode.mode == "device" { identity.padding(.leading, 28) }
-                option("export", ix(loc, "install.mode.export"),
-                       ix(loc, "install.mode.export_note") + (model.installMode.exportAvailable ? "" : "\n" + ix(loc, "install.mode.export_soon")),
-                       enabled: model.installMode.exportAvailable)
-            }
-            .padding(14)
+        CardGroup(ix(loc, "install.mode.device"), footnote: ix(loc, "install.mode.device_note")) {
+            identity.padding(14)
         }
         .onAppear { model.refreshInstallMode(); model.refreshDevCert() }
         .accessibilityIdentifier("env.installMode")
-    }
-
-    private func option(_ mode: String, _ title: String, _ note: String, enabled: Bool) -> some View {
-        let on = model.installMode.mode == mode
-        return Button { if enabled, !on { model.setInstallMode(mode) } } label: {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: on ? "largecircle.fill.circle" : "circle").font(.system(size: 15)).foregroundStyle(on ? LauncherPalette.cream : .secondary)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(title).font(.manrope(14, .semibold))
-                    Text(note).font(.manrope(12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-            .padding(12).contentShape(Rectangle())
-            .background(on ? Color.white.opacity(0.04) : .clear, in: RoundedRectangle(cornerRadius: 12))
-            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(on ? LauncherPalette.cream.opacity(0.7) : Color.white.opacity(0.08)))
-        }
-        .buttonStyle(.plain).disabled(!enabled).opacity(enabled ? 1 : 0.5)
-        .accessibilityIdentifier("env.installMode." + mode)
     }
 
     /// 一键装时的签名身份：开发者证书一栏照用出包页原来那套（导入 / 换 / 删、体检）；不用证书时 Xcode 团队号与引导项目在这里
@@ -84,7 +57,7 @@ struct InstallModeCard: View {
     }
 }
 
-/// 出包页：现在按哪种方式装 + 「更改」（打开环境检查那张卡）
+/// 出包页：一键装用谁签名 + 「更改」（打开设置那张卡）
 struct InstallModeLine: View {
     @ObservedObject var model: S2ArmLauncherModel
     @EnvironmentObject var loc: Localizer
@@ -105,13 +78,11 @@ struct InstallModeLine: View {
     }
 
     private var summary: String {
-        if model.installMode.mode == "export" { return ix(loc, "install.mode.export") }
-        let who = model.signIdentity == "devcert" ? ix(loc, "export.sign.devcert") : ix(loc, "install.mode.identity_xcode")
-        return ix(loc, "install.mode.device") + "（" + who + "）"
+        model.signIdentity == "devcert" ? ix(loc, "export.sign.devcert") : ix(loc, "install.mode.identity_xcode")
     }
 }
 
-/// 游戏库右上角：壳比本版旧才出现；一键装叫「更新 iPhone 上的 S2Arm」，导出模式叫「导出新版 S2Arm」。
+/// 游戏库右上角：壳比本版旧才出现，「更新 iPhone 上的 S2Arm」（自签的玩家点游戏的「导出自签包」导出新版）。
 ///   放在标题栏那一排（同 batchPill）：那里拿不到 Localizer 环境对象（真机起局实测取它即崩），文字按调用方给的界面语言从共用规格取
 struct PhoneUpdateButton: View {
     @ObservedObject var model: S2ArmLauncherModel
@@ -123,7 +94,7 @@ struct PhoneUpdateButton: View {
             Button { model.requestPhoneUpdate(language: language) } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "arrow.up.circle")
-                    Text(t(model.installMode.mode == "export" ? "update.button.export" : "update.button.device")).font(.manrope(12.5, .semibold)).lineLimit(1)
+                    Text(t("update.button.device")).font(.manrope(12.5, .semibold)).lineLimit(1)
                 }
             }
             .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)

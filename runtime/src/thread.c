@@ -118,6 +118,10 @@ typedef struct thr {
     uint64_t wseq;                     // 登记等待的先后：同优先级先到先醒（同 Horizon KThread 等待树）
     struct thr *next, *all;            // 等待链 / 全部线程链
     int last_svc; uint64_t last_lr, last_fp, nsvc;
+    // 最近 8 次同步类系统调用（0x1a–0x1d / 0x34 / 0x35）：号、参数、地址处的值（调前 / 调后）、返回码、返回地址。
+    //   停帧现场只打「在跑」线程的：同步原语每圈都掉进系统调用的空转（11-14 #35fdbb 166 号 SignalToAddress 11 万次、162 号对空闲锁 ArbitrateLock 2.6 万次）
+    //   要看游戏给了什么、我们回了什么，光有最后一个调用号判不了是哪个输入错
+    struct { uint64_t a[4], lr; uint32_t num, pre, post, ret; } sv_ring[8]; uint32_t sv_n;
     uint64_t tr_ret_t, tr_cpu_ns, tr_wake_t, tr_waker, tr_lastwake_t; int tr_ret_svc;   // 唤醒追踪（S2A_WAKE_TRACE，见 wt_on）：上次回游戏的时刻与当时的线程 CPU、被唤醒时刻与唤醒方、自己最近一次唤醒别人的时刻
     _Atomic uint64_t nsvc_all;                 // 全部系统调用次数（svc_thread 入口计；nsvc 只计线程类）：让步退避判「两次让步之间有没有别的系统调用」
     uint64_t yrun_blk, yrun_sig, yrun_t0, nblk, y_lr, y_ret;   // Yield runs reset after an actual blocking wait, or changed guest state at another call site / after > SPIN_GAP_NS of guest code (y_lr / y_ret).
@@ -591,6 +595,7 @@ static int thread_keys_init(void) {
 // TLR+0x1F8 = 当前线程对象指针：SDK 内部临界区从这里取，主线程与宿主借建的线程没人填，给一块零初始化对象（旧库同做法）
 // TLR+0x110 = 当前线程句柄：Horizon 内核建线程时无条件写（主线程起进程时 / svcCreateThread）；Switch 2 SDK 的
 // InternalCriticalSection::IsLockedByCurrentThread 拿它比互斥锁属主，留 0 则没人持的锁读成「本线程持有」直接 abort（火纹 Fortune's Weave）
+uint64_t s2a_guest_x18_now(void) { return (uint64_t)(uintptr_t)pthread_getspecific(g_key18); }   // 本线程游戏 x18 的槽值（crash.c 崩溃现场打，诊断#ff9a04）
 static void guest_thread_init(thr_t *t) {
     pthread_setspecific(g_keygate, (void *)sw_gate);
     pthread_setspecific(g_key18, 0);
@@ -1683,6 +1688,11 @@ static void sleep_wait_boundary(thr_t *t) {
     if (!atomic_load(&t->paused_ack) && (atomic_load(&t->pause) || atomic_load(&g_frz))) pause_park(t);
 }
 #endif
+// 同步类系统调用操作的游戏地址（地址就是宿主地址）：ArbitrateLock 在 x1，ArbitrateUnlock / WaitProcessWideKeyAtomic / WaitForAddress / SignalToAddress 在 x0
+static uint32_t *sync_svc_addr(int num, const uint64_t *regs) {
+    uint64_t a = num == 0x1A ? regs[1] : (num == 0x1B || num == 0x1C || num == 0x34 || num == 0x35) ? regs[0] : 0;
+    return a && !(a & 3) ? (uint32_t *)(uintptr_t)a : NULL;
+}
 static void svc_enter(thr_t *t, uint64_t *regs, int num) {
     s2a_thread_stop_point();
     if (wt_on() && t->tr_ret_t) {   // 用户态段：上次回游戏 → 这次进系统调用
@@ -2313,7 +2323,14 @@ int svc_thread(int num, uint64_t *regs) {
         wait_diag_flush(1);
     }
     if (diag) { source_svc = g_wd_source_svc; g_wd_source_svc = num; }
+    uint32_t *sv_addr = sync_svc_addr(num, regs), sv_k = me->sv_n % 8;
+    if (sv_addr || num == 0x1D) {
+        me->sv_ring[sv_k].num = (uint32_t)num; me->sv_ring[sv_k].lr = regs[30];
+        for (int i = 0; i < 4; i++) me->sv_ring[sv_k].a[i] = regs[i];
+        me->sv_ring[sv_k].pre = sv_addr ? __atomic_load_n(sv_addr, __ATOMIC_RELAXED) : 0;
+    }
     int r = svc_thread_impl(me, num, regs);
+    if (sv_addr || num == 0x1D) { me->sv_ring[sv_k].ret = (uint32_t)regs[0]; me->sv_ring[sv_k].post = sv_addr ? __atomic_load_n(sv_addr, __ATOMIC_RELAXED) : 0; me->sv_n++; }
     if (diag) g_wd_source_svc = source_svc;
     if (wait_trace) {
         glock(); wait_diag_end_locked(me, regs); pthread_mutex_unlock(&G);
@@ -2764,7 +2781,7 @@ uint32_t s2a_event_dup_read(uint64_t ev) {
 uint32_t s2a_shmem_create(uint64_t size, void **host) {
     if (!size) return 0;
     shmem_t *sm = calloc(1, sizeof *sm); sm->size = size; sm->refs = 1; sm->owned = 1;
-    sm->buf = mmap(NULL, (size + 0x3FFF) & ~0x3FFFull, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);   // MAP_SHARED：vm_remap 别名到游戏地址后同一批物理页
+    sm->buf = mmap(NULL, (size + 0x3FFF) & ~0x3FFFull, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, S2A_VMTAG_FD(S2A_VMTAG_SHMEM), 0);   // MAP_SHARED：vm_remap 别名到游戏地址后同一批物理页
     if (sm->buf == MAP_FAILED) die("共享内存后备 mmap %#llx", (unsigned long long)size);
     glock(); uint32_t h = h_new(S2A_OBJ_SHMEM, sm, 0);
     if (h) { sm->next = g_shmem; g_shmem = sm; } pthread_mutex_unlock(&G);
@@ -2997,29 +3014,51 @@ void s2a_thread_dump(void) {
             (unsigned long long)t->mask, t->held_core - 1,
             t->exited ? "已退出" : !t->started ? "未启动" : wk[(t->wkind < 0 || t->wkind > 4) ? 0 : t->wkind], atomic_load(&t->wcore) ? "（等核）" : "", atomic_load(&t->pause) ? "（暂停）" : "",
             t->last_svc, m ? m->name : "?", (unsigned long long)(m ? t->last_lr - (uint64_t)m->base : t->last_lr), (unsigned long long)t->nsvc, (unsigned long long)t->waddr);
+        if (!t->exited && t->started && t->wkind == 0 && t->sv_n) {   // 在跑：最近的同步类系统调用（旧 → 新），看空转时游戏给了什么、我们回了什么
+            uint32_t n = t->sv_n < 8 ? t->sv_n : 8;
+            for (uint32_t i = 0; i < n; i++) {
+                const typeof(t->sv_ring[0]) *e = &t->sv_ring[(t->sv_n - n + i) % 8]; module_t *em = module_of((void *)e->lr);
+                LOG("    同步调用 %u/%u：svc %#x 参数 %#llx %#llx %#llx %#llx，地址处值 调前 %#x 调后 %#x，返回 %#x，lr %s+%#llx", i + 1, n, e->num,
+                    (unsigned long long)e->a[0], (unsigned long long)e->a[1], (unsigned long long)e->a[2], (unsigned long long)e->a[3], e->pre, e->post, e->ret,
+                    em ? em->name : "?", (unsigned long long)(em ? e->lr - (uint64_t)em->base : e->lr));
+            }
+        }
 #if defined(__APPLE__)
         // 客体回溯（10-25 哈迪斯卡面板：只有 svc 包装函数的 lr 看不出是谁在轮询）：沿 x29 帧链走 ≤ 8 层，打每层返回地址的模块 + 偏移。
         //   在系统调用里的线程：用进门时存的 x29（栈此刻不动）。在跑（游戏代码里、不在系统调用）的线程：短暂停住它的宿主线程读 pc / lr / fp 再放开
         //   （卡住时主线程多半在跑：看不到它在哪个循环里就定不了卡点）。帧读取一律经 vm_read_overwrite，读不到即停，不会因坏帧指针崩
         if (!t->exited && t->started && t->pt && !pthread_equal(t->pt, pthread_self())) {
-            uint64_t pc = 0, lr = 0, fp = 0; int run = !atomic_load(&t->in_svc);
+            uint64_t pc = 0, lr = 0, fp = 0, xr[29]; int run = !atomic_load(&t->in_svc), got_x = 0;
             if (!run) fp = t->last_fp;
             else if (t->mport && thread_suspend(t->mport) == KERN_SUCCESS) {
+                // 停住后先看宿主线程的运行状态：在内核里不可中断等待（缺页读写文件、驱动调用之类）时 thread_get_state 要等它走到可停的点，
+                //   一直出不来就把看门线程也卡死（11-14 一台测试设备卡在第 17515 帧：线程表打到第 4 条就断，宿主栈和后两次现场都没出）。这种线程不取寄存器、标出来——
+                //   「客体代码里却卡在内核」正是要找的卡点
+                thread_basic_info_data_t bi; mach_msg_type_number_t bc = THREAD_BASIC_INFO_COUNT;
+                int unint = thread_info(t->mport, THREAD_BASIC_INFO, (thread_info_t)&bi, &bc) == KERN_SUCCESS && bi.run_state == TH_STATE_UNINTERRUPTIBLE;
                 arm_thread_state64_t st; mach_msg_type_number_t n = ARM_THREAD_STATE64_COUNT;
-                if (thread_get_state(t->mport, ARM_THREAD_STATE64, (thread_state_t)&st, &n) == KERN_SUCCESS) {
-                    pc = arm_thread_state64_get_pc(st); lr = arm_thread_state64_get_lr(st); fp = arm_thread_state64_get_fp(st); }
+                if (unint) LOG("    【红】这条线程不在系统调用里，宿主线程却在内核里不可中断等待（缺页读写文件 / 驱动调用之类），不取寄存器（取了会把看门线程一起卡住）");
+                else if (thread_get_state(t->mport, ARM_THREAD_STATE64, (thread_state_t)&st, &n) == KERN_SUCCESS) {
+                    pc = arm_thread_state64_get_pc(st); lr = arm_thread_state64_get_lr(st); fp = arm_thread_state64_get_fp(st);
+                    for (int i = 0; i < 29; i++) xr[i] = st.__x[i];
+                    got_x = 1; }
                 thread_resume(t->mport);
             }
-            char bt[720]; int bn = 0;
+            // 在跑线程的通用寄存器（恢复它之后再打，停着时不碰日志锁）：游戏在空转循环里的计数、下标、数据指针都在这里
+            //   （11-14 停帧：166 号在解析 BYML，循环次数来自数据里的节点头，要看计数 / 下标 / 指针才判得了数据是不是坏的）
+            if (got_x) for (int i = 0; i < 29; i += 4)
+                LOG("    寄存器 x%-2d %016llx %016llx %016llx %016llx", i, (unsigned long long)xr[i], (unsigned long long)(i + 1 < 29 ? xr[i + 1] : 0),
+                    (unsigned long long)(i + 2 < 29 ? xr[i + 2] : 0), (unsigned long long)(i + 3 < 29 ? xr[i + 3] : 0));
+            char bt[2048], w[256]; int bn = 0;   // 每帧带导出名（s2a_guest_where，#806）：一帧至多约 200 字节
             uint64_t at[2] = {pc, lr};
             for (int k = 0; k < 2; k++) { module_t *rm = at[k] ? module_of((void *)at[k]) : NULL;   // 宿主代码里（门、桩）的 pc / lr 不在游戏模块内，略过
-                if (rm) bn += snprintf(bt + bn, sizeof bt - bn, " %s%s+%#llx", k ? "lr " : "pc ", rm->name, (unsigned long long)(at[k] - (uint64_t)rm->base)); }
+                if (rm && s2a_guest_where(at[k], w, sizeof w)) bn += snprintf(bt + bn, sizeof bt - bn, " %s%s", k ? "lr " : "pc ", w); }
             for (int d = 0; d < 8 && fp && !(fp & 0xF); d++) {
                 uint64_t fr[2]; vm_size_t got = 0;
                 if (vm_read_overwrite(mach_task_self(), (vm_address_t)fp, sizeof fr, (vm_address_t)fr, &got) != KERN_SUCCESS || got != sizeof fr) break;
-                module_t *rm = module_of((void *)fr[1]); if (!rm) break;
-                bn += snprintf(bt + bn, sizeof bt - bn, " ← %s+%#llx", rm->name, (unsigned long long)(fr[1] - (uint64_t)rm->base));
-                if (fr[0] <= fp || bn >= (int)sizeof bt - 48) break;
+                if (!s2a_guest_where(fr[1], w, sizeof w)) break;
+                bn += snprintf(bt + bn, sizeof bt - bn, " ← %s", w);
+                if (fr[0] <= fp || bn >= (int)sizeof bt - 256) break;
                 fp = fr[0];
             }
             if (bn) LOG("    客体回溯%s%s", run ? "（在跑，采样）" : "", bt);
@@ -3067,6 +3106,16 @@ void s2a_thread_dump(void) {
                     mach_ms(now - g_cvl[i].t), g_cvl[i].woken, g_cvl[i].left, mine);
             else LOG("    条件键 %#llx 当前值 %#x，已等 %.0f ms；此键从没被发过信号（或记录被别的键覆盖）%s",
                      (unsigned long long)t->wkey, ld32(t->wkey), mach_ms(now - t->wait_t0), mine);
+            // 锁 / 键周围的原样内存（#19361b：上古卷轴加载线程在 WaitLightEvent 里等，键「从没被发过信号」、锁字 0——
+            //   判不了是「事件已置位、唤醒丢了」还是「根本没人置位」：两者只差键后面那几个字节里的「已置位」标志）。
+            //   从锁地址按 16 对齐往前 16 字节起打 48 字节，盖住游戏自己包在外面的锁字与 SDK 事件的锁 / 键 / 已置位
+#if defined(__APPLE__)   // 安全读靠 Mach vm_read_overwrite（同上面抽样回溯）；安卓不打
+            { uint64_t a0 = (t->waddr < t->wkey ? t->waddr : t->wkey) & ~0xFull; a0 -= 0x10; uint32_t m[12]; vm_size_t got = 0;
+              if (vm_read_overwrite(mach_task_self(), (vm_address_t)a0, sizeof m, (vm_address_t)m, &got) == KERN_SUCCESS && got == sizeof m)
+                  LOG("    键周围内存 %#llx：%08x %08x %08x %08x | %08x %08x %08x %08x | %08x %08x %08x %08x", (unsigned long long)a0,
+                      m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
+              else LOG("    键周围内存 %#llx：读不了", (unsigned long long)a0); }
+#endif
         }
         if (t->wkind && t->wkind != 2 && !t->exited) LOG("    已等 %.0f ms", mach_ms(thread_clock() - t->wait_t0));
         if (t->wkind == 4 && t->wn > 0) {   // 在等哪些句柄：种类 + cookie（C# 对象 / 事件号）——事件一直不来时据此找是哪个服务的

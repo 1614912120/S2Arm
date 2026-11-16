@@ -10,6 +10,12 @@ import unittest
 import unittest.mock
 import os
 os.environ.setdefault("S2A_BANNER_FETCH", "0")   # 作业层测试一律不连商店（library.store_meta）；要测的用例自己打桩
+# 补丁 / 金手指下载站同理（11-14 门禁提速）：每次出包 patches.prepare 都现取云端清单（patches.cloud_manifest），原先单测里每个出包用例都真连网
+#   （经本机代理，每次约 1 秒，test_job_failure_codes 一份就 40 多次；断网 / 代理卡住时按 patches.TIMEOUT 白等）。缺省指一个不存在的本地目录
+#   = 「云端取不到、只用本地」，与门禁机断网时同一条路径；要测下载站的用例（test_patches）自己把 S2A_PATCH_BASE 指到造好的目录
+os.environ.setdefault("S2A_PATCH_BASE", "file:" + os.path.join(tempfile.gettempdir(), "s2a-jobtests-no-patch-site"))
+# 每局结束注销 S2ArmGame 系统登记（host_update.forget_registrations，#1126）：单测起局不碰门禁机 / 本机真的应用登记库，指向不存在的工具 = 不做
+os.environ.setdefault("S2A_LSREGISTER", os.path.join(tempfile.gettempdir(), "s2a-jobtests-no-lsregister"))
 
 JOBS = Path(__file__).resolve().parents[1]
 ROOT = JOBS.parents[1]
@@ -214,13 +220,22 @@ if source.read_bytes() == b"disappear fixture":
 print(json.dumps({"schema":1,"packages":[{"titleId":"0100000000000000","baseId":"0100000000000000","type":"base","version":0,"name":"Synthetic","display":"1.0","guestIsa":"aarch64","builds":{}}]}))
 ''')
         binary.chmod(0o700)
-        # Reader lookup is content-keyed in the actual worker too.
+        # Reader lookup is content-keyed in the actual worker too. Mac 起读取器直接执行缓存位上的
+        # 自包含单文件（不再经 dotnet 跑 dll）：合成读取器脚本就装在缓存位，argv 与 Windows 直跑同形
+        # （少了 dotnet 前缀，源 / 图标目录各前移一位）。
         from core import digest
         key = toolchain.reader_key(self.c)
         actual = self.c.private / "tools" / key
         actual.mkdir(parents=True)
-        (actual / "nx_unpack.dll").write_bytes(b"fixture")
-        atomic(actual / "ready.json", dict(schema=1, sha256=digest(actual / "nx_unpack.dll")))
+        reader = actual / "nx_unpack"
+        reader.write_text(
+            binary.read_text()
+            .replace("sys.argv[4]", "sys.argv[3]")
+            .replace("sys.argv[5]", "sys.argv[4]"),
+            encoding="utf-8",
+        )
+        reader.chmod(0o700)
+        atomic(actual / "ready.json", dict(schema=1, sha256=digest(reader)))
         if sys.platform == 'win32':
             # A local copy of the installed interpreter runs the *same*
             # synthetic reader script. This is not a real .NET reader.
