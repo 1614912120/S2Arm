@@ -146,15 +146,16 @@ class Reader(unittest.TestCase):
         self.mods.start(); self.addCleanup(self.mods.stop)
 
     def test_prebuilt_same_identity(self):
-        (self.d / "nx_unpack.dll").write_bytes(b"x"); (self.d / ".src_digest").write_text("abc123abc123\n")
+        """给能直接执行的 nx_unpack.exe（调用方都直接执行它；Windows 直接执行 .dll 交给旧 .NET Framework，报找不到 System.Runtime 10.0）"""
+        (self.d / "nx_unpack.dll").write_bytes(b"x"); (self.d / "nx_unpack.exe").write_bytes(b"x"); (self.d / ".src_digest").write_text("abc123abc123\n")
         with as_windows(toolchain):
-            self.assertEqual(toolchain.reader(self.c), self.d / "nx_unpack.dll")
+            self.assertEqual(toolchain.reader(self.c), self.d / "nx_unpack.exe")
 
     def test_stale_or_missing_is_named_failure(self):
         (self.d / "nx_unpack.dll").write_bytes(b"x"); (self.d / ".src_digest").write_text("000000000000\n")
         for case in ("stale", "missing"):
             with self.subTest(case=case), as_windows(toolchain):
-                if case == "missing": (self.d / "nx_unpack.dll").unlink()
+                if case == "missing": (self.d / "nx_unpack.dll").unlink()   # exe 本来就没放：只有 dll 也算缺
                 with self.assertRaises(core.Failure) as e:
                     toolchain.reader(self.c)
                 self.assertEqual(e.exception.code, "reader_unavailable")
