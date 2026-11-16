@@ -39,6 +39,16 @@ static int iml_ent(void) {
 }
 // 上次异常退出后问「把上次的诊断发给我们？」时用（diag.m）：确定丢了才算（读不到不报，防误报）
 int s2a_iml_lost(void) { return iml_ent() == 0; }
+// 游戏库顶上的提示（S2ArmShellHostModel，s2a_shell.h）：确定丢了才给标题与正文（同起局提示条的两句，六语在 S2ArmHost.strings），调用方 free
+char *s2a_shell_iml_notice(void) {
+    @autoreleasepool {
+        if (!s2a_iml_lost()) return NULL;
+        NSData *d = [NSJSONSerialization dataWithJSONObject:@{@"title": S2AL(@"iml.lost.title"), @"body": S2AL(@"iml.lost.body")} options:0 error:nil];
+        if (!d) return NULL;
+        char *p = malloc(d.length + 1); if (!p) return NULL;
+        memcpy(p, d.bytes, d.length); p[d.length] = 0; return p;
+    }
+}
 
 static void _write_result(int ent, uint64_t fit, uint64_t top, int jumbo) {
     NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
@@ -79,7 +89,9 @@ void s2a_iml_probe_check(void) {
         // 玩家也要知道（审计 P2-3：原先只写日志）：同一个包只提示一次，不挡操作（dprompt.m 顶部提示条，起局 3 秒后）
         if (ent == 0) {
             NSUserDefaults *u = NSUserDefaults.standardUserDefaults; NSString *build = [NSBundle.mainBundle objectForInfoDictionaryKey:@"S2ABuildID"] ?: @"-";
-            if (![[u stringForKey:@"S2AIMLLostNoticeBuild"] isEqualToString:build]) {
+            // 玩家在游戏库提示上点过关闭（S2ArmShellHostModel，按 App 包路径认这次安装）：这次安装内不再提示，进游戏也不弹（玩家选择优先）
+            BOOL closed = [[u stringForKey:@"S2AIMLNoticeClosedInstall"] isEqualToString:NSBundle.mainBundle.bundlePath];
+            if (!closed && ![[u stringForKey:@"S2AIMLLostNoticeBuild"] isEqualToString:build]) {
                 [u setObject:build forKey:@"S2AIMLLostNoticeBuild"];
                 void s2a_dprompt_notice(NSString *title, NSString *body, double delay, double seconds);
                 s2a_dprompt_notice(S2AL(@"iml.lost.title"),
