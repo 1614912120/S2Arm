@@ -46,6 +46,8 @@ public final class SettingsProvider {
     private var targets: [String]?
     /// 出包页最后一次手动选择的文件夹；尚未出包、尚未登记的位置也要记住。
     private var location: String?
+    /// 每款游戏手动选过的文件夹（游戏号 → 路径）：玩家给哪款选的只管哪款，不拿去覆盖别的游戏现在放的位置（「玩家自行选择优先」）
+    private var picks: [String: String]
     /// 「允许 AI 操作 S2Arm」（本机控制口，见 ControlPort）：缺省关；--control / S2ARM_CONTROL=1 启动时强制开、不写这里。
     private var ai: Bool
     /// iCloud 存档同步的云盘文件夹（玩家在环境页选的；iPhone 上选同一个）。没选 = 不同步
@@ -56,6 +58,7 @@ public final class SettingsProvider {
         self.store = store ?? client.environment.privateRoot.appendingPathComponent("apple-frontend/launch-settings.json")
         targets = Self.read(self.store)
         location = Self.object(self.store)?["exportLocation"] as? String
+        picks = Self.object(self.store)?["exportLocationByGame"] as? [String: String] ?? [:]
         ai = Self.object(self.store)?["aiControl"] as? Bool ?? false
         cloud = Self.object(self.store)?["cloudSavesFolder"] as? String
     }
@@ -98,9 +101,12 @@ public final class SettingsProvider {
 
     public var exportLocation: String? { lock.withLock { location } }
 
-    public func setExportLocation(_ path: String) throws {
-        let before = lock.withLock { () -> String? in let b = location; location = path; return b }
-        do { try write() } catch { lock.withLock { location = before }; throw JobClientError("出包存放位置没能写进磁盘（\(error.localizedDescription)）。") }
+    /// 玩家给这款手动选过的文件夹；没选过为 nil
+    public func exportLocation(forGame id: String) -> String? { lock.withLock { picks[id] } }
+
+    public func setExportLocation(_ path: String, game id: String? = nil) throws {
+        let before = lock.withLock { () -> (String?, [String: String]) in let b = (location, picks); location = path; if let id { picks[id] = path }; return b }
+        do { try write() } catch { lock.withLock { (location, picks) = before }; throw JobClientError("出包存放位置没能写进磁盘（\(error.localizedDescription)）。") }
     }
 
     private func write() throws {
@@ -109,6 +115,8 @@ public final class SettingsProvider {
         var file: [String: Any] = ["schema": 1]
         if let saved = lock.withLock({ targets }) { file["exportTargets"] = saved }
         if let saved = lock.withLock({ location }) { file["exportLocation"] = saved }
+        let byGame = lock.withLock { picks }
+        if !byGame.isEmpty { file["exportLocationByGame"] = byGame }
         if lock.withLock({ ai }) { file["aiControl"] = true }
         if let folder = lock.withLock({ cloud }) { file["cloudSavesFolder"] = folder }
         let data = try JSONSerialization.data(withJSONObject: file, options: [.sortedKeys])

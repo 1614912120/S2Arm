@@ -1276,14 +1276,17 @@ public final class S2ArmLauncherModel: ObservableObject {
     }
 
     /// 优先恢复上次手动选择；还没选过时沿用这款现在的位置、后端上次用的位置、默认位置。
+    /// 出包页缺省存放位置，玩家自己定过的优先（维护者 11-15「玩家自行选择优先级更高」）：
+    ///   ① 给这款手动选过的文件夹 → ② 这款现在放的位置 → ③ 上次手动选的（只给还没放过的新游戏）→ ④ 上次出包的位置 / 缺省位置
     func defaultLocation(for game: GameSummary) -> String {
-        if let saved = provider.settings.exportLocation, !saved.isEmpty { return saved }
+        if let picked = provider.settings.exportLocation(forGame: game.id), !picked.isEmpty { return picked }
         if game.location.state == "ok" || game.location.state == "offline", !game.location.path.isEmpty { return game.location.path }
+        if let saved = provider.settings.exportLocation, !saved.isEmpty { return saved }
         return locations.first(where: { $0.id == lastLocation && $0.connected })?.path ?? locations.first(where: \.isDefault)?.path ?? ""
     }
 
-    func rememberExportLocation(_ path: String) {
-        do { try provider.settings.setExportLocation(path) } catch { choiceError = error.localizedDescription }
+    func rememberExportLocation(_ path: String, game: GameSummary) {
+        do { try provider.settings.setExportLocation(path, game: game.id) } catch { choiceError = error.localizedDescription }
     }
 
     /// 移动到其他位置（整个文件夹，存档跟着走）。

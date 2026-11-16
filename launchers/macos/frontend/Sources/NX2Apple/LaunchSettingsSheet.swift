@@ -232,7 +232,8 @@ struct LaunchSettingsSheet: View {
     /// 补丁一栏只在这款列得出补丁时出现；开关 / 选项要作业层给了状态才画
     private func visible(_ item: GameSettingItem) -> Bool {
         // 主玩家四键改在顶栏手柄弹窗设置；共享定义和旧布局值仍供其他平台读取。
-        if item.id == "padFace" { return false }
+        //   玩家以前在这里明确选过 Switch / Xbox 布局（不是缺省「自动」）的照样起作用（community.py → S2A_PAD_FACE），这一行就留着让他看得到、改得回（11-15「玩家自行选择优先」）
+        if item.id == "padFace" { return (options[item.id]?.value as? String ?? "auto") != "auto" }
         switch item.type {
         case "patches": return !patches.isEmpty
         case "page", "cheats": return true

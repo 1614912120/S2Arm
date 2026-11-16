@@ -172,7 +172,7 @@ struct ExportView: View {
 
     private func selectLocation(_ path: String) {
         location = path
-        model.rememberExportLocation(path)
+        model.rememberExportLocation(path, game: game)
     }
 
     private func chooseLocation() {

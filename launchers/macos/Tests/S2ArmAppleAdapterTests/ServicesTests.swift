@@ -78,6 +78,11 @@ final class SettingsProviderTests: XCTestCase {
         let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         XCTAssertEqual(saved["exportLocation"] as? String, "/original/selected-storage", "修改其他设置不能丢掉上次选择的位置")
         XCTAssertEqual(SettingsProvider(client: c).exportLocation, "/original/selected-storage")
+        // 按游戏记（11-15「玩家自行选择优先」）：给 A 选的只管 A，B 没选过取不到；重开仍在；全局「上次手动选」照记
+        try settings.setExportLocation("/vol/a-folder", game: "0100A")
+        XCTAssertEqual(SettingsProvider(client: c).exportLocation(forGame: "0100A"), "/vol/a-folder")
+        XCTAssertNil(SettingsProvider(client: c).exportLocation(forGame: "0100B"))
+        XCTAssertEqual(SettingsProvider(client: c).exportLocation, "/vol/a-folder")
     }
 
     /// 这一层设置表一行都没有（逐款选项在启动设置，走作业层 community）；本地文件只记出包平台勾选，旧文件里的 games（语言 / 底座）读时丢、写时不再带。
