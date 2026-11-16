@@ -340,7 +340,7 @@ struct IosAfterPackPicker: View {
             HStack(alignment: .top, spacing: 12) {
                 option("install", x("after.install"), x("after.install_note"), "iphone.and.arrow.forward")
                 option("export", x("after.export"), x("after.export_note"), "square.and.arrow.up")
-            }
+            }.fixedSize(horizontal: false, vertical: true)   // 两张卡同高：按较高那张撑齐
             if model.iosAfterPack == "export" {
                 EmptyView()
             } else {
@@ -362,7 +362,7 @@ struct IosAfterPackPicker: View {
                 }
                 Spacer(minLength: 0)
             }
-            .padding(14).frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(LauncherPalette.surface.opacity(on ? 0.95 : 0.55), in: RoundedRectangle(cornerRadius: 12))
             .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(on ? LauncherPalette.cream.opacity(0.75) : .white.opacity(0.08), lineWidth: on ? 1.5 : 1))
             .contentShape(RoundedRectangle(cornerRadius: 12))

@@ -866,6 +866,7 @@ public sealed partial class EnvironmentWindow
             text.Children.Add(Label((on ? "● " : "○ ") + T(title), 15));
             var n = Muted(T(note), 12); n.TextWrapping = TextWrapping.Wrap; text.Children.Add(n);
             var card = new Button { Content = text, HorizontalAlignment = HorizontalAlignment.Stretch, HorizontalContentAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Stretch, VerticalContentAlignment = VerticalAlignment.Top,   // 两张卡同高（说明长短不同也不错位）
                 Padding = new Thickness(14, 12), CornerRadius = new CornerRadius(12), Foreground = Ink,
                 Background = on ? Brush.Parse("#2A2722") : Surface, BorderBrush = on ? Accent : Brush.Parse("#2A2A2E"), BorderThickness = new Thickness(on ? 1.5 : 1) };
             AutomationId(card, "export.after." + id);

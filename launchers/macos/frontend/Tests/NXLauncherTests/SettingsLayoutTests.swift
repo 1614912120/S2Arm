@@ -373,13 +373,19 @@ import S2ArmAppleAdapter
                 let page = AnyView(ExportView(model: fixture.model, covers: CoverCache(), game: game, install: {})
                     .environmentObject(padFocus).padScope("main", padFocus).frame(width: 1120, height: 720))
                 let (host, window) = try await render(page, fixture: fixture, language: language)
-                defer { window.close() }
+                fixture.navigation.source.controllers = { [] }; fixture.navigation.attach(window)
+                defer { fixture.navigation.detach(); window.close() }
                 if let scroll = scrollViews(in: host).first, let document = scroll.documentView {
                     let clip = scroll.contentView
                     clip.scroll(to: CGPoint(x: 0, y: document.isFlipped ? max(0, document.bounds.height - clip.bounds.height) : 0))
                     scroll.reflectScrolledClipView(clip)
                 }
                 try await Task.sleep(for: .milliseconds(70))
+                let targets = fixture.navigation.controlTargets(in: window)
+                let install = try XCTUnwrap(targets.first { $0.id == "export.after.install" })
+                let export = try XCTUnwrap(targets.first { $0.id == "export.after.export" })
+                XCTAssertEqual(install.frame.height, export.frame.height, accuracy: 1, "「出完之后」两张卡同高")
+                XCTAssertEqual(install.frame.minY, export.frame.minY, accuracy: 1)
                 try self.snapshot(host, "export-after-\(branch)-\(language.code)")
             }
         }
