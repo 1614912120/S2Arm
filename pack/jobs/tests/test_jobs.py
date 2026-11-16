@@ -1455,6 +1455,15 @@ class JobsTests(unittest.TestCase):
         got = {g["id"]: g["onPhone"] for g in library.catalog(self.c)["games"]}
         self.assertEqual(got, {on["id"]: True, off["id"]: False})
 
+    def test_catalog_counts_phone_devices(self):
+        # 启动器更新弹窗按 phoneDevices 写成「更新启动器和 iPhone App」：设备记录里有款的才算；没装过 → 0，空记录 → 不算
+        g = self.game(tid="0100000000AA0000", packages=[self.package(tid="0100000000AA0000")])
+        self.catalogue([g])
+        self.assertEqual(library.catalog(self.c)["phoneDevices"], 0)
+        layout.save_device(self.c, "dev1", dict(games={g["id"]: dict(pack="p")}))
+        layout.save_device(self.c, "dev2", dict(games={}))
+        self.assertEqual(library.catalog(self.c)["phoneDevices"], 1)
+
     def test_catalogue_keeps_unsupported_and_unverified_distinct(self):
         game = self.game(packages=[self.package()])
         self.catalogue([game])

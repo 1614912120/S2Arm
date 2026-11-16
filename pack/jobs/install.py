@@ -1861,8 +1861,20 @@ class WinPhone:
     def pull_kept(self, games):   # 留下的 NRO（#8be819）：Windows 没有 devicectl，先不收（后续项：经 s2a-devpush 列 / 拉 Documents 文件）
         return 0
 
-    def app_running(self):   # 查不清（Windows 没有 devicectl）：自动推送不发起
+    def app_running(self):   # 查不了进程（Windows 没有 devicectl）：调用方改用 playing（游玩时间心跳）
         return None
+
+    def playing(self, games):
+        """按游玩时间心跳判手机上是不是正在玩（playing_by_heartbeat）：True 在玩 / False 没在玩 / None 查不清"""
+        if not self.bid:
+            return None
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="s2a-hb-") as work:
+            try:
+                client = self.client(work)
+            except Failure:
+                return None
+            return playing_by_heartbeat(client, games, work)
 
     def client(self, work):
         return devpush_client(self.c, self.udid, self.bid, work)
@@ -2303,6 +2315,35 @@ def phone_updates(c):
     return out
 
 
+PLAYING_WINDOW_S = 45   # 游玩时间心跳：游戏在前台时每 10 秒写一次 playtime.json（runtime/src/playtime.c，平台壳 10 秒定时器）；最近 45 秒内写过 = 正在玩
+
+
+def playing_by_heartbeat(client, games, work, now=None):
+    """手机上各款的游玩时间心跳（<容器>/Documents/games/<程序号>/playtime.json 的 lastPlayed，手机写入时的时刻）：
+    任一款在 PLAYING_WINDOW_S 秒内写过 → True（正在玩，装 App 会杀掉这局）；都没有 / 文件不在（没玩过）→ False；
+    一个都读不了（锁屏、断开）→ None（查不清）。Windows 没有 devicectl 查进程，靠它判（11-16 定的判据）"""
+    import time as _t
+    now = _t.time() if now is None else now
+    got_any, stale = False, True
+    for g in games:
+        dst = Path(work) / f"playtime-{g}.json"
+        try:
+            ok = client.get(f"{game_docs(g)}/playtime.json", str(dst), 20)
+        except Exception as e:   # 进不了容器（锁屏 / 断开 / 没装）：这一款查不清
+            print(f"[s2a] 读 {g} 的游玩心跳失败：{e}", file=sys.stderr)
+            continue
+        got_any = True
+        if not ok:
+            continue   # 文件不在：这款没玩过，不算在玩
+        try:
+            last = int(json.loads(dst.read_text(encoding="utf-8")).get("lastPlayed") or 0)
+        except (OSError, ValueError, TypeError):
+            continue
+        if now - last < PLAYING_WINDOW_S:
+            return True
+    return False if got_any or not games else None
+
+
 def phone_kept_pull(c):
     """「手机插着、启动器开着」时启动器隔一阵调一次（phoneKeptPull 作业）：连着的那台手机上，宿主留下的 NRO（#8be819）拉回游戏库。
     → {device, new: 新收的个数, kept: 还没补进 iPhone 件的款, shellUpdate: 壳比本版旧且不用问玩家, stale: 壳旧了但要重出包的款,
@@ -2323,8 +2364,13 @@ def phone_kept_pull(c):
     st = shell_outdated(c, rec, packer.current_shell_id(c))
     stale = [s["gameId"] for s in (st or {}).get("stale", [])]
     shell_update = bool(st) and not stale
-    return dict(device=ph.key, new=new, kept=kept, shellUpdate=shell_update, stale=stale,
-                running=bool(kept or shell_update) and ph.app_running() is not False)
+    running = False
+    if kept or shell_update:
+        running = ph.app_running()
+        if running is None and hasattr(ph, "playing"):   # 查不了进程（Windows）：按游玩时间心跳判
+            running = ph.playing(games)
+        running = running is not False
+    return dict(device=ph.key, new=new, kept=kept, shellUpdate=shell_update, stale=stale, running=running)
 
 
 def online_devices(c):

@@ -212,6 +212,8 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// 装到 iPhone 的方式（环境检查「装到 iPhone 的方式」卡，installMode 作业）与壳比本版旧的手机（catalog phoneUpdates，库页右上角按钮）
     @Published var installMode = InstallModeInfo()
     @Published var phoneUpdates: [PhoneUpdate] = []
+    @Published var phoneDevices = 0   // catalog phoneDevices：这台电脑往几台手机装过游戏（更新弹窗按钮写「更新启动器和 iPhone App」）
+    @Published var phoneBanner: PhoneBanner?   // 新版启动器首次启动后的「iPhone 版 S2Arm」横幅（S2ArmLauncherModel+PhoneBanner.swift）
     /// 点了更新、有要重新出包的款：三选一弹框；选「更新并重新出这几款」时更新完把它们排进批量出包（只出 iPhone），批次出完逐款装上
     @Published var updateConfirm: PhoneUpdate?
     /// 「S 级优化升级」页开着（v0.4.0；SGradeUpgradeView）
@@ -443,7 +445,7 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     /// keptModulesLoop 的一次（单测直接调）：→ 这次有没有发起「更新 iPhone」
     @discardableResult func keptModulesTick() async -> Bool {
-        if busy { return false }
+        if busy || selfSignChosen { return false }   // 出包页选了「出完之后导出自签」：不走启动器装机，自动装到手机也不做（玩家选择优先）
         guard let r = try? await provider.client.perform("phoneKeptPull").result else { return false }
         let kept = (r["kept"] as? [String]) ?? [], device = r["device"] as? String ?? ""
         // 启动器升级顺带更新 iPhone App（11-16 维护者「点一次完成整个流程」）：连着的这台壳比本版旧、且没有要按新版重出包的款（shellUpdate），
@@ -480,7 +482,8 @@ public final class S2ArmLauncherModel: ObservableObject {
             case .success(let games):
                 self.games = games; self.libraryError = nil; self.showingSnapshot = false
                 self.phoneUpdates = self.provider.library.phoneUpdates
-                if startup { self.sgradeMacInBackground(); self.keptModulesLoop() }
+                self.phoneDevices = self.provider.library.phoneDevices
+                if startup { self.sgradeMacInBackground(); self.keptModulesLoop(); self.preparePhoneUpdate() }
                 if self.selectedID == nil || !games.contains(where: { $0.id == self.selectedID }) { self.selectedID = games.first?.id }
             case .failure(let error):
                 self.libraryError = error.message

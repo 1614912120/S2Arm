@@ -1452,6 +1452,39 @@ class AssembleTests(unittest.TestCase):
         cur = install.layout.load_device(self.c, "dev1").get("shellId")
         self.assertEqual(run(cur), (False, [], False))
 
+    def test_playing_by_heartbeat(self):
+        """Windows 判正在玩（11-16）：读各款 Documents/games/<程序号>/playtime.json 的 lastPlayed；45 秒内 → 在玩；
+        更早 / 没这个文件 → 没在玩；全都读不了 → 查不清（None）；没有款 → 没在玩"""
+        import tempfile as tf
+        work = Path(tf.mkdtemp()); self.addCleanup(lambda: shutil.rmtree(work, ignore_errors=True))
+        class Fake:
+            def __init__(self, files, boom=False): self.files, self.boom, self.asked = files, boom, []
+            def get(self, rel, dst, t=None):
+                self.asked.append(rel)
+                if self.boom: raise OSError("device locked")
+                if rel not in self.files: return False
+                Path(dst).write_text(json.dumps(dict(schema=1, seconds=100, lastPlayed=self.files[rel]))); return True
+        now = 1_000_000
+        A, B = "0100000000010000", "0100000000020000"
+        f = Fake({f"Documents/games/{A}/playtime.json": now - 10})
+        self.assertIs(install.playing_by_heartbeat(f, [A, B], work, now), True)
+        self.assertEqual(f.asked[0], f"Documents/games/{A}/playtime.json")
+        self.assertIs(install.playing_by_heartbeat(Fake({f"Documents/games/{A}/playtime.json": now - 600}), [A, B], work, now), False)
+        self.assertIs(install.playing_by_heartbeat(Fake({}), [A], work, now), False, "没玩过：文件不在")
+        self.assertIsNone(install.playing_by_heartbeat(Fake({}, boom=True), [A, B], work, now), "进不了容器：查不清")
+        self.assertIs(install.playing_by_heartbeat(Fake({}), [], work, now), False)
+
+    def test_phone_kept_pull_uses_heartbeat_when_process_unknown(self):
+        """查不了进程（app_running None，Windows）：改按 playing（心跳）判；playing 也查不清 → 当在玩（不装）"""
+        self._update()
+        ph = types.SimpleNamespace(key="dev1", pull_kept=lambda games: 0, app_running=lambda: None)
+        import ipa as packer, rewrite_refresh
+        for heartbeat, want in ((False, False), (True, True), (None, True)):
+            ph.playing = lambda games, h=heartbeat: h
+            with um.patch.object(install, "phone_for", return_value=ph), um.patch.object(packer, "current_shell_id", return_value="NEWSHELL"), \
+                 um.patch.object(packer, "usable_kit", return_value="kit"), um.patch.object(rewrite_refresh, "kept_todo", return_value=[]):
+                self.assertEqual(install.phone_kept_pull(self.c)["running"], want, heartbeat)
+
     def test_app_running(self):
         """自动推送前查手机上 S2Arm 是否在跑（#8be819）：进程在它安装目录下 = True；没有 = False；没装 = False；devicectl 查不了 = None"""
         url = "file:///private/var/containers/Bundle/Application/X/S2Arm.app/"

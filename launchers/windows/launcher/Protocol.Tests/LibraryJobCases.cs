@@ -88,6 +88,7 @@ internal static class LibraryJobCases
         check(empty.Games.Count == 0 && !empty.KeysReady, "recorded real empty Windows catalogue has no games or keys");
         check(empty.KeysMessage == "尚未导入 prod.keys", "recorded backend key status stays verbatim");
         check(empty.PhoneUpdates.Count == 0, "catalog: no phoneUpdates field reads as an empty list");
+        check(empty.PhoneDevices == 0, "catalog: no phoneDevices field reads as 0");
         // 壳比本版旧的手机（pack/jobs/install.py phone_updates 的形状）：一台两款、其中一款要重新出包；不是数组 / 没有 device 的项不算
         const string updates = """
         {"games":[],"keys":{"ready":true,"message":""},"phoneUpdates":[
@@ -107,6 +108,8 @@ internal static class LibraryJobCases
             check(g[0].NeedsKeys && !g[1].NeedsKeys, "catalog: needsKeys comes from the backend field, not from package formats");
             check(g[0].OnPhone && !g[1].OnPhone, "catalog: onPhone (recorded on a phone; delete confirm warns it stops opening there) read from the backend field");
         }
+        using (var document = System.Text.Json.JsonDocument.Parse(updates.Replace("\"phoneUpdates\":[", "\"phoneDevices\":2,\"phoneUpdates\":[")))
+            check(LibraryCatalog.Parse(document.RootElement).PhoneDevices == 2, "catalog: phoneDevices (phones this PC installed to; update popup says launcher and iPhone app) read");
         using (var document = System.Text.Json.JsonDocument.Parse(updates))
         {
             var u = LibraryCatalog.Parse(document.RootElement).PhoneUpdates;

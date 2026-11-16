@@ -1996,7 +1996,9 @@ def catalog(c):
         phone_updates = install.phone_updates(c)
     except (Failure, OSError, ValueError):   # 算不出本版壳号（开发树没出过壳等）：不提示，不挡游戏库
         phone_updates = []
-    return dict(games=cat["games"], profiles=[], keys=status, jobs=jobs, phoneUpdates=phone_updates,
+    # 这台电脑往几台手机装过游戏（设备记录里有款的）：启动器更新弹窗据此把按钮写成「更新启动器和 iPhone App」（11-16 维护者「点一次完成整个流程」）
+    phone_devices = sum(1 for _, r in layout.devices(c) if isinstance(r, dict) and r.get("games"))
+    return dict(games=cat["games"], profiles=[], keys=status, jobs=jobs, phoneUpdates=phone_updates, phoneDevices=phone_devices,
                 engineInfo={"inputConfig": input_supported, "inputConfigReason": input_reason})
 
 
