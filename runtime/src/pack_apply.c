@@ -865,6 +865,15 @@ static int img_place(const char *proc_docs, const char *path, int pass) {   // 0
     if (!ok) return 1;
     uint64_t total; memcpy(&total, h + 128, 8); if (total != (uint64_t)st.st_size) return 1;   // 还在拷
     uint32_t fmt; memcpy(&fmt, h + 8, 4);
+    // 长度对上不等于拷完（D-4VAX 复现：拷贝方先把目标撑到全长、再从头往后填，App 扫到时头在、尾巴的目录表还是 0，原先照样认领挪走，
+    //   拷贝方经原句柄接着写进挪走后的文件，期间再解包 / 套更新包读到的是半截目录表）：目录表在文件末尾、最后才写到——
+    //   读得出、自检过（img_toc_file）、且列着程序描述 exefs/main.npdm 才算拷完；更新包要目录表读得出且非空。不然当「还在拷」，原样留着下次再看
+    if (fmt == 1) { img_ent *te; size_t tn; int has = 0;
+        if (img_toc_file(path, &te, &tn)) return 1;
+        for (size_t i = 0; i < tn && !has; i++) has = !strcmp(te[i].rel, "exefs/main.npdm");
+        img_free(te, tn); if (!has) return 1; }
+    if (fmt == 2) { int ufd = open(path, O_RDONLY); upd_ent *ue = NULL; size_t un = 0; uint64_t uto, utl; memcpy(&uto, h + 112, 8); memcpy(&utl, h + 120, 8);
+        int bad = ufd < 0 || upd_read_toc(ufd, uto, utl, &ue, &un) || !un; if (ufd >= 0) close(ufd); if (ue) upd_free(ue, un); if (bad) return 1; }
     if ((fmt == 2) != (pass == 1)) return 1;
     if (fmt == 2) return img_update(proc_docs, path, h, total);   // 着色器更新包
     if (fmt != 1) { snprintf(g_img_err, sizeof g_img_err, "%s 是格式号 %u 的资源包，这个 S2Arm 只认 1、2：请更新 S2Arm", path, fmt); return -11; }
