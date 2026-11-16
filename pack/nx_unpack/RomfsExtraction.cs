@@ -2,6 +2,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -33,10 +34,16 @@ static class RomfsExtraction {
         ? a.InnerExceptions.Count > 0 && a.InnerExceptions.All(IsDataHashFailure)
         : e is HorizonResultException h && h.ResultValue == ResultFs.NonRealDataVerificationFailed.Value;
 
-    static bool IsAccessDenied(Exception e) => e is UnauthorizedAccessException ||
-        e is IOException && (e.HResult == unchecked((int)0x80070005) || e.HResult == 13);
+    static readonly TimeSpan[] PublishRetryDelays = {
+        TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(500),
+        TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4),
+        TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(30)
+    };
 
-    static void FlushFiles(string root) {
+    static bool IsAccessDenied(Exception e) => e is UnauthorizedAccessException ||
+        e is IOException && (e.HResult == unchecked((int)0x80070005) || e.HResult == unchecked((int)0x80070020));
+
+    static void FlushFilesForTest(string root) {
         foreach (string path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)) {
             using var file = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
             file.Flush(true);
@@ -44,65 +51,137 @@ static class RomfsExtraction {
     }
 
     static void Publish(string stage, string destination, Action<string, string> move,
-                        Action<string> flush, bool windows) {
+                        bool windows, Action<TimeSpan> wait = null) {
+        Action<TimeSpan> pause = wait ?? (delay => Thread.Sleep(delay));
         try { move(stage, destination); }
         catch (Exception e) when (windows && IsAccessDenied(e)) {
-            // 部分 Windows 挂载卷在并行分段写完后，立即改名会因卷内待提交写入返回 E_ACCESSDENIED。
-            // 显式 FlushFileBuffers 后只重试一次；真实权限错误仍由第二次 move 抛出。
-            flush(stage);
-            Console.WriteLine("🟡 Windows 卷拒绝立即发布 RomFS；已刷新暂存文件并重试一次");
-            move(stage, destination);
+            // 与 pack/orch/dirrename.py 对齐：等待 Windows 杀软 / 索引器释放新写文件的句柄。
+            Exception lastDenied = e;
+            foreach (TimeSpan delay in PublishRetryDelays) {
+                pause(delay);
+                try { move(stage, destination); return; }
+                catch (Exception retry) when (IsAccessDenied(retry)) { lastDenied = retry; }
+            }
+            // 保留底层异常供错误分类器识别，同时把可操作路径和建议交给玩家。
+            throw new IOException($"RomFS 目录发布退避重试 {PublishRetryDelays.Length} 次仍被拒绝：{stage}（最近一次错误：{lastDenied.Message}）。请等待文件扫描结束后重试，或将游戏库目录加入杀毒软件排除列表。", lastDenied);
         }
     }
 
     internal static void TestPublish(string root) {
         if (Directory.Exists(root) || File.Exists(root)) throw new IOException("测试目录已存在（不覆盖）");
+        TimeSpan[] expectedRetries = {
+            TimeSpan.FromMilliseconds(100), TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(500),
+            TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(4),
+            TimeSpan.FromSeconds(8), TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(30)
+        };
+        if (!PublishRetryDelays.SequenceEqual(expectedRetries) ||
+            !IsAccessDenied(new IOException("synthetic sharing violation", unchecked((int)0x80070020))))
+            throw new InvalidDataException("Windows 发布退避表或 ERROR_SHARING_VIOLATION 分类与 dirrename.py 不一致");
+        // 用与先前比较接近的合成树量 FlushFileBuffers 耗时，再让独立目录的拒绝只持续同样长的时间。
+        // 这验证等待本身是否足够，不把 flush 花掉的时间误算成 flush 的效果。
+        string benchmark = Path.Combine(root, "flush-benchmark");
+        Directory.CreateDirectory(benchmark);
+        byte[] block = new byte[64 * 1024];
+        for (int i = 0; i < 500; i++) {
+            long remaining = i < 332 ? 488_178 : 488_177;
+            using var file = new FileStream(Path.Combine(benchmark, $"f{i:D4}.bin"), FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite);
+            while (remaining > 0) {
+                int count = (int)Math.Min(block.Length, remaining);
+                file.Write(block, 0, count);
+                remaining -= count;
+            }
+        }
+        var flushTimer = Stopwatch.StartNew();
+        FlushFilesForTest(benchmark);
+        flushTimer.Stop();
+        TimeSpan measuredFlush = flushTimer.Elapsed;
+        Directory.Delete(benchmark, recursive: true);
+        Console.WriteLine($"ℹ️ 同等待时长对照：500 个合成文件 / 244,088,832 字节的 flush 用时 {measuredFlush.TotalMilliseconds:F1} ms");
+
+        if (OperatingSystem.IsWindows()) {
+            string lockedStage = Path.Combine(root, "locked-stage"), lockedDestination = Path.Combine(root, "locked-published");
+            Directory.CreateDirectory(lockedStage);
+            File.WriteAllBytes(Path.Combine(lockedStage, "payload.bin"), block);
+            using var blocker = new FileStream(Path.Combine(lockedStage, "payload.bin"), FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite); // 故意不授予 FileShare.Delete，令 Windows 真正拒绝目录改名。
+            int lockedMoves = 0, lockDeniedHResult = 0;
+            TimeSpan lockedWait = TimeSpan.Zero;
+            void LockedMove(string from, string to) {
+                lockedMoves++;
+                try { Directory.Move(from, to); }
+                catch (Exception e) { if (lockedMoves == 1) lockDeniedHResult = e.HResult; throw; }
+            }
+            void WaitAndRelease(TimeSpan delay) {
+                TimeSpan remaining = measuredFlush - lockedWait;
+                TimeSpan actual = delay > remaining ? remaining : delay;
+                if (actual > TimeSpan.Zero) Thread.Sleep(actual);
+                lockedWait += actual;
+                if (lockedWait >= measuredFlush) blocker.Dispose();
+            }
+            Publish(lockedStage, lockedDestination, LockedMove, windows: true, wait: WaitAndRelease);
+            if (lockedMoves < 2 || !IsAccessDenied(new IOException("test", lockDeniedHResult)) || lockedWait < measuredFlush ||
+                Directory.Exists(lockedStage) || !File.Exists(Path.Combine(lockedDestination, "payload.bin")))
+                throw new InvalidDataException("真实 Windows 文件句柄等待对照未能在不 flush 时发布");
+            Console.WriteLine($"🟢 Windows 同盘句柄对照：真实 Directory.Move 初次拒绝 0x{lockDeniedHResult:X8}；仅等待 {lockedWait.TotalMilliseconds:F1} ms（flush 用时 {measuredFlush.TotalMilliseconds:F1} ms）释放句柄后发布成功，未 flush");
+        } else Console.WriteLine("🟡 Windows 同盘句柄对照：非 Windows 跳过");
+
         string stage = Path.Combine(root, "stage"), destination = Path.Combine(root, "published");
         Directory.CreateDirectory(stage);
         byte[] expected = { 0x53, 0x32, 0x41, 0x00, 0x7f };
         File.WriteAllBytes(Path.Combine(stage, "payload.bin"), expected);
-        int moves = 0, flushes = 0;
-        void DenyFirstMove(string from, string to) {
-            if (++moves == 1) throw new IOException("synthetic access denied", unchecked((int)0x80070005));
+        int moves = 0;
+        TimeSpan waited = TimeSpan.Zero;
+        TimeSpan releaseAfter = measuredFlush;
+        void DenyUntilWaited(string from, string to) {
+            moves++;
+            if (waited < releaseAfter) throw new IOException("synthetic access denied", unchecked((int)0x80070005));
             Directory.Move(from, to);
         }
-        Publish(stage, destination, DenyFirstMove, path => { flushes++; FlushFiles(path); }, windows: true);
-        if (moves != 2 || flushes != 1 || Directory.Exists(stage) ||
+        Publish(stage, destination, DenyUntilWaited, windows: true,
+            wait: delay => waited += delay > releaseAfter - waited ? releaseAfter - waited : delay);
+        if (moves < 2 || waited != measuredFlush || Directory.Exists(stage) ||
             !File.ReadAllBytes(Path.Combine(destination, "payload.bin")).SequenceEqual(expected))
-            throw new InvalidDataException("访问拒绝后的 flush 重试未保留完整输出");
-        Console.WriteLine("🟢 合成正控：一次 E_ACCESSDENIED → flush 1 次 → 重试发布成功；文件内容一致");
+            throw new InvalidDataException("Windows 退避等待重试未在不 flush 时发布完整输出");
+        Console.WriteLine($"🟢 等待对照：无 flush 等待与合成拒绝时间相同的 {waited.TotalMilliseconds:F1} ms 后发布成功；文件内容一致");
 
         string oldStage = Path.Combine(root, "old-stage"), oldDestination = Path.Combine(root, "old-published");
         Directory.CreateDirectory(oldStage);
         File.WriteAllBytes(Path.Combine(oldStage, "payload.bin"), expected);
         int oldMoves = 0;
-        void OldDirectMove(string from, string to) {
-            oldMoves++;
-            throw new IOException("synthetic access denied", unchecked((int)0x80070005));
+        void DenyFirstMove(string from, string to) {
+            if (++oldMoves == 1) throw new IOException("synthetic access denied", unchecked((int)0x80070005));
+            Directory.Move(from, to);
         }
         try {
-            OldDirectMove(oldStage, oldDestination);
-            throw new InvalidDataException("旧的直接 move 负对照不应成功");
+            Publish(oldStage, oldDestination, DenyFirstMove, windows: false,
+                wait: _ => throw new InvalidDataException("非 Windows 不应等待重试"));
+            throw new InvalidDataException("非 Windows 负对照应原样抛出首次拒绝");
         } catch (IOException e) when (e.Message == "synthetic access denied") { }
         if (oldMoves != 1 || !Directory.Exists(oldStage) || Directory.Exists(oldDestination))
-            throw new InvalidDataException("直接 move 负对照没有复现首次拒绝");
-        Console.WriteLine("🟢 负对照：旧的直接 Directory.Move 遇一次 E_ACCESSDENIED 即失败");
+            throw new InvalidDataException("非 Windows 负对照没有证明一次拒绝后原样失败");
+        Console.WriteLine("🟢 负对照：windows=false 的直接发布遇一次 E_ACCESSDENIED 即原样失败，不等待、不 flush");
 
         string deniedStage = Path.Combine(root, "denied-stage"), deniedDestination = Path.Combine(root, "denied-published");
         Directory.CreateDirectory(deniedStage);
         File.WriteAllBytes(Path.Combine(deniedStage, "payload.bin"), expected);
-        int deniedMoves = 0, deniedFlushes = 0;
+        int deniedMoves = 0, deniedWaits = 0;
+        TimeSpan deniedWaited = TimeSpan.Zero;
         void AlwaysDeny(string from, string to) {
             deniedMoves++;
             throw new IOException("synthetic persistent access denied", unchecked((int)0x80070005));
         }
         try {
-            Publish(deniedStage, deniedDestination, AlwaysDeny, path => { deniedFlushes++; FlushFiles(path); }, windows: true);
+            Publish(deniedStage, deniedDestination, AlwaysDeny, windows: true,
+                wait: delay => { deniedWaits++; deniedWaited += delay; });
             throw new InvalidDataException("持续访问拒绝不应被吞掉");
-        } catch (IOException e) when (e.Message == "synthetic persistent access denied") { }
-        if (deniedMoves != 2 || deniedFlushes != 1 || !Directory.Exists(deniedStage) || Directory.Exists(deniedDestination))
+        } catch (IOException e) when (e.Message.Contains("RomFS 目录发布退避重试")) {
+            if (!e.Message.Contains(deniedStage) || !e.Message.Contains("加入杀毒软件排除列表"))
+                throw new InvalidDataException("最终拒绝错误未包含目录路径和杀软排除建议", e);
+        }
+        if (deniedMoves != 10 || deniedWaits != PublishRetryDelays.Length ||
+            deniedWaited != TimeSpan.FromMilliseconds(60_800) || !Directory.Exists(deniedStage) || Directory.Exists(deniedDestination))
             throw new InvalidDataException("持续访问拒绝未保留暂存目录或被错误吞掉");
-        Console.WriteLine("🟢 合成负控：持续 E_ACCESSDENIED → 原样失败；暂存保留、目标未创建");
+        Console.WriteLine("🟢 合成负控：持续拒绝 → 按 dirrename 重试 9 次（总等待 60.8 秒）后报红；提示路径和杀软排除，暂存保留、目标未创建");
     }
 
     internal static Result Extract(Func<IntegrityCheckLevel, IStorage> open, string destination, bool patched,
@@ -121,7 +200,7 @@ static class RomfsExtraction {
                 string first = (e is AggregateException g ? g.InnerExceptions.ToArray() : new[] { e }).OfType<ReadPlace>().Select(r => r.Message).FirstOrDefault();
                 result = Attempt(open, stage, IntegrityCheckLevel.None, partSize, parallelism) with { Bypassed = true, FirstBad = first };
             }
-            Publish(stage, destination, Directory.Move, FlushFiles, OperatingSystem.IsWindows());
+            Publish(stage, destination, Directory.Move, OperatingSystem.IsWindows());
             return result;
         } finally {
             if (Directory.Exists(stage)) Directory.Delete(stage, true);
