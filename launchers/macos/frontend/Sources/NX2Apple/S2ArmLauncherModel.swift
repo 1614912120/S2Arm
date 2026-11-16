@@ -221,6 +221,8 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published var availableUpdate: [String: Any]?
     /// 点「现在更新并重启」时有局 / 任务在跑：先拦下说明（文案号 update.gate.playing / update.gate.busy）
     @Published var updateGate: String?
+    /// 玩家点了「现在更新」、新版还在下：下好就直接换（玩家已经选了，不再要第二次点）
+    var installWhenReady = false
     /// 更新失败时 Sparkle 给的原因（界面在错误码文案之外照原话显示，控制口 /state 的 update.reason）
     @Published var updateFailure: String?
     /// 应用内更新（Sparkle 2）：第一次用时起，起来后整个 App 生命周期只一份
@@ -1363,12 +1365,15 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// 失败如实报（剃刀 G9 M12 / M13）：原先 try? 吞掉，读失败当成「没有」、切换失败界面停在旧值像点了没反应。
     ///   弹一行原因（标题按 titleKey，正文是后端 / 系统给的原因句）；值保持原样，不拿失败当结果。
     ///   passive（打开页面时的被动刷新）：同一类连续失败只报头一次，成功一次后复位（readOK）
+    /// 弹提示框的出口：生产照常 runModal；单测注入成记录（单测里走到真 NSAlert 会在开发机桌面弹窗、并把那条用例卡住等人点，11-16）
+    var runAlert: (NSAlert) -> NSApplication.ModalResponse = { $0.runModal() }
+
     func reportFailure(_ titleKey: String, _ error: Error, passive: Bool = false) {
         if passive { guard failingReads.insert(titleKey).inserted else { return } }
         let alert = NSAlert()
         alert.messageText = Localizer().t(titleKey)
         alert.informativeText = error.localizedDescription
-        if Self.bundleIncomplete(error) { offerFullDownload(alert) } else { alert.runModal() }
+        if Self.bundleIncomplete(error) { offerFullDownload(alert) } else { _ = runAlert(alert) }
     }
     func readOK(_ titleKey: String) { failingReads.remove(titleKey) }
 
@@ -1383,13 +1388,13 @@ public final class S2ArmLauncherModel: ObservableObject {
         alert.informativeText += "\n\n" + Localizer().t("s2arm.bundleIncomplete.howto")
         alert.addButton(withTitle: Localizer().t("s2arm.bundleIncomplete.download"))
         alert.addButton(withTitle: Localizer().t("s2arm.bundleIncomplete.later"))
-        if alert.runModal() == .alertFirstButtonReturn { NSWorkspace.shared.open(Self.fullDownloadURL) }
+        if runAlert(alert) == .alertFirstButtonReturn { NSWorkspace.shared.open(Self.fullDownloadURL) }
     }
 
     private func explainMissing(_ key: String) {
         let alert = NSAlert()
         alert.messageText = Localizer().t(key)
-        alert.runModal()
+        _ = runAlert(alert)
     }
 
     /// 删这款（IPA / 资源包 / 中间产物 / 缓存；存档与原始游戏文件保留）。

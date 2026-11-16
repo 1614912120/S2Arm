@@ -67,7 +67,7 @@ NSArray<S2ACPatchGroup *> *S2ACPatchGroupsFromTSV(NSString *text) {
         if (c.count < 9 || !c[0].length) continue;
         if ([c[0] hasPrefix:@"cheat:"]) continue;
         if ([c[0] hasPrefix:@"mod:"]) continue;   // 玩家导入的 mod 带的代码补丁：跟资源 Mod 页的开关走（runtime/src/cpatch.c cp_mod_on），不进画面补丁页
-        if ([c[0] hasPrefix:@"gfx:"]) continue;   // 画面类（提分辨率 / 画质）iOS 上不打不列（11-13 维护者；运行时 runtime/src/cpatch.c 同样一律不开）   // 编进包的金手指（pack/cpatch.py scan_cheats）在金手指页开关（ios/vpad_cheats.m → Cheats.cs → s2a_cpatch_cheat），不进画面补丁页
+        if ([c[0] hasPrefix:@"gfx:"] && !(c.count > 13 && [c[13] isEqual:@"load"])) continue;   // 画面类只列降负载的（表第 14 列方向 load，11-16 维护者）；提画质 / 认不出的 iOS 上不打不列（运行时 runtime/src/cpatch.c 同口径）   // 编进包的金手指（pack/cpatch.py scan_cheats）在金手指页开关（ios/vpad_cheats.m → Cheats.cs → s2a_cpatch_cheat），不进画面补丁页
         // 自适应画幅一族（pack/cpatch.py adapt_families）的宽 / 窄两份只列一项，开关按族编号（runtime/src/cpatch.c 按当前画幅开其一）
         BOOL adapt = [c[0] hasPrefix:@"wsauto:"];
         // 定画幅的几份宽屏变体（表第 11 列画幅 > 0，pack/cpatch.py）也只列一项，开关写总编号 widescreen:auto（runtime/src/cpatch.c 按当前屏幕比例开最近的一份）

@@ -316,8 +316,12 @@ NSDictionary *s2a_ios_sgrade_state(NSString *gid) {
     NSArray *fSt = nil; for (NSString *k in st) if ([k hasPrefix:@"fps:"] && [st[k][0] isEqual:@"开"]) { fSt = st[k]; break; }   // 非玩家句
     s = opted ? @"opted_out" : !fpsP ? missing(@"fps") : !fon ? (fAuto ? @"off_auto" : @"off_user") : @"on";
     out[@"fps"] = @{@"state": s, @"lastRun": s2a_ios_cpatch_result(fSt) ?: @"", @"autoOff": fAuto ?: NSNull.null, @"versions": kit[@"fps"][@"versions"] ?: @{}};
-    // 画面：iPhone 一律不打
-    out[@"gfx"] = @{@"state": opted ? @"opted_out" : @"mac_only"};
+    // 画面：iPhone 只打降负载的（11-16，表第 14 列方向 load，见 cpatch_model.m）；包里没有降负载画面补丁 = 画面补丁只在 Mac 版
+    NSSet *gon = S2ACPatchEnabled(groups, d); NSArray *gIds = nil; for (S2ACPatchGroup *g in groups) if ([g.kind isEqual:@"gfx"]) gIds = [g.items valueForKey:@"ident"];
+    BOOL gAny = NO; NSDictionary *gAuto = nil; for (NSString *k in gIds) { if ([gon containsObject:k]) gAny = YES; if (!gAuto) gAuto = autoOff[[@"patch\t" stringByAppendingString:k]]; }
+    out[@"gfx"] = @{@"state": opted ? @"opted_out" : !gIds.count ? @"mac_only" : gAny ? @"on" : (gAuto ? @"off_auto" : @"off_user"),
+                    @"active": gAny ? [gIds filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(id k, id b) { (void)b; return [gon containsObject:k]; }]] : @[],
+                    @"autoOff": gAuto ?: NSNull.null};
     // 金手指
     NSString *dir = s2a_ios_cheats_dir_for(gid); NSSet *con = cheats_enabled(dir); NSArray *ents = s2a_ios_cheat_entries(dir);
     NSDictionary *cAuto = nil; for (NSDictionary *e in ents) if (!cAuto) cAuto = autoOff[[@"cheat\t" stringByAppendingString:e[@"key"]]];
