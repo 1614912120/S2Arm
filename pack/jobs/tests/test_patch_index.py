@@ -14,7 +14,7 @@ class PatchIndexTests(unittest.TestCase):
         with zipfile.ZipFile(buf, "w") as z:
             z.writestr("[21x9 Ultrawide]/exefs/1.0.pchtxt", ws)
             z.writestr("[60FPS]/cheats/FF1D1C05670DB602.txt", b"[x]\n04000000 00000010 00000001\n")
-            z.writestr("[21x9 Ultrawide]/romfs/ui.bfres", b"data")          # 游戏数据：不收
+            z.writestr("[HD Textures]/romfs/ui.bfres", b"data")             # 游戏数据：不收（另一个 mod，不带 exefs）
             z.writestr("readme.md", b"hi")
         for repo in ("orig__mods", "ADEMOLA200__mods"):                   # 合集库里是同一个包
             d = self.m / repo / "Game [01006F8002326000]"; d.mkdir(parents=True)
@@ -44,6 +44,29 @@ class PatchIndexTests(unittest.TestCase):
         r = next(r for r in rows if r["kind"] == "pchtxt")
         self.assertEqual((r["path"], r["sha256"], r["archive_sha256"]),
                          ("Game [01006F8002326000]/mods.zip", hashlib.sha256(self.ws).hexdigest(), hashlib.sha256((self.m / "orig__mods/Game [01006F8002326000]/mods.zip").read_bytes()).hexdigest()))
+
+    def test_mod_with_romfs_companion_is_not_half_indexed(self):
+        # 11-16 D-Q3QJ（王国之泪 1800p：exefs 改分辨率 + romfs 调大显存堆，只收 exefs 半边 → 按 1800p 建缓冲分配失败崩溃）。期望手写：
+        #   ① 包里 1800p/ 同时有 exefs 补丁和 romfs/ → 它的补丁不收；② 散文件 Big/exefs + Big/romfs → 不收；
+        #   ③ 别的库里单独放着同一份 1800p 补丁（内容一样）→ 也不收；④ 同包里不带 romfs 的 Plain/exefs → 照收
+        p1800 = b"@nsobid-AABBCCDDEEFF00112233445566778899\n@enabled\n"
+        plain = b"@nsobid-AABBCCDDEEFF00112233445566778899\n// plain\n@enabled\n"
+        big = b"@nsobid-AABBCCDDEEFF00112233445566778899\n// big\n@enabled\n"
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr("1800p/exefs/1.2.1.pchtxt", p1800)
+            z.writestr("1800p/romfs/System/HeapSize/Product.HeapDef.byml.zs", b"heap")
+            z.writestr("Plain/exefs/1.2.1.pchtxt", plain)
+        g = self.m / "orig__mods" / "Zelda [0100F2C0115B6000]"; g.mkdir(parents=True)
+        (g / "res.zip").write_bytes(buf.getvalue())
+        (g / "Big/exefs").mkdir(parents=True); (g / "Big/exefs/1.2.1.pchtxt").write_bytes(big)
+        (g / "Big/romfs/System").mkdir(parents=True); (g / "Big/romfs/System/x.zs").write_bytes(b"x")
+        o = self.m / "other__mods" / "Zelda [0100F2C0115B6000]/1800p/exefs"; o.mkdir(parents=True)
+        (o / "1.2.1.pchtxt").write_bytes(p1800)
+        (self.m / "SOURCES.tsv").write_text("来源\tURL\t提交号\n" + "".join(f"{r}\tu\t{'c' * 40}\n" for r in ("orig__mods", "ADEMOLA200__mods", "other__mods")))
+        got = sorted(r["sha256"] for r in patch_index.dedupe(patch_index.scan(str(self.m))) if "0100F2C0115B6000" in r["gids"])
+        self.assertEqual(got, [hashlib.sha256(plain).hexdigest()])
+        self.assertEqual(sorted(h for _, _, h in patch_index.HALVES), sorted(hashlib.sha256(x).hexdigest() for x in (p1800, big)))
 
     def test_cheat_libraries_are_not_indexed_twice(self):
         os.rename(self.m / "orig__mods", self.m / "ChanseyIsTheBest__NX-60FPS-RES-GFX-Cheats")
