@@ -2954,7 +2954,8 @@ class WaitReadableTests(unittest.TestCase):
         import library
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "base.nsp"; p.write_bytes(b"x" * 5000)
-            c, msgs = self.ctx(); library.wait_readable(c, [p], poll=0.1)
+            # poll 取大：读完 join 当场返回、不真等；原来 0.1 秒在门禁负载下起线程 + 读 4 KB 就可能超过，先红后绿（11-15）
+            c, msgs = self.ctx(); library.wait_readable(c, [p], poll=30)
             self.assertEqual(msgs, [])
 
     def test_permission_denied_says_where_to_allow(self):
