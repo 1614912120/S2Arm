@@ -1174,7 +1174,8 @@ import S2ArmAppleAdapter
                 let targets = fixture.navigation.controlTargets(in: window)
                 let cover = try XCTUnwrap(targets.first { $0.id == "export.cover" })
                 let start = try XCTUnwrap(padFocus.frames["main"]?.first { $0.id == "export.start" })
-                let expectedContentWidth = min(1120, width - 96)
+                // 接鼠标、没接触控板的 Mac 是常显滚动条，要从可用宽度里扣掉它占的那条
+                let expectedContentWidth = min(1120, width - 96 - (scrollViews(in: host).first.map(scrollerReserve) ?? 0))
                 print("export-bounded \(language.code)/\(width): left=\(cover.frame.minX - bounds.minX), right=\(width - start.frame.maxX)")
                 XCTAssertEqual(cover.frame.minX - bounds.minX, 48, accuracy: 1, "出包内容最多 1120 pt 宽并靠左，左边距保持 48 pt")
                 XCTAssertEqual(width - start.frame.maxX, 48, accuracy: 1, "底栏操作应保持距窗口右边缘 48 pt")
@@ -1413,7 +1414,7 @@ import S2ArmAppleAdapter
                 let choice = try XCTUnwrap(targets.first { $0.id == "input.axis.source." + axis })
                 let invert = try XCTUnwrap(targets.first { $0.id == "input.axis.invert." + axis })
                 XCTAssertEqual(choice.frame.width, 124, accuracy: 1, "来源选择与反向开关必须共用 220 pt 操作列")
-                XCTAssertEqual(choice.frame.maxX, window.convertToScreen(host.bounds).maxX - 52, accuracy: 1)
+                XCTAssertEqual(choice.frame.maxX, window.convertToScreen(host.bounds).maxX - 52 - scrollerReserve(scroll), accuracy: 1)
                 XCTAssertEqual(choice.frame.union(invert.frame).width, 172, accuracy: 1)
             }
             try snapshot(host, "input-axes-\(language.code)")
@@ -1515,6 +1516,11 @@ import S2ArmAppleAdapter
         try await Task.sleep(for: .milliseconds(250))
         host.layoutSubtreeIfNeeded()
         return (host, window)
+    }
+
+    /// 常显滚动条占掉的宽度（浮层滚动条为 0）。
+    private func scrollerReserve(_ scroll: NSScrollView) -> CGFloat {
+        scroll.bounds.width - scroll.contentView.frame.width
     }
 
     private func scrollViews(in view: NSView) -> [NSScrollView] {
