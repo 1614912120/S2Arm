@@ -6,6 +6,7 @@
 #import <UIKit/UIGestureRecognizerSubclass.h>   // S2ATouchWatch 要改 state
 #include "native.h"
 #include "s2a_pad.h"
+#include "s2a_unattended.h"
 #include "motion_pick.h"   // 玩家 1 六轴来源仲裁（纯函数，单测 t_motion_pick）
 #include "NS2Module.h"
 #include "pad_liveness.h"
@@ -1095,6 +1096,26 @@ __attribute__((visibility("default"), used)) void s2a_pad_set_motion_enabled(int
     //   后台一律关（前后台切换时 setForeground: 也会再关一次）
     phone_motion_use(atomic_load(&g_ble_foreground) && !ns2);
 }
+// 体感「没反应」的两种情况，游戏真开了六轴时一局说一次（玩家反馈「陀螺仪 / 体感没实现」；之前都只写日志）：
+//   ① 正在用的手柄系统不给体感（Joy-Con 一代 / Xbox 等，slot_feedback.m）：体感退到手机陀螺仪；手机陀螺仪也关着就说用不了
+//   ② 触屏在操作、「手机陀螺仪」关着：体感没有来源
+//   操作来源稳定（S2A_MOTION_DWELL_MS）后才判，免得刚插上手柄的那一瞬误报；自动化局不说（s2a_unattended）
+int s2a_ios_slot_motion_capable(int slot);   // slot_feedback.m
+// 弱链接[lab]：s2a_dprompt_notice（dprompt.m 提供的提示条；输入工作台不编 dprompt.m，取不到就不提示）
+void s2a_dprompt_notice(NSString *title, NSString *body, double delay, double seconds) __attribute__((weak_import));
+static void motion_notice(int sel) {
+    static _Atomic int said_pad, said_off;
+    if (!s2a_dprompt_notice || s2a_unattended()) return;
+    int phone = s2a_phone_motion_available();
+    int which = 0;   // 1 手柄没体感、退到手机；2 手柄没体感、手机也关；3 触屏在操作、手机陀螺仪关
+    if (sel == S2A_PAD_SYSTEM && s2a_ios_slot_motion_capable(0) == 2 && !atomic_exchange(&said_pad, 1)) which = phone ? 1 : 2;
+    else if (sel == S2A_PAD_TOUCH && !phone && !atomic_exchange(&said_off, 1)) which = 3;
+    if (!which) return;
+    LOG("六轴：给玩家提示一次（%s）", which == 1 ? "手柄没体感，改用手机陀螺仪" : which == 2 ? "手柄没体感，手机陀螺仪也关着" : "触屏在操作，手机陀螺仪关着");
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSString *body = which == 1 ? S2AL(@"dprompt.motion.padNone.phone") : which == 2 ? S2AL(@"dprompt.motion.padNone.off") : S2AL(@"dprompt.motion.phoneOff");
+        s2a_dprompt_notice(S2AL(@"dprompt.motion.title"), body, 0, 12); });
+}
 __attribute__((visibility("default"), used)) int s2a_pad_read_motion(s2a_pad_motion *out) {
     if (!out) return 0;
     *out = (s2a_pad_motion){0};
@@ -1118,6 +1139,7 @@ __attribute__((visibility("default"), used)) int s2a_pad_read_motion(s2a_pad_mot
     s2a_pad_motion phone = {0};
     int phone_known = s2a_phone_motion_read(&phone);
 
+    if (settled) motion_notice(sel);
     int target = s2a_motion_pick(sel, motion.known, gc_known, phone_known);
     int cur = g_motion_src;
     int cur_ok = cur == S2A_MOTION_GC ? gc_known : cur == S2A_MOTION_NS2 ? motion.known : cur == S2A_MOTION_PHONE ? phone_known : 0;

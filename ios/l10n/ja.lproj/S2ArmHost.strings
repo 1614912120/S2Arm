@@ -365,6 +365,10 @@
 "dprompt.expiry.title" = "署名の有効期限が近づいています";
 "dprompt.ns2pro.body" = "画面を 4 本指で 1.5 秒長押しして設定を開き、「Switch 2 Pro コントローラーを有効にする」をオンにしてから、コントローラーのペアリングボタンを押してください。";
 "dprompt.ns2pro.title" = "Switch 2 Pro コントローラーを使用しますか？";
+"dprompt.motion.title" = "モーション操作";
+"dprompt.motion.padNone.phone" = "このコントローラーにはモーションセンサーがありません（初代 Joy-Con、Xbox コントローラーなど）。ゲームのモーション操作はスマホのジャイロで行います。スマホを傾けてください。";
+"dprompt.motion.padNone.off" = "このコントローラーにはモーションセンサーがなく（初代 Joy-Con、Xbox コントローラーなど）、スマホジャイロもオフのため、いまはモーション操作が使えません。使うには：左上の歯車 →「コントローラーとモーション」→「スマホジャイロ」をオン。";
+"dprompt.motion.phoneOff" = "このゲームはモーション操作を使いますが、「スマホジャイロ」がオフのため反応しません。使うには：左上の歯車 →「コントローラーとモーション」→「スマホジャイロ」をオン。";
 "gfx.antiAliasing" = "アンチエイリアス";
 "gfx.antiAliasing.high" = "SMAA 高";
 "gfx.antiAliasing.medium" = "SMAA 中";
