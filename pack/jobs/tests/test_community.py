@@ -51,6 +51,17 @@ class CommunityTests(unittest.TestCase):
         self.assertEqual((fps["available"], fps["verified"], fps["enabled"], fps["sources"], fps["relocate"]), (True, False, True, ["fpsrepo"], True))   # 1.1.1≠4.1.0：跨版本定位、不判死；30 帧那条不算
         self.assertEqual([(it["id"], it["enabled"], it["license"]) for it in r["graphics"]], [("widescreen:aa", True, "MIT"), ("gfx:bb", True, "")])   # 11-13 起没选过 = 默认开（Mac 画面类也开）；帧率 / 金手指不在这里
 
+    def test_other_kind_default_off(self):
+        # 11-15：认不出是画面的补丁（other:，声音 / 玩法等）列出来可开，但没选过 = 关：启动设置里 enabled 假、起局开关列表不带；玩家明确开了才带。期望手写
+        p = layout.image_mac(self.c, GID) / "cpatch.tsv"
+        write(p, p.read_text(encoding="utf-8") + "other:ee\tmain\t3\tother\tNo Music\t\to.pchtxt\t\t0\n")
+        g = {it["id"]: it for it in community.listing(self.c)["graphics"]}
+        self.assertEqual((g["other:ee"]["enabled"], g["other:ee"]["kind"], g["gfx:bb"]["enabled"]), (False, "other", True))
+        self.assertEqual(community.launch_env(self.c, GID)["S2A_CPATCH_ON"], "gfx:bb,widescreen:aa")
+        self.c.r = {"gameId": GID, "graphics": {"other:ee": True}}
+        community.save(self.c)
+        self.assertEqual(community.launch_env(self.c, GID)["S2A_CPATCH_ON"], "gfx:bb,other:ee,widescreen:aa")
+
     def test_save_and_launch_env(self):
         self.assertEqual(community.launch_env(self.c, GID), {"S2A_CPATCH_ON": "gfx:bb,widescreen:aa", "S2A_WIDESCREEN": "0"})   # 没选过：包里的补丁全开（11-13），开着宽屏补丁 S2Arm 满屏让开；60 帧由宿主定
         self.c.r.update(settings={"widescreen": False, "fps60": False}, graphics={"gfx:bb": True})
