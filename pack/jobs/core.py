@@ -1109,13 +1109,20 @@ class Context:
             env.update(win_runtime_env(runtime, self.engine, env.get("SystemRoot") or r"C:\Windows"))
             env["S2A_METAL_BIN"] = win_metal_dir(os.environ)
             return env
-        # 3 和 4 都是「作业 PATH 只有 Runtime + 系统目录」的便携运行环境。4 起不再带 oead / GNU timeout；
+        # 3、4、5 都是「作业 PATH 只有 Runtime + 系统目录」的便携运行环境。4 起不再带 oead / GNU timeout；5 起不再带 .NET 运行时；
         # 旧 schema 3 仍走这条 PATH（构建侧 build_app 会因 schema / runtimeDeps 不符而重打，不在这里改 PATH）。
-        if read(runtime / "versions.json", {}).get("runtimeSchema") in (3, 4):
-            # DOTNET 一并固定成自带的（#441 D-NDRE）：只设 DOTNET_ROOT / PATH 时，translator/dmsh_chain.py 等按「DOTNET → ~/.dotnet/dotnet → PATH」找，
-            #   玩家自己在 ~/.dotnet 装了别的版本就抢在前面，.NET 10 的翻译器跑不起来、出库前核工具失败（同 ipa.py 设 DOTNET 的口径）
-            env.update(DOTNET=str(runtime / "dotnet" / "dotnet"), DOTNET_ROOT=str(runtime / "dotnet"), DOTNET_MULTILEVEL_LOOKUP="0",
-                       S2A_PREBUILT_TOOLS=str(self.engine / "Binaries/Prepare"))
+        schema = read(runtime / "versions.json", {}).get("runtimeSchema")
+        if schema in (3, 4, 5):
+            # 5 起 Runtime 不带 .NET 运行时（出包用的 C# 工具随引擎预编为 NativeAOT 单文件，见 launchers/macos/bundle_engine.py）：
+            #   作业环境不再给 DOTNET_*；3 / 4 的旧 Runtime 还带，DOTNET 一并固定成自带的（#441 D-NDRE）：只设 DOTNET_ROOT / PATH 时，
+            #   translator/dmsh_chain.py 等按「DOTNET → ~/.dotnet/dotnet → PATH」找，玩家自己在 ~/.dotnet 装了别的版本就抢在前面（同 ipa.py 的口径）
+            if schema in (3, 4):
+                env.update(
+                    DOTNET=str(runtime / "dotnet" / "dotnet"),
+                    DOTNET_ROOT=str(runtime / "dotnet"),
+                    DOTNET_MULTILEVEL_LOOKUP="0",
+                )
+            env["S2A_PREBUILT_TOOLS"] = str(self.engine / "Binaries/Prepare")
             paths = [str(runtime / "python/bin"), str(runtime / "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
             # App 自带的 C 改写器（pack/rewriter.py 核源码指纹，与引擎不符时不用）：玩家机器零安装
             env["S2A_REWRITER_BUNDLED"] = str(runtime / "bin/s2a-rewrite")
@@ -1405,7 +1412,7 @@ def pid_start(pid):
     return result.stdout.strip()
 
 
-WIN_RUNTIME_PATH = ["python", r"python\Scripts", "dotnet", r"mingit\cmd", r"git\usr\bin", "zstd"]   # 同 bundle_runtime_win.env_cmd 的 PATH（tests 核两处一致）
+WIN_RUNTIME_PATH = ["python", r"python\Scripts", "dotnet", r"git\usr\bin", "zstd"]   # 同 bundle_runtime_win.env_cmd 的 PATH（tests 核两处一致）
 
 
 def win_metal_dir(environ):
@@ -1418,7 +1425,7 @@ def win_metal_dir(environ):
 
 
 def win_runtime_env(runtime, engine, system_root):
-    """Windows 出包作业的环境（同随包 s2arm_env.cmd）：只用随包 Python / .NET 运行时 / bash / MinGit / zstd + 系统目录，预编件在引擎 Binaries/Prepare（同 Mac）"""
+    """Windows 出包作业的环境（同随包 s2arm_env.cmd）：只用随包 Python / .NET 运行时 / bash / zstd + 系统目录，预编件在引擎 Binaries/Prepare（同 Mac）"""
     import ntpath
     rt = str(runtime)
     paths = [ntpath.join(rt, d) for d in WIN_RUNTIME_PATH] + [ntpath.join(system_root, "system32"), system_root,

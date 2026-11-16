@@ -76,7 +76,8 @@ class RewriteRefreshTests(unittest.TestCase):
              patch.object(rr.layout, "update_info", side_effect=lambda c, g, **f: self.info.setdefault(g, {}).update(f)), \
              patch.object(rr, "rewrite_modules", side_effect=rewrite), \
              patch.object(rr, "sgrade_off", return_value=sgrade is None), \
-             patch.object(rr, "sgrade_key", return_value=sgrade or "-"), patch.object(rr, "sgrade_rewrite", side_effect=self.fake_sgrade()):
+             patch.object(rr, "sgrade_key", return_value=sgrade or "-"), patch.object(rr, "sgrade_rewrite", side_effect=self.fake_sgrade()), \
+             patch.object(rr, "_refresh_bf_ios", return_value=[]):   # 补 _bf 一段另有单测（test_sgrade_bf.py）
             return rr.refresh_ios(self.c, games), kits
 
     def test_affected_module_replaced_others_untouched_and_id_recorded(self):
@@ -161,6 +162,23 @@ class RewriteRefreshTests(unittest.TestCase):
             with patch.object(rr, "rewrite_modules", side_effect=AssertionError("同一改写器不该再核")):
                 self.assertFalse(rr.refresh_mac(self.c, "0100A", rt))
 
+    def test_mac_hold_busy_leaves_runtime_untouched(self):
+        # 诊断 D-R8NG：后台补 S 级在锁外改写，换进前 hold() 拿不到锁（玩家点了开始）→ 放弃这款：返回 False，运行版本文件与清单原样
+        import contextlib, json
+        rt = self.tmp / "mac-hold"; (rt / "exefs").mkdir(parents=True)
+        for m in ("main", "sdk"):
+            (rt / "exefs" / m).write_bytes(b"x"); (rt / f"{m}.patched.bin").write_bytes(b"old")
+        man = json.dumps({"schema": 1, "files": {"main.patched.bin": [3, ""], "sdk.patched.bin": [3, ""]}, "gameId": "0100A"})
+        (rt / "manifest.json").write_text(man)
+        binary = fake_rewriter(self.tmp, ["main"])
+        with patch.object(rr, "rewriter_id", return_value="rid-new"), patch.object(rr, "rewriter_bin", return_value=binary), \
+             patch.object(rr, "rewrite_env", return_value=dict(os.environ)), patch.object(rr, "sgrade_off", return_value=True):
+            self.assertFalse(rr.refresh_mac(self.c, "0100A", rt, hold=lambda: contextlib.nullcontext(False)))
+            self.assertEqual(((rt / "main.patched.bin").read_bytes(), (rt / "manifest.json").read_text()), (b"old", man))
+            self.assertTrue(rr.refresh_mac(self.c, "0100A", rt, hold=lambda: contextlib.nullcontext(True)), "拿得到锁：照常换进")
+            self.assertEqual((rt / "main.patched.bin").read_bytes(), b"new-main")
+            self.assertEqual(json.loads((rt / "manifest.json").read_text())["rewriterId"], "rid-new")
+
     # S 级优化补到老游戏（v0.4.0）：补丁记号变了 → 全部模块换成带补丁的产物、补丁表与金手指原文进 kit（旧原文删掉）、记下记号；记号没变不再做
     def test_sgrade_upgrade_replaces_all_modules_and_tables(self):
         self.info["0100A"] = {"ios": {"rewriterId": "rid-new", "sgradeKey": "k-old"}}
@@ -221,7 +239,8 @@ class RewriteRefreshTests(unittest.TestCase):
              patch.object(rr, "sgrade_key", return_value="k"), patch.object(rr.layout, "game_info", return_value={}), \
              patch.object(rr.layout, "update_info", side_effect=lambda c, g, **f: self.info.setdefault(g, {}).update(f)), \
              patch.object(rr.layout, "ios_kit", return_value=self.tmp), patch.object(rr.layout, "nro_kept", return_value=self.tmp / "no-kept"), \
-             patch.object(rr, "check_and_update", side_effect=lambda c, g, *a: "unavailable" if g == "0100A" else "updated"):
+             patch.object(rr, "check_and_update", side_effect=lambda c, g, *a: "unavailable" if g == "0100A" else "updated"), \
+             patch.object(rr, "_refresh_bf_ios", return_value=[]):
             self.assertEqual(rr.refresh_ios(self.c, ["0100A", "0100B"]), ["0100B"])
         self.assertTrue(any("甲游戏" in e and "没补上 S 级优化" in e and "乙游戏" not in e for e in self.events), self.events)
         self.assertEqual(self.info["0100A"]["ios"]["sgradeMissing"], "k", "缺原件补不上：记下这一版记号，「更新 iPhone」不再因它重装（install.sgrade_pending）")
@@ -287,7 +306,7 @@ class KeptNroRefreshTests(unittest.TestCase):
 
     def test_refresh_ios_counts_kept(self):
         with patch.object(rr, "rewriter_id", return_value="rid"), patch.object(rr, "pending_ios", return_value=[]), \
-             patch.object(rr.layout, "ios_kit", return_value=self.base):
+             patch.object(rr.layout, "ios_kit", return_value=self.base), patch.object(rr, "_refresh_bf_ios", return_value=[]):
             self.assertEqual(self.run_add(lambda c, g: rr.refresh_ios(c, [g])), ["0100A"])
         self.assertTrue((self.base / "nro1.patched.bin").is_file())
 
@@ -341,3 +360,168 @@ class SwapKeepsOld(unittest.TestCase):
         with patch.object(rr.shutil, "copyfile", side_effect=boom), self.assertRaises(OSError):
             rr.apply_sgrade(self.out, self.kit, ["main"], [self.newtab])
         self.assertEqual(self.state(), before)
+
+
+class OriginalExefsFormatTests(unittest.TestCase):
+    """S 级升级的原始 exefs 来源：NUP、Switch 2 dump、extract / loose；只用合成数据。"""
+
+    TID = "0100000000000000"
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.saved = self.tmp / "saved-program"
+        self.engine = Path(__file__).resolve().parents[3]
+        self.game = {"id": self.TID, "name": "synthetic"}
+        self.packages = []
+        self.reader_args = None
+
+        def run(args, log, env):
+            self.reader_args = list(map(str, args))
+            out = Path(args[2]) / "exefs"
+            out.mkdir(parents=True)
+            (out / "main").write_bytes(b"reader-main")
+            (out / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+
+        self.c = types.SimpleNamespace(
+            private=self.tmp, library=self.tmp / "library", engine=self.engine,
+            keys=self.tmp / "prod.keys", env=lambda: dict(os.environ), run=run,
+        )
+        self.c.keys.write_text("synthetic")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def original(self, packages=None):
+        import build, library, sgrade
+        rows = self.packages if packages is None else packages
+        with patch.object(sgrade, "saved_program", return_value=None), \
+             patch.object(build, "extract_valid", return_value=False), \
+             patch.object(rr.layout, "image_mac", return_value=self.tmp / "no-mac"), \
+             patch.object(rr.layout, "path", return_value=self.saved), \
+             patch.object(library, "selected_packages", return_value=rows):
+            return rr.original_exefs(self.c, self.game, self.tmp / "work")
+
+    def package(self, source, fmt, kind="base", version=0):
+        return {"type": kind, "version": version, "format": fmt, "path": str(source),
+                "titleId": self.TID if kind == "base" else f"{int(self.TID, 16) | 0x800:016X}"}
+
+    def assert_saved(self, source_main):
+        result = self.original()
+        self.assertEqual(result, self.saved)
+        self.assertEqual((self.saved / "main").read_bytes(), source_main)
+        self.assertEqual((self.saved / "main.npdm").read_bytes(), jobcase.synthetic_npdm(int(self.TID, 16)))
+
+    def test_extract_and_loose_use_existing_exefs_layout_and_save_copy(self):
+        for fmt in ("extract", "loose"):
+            with self.subTest(format=fmt):
+                import shutil
+                shutil.rmtree(self.saved, ignore_errors=True)
+                root = self.tmp / fmt
+                exefs = root / "exefs"; exefs.mkdir(parents=True)
+                (exefs / "main").write_bytes(fmt.encode())
+                (exefs / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+                self.packages = [self.package(root, fmt)]
+                self.assert_saved(fmt.encode())
+                self.assertEqual((exefs / "main").read_bytes(), fmt.encode(), "来源目录保持原样")
+
+    def test_dump_uses_selected_latest_update_exefs_and_saves_copy(self):
+        root = self.tmp / "dump"
+        base = root / "base" / "exefs"; base.mkdir(parents=True)
+        (base / "main").write_bytes(b"base-main")
+        (base / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+        older = root / "updates" / "2" / "exefs"; older.mkdir(parents=True)
+        (older / "main").write_bytes(b"older-update")
+        (older / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+        newest = root / "updates" / "9" / "exefs"; newest.mkdir(parents=True)
+        (newest / "main").write_bytes(b"selected-update")
+        (newest / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+        self.packages = [self.package(root, "dump")]
+        self.assert_saved(b"selected-update")
+
+    def test_nup_uses_base_plus_selected_update_and_saves_copy(self):
+        import library
+        ns2_nup = library.engine_tool(self.c, "ns2_nup")
+        ns2_dump = library.engine_tool(self.c, "ns2_dump")
+        from jobcase import synthetic_nup, synthetic_npdm
+        source = self.tmp / "synthetic.nup"
+        app = int(self.TID, 16)
+        synthetic_nup(source, app, [
+            (ns2_nup.BASE, app, 0,
+             {"main": b"nup-base", "main.npdm": synthetic_npdm(app)}, {"base.bin": b"base-romfs"}, {}),
+            (ns2_nup.UPDATE, app | 0x800, 65536,
+             {"main": b"nup-old-update", "main.npdm": synthetic_npdm(app)}, {"old.bin": b"old-romfs"}, {}),
+            (ns2_nup.UPDATE, app | 0x800, 131072,
+             {"main": b"nup-selected-update", "main.npdm": synthetic_npdm(app)}, {"huge.bin": b"not-extracted"}, {}),
+        ])
+        self.packages = [self.package(source, "nup", "base"),
+                         self.package(source, "nup", "update", 131072)]
+        import hashlib
+        with ns2_nup.Nup(str(source)) as container:
+            expected_exefs = ns2_nup.scan(container)[2][131072].exefs
+        before = hashlib.sha256(source.read_bytes()).digest()
+        with patch.object(library, "engine_tool", side_effect=lambda _c, name: {"ns2_nup": ns2_nup, "ns2_dump": ns2_dump}[name]), \
+             patch.object(ns2_nup, "write_tree", wraps=ns2_nup.write_tree) as write_tree:
+            self.assert_saved(b"nup-selected-update")
+        self.assertEqual(write_tree.call_args.args[1], expected_exefs, "只写所选更新包的 exefs 目录，不解 romfs")
+        self.assertEqual(hashlib.sha256(source.read_bytes()).digest(), before, "NUP 原件保持不变")
+
+    def test_each_extracted_format_missing_npdm_returns_none(self):
+        for fmt in ("dump", "extract", "loose"):
+            with self.subTest(format=fmt):
+                root = self.tmp / (fmt + "-missing")
+                exefs = root / ("base/exefs" if fmt == "dump" else "exefs")
+                exefs.mkdir(parents=True)
+                (exefs / "main").write_bytes(b"main-without-npdm")
+                self.packages = [self.package(root, fmt)]
+                self.assertIsNone(self.original())
+
+    def test_nup_missing_main_returns_none(self):
+        import library
+        ns2_nup = library.engine_tool(self.c, "ns2_nup")
+        from jobcase import synthetic_nup, synthetic_npdm
+        source = self.tmp / "missing-main.nup"
+        app = int(self.TID, 16)
+        synthetic_nup(source, app, [(ns2_nup.BASE, app, 0,
+                                     {"main.npdm": synthetic_npdm(app)}, {"r": b"r"}, {})])
+        self.packages = [self.package(source, "nup")]
+        self.assertIsNone(self.original())
+
+    def test_nsp_reader_exefs_only_remains_negative_control(self):
+        import toolchain
+        source = self.tmp / "synthetic.nsp"; source.write_bytes(b"nsp fixture")
+        self.packages = [self.package(source, "nsp")]
+        with patch.object(toolchain, "reader", return_value="synthetic-reader"):
+            result = self.original()
+        self.assertEqual(result, self.saved)
+        self.assertIn("--exefs-only", self.reader_args)
+        self.assertIn(str(source), self.reader_args)
+
+    def test_wrong_program_id_is_failure_not_crash(self):
+        # 维护方修正：程序号不符等原件问题统一成 Failure（升级循环 check_and_update 外层只接 Failure / OSError / SubprocessError；
+        #   原先 ValueError 穿出去整轮升级作业崩掉）。期望手写：抛 Failure、不留保存的副本
+        from core import Failure
+        root = self.tmp / "wrong"; exefs = root / "exefs"; exefs.mkdir(parents=True)
+        (exefs / "main").write_bytes(b"x")
+        (exefs / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16) ^ 0x1000))
+        self.packages = [self.package(root, "extract")]
+        with self.assertRaises(Failure):
+            self.original()
+        self.assertFalse((self.saved / "main").exists())
+
+    def test_zbic_reader_passed_explicitly(self):
+        # 维护方修正：ZBIC 压缩的 NSO 要 nx_unpack 解；S 级升级这条路显式把读取器交给 normalize_exefs（作业进程环境里没有 S2A_NX_UNPACK）
+        import build, library
+        ns2_dump = library.engine_tool(self.c, "ns2_dump")
+        reader = self.tmp / "nx_unpack"; reader.write_bytes(b"#!")
+        root = self.tmp / "zb"; exefs = root / "exefs"; exefs.mkdir(parents=True)
+        (exefs / "main").write_bytes(b"m"); (exefs / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+        self.packages = [self.package(root, "extract")]
+        seen = []
+        real = ns2_dump.normalize_exefs
+        def spy(src, dst, tid, nxu=None):
+            seen.append(nxu); return real(src, dst, tid, nxu)
+        with patch.object(build, "reader_program", return_value=reader), patch.object(ns2_dump, "normalize_exefs", side_effect=spy), \
+             patch.object(library, "engine_tool", side_effect=lambda _c, name: ns2_dump):
+            self.original()
+        self.assertEqual(seen, [str(reader)])

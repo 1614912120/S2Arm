@@ -14,6 +14,9 @@ import java.util.Set;
 public final class LibraryActivity extends Activity {
     private GameLibrary library;
     private TextView status;
+    // #528 item 15: "the last game session ended abnormally", once, above the status line; never blocks the library.
+    private LinearLayout notice;
+    private TextView noticeText;
     private LinearLayout more;
     private LibraryShelf shelf;
     private CheckBox fpsOverlay;
@@ -68,6 +71,23 @@ public final class LibraryActivity extends Activity {
                 display.edit().putBoolean("fps", checked).apply();
         });
         more.addView(fpsOverlay);
+        // 画质：高画质（打开 EASU 等上屏增强）/ 更省电（缺省）。存在 display 偏好 quality_high，游戏进程开局时读（MainActivity → NativeBridge.configureHighQuality）
+        android.widget.RadioGroup quality = new android.widget.RadioGroup(this);
+        quality.setOrientation(android.widget.RadioGroup.HORIZONTAL);
+        android.widget.RadioButton high = new android.widget.RadioButton(this), saver = new android.widget.RadioButton(this);
+        high.setId(android.view.View.generateViewId()); saver.setId(android.view.View.generateViewId());
+        high.setText(R.string.quality_high); saver.setText(R.string.quality_saver);
+        high.setTextColor(0xFFFFFFFF); saver.setTextColor(0xFFFFFFFF);
+        quality.addView(high); quality.addView(saver);
+        quality.check(display.getBoolean("quality_high", false) ? high.getId() : saver.getId());
+        quality.setOnCheckedChangeListener((group, id) -> {
+            boolean on = id == high.getId();
+            if (display.getBoolean("quality_high", false) != on) display.edit().putBoolean("quality_high", on).apply();
+        });
+        more.addView(quality);
+        android.widget.TextView qualityNote = new android.widget.TextView(this);
+        qualityNote.setText(R.string.quality_note); qualityNote.setTextColor(0xFFB0B0B0); qualityNote.setTextSize(12);
+        more.addView(qualityNote);
         // #528 item 15: works without any game; the bundle goes to whatever app the player picks.
         Button exportButton = new Button(this); exportButton.setText(R.string.export_diagnostics);
         exportButton.setOnClickListener(v -> exportDiagnostics(exportButton, false));
@@ -77,10 +97,28 @@ public final class LibraryActivity extends Activity {
         saveButton.setOnClickListener(v -> exportDiagnostics(saveButton, true));
         more.addView(saveButton);
         root.addView(more, new android.widget.FrameLayout.LayoutParams(Math.round(320 * density), -1, android.view.Gravity.END));
+        // 状态区在底部：上一局异常结束的提示（有才显示），下面是状态行
+        LinearLayout footer = new LinearLayout(this); footer.setOrientation(LinearLayout.VERTICAL);
+        notice = new LinearLayout(this); notice.setOrientation(LinearLayout.VERTICAL); notice.setVisibility(android.view.View.GONE);
+        notice.setPadding(pad, pad / 2, pad, pad / 2); notice.setBackgroundColor(0xE6332A12);
+        noticeText = new TextView(this); noticeText.setTextColor(0xFFFFFFFF);
+        notice.addView(noticeText);
+        // 入口复用「更多」面板里的导出 / 保存：同一条路径、同一个按钮的忙碌状态
+        LinearLayout noticeActions = new LinearLayout(this);
+        Button noticeExport = new Button(this); noticeExport.setText(R.string.export_diagnostics);
+        noticeExport.setOnClickListener(v -> { hideNotice(); exportDiagnostics(exportButton, false); });
+        Button noticeSave = new Button(this); noticeSave.setText(R.string.save_diagnostics);
+        noticeSave.setOnClickListener(v -> { hideNotice(); exportDiagnostics(saveButton, true); });
+        Button noticeDismiss = new Button(this); noticeDismiss.setText(R.string.last_session_dismiss);
+        noticeDismiss.setOnClickListener(v -> hideNotice());
+        noticeActions.addView(noticeExport); noticeActions.addView(noticeSave); noticeActions.addView(noticeDismiss);
+        notice.addView(noticeActions);
+        footer.addView(notice);
         // 状态行只给玩家看得懂的：导入进度、失败原因；库清单（Games: 文件数 / 哈希…）只进日志，不上屏
         status = new TextView(this); status.setVisibility(android.view.View.GONE);
         status.setTextColor(0xFFFFFFFF); status.setPadding(pad, pad / 2, pad, pad / 2); status.setBackgroundColor(0xB3000000);
-        root.addView(status, new android.widget.FrameLayout.LayoutParams(-1, -2, android.view.Gravity.BOTTOM));
+        footer.addView(status);
+        root.addView(footer, new android.widget.FrameLayout.LayoutParams(-1, -2, android.view.Gravity.BOTTOM));
         setContentView(root);
         library = new GameLibrary(getApplicationContext(), new GameLibrary.Listener() {
             @Override public void onStatus(String text) { runOnUiThread(() -> {
@@ -101,6 +139,28 @@ public final class LibraryActivity extends Activity {
     }
 
     private void show(String text) { status.setText(text); status.setVisibility(android.view.View.VISIBLE); }
+
+    // #528 item 15: the last game session died in the foreground (LastSession, the marker the :game process keeps).
+    //   Asked once: the marker is cleared before the notice shows. Not while a game process lives (split screen can
+    //   keep the game in front next to the library); "bg" or no marker never asks.
+    private void checkLastSession() {
+        java.io.File dir = getFilesDir();
+        if (LastSession.read(dir) != LastSession.FOREGROUND || GameActivity.runningPid(this) != 0) return;
+        long markedAt = LastSession.markedAt(dir);
+        try { LastSession.mark(dir, LastSession.NONE); }
+        catch (java.io.IOException | RuntimeException error) { android.util.Log.w("S2Arm", "Cannot clear the session mark", error); }
+        android.content.Context app = getApplicationContext();
+        new Thread(() -> {
+            String text = LastSessionNotice.text(app, markedAt);   // a binder call for the exit reason: off the main thread
+            runOnUiThread(() -> {
+                if (isDestroyed()) return;
+                noticeText.setText(text);
+                notice.setVisibility(android.view.View.VISIBLE);
+            });
+        }, "s2a-last-session").start();
+    }
+
+    private void hideNotice() { notice.setVisibility(android.view.View.GONE); }
 
     private void launch(String titleId) { launch(titleId, 0); }
 
@@ -224,6 +284,7 @@ public final class LibraryActivity extends Activity {
             getIntent().removeExtra(EXTRA_IMPORT_STAGING); // do not repeat on later resumes
             if (receive) receiveImport(); else library.scanImports(staging);
         }
+        checkLastSession();
     }
     @Override protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);

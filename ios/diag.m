@@ -207,6 +207,13 @@ static NSURL *build_zip(NSUInteger cap, BOOL slim, NSString **err) {
     }
     NSArray *extra = slim ? @[@"unpack.log"] : @[@"frames.tsv", @"threads.txt", @"unpack.log", @"far_sites.tsv"];   // far_sites.tsv：远端缺页点表（far.c，地址根修的读数）
     for (NSString *f in extra) { NSString *src = [D stringByAppendingPathComponent:f]; if ([fm fileExistsAtPath:src]) add(src, [@"logs/" stringByAppendingString:f], cap); }
+    // 多款容器：每款的解包日志在本款文档根 Documents/games/<游戏号>/unpack.log（runtime/src/pack_apply.c 的 logp），上面只收进程级那份、永远收不到
+    //   （D-4VAX「装不上」：解小文件 -4 的现场 errno 只在这里，诊断包里一行都没有）。每款一份，放 logs/unpack_<游戏号>.log
+    {   NSString *G = [D stringByAppendingPathComponent:@"games"];
+        for (NSString *gid in [[fm contentsOfDirectoryAtPath:G error:nil] sortedArrayUsingSelector:@selector(compare:)]) {
+            NSString *src = [[G stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"unpack.log"];
+            if ([fm fileExistsAtPath:src]) add(src, [NSString stringWithFormat:@"logs/unpack_%@.log", gid], cap);
+        } }
     int crash = 0, hang = 0, exits = 0;
     NSString *mk = [D stringByAppendingPathComponent:@"metrickit"];
     for (NSString *f in [[fm contentsOfDirectoryAtPath:mk error:nil] sortedArrayUsingSelector:@selector(compare:)]) {

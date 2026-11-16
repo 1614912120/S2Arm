@@ -273,6 +273,20 @@ class Upgrade3Tests(JobCase):
                 ios_fixture(self.c, A); breaks()
                 self.assertFalse(library.iphone_ready(self.c, A))
 
+    def test_iphone_img_tells_exportable_from_old_format(self):
+        """「导出自签包」能不能直接导出（catalog iphoneExportable，11-15）：资源包清单 format = img 才算；旧格式 / 没清单 / 读不出都不算（点了先重出再导出）"""
+        import library
+        from jobcase import ios_fixture
+        atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=A, name="Alpha")]))
+        self.assertFalse(library.iphone_img(self.c, A))   # 没出过
+        _, pack = ios_fixture(self.c, A)
+        atomic(pack / "manifest.json", {"version": 3, "format": "img", "imgFile": "game.img"})
+        self.assertTrue(library.iphone_img(self.c, A))
+        atomic(pack / "manifest.json", {"version": 2, "index_sha256": "x"})   # 旧格式（散文件 / tar）
+        self.assertFalse(library.iphone_img(self.c, A))
+        (pack / "manifest.json").write_text("{坏")
+        self.assertFalse(library.iphone_img(self.c, A))
+
 
 class DevicesTests(JobCase):
     """devices()：exFAT 搬库带来的 ._<名>.json 附属文件不算设备记录；单个记录读不出不拖垮整个请求（#911）"""

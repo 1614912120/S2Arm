@@ -1065,8 +1065,18 @@ def inspect(c, source, icon_dir, keyfile=None, *, source_id=None):
     # NCZ 解压临时文件落游戏库那块盘（#612：Windows 上游戏库在别的盘、系统盘只剩百来 MB 时，读取器缺省写 %TEMP%，导入报空间不足）
     scratch = tempfile.TemporaryDirectory(prefix=".s2a-inspect-", dir=c.library if c.library.is_dir() else c.private)
     try:
-        c.run(["dotnet", toolchain.reader(c), keyfile, "--inspect", source, icon_dir, f"--temp-dir={scratch.name}"],
-              c.logs / log_name, on_line=lines.append)
+        c.run(
+            [
+                toolchain.reader(c),
+                keyfile,
+                "--inspect",
+                source,
+                icon_dir,
+                f"--temp-dir={scratch.name}",
+            ],
+            c.logs / log_name,
+            on_line=lines.append,
+        )
     except Failure as error:
         if error.code not in ("tool_exit", "job_failed"):
             raise
@@ -1409,6 +1419,8 @@ def check_pack_space(c, game, *, compiler_policy=None):
             floor = target if any(not v["enough"] for v in relevant) else 0
             cache_result = trim(c.work_root, current_gid=game["id"],
                                 **dict(compiler_policy, min_free_bytes=floor))
+            from cache_retention import trim_build_caches
+            trim_build_caches(c.work_root / "run" / "s2arm", current_gid=game["id"])   # 盘紧时连带出包可重建缓存（aoc 等）按总量上限回收
             budget = space_budget(c, game)
             budget["compilerCache"] = cache_result
         budget["compilerMinFreeBytes"] = target
@@ -1912,6 +1924,7 @@ def catalog(c):
         # 升级启动器不算要重新准备（11-08 维护者：覆盖升级状态要保留）：运行版本自带宿主，旧版照常能玩；输入变了才要重做
         game["needsPreparation"] = not game["ready"] or manifest.get("inputIdentity") != input_identity(game)
         game["iphoneReady"] = iphone_ready(c, game["id"])
+        game["iphoneExportable"] = game["iphoneReady"] and iphone_img(c, game["id"])   # 「导出自签包」能直接导出（单一 IMG 资源包）；旧格式要先重出
         game["downstream"] = downstream.describe(c, game)   # 下游深度方案（pack/downstream/schemes.json）：命中时启动器弹确认页
         game["sgrade"] = sgrade_badge(c, game["id"], image)   # 游戏库封面左上角金色 S（v0.4.0）
         game["iphoneRestorable"] = layout.phone_ipa(c, previous=True).is_file()   # 换壳后可装回上一版（install.restore_previous）
@@ -2564,6 +2577,8 @@ def clean(c):
             prune_build(c, game["id"], retain_compiler=False)   # 用户显式清缓存保留原有全清语义，不套用 Q15 自动保留策略
             from cache_retention import engine_installed_at, prune_tool_keys
             prune_tool_keys(c.work_root, engine_installed_at(c.engine))   # 顺带清当前引擎用不到的工具缓存旧键
+            from cache_retention import trim_build_caches
+            trim_build_caches(c.work_root / "run" / "s2arm")   # 出包可重建缓存总量上限（同 ipa.py 出包收尾）
         elif kind == "sources":
             # 只删 0.1.0-beta.3 及以前复制进游戏库的托管副本；原地导入的原件是玩家的文件，只读、不删
             other = {p["path"] for g in c.catalog()["games"] if g["id"] != game["id"] for p in g["packages"]}
@@ -2595,6 +2610,15 @@ def iphone_ready(c, gid):
     try:
         return (kit / "main.npdm").stat().st_size > 0 and any(kit.glob("*.fixups.tsv")) and (pack / "manifest.json").is_file()
     except OSError:
+        return False
+
+
+def iphone_img(c, gid):
+    """这款的 iPhone 资源包是不是单一 IMG 形态（manifest format = img，同 install.img_pack）：是才能直接导出成 .img；
+    旧格式（散文件 / tar）点「导出自签包」时先重出 iPhone 包再导出（11-15 维护者：玩家点的是导出，就把导出做完）"""
+    try:
+        return json.loads((layout.ios_pack(c, gid) / "manifest.json").read_text(encoding="utf-8")).get("format") == "img"
+    except (OSError, ValueError, AttributeError):
         return False
 
 

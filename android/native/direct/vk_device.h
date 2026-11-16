@@ -67,6 +67,11 @@ struct s2a_vk_device {
     int formats_4444_enabled;
     // VK_EXT_depth_clip_control 已启用（depthClipControl）：管线可把裁剪深度设成 [-1, 1]（nvn_backend.h NVN_GPU_CAP_DEPTH_CLIP_CTL）
     int depth_clip_control_enabled;
+    // #1070 第 2 步探针：VK_EXT_map_memory_placed（把设备内存映射到指定 CPU 地址，池镜像零拷贝要它）。只查不启用：
+    //   placed_ext = 设备列出了扩展；placed_map / range / unmap_reserve = 三项特性；placed_align = minPlacedMemoryMapAlignment；
+    //   map_memory2_ext = 列出 VK_KHR_map_memory2（placed 依赖它）；max_alloc = maxMemoryAllocationSize（大池要按它拆段）
+    int placed_ext, placed_map, placed_range, placed_unmap_reserve, map_memory2_ext;
+    uint64_t placed_align, max_alloc;
     uint32_t p16_fallback_mask;
     int bc_decode_forced;   // S2A_VK_BC_DECODE=force（仅 debug 构建生效）
     // VK_EXT_external_memory_host：把 host 指针（guest 内存池直映射地址）导入成 VkBuffer 内存的零拷贝路径。

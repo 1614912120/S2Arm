@@ -61,10 +61,11 @@ int main(void) {
         NVNbuffer buf; NVNmemoryPool pool; NVNtexture tex;
         memset(&buf, 0xa5, sizeof buf); memset(&pool, 0xa5, sizeof pool); memset(&tex, 0xa5, sizeof tex);
         API(nvnBufferFlushMappedRange)(&buf, 0, 64); API(nvnBufferInvalidateMappedRange)(&buf, 0, 64);
+        API(nvnMemoryPoolFlushMappedRange)(&pool, 0, 64);   // P1-190 余项：池刷新同样先核魔数（0xa5 填的 mem 非空，原先照样 ft_flush 去读）
         API(nvnMemoryPoolFinalize)(&pool); API(nvnMemoryPoolFinalize)(&pool);
         API(nvnTextureFinalize)(&tex); API(nvnTextureFinalize)(&tex);
         API(nvnBufferFinalize)(&buf);
-        checks++; printf("✓ 没初始化过的缓冲刷新 / 作废、池收尾两次、纹理收尾两次：不崩\n");
+        checks++; printf("✓ 没初始化过的缓冲刷新 / 作废、池刷新、池收尾两次、纹理收尾两次：不崩\n");
     }
     printf("✓ t_nvn_map_noaccess：%u 项全过\n", checks);
     return 0;

@@ -18,6 +18,9 @@
     <string name="player_err_in_place_next">Put the game folder back as it was (or copy it from your computer again), then tap \"Use a game folder in place…\" in the library to register it again.</string>
     <string name="import_progress">Importing game: %1$d / %2$d MiB</string>
     <string name="fps_overlay_show">Show FPS (successful frame submissions)</string>
+    <string name="quality_high">High quality</string>
+    <string name="quality_saver">Battery saver</string>
+    <string name="quality_note">High quality turns on edge-adaptive spatial upscaling and similar features for a sharper picture.</string>
     <string name="fps_overlay_description">Successful game frame submissions per second; not the screen refresh rate</string>
     <!-- #528 item 15: player diagnostic bundle (library screen) -->
     <string name="export_diagnostics">Export diagnostics…</string>
@@ -27,6 +30,16 @@
     <string name="save_diagnostics">Save diagnostics to file…</string>
     <string name="save_diagnostics_done">Diagnostics saved: %1$s</string>
     <string name="save_diagnostics_failed">Saving diagnostics failed: %1$s</string>
+    <!-- #528 item 15: last game session died in the foreground (LastSession); shown once in the library's status area -->
+    <string name="last_session_abnormal">The last game session ended abnormally. A diagnostics bundle helps us find out why.</string>
+    <string name="last_session_abnormal_reason">The last game session ended abnormally (%1$s). A diagnostics bundle helps us find out why.</string>
+    <string name="last_session_crash">app crash</string>
+    <string name="last_session_native_crash">native crash, signal %1$d</string>
+    <string name="last_session_not_responding">not responding</string>
+    <string name="last_session_low_memory">closed by the system: out of memory</string>
+    <string name="last_session_signaled">closed by the system: signal %1$d</string>
+    <string name="last_session_excessive">closed by the system: too many resources used</string>
+    <string name="last_session_dismiss">Not now</string>
     <string name="console_mode_handheld">Console mode: handheld (tap for docked)</string>
     <string name="console_mode_docked">Console mode: docked (tap for handheld)</string>
     <string name="console_mode_switched">Console mode switched.</string>
