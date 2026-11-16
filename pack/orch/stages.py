@@ -140,7 +140,8 @@ class Dependencies:
         self.env['PYTHONIOENCODING'] = 'utf-8'
         self.env['S2A_DEPS_OUT'] = str(self.raw)
         self.env['PYTHONPATH'] = str(REPO / 'tools/stage_deps_hook') + (os.pathsep + self.env['PYTHONPATH'] if self.env.get('PYTHONPATH') else '')
-        self.env.setdefault('S2A_DEPS_EXTERNAL', machine_cfg(self.env, 'S2A_COMMUNITY_DIR'))
+        if 'S2A_DEPS_EXTERNAL' not in self.env:   # 原先 setdefault 先求值：每个阶段的依赖记账都起一次 Git Bash 跑 machine.sh（11-16 极速出包定因）
+            self.env['S2A_DEPS_EXTERNAL'] = machine_cfg(self.env, 'S2A_COMMUNITY_DIR')
         self.py = self.env.get('S2A_PYTHON') or self.env.get('S2A_PY') or sys.executable
         self.inputs = set()
         # Retain the existing root-clone algorithm identity even on Windows,
@@ -239,11 +240,21 @@ def selected_tables(game, bid, env):
             else: os.environ[k] = v
 
 
+_MACHINE_CFG = {}   # 进程内只读一次 machine.local（每次都起 Git Bash，一单的轻阶段里要问十来次；machine.local 在一单之内不变）
+
+
 def machine_cfg(env, name):
     """本机配置一项：env 里非空用它，否则 tools/machine.local 的值（tools/machine.sh get，S2A_MACHINE_NO_LOCAL=1 不读；玩家作业恒设），都没有 = ''。
-    不在代码里写死开发机路径（11-07 启动器零配置）：开发机的数据目录在 machine.local 声明"""
+    不在代码里写死开发机路径（11-07 启动器零配置）：开发机的数据目录在 machine.local 声明。同一进程同一项只问一次"""
     if env.get(name):
         return env[name]
+    cached = (name, env.get('S2A_MACHINE_NO_LOCAL', ''), env.get('S2A_BASH', ''))
+    if cached not in _MACHINE_CFG:
+        _MACHINE_CFG[cached] = _machine_cfg_read(env, name)
+    return _MACHINE_CFG[cached]
+
+
+def _machine_cfg_read(env, name):
     bash = find_bash(env)
     if not bash:
         return ''
@@ -767,7 +778,11 @@ class Stages:
         if original is None or not original.is_dir() or (theirs and ours and theirs != ours):
             print(f'【黄】布局原版改用现行产物根的 RomFS（seed.txt 记的解包目录{"是另一款 " + theirs + " 的" if theirs and ours and theirs != ours else "不在或已失效"}）', file=sys.stderr)
             original = current / 'romfs'
-        plain_entries(original)
+        # 只校验生成器真正读的三处（graphics/widen/scan/ui_lyt.py 缺省子目录 Layout,UI,Pack；王国之泪的字典包 Pack/ZsDic 也在其内）：
+        #   原先对整份原版 RomFS 逐文件 lstat / stat，结果不用，大款每单十几到几十秒（11-16 极速出包定因）；整份 RomFS 播种时已校验过（refresh.py）
+        for name in ('Layout', 'UI', 'Pack'):
+            if (original / name).is_dir():
+                plain_entries(original / name)
         generator = REPO / 'graphics/widen/scan/ui_lyt.py'
         # Current repository import closure, including both on-demand C codecs.
         # Decoder fixes must invalidate overlays as well as the stage stamp.
