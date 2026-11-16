@@ -9954,13 +9954,17 @@ static NSArray<NSString *> *warm_paths(int say) {
     const char *e = getenv("DM_PSO_MANIFEST");
     if (e && !strcmp(e, "off")) return nil;
     if (e && *e) return @[@(e)];
+    // 两份清单各自独立：包里的种子表（出包时给的）与本机记下的 user 表（以前玩过建过的管线）。缺哪份就只用另一份。
+    //   原先种子表一缺就整个返回 nil，本机 user 表跟着被丢：不预热 → 归档没有未命中可写（par_writer 只写预热的未命中）→ 每次进游戏都冷编
+    //   （D-EPJ8 真人快打 5 局全是「256 compiled, 0 from the archive, 0 written」；保留诊断 821 份里 90 份带这句，含奥德赛、旷野之息，v0.1.0 起如此）
     NSString *seed = [shmap_path().stringByDeletingLastPathComponent stringByAppendingPathComponent:@"pso_manifest.tsv"];
-    NSMutableArray<NSString *> *all = [NSMutableArray arrayWithObject:seed];
+    NSMutableArray<NSString *> *all = [NSMutableArray array];
+    if ([NSFileManager.defaultManager fileExistsAtPath:seed]) [all addObject:seed];
+    else if (say) MLOG("pipeline prewarm: this package has no seed list (%s): prewarm uses this device's user list only", seed.UTF8String);
     NSString *user = pso_user_path();
     if (user && [NSFileManager.defaultManager fileExistsAtPath:user]) [all addObject:user];
     else if (say) MLOG("pipeline prewarm: this device's user list %s%s", user ? "does not exist yet: " : "has no path (neither DM_PSO_USER nor DM_SAVE is set)", user ? user.UTF8String : "");
-    if (![NSFileManager.defaultManager fileExistsAtPath:seed]) { if (say) MLOG("【红】 pipeline prewarm: seed list does not exist: %s", seed.UTF8String); return nil; }
-    return all;
+    return all.count ? all : nil;
 }
 // Tell the front end at once that the first frame will wait for the prewarm (10-30 device line, Monster Hunter Rise cold start mhrise_1030172905_1: the game's first present, 0.96 s, came
 //   before its first submission, where the shader map loads lazily and the prewarm runs, so the loading page was taken down at that present and the 15 s prewarm showed black).
