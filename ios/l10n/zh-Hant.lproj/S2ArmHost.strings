@@ -341,6 +341,10 @@
 "dprompt.expiry.title" = "簽署即將到期";
 "dprompt.ns2pro.body" = "四指長按螢幕 1.5 秒開啟設定，開啟「啟用 Switch 2 Pro 手把」，再按手把上的配對鍵。";
 "dprompt.ns2pro.title" = "要使用 Switch 2 Pro 手把嗎？";
+"dprompt.motion.title" = "體感操作";
+"dprompt.motion.padNone.phone" = "這個手把不支援體感（例如 Joy-Con 一代、Xbox 手把），遊戲裡的體感改由手機陀螺儀完成：轉動手機就行。";
+"dprompt.motion.padNone.off" = "這個手把不支援體感（例如 Joy-Con 一代、Xbox 手把），手機陀螺儀也關著，所以體感暫時用不了。要用的話：左上角齒輪 →「手把與體感」→ 開啟「手機陀螺儀」。";
+"dprompt.motion.phoneOff" = "這款遊戲用到了體感，但「手機陀螺儀」關著，體感沒有反應。要用的話：左上角齒輪 →「手把與體感」→ 開啟「手機陀螺儀」。";
 "gfx.antiAliasing" = "反鋸齒";
 "gfx.antiAliasing.high" = "SMAA 高";
 "gfx.antiAliasing.medium" = "SMAA 中";
