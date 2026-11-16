@@ -14,13 +14,10 @@ static _Atomic uint64_t g_last;   // 上一次上屏的单调纳秒
 static _Atomic int g_seen;        // 本局上屏过（不拿 g_last == 0 当「没上屏过」：时刻 0 也是合法读数）
 static _Atomic uint64_t g_acc;    // 攒着、还没落盘的游玩纳秒
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
-static atomic_flag g_exit_hook = ATOMIC_FLAG_INIT;
-
-static void flush_at_exit(void) { s2a_playtime_flush(); }   // 正常退出补最后那 <10 秒
 
 void s2a_playtime_frame(uint64_t now, int focused) {
     uint64_t prev = atomic_exchange_explicit(&g_last, now, memory_order_relaxed);
-    if (!atomic_exchange_explicit(&g_seen, 1, memory_order_relaxed)) { if (!atomic_flag_test_and_set(&g_exit_hook)) atexit(flush_at_exit); return; }   // 首帧：从这里开始计
+    if (!atomic_exchange_explicit(&g_seen, 1, memory_order_relaxed)) return;   // 首帧：从这里开始计
     if (focused && now > prev && now - prev <= S2A_PLAYTIME_GAP_NS) atomic_fetch_add_explicit(&g_acc, now - prev, memory_order_relaxed);
 }
 

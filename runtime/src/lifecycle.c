@@ -48,6 +48,8 @@ void s2a_host_shutdown(const char *why) {
     //   下一局开同款被当成「上一局在前台死于内存」强制开客体内存文件后备（vawin.c s2a_guest_run_died；那款起局慢 6 倍，玩家看实占 0.1 GB 以为卡死又划掉）。
     //   走到这里就不是被系统杀：只有真被杀（SIGKILL）/ 崩（crash.c 改写成 crash）才留标记。按名字取（单测、安卓宿主不链 vawin.c 的没有它）
     { void (*run_mark)(int) = (void (*)(int))dlsym(RTLD_DEFAULT, "s2a_guest_run_mark"); if (run_mark) run_mark(0); }
+    // 游玩时间（runtime/src/playtime.c）：收局把最后一次心跳之后攒的秒数写进去（收局走 _exit，不跑 atexit）；按名字取（只链本文件的单测没有它）
+    { int (*pt_flush)(void) = (int (*)(void))dlsym(RTLD_DEFAULT, "s2a_playtime_flush"); if (pt_flush) pt_flush(); }
 #if !defined(__ANDROID__)
     // 兜底先开（11-14 iPhone 实机 第 17515 帧卡死）：原先排在统计汇总之后，游戏卡死时收尾停在更早一步（日志只到「收到 自动玩家结束：优雅退出」，
     //   一行收局阶段都没有），兜底从没开，进程挂到设备锁收割 SIGKILL。带着音频会话被强杀之后，手机系统声音服务一直坏到重启。

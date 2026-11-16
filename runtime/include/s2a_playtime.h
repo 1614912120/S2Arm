@@ -13,7 +13,7 @@
 void s2a_playtime_frame(uint64_t now, int focused);
 // 把内存里攒的整秒加进文件（读-加-原子替换），并记 lastPlayed = now_wall（Unix 秒）；没攒满 1 秒不写。返回 0 = 成功或没东西可写
 int s2a_playtime_flush_at(int64_t now_wall);
-// 同上，now_wall 取当前时刻（平台壳心跳 / 进后台 / 退出时调）
+// 同上，now_wall 取当前时刻（平台壳心跳 / iOS 进后台 / 优雅收局 lifecycle.c s2a_host_shutdown 调；收局走 _exit，不靠 atexit）
 int s2a_playtime_flush(void);
 // 读文件：秒数与最近一次时刻（没有 / 读不出 → 0、0，返回 -1）
 int s2a_playtime_read(const char *path, uint64_t *seconds, int64_t *last);

@@ -55,9 +55,6 @@ int main(void) {
         FILE *f = fopen(p, "w"); fputs("not json", f); fclose(f);
         frames(0, 1 * S, 3, 1); WANT(!s2a_playtime_flush_at(42));
         uint64_t s; int64_t l; WANT(!s2a_playtime_read(p, &s, &l)); WANT(s == 2); WANT(l == 42); WANT(secs(NULL) == 0); });
-    CASE("正常退出：atexit 补落盘", {
-        LAUNCH({ frames(0, 1 * S, 4, 1); exit(0); });                          // 3 秒，不调 flush、走 exit
-        WANT(secs(NULL) == 3); });
     if (fails) printf("✗ t_playtime：%d 项不通\n", fails); else printf("✓ t_playtime：全过\n");
     return fails != 0;
 }
