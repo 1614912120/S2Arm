@@ -329,8 +329,21 @@ open(idx21 + '/INDEX.tsv', 'w').write('game\ttitle_id\tpath\ttype\tsource\tlicen
 cpatch.plan(r21, '', [idx21])
 rows21 = [c for c in (l.split('\t') for l in open(r21 + '/cpatch.tsv', encoding='utf-8').read().splitlines()[1:]) if c[0].startswith('fps:')]
 grp21 = [c[12] if len(c) > 12 else '' for c in rows21]
-ck(f'㉑ 组号走 plan()：同包两份同组、另一上游另组（实得 {[(c[0], c[12] if len(c) > 12 else "") for c in rows21]}）',
-   len(rows21) == 3 and len(set(grp21)) == 2 and all(len(x) == 8 for x in grp21) and sorted(grp21.count(x) for x in set(grp21)) == [1, 2])
+g21 = {c[6]: (c[12] if len(c) > 12 else '') for c in rows21}   # 第 7 列来源（本机缓存路径 f/<n>/…）→ 第 13 列组：按来源认是哪两份（审计 P2-453：原先只数个数，看不出哪两份同组）
+ck(f'㉑ 组号走 plan()：同包两份（f/0、f/1）同组、另一上游（f/2）另组、8 位（实得 {g21}）',
+   len(rows21) == 3 and g21.get('f/0/60fps.pchtxt') == g21.get('f/1/60fps.pchtxt') != g21.get('f/2/60fps.pchtxt') and all(len(x) == 8 for x in g21.values()))
+# ㉒ IPS 也按上游原路径分组（审计 P1-193 余项：IPS 那一支单元不带 origin，退回缓存路径 f/<n>/…，同包的 IPS 与 pchtxt 拆成两组）。
+#   同一个压缩包 exefs 下一份 IPS（文件名 = 主程序构建号）、一份 pchtxt，本机缓存分在 f/3、f/4。期望手写：两份第 13 列相同
+r22 = T + '/root22'; shutil.copytree(r5, r22, ignore=shutil.ignore_patterns('cpatch*'))
+idx22 = T + '/e22/fps'; os.makedirs(f'{idx22}/f/3'); os.makedirs(f'{idx22}/f/4')
+open(f'{idx22}/f/3/{BID}.ips', 'wb').write(b'PATCH' + (0x120).to_bytes(3, 'big') + (4).to_bytes(2, 'big') + bytes.fromhex('1F2003D5') + b'EOF')
+open(f'{idx22}/f/4/60fps.pchtxt', 'w').write(f'@nsobid-{BID}\n@flag offset_shift 0x100\n// 60 FPS\n@enabled\n00000124 1F2003D5\n@stop\n')
+open(idx22 + '/INDEX.tsv', 'w').write('game\ttitle_id\tpath\ttype\tsource\tlicense\tin_pack\tsha256\ttarget_fps\torigin\n'
+    + f'\t0100A3501946E000\tf/3/{BID}.ips\tips\to/r\tMIT\tyes\t\t60\tt/r/Game/60FPS-pack.zip/exefs/{BID}.ips\n'
+    + '\t0100A3501946E000\tf/4/60fps.pchtxt\tpchtxt\to/r\tMIT\tyes\t\t60\tt/r/Game/60FPS-pack.zip/exefs/60fps.pchtxt\n')
+cpatch.plan(r22, '', [idx22])
+g22 = {c[6].split('/')[1]: (c[12] if len(c) > 12 else '') for c in (l.split('\t') for l in open(r22 + '/cpatch.tsv', encoding='utf-8').read().splitlines()[1:]) if c[0].startswith('fps:')}
+ck(f'㉒ IPS 与同包 pchtxt 同组（实得 {g22}）', set(g22) == {'3', '4'} and g22['3'] == g22['4'] and len(g22['3']) == 8)
 sys.exit(bad)
 EOF
 rc=$?; [ $rc = 0 ] && echo "✅ cpatch_adapt_test 全过" || { echo "🔴 cpatch_adapt_test 有不通项"; exit 1; }

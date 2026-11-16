@@ -224,7 +224,8 @@ def scan(index_dirs, exefs, log=None):
                 if not ms: mod_miss([bid]); continue
                 w = parse_ips(open(full, 'rb').read())
                 if w is None: skipped['IPS 格式不对'] = skipped.get('IPS 格式不对', 0) + 1; continue
-                if w: out.append({'module': ms[0], 'cat': cat, 'name': os.path.basename(os.path.dirname(path)), 'writes': w, 'license': r.get('license') or '', 'path': path, 'base': base, 'id': uid, 'meta': meta})
+                if w: out.append({'module': ms[0], 'cat': cat, 'name': os.path.basename(os.path.dirname(path)), 'writes': w, 'license': r.get('license') or '', 'path': path, 'base': base, 'id': uid, 'meta': meta,
+                                  'origin': r.get('origin') or path})   # 上游原路径：fps_group 按它分组（审计 P1-193 余项：IPS 这一支原先不带，退回缓存路径 files/<哈希>/…，同包 main / sdk 拆成两组）
     for k, v in sorted(skipped.items()): print(f'跳过 {v} 段：{k}', file=sys.stderr)
     # 跨版本移植（11-13 维护者：画幅补丁扩大泛化性，帧率 / 金手指不做）：主程序没有任何版本对得上的宽屏补丁时，同款别的版本的宽屏补丁逐段
     #   按「这一处原来是什么」移植到这份主程序（port_writes），移植成的照常进自适应合成。移植不了的（画幅值在新版里找不到）不收
