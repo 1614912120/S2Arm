@@ -20,6 +20,7 @@
 #include <sys/wait.h>
 void s2a_host_shutdown(const char *why) { (void)why; }
 void s2a_dguard_frame(uint64_t now) { (void)now; }
+void s2a_playtime_frame(uint64_t now, int focused) { (void)now; (void)focused; }
 void s2a_dguard_evidence(const char *why, int stall) { (void)why; (void)stall; }
 void s2a_load_first_frame(uint64_t now) { (void)now; }   // loadprog.c 加载页：首帧调   // dguard.c 直连安全网：s2a_frame_presented 每帧调
 void s2a_wg_frame(void) {}   // thread.c 帧间隔工作组（S2A_WORKGROUP）：s2a_frame_presented 每帧调
