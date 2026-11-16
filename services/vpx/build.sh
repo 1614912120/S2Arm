@@ -51,7 +51,8 @@ if [ ! -s "$OUT/libvpx.a" ]; then
     # Apple TV：darwin20 目标按 Mac 处理、不给 sysroot，编译器要显式指到 tvOS SDK（否则 g++ 落到 macOS SDK，报 incompatible-sysroot）
     #   配置脚本对 darwin2x 目标还会自己 xcrun --sdk macosx --show-sdk-path 再加 -isysroot：PATH 前放一个 xcrun 垫片，只把这一问答成 tvOS SDK，其余原样交系统 xcrun
     if [ "$RID" = tvos-arm64 ]; then
-      export CC="xcrun --sdk appletvos clang" CXX="xcrun --sdk appletvos clang++"
+      export CC="xcrun --sdk appletvos clang" CXX="xcrun --sdk appletvos clang++" LD="xcrun --sdk appletvos clang $MIN"
+      unset MACOSX_DEPLOYMENT_TARGET   # 出壳走 tools/toolchain.sh 时导出了它：配置脚本的链接检查用 gcc 会按 macOS 目标链、和 tvOS 目标文件冲突
       mkdir -p "$W/shim" && printf '#!/bin/sh\n[ "$*" = "--sdk macosx --show-sdk-path" ] && exec /usr/bin/xcrun --sdk appletvos --show-sdk-path\nexec /usr/bin/xcrun "$@"\n' > "$W/shim/xcrun" && chmod +x "$W/shim/xcrun" && export PATH="$W/shim:$PATH"
     fi
     CFLAGS="$MIN -ffile-prefix-map=$WN/src=libvpx" CXXFLAGS="$MIN -ffile-prefix-map=$WN/src=libvpx" "$WN/src/configure" --target=$TARGET \
