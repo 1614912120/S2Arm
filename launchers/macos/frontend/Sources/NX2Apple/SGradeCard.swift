@@ -83,6 +83,7 @@ struct SGradeCardView: View {
                     if let on {
                         Spacer(minLength: 12)
                         Toggle(x("toggle"), isOn: on).toggleStyle(.checkbox).font(.manrope(12.5, .medium)).tint(Self.gold)
+                            .controllerControl(id: "export.sgrade.toggle", activate: { on.wrappedValue.toggle() })
                             .accessibilityIdentifier("export.sgrade.toggle")
                     }
                 }
@@ -203,7 +204,7 @@ struct SGradeGroupCard<Content: View>: View {
                                                                                          startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
                 .shadow(color: G.gold.opacity(0.10), radius: 16, y: 4)
         }
-        .accessibilityIdentifier("launch.sgrade")
+        .accessibilityElement(children: .contain).accessibilityIdentifier("launch.sgrade")
     }
 }
 
@@ -244,8 +245,7 @@ struct SGradeToggle: Identifiable {
     var enabled = true
 }
 
-/// S 级优化组的内容：「社区补丁」「金手指」两个小节，每节一个金色小标题（文字与下面各行的文字同一条起始线：行左边留 7 点圆点位 + 12 点间距，
-///   小标题照留）+ 逐条开关行（CardRow，开关靠右）；金手指小标题右边是「导入」。启动设置与离屏单测共用
+/// S 级优化组的内容：小节与设置行共用卡片内边距，金手指小标题右边是「导入」
 struct SGradeSettingsRows: View {
     let patchesTitle: String, patchesNote: String, patches: [SGradeToggle]
     let cheatsTitle: String, cheatsNote: String, cheats: [SGradeToggle]
@@ -267,6 +267,7 @@ struct SGradeSettingsRows: View {
     static let listMaxHeight: CGFloat = 300
     var summary: (Int, Int) -> String = { on, all in "已开 \(on) 条 · 共 \(all) 条" }
     var searchPrompt = "搜索金手指"
+    var clearSearchTitle = "清除搜索"
     var patchesSummary: (Int, Int) -> String = { on, all in "已开 \(on) · 共 \(all)" }
     /// 金手指小标题前的金色 S（与金卡最上面两行同一个标志）；nil = 不画（老样式 / 单测）
     var cheatsIcon: NSImage? = nil
@@ -274,18 +275,18 @@ struct SGradeSettingsRows: View {
     var body: some View {
         VStack(spacing: 0) {
             subhead(cheatsTitle, note: cheatsNote, icon: cheatsIcon) {
-                Button(importTitle) { onImport() }.buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("launch.cheats.import").disabled(busy)
+                Button(importTitle) { onImport() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("launch.cheats.import").disabled(busy)
             }
             if !cheats.isEmpty {
                 // 汇总行：点一下展开 / 收起
                 Button { withAnimation(.easeOut(duration: 0.2)) { cheatsOpen = !open } } label: {
                     CardRow(summary(cheats.filter(\.on).count, cheats.count), open: open) { EmptyView() }.contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).accessibilityIdentifier("launch.cheats.toggleList")
+                .controllerButtonStyle(.plain).accessibilityIdentifier("launch.cheats.toggleList")
                 if open {
                     if cheats.count > 10 {
-                        TextField(searchPrompt, text: $query).textFieldStyle(.roundedBorder).font(.manrope(12.5))
-                            .padding(.leading, 18 + 7 + 12).padding(.trailing, 18).padding(.bottom, 6)   // 与各行文字同一条起始线（CardRow 左边 18 + 圆点位 7 + 间距 12）
+                        LauncherSearchField(searchPrompt, text: $query, clearTitle: clearSearchTitle)
+                            .padding(.horizontal, LauncherTheme.Metrics.cardInset).padding(.bottom, LauncherTheme.Space.small)
                             .accessibilityIdentifier("launch.cheats.search")
                     }
                     let shown = query.isEmpty ? cheats : cheats.filter { $0.label.localizedCaseInsensitiveContains(query) || $0.detail.localizedCaseInsensitiveContains(query) }
@@ -299,7 +300,7 @@ struct SGradeSettingsRows: View {
                 Button { withAnimation(.easeOut(duration: 0.2)) { patchesOpen.toggle() } } label: {
                     CardRow(patchesTitle, detail: patchesSummary(patches.filter(\.on).count, patches.count), open: patchesOpen) { EmptyView() }.contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).accessibilityIdentifier("launch.patches.toggleList")
+                .controllerButtonStyle(.plain).accessibilityIdentifier("launch.patches.toggleList")
                 if patchesOpen {
                     if !patchesNote.isEmpty { Text(patchesNote).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         .padding(.leading, 18 + 7 + 12).padding(.trailing, 18).padding(.bottom, 4).frame(maxWidth: .infinity, alignment: .leading) }
@@ -310,18 +311,18 @@ struct SGradeSettingsRows: View {
     }
 
     private func subhead<T: View>(_ title: String, note: String, icon: NSImage? = nil, @ViewBuilder trailing: () -> T) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: LauncherTheme.Space.section) {
             if let icon { Image(nsImage: icon).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 20, height: 20) }
             else { Color.clear.frame(width: 7, height: 7) }
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: LauncherTheme.Space.xSmall) {
                 Text(title).font(.manrope(icon == nil ? 13 : 14, .bold)).tracking(icon == nil ? 0.4 : 0)
                     .foregroundStyle(LinearGradient(colors: [G.goldHi, G.gold], startPoint: .leading, endPoint: .trailing))
-                if !note.isEmpty { Text(note).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                if !note.isEmpty { Text(note).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             }
-            Spacer(minLength: 12)
-            trailing()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            trailing().launcherRowControls()
         }
-        .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 6)
+        .padding(.horizontal, LauncherTheme.Metrics.cardInset).padding(.top, LauncherTheme.Space.large).padding(.bottom, LauncherTheme.Space.small)
     }
 
     @ViewBuilder private func rows(_ list: [SGradeToggle], prefix: String, _ set: @escaping (String, Bool) -> Void) -> some View {
