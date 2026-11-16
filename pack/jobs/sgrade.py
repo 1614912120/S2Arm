@@ -13,9 +13,16 @@
 from __future__ import annotations
 
 import shutil
+import sys
 import tempfile
 import uuid
 from pathlib import Path
+
+# `python -I pack/jobs/main.py` keeps the script directory but ignores the
+# repository cwd/PYTHONPATH. Make the package root available for this import.
+_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(1, _REPO_ROOT)
 
 import layout
 from pack.orch import dirrename

@@ -2,6 +2,8 @@
 # Copyright 2026 S2Arm contributors
 """S 级优化升级（pack/jobs/sgrade.py，v0.4.0）：原始程序存一份 / 按顺序找 / 升级前查找的分组 / Mac 逐款补。游戏库换成临时目录，期望手写"""
 import contextlib
+import subprocess
+import sys
 import tempfile
 import types
 import unittest
@@ -15,6 +17,9 @@ import sgrade
 from core import Failure
 from pack.orch import dirrename
 
+ROOT = Path(__file__).resolve().parents[3]
+JOBS = ROOT / "pack" / "jobs"
+
 
 def nso(d, bid):
     d.mkdir(parents=True, exist_ok=True)
@@ -24,6 +29,20 @@ def nso(d, bid):
 
 
 class SGradeTests(unittest.TestCase):
+    def test_isolated_import_adds_repository_root(self):
+        # -I excludes cwd and PYTHONPATH. Only add pack/jobs explicitly, as
+        # `main.py` does; sgrade must make the package root available itself.
+        code = "import sys; sys.path.insert(0, sys.argv[1]); import sgrade"
+        result = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(JOBS)],
+                                cwd=ROOT, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_isolated_launcher_help(self):
+        result = subprocess.run([sys.executable, "-I", "-B", "pack/jobs/main.py", "--help"],
+                                cwd=ROOT, text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage:", result.stdout)
+
     def setUp(self):
         self.t = Path(tempfile.mkdtemp())
         self.events = []
