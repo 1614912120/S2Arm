@@ -1,6 +1,7 @@
 """社区补丁与金手指查库（pack/jobs/patches.py，11-13 起读我们下载站的统一包）：按程序号 / 主程序构建号要包、核包与条目 sha256、
 生成 pack/cpatch.py 认的 INDEX.tsv，金手指交 cheats。不联网：下载站换成本地目录（S2A_PATCH_BASE）。期望按规则手写"""
 import base64, gzip, hashlib, json, os, shutil, sys, tempfile, unittest
+from unittest.mock import patch
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import patches
@@ -11,7 +12,7 @@ SDK = "A226048605D3597F90CB1067D141CD36647B90CD"
 
 
 class Ctx:
-    def __init__(self, root): self.private = root / "priv"
+    def __init__(self, root): self.private = root / "priv"; self.library = root / "lib"   # 游戏库：玩家导入的 mod 在 <库>/<款>/mods（fetch 带上 mod 代码补丁）
 
 
 def nso(path, bid_hex):
@@ -186,7 +187,11 @@ class PatchesTests(unittest.TestCase):
         try:
             cheats.main_build = lambda c, g: "FF1D1C05670DB602"
             r = patches.match(self.c)
-            self.assertEqual((r["build"], r["exact"], r["total"]), ("FF1D1C05670DB602", {"widescreen": 0, "fps": 1, "gfx": 0, "cheat": 1}, 2))
+            self.assertEqual((r["build"], r["exact"], r["total"]), ("FF1D1C05670DB602", {"widescreen": 0, "fps": 1, "gfx": 0, "cheat": 1, "mod": 0}, 2))
+            import mods   # 玩家导入的 mod 带的代码补丁（11-15）：各 mod 份数相加单列 mod 一类、计入总数（出包页点亮）
+            with patch.object(mods, "listing", return_value=[{"name": "A", "code": 2}, {"name": "B", "code": 0}]):
+                r2 = patches.match(self.c)
+            self.assertEqual((r2["exact"]["mod"], r2["total"]), (2, 4))
             self.assertEqual(r["version"], "1.3.0")
             # 满屏跨版本：这份（FF1D…）没有同版本的满屏补丁，1.0 版的满屏出包时会尝试移植 → 单列 port，不进「不会打入」的 others
             self.assertEqual((r["port"], r["portVersions"]), (True, ["1.0"]))

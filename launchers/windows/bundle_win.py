@@ -106,6 +106,23 @@ def bundle_impactor(dest, cache=None, fetch=None):
         f"Impactor 完整源码：https://github.com/claration/impactor/tree/v{impactor.TESTED}", ""]), encoding="utf-8")
 
 
+def smoke_reader(runtime, engine):
+    """出包作业怎么找读取器、用什么环境，这里就照样起一次（v0.4.4 候选：作业直接执行 nx_unpack.dll，Windows 交给旧 .NET Framework，导入全挂；
+    打包机装着 .NET，平常跑得通也看不出）：环境只有 core.win_runtime_env 给的那些 + SystemRoot，不继承本机的 DOTNET_* / PATH，
+    DOTNET_ROOT 指随包运行时、不找全局安装。读取器不带参数会打用法、退出码 2：看到用法就算起得来"""
+    sys.path.insert(0, str(ROOT / "pack/jobs"))
+    import types
+    import core, toolchain   # noqa: E401  作业层自己的取法，不另写一份
+    sr = os.environ.get("SystemRoot", r"C:\Windows")
+    env = dict(core.win_runtime_env(runtime, engine, sr), SystemRoot=sr)
+    exe = toolchain.reader(types.SimpleNamespace(engine=engine))
+    p = subprocess.run([str(exe)], env=env, capture_output=True)
+    out = (p.stdout + p.stderr).decode("utf-8", "replace")
+    if "nx_unpack" not in out or p.returncode != 2:
+        raise SystemExit(f"【红】只用随包运行时起不来读取器 {exe}（退出码 {p.returncode & 0xFFFFFFFF:#x}）：{out.strip()[-300:]}")
+    say(f"  读取器 {Path(exe).name} 起得来（只用随包运行时）")
+
+
 def bundle(target, shell, tzdata, fonts):
     target = Path(target).resolve()
     if target.exists():
@@ -128,6 +145,7 @@ def bundle(target, shell, tzdata, fonts):
     identity = bundle_engine.seal_snapshot(engine, fingerprint)
     say(f"[组装] engine.json：{identity[:16]}（壳 {want}）")
     say("[组装] 随包运行时"); bundle_runtime_win.main([str(target)])
+    say("[组装] 自检：只用随包运行时起读取器"); smoke_reader(target / "Runtime", engine)
     shutil.copytree(shell, target / "Shell")
     (target / "Fonts").mkdir()
     for f in bft:

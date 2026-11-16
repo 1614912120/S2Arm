@@ -6,7 +6,7 @@
 #   engine_snap <仓库根> <字段[.子键]> → 打印值（列表一行一项），返回 0；没有 engine.json 或没有这个字段（开发树、旧快照）→ 返回 1，调用方走 git
 engine_snap() {
   [ -f "$1/engine.json" ] || return 1
-  "${S2A_PYTHON:-${S2A_PY:-python3}}" -I -c 'import json, sys
+  "${S2A_PYTHON:-${S2A_PY:-python3}}" -B -I -c 'import json, sys
 v = json.load(open(sys.argv[1], encoding="utf-8"))
 for k in sys.argv[2].split("."):
     v = v.get(k) if isinstance(v, dict) else None

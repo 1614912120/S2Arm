@@ -1,6 +1,6 @@
 // Derived from NX2Apple frontend/Sources/NX2Apple/LauncherView.swift (908e4e84, MIT; see ../../UPSTREAM.md).
 // S2Arm changes: one page, the Library (the Builds and Settings pages, engine sync banner, artwork editor, Manage menu, console mode
-// and gamepad driver are not taken); the state is S2ArmLauncherModel (adapter services) instead of LauncherStores; while a game runs
+// are not taken); the state is S2ArmLauncherModel (adapter services) instead of LauncherStores; while a game runs
 // the library gives way to JobSessionView (the launch job's events and Stop), and Back returns to the library. Second cut: the top bar
 // adds Add games (open panel, or drop files on the window → import job) and the environment check (EnvironmentView); the options
 // sheet is joined by the install-to-iPhone sheet (InstallView); any job (prepare, install, import) runs in JobSessionView. Export
@@ -9,6 +9,8 @@
 // change library (JobSessionView, setup job) sit beside them.
 // Switch 2 Pro: the top bar adds the controller button and popover (Switch2ProConnectionPopover), and the library starts the
 //   controller connection on appear when the user enabled it (NS2LauncherController).
+// Console Home: selected banners fill the window behind the titlebar; toolbar actions use compact, labeled icons.
+// Headings: brand and version share a baseline, reserving the native titlebar actions' measured width.
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
@@ -19,9 +21,11 @@ import S2ArmAppleAdapter
 
 struct LauncherView: View {
     @ObservedObject var model: S2ArmLauncherModel
+    @ObservedObject var home: HomeLibraryState
+    @ObservedObject var navigation: LauncherPadNavigation
     @EnvironmentObject var loc: Localizer
+    @Environment(\.accessibilityReduceMotion) var reduceMotion
     @StateObject var padFocus = PadFocus()
-    @StateObject var row = RowScroller()
     @StateObject var covers = CoverCache()
     @State var installFor: String?
     @State var spaceFor: String?
@@ -39,19 +43,29 @@ struct LauncherView: View {
     @State private var showController = false
     @State private var dropTargeted = false
     @State private var showMessages = false
-    @State var collectionHeight: CGFloat = 300
+    @State private var titlebarActionsWidth: CGFloat = 0
+    @State var showHomeSearch = false
     let brand: String
 
-    /// Room for the controller's focus ring, which sits 4 pt outside a card.
-    static let ringRoom: CGFloat = 6
+    init(model: S2ArmLauncherModel, brand: String) {
+        self.model = model; self.brand = brand
+        self.home = model.home; self.navigation = model.gamepad
+    }
 
     /// What the host's own messages use: the launch job takes zh-Hans or en.
     var uiLanguage: String { loc.lang.sharedCode }
 
     var body: some View {
+        presentedContent
+            .environment(\.padControls, navigation)
+            .controllerButtonStyle(DefaultButtonStyle())
+            .toggleStyle(PadToggleStyle(SwitchToggleStyle()))
+    }
+
+    private var presentedContent: some View {
         VStack(spacing: 0) {
             topBar
-            Divider().opacity(0.3)
+            if !showingHome { Divider().opacity(0.3) }
             noticeBar
             libraryNoticeBar
             if model.batchShown {
@@ -60,7 +74,7 @@ struct LauncherView: View {
                 ExportSessionView(model: model, covers: covers, session: result, run: run, install: { installFor = $0 }, freeSpace: { spaceFor = $0 }, uiLanguage: uiLanguage)
             } else if let session = model.session, let run = session.export, !model.sessionHidden {
                 ExportSessionView(model: model, covers: covers, session: session, run: run, install: { installFor = $0 }, freeSpace: { spaceFor = $0 }, uiLanguage: uiLanguage)
-            } else if let session = model.session, session.export == nil, !model.isInline(session) {
+            } else if let session = model.session, session.export == nil, !model.sessionHidden, !model.isInline(session) {
                 if session.kind == .play { PlaySessionView(model: model, covers: covers, session: session, uiLanguage: uiLanguage) }
                 else { JobSessionView(model: model, session: session) }
             } else if let id = model.exportFor, let game = model.games.first(where: { $0.id == id }) {
@@ -85,13 +99,21 @@ struct LauncherView: View {
         .padScope("main", padFocus)
         .environmentObject(padFocus)
         .launcherDropdownHost()
-        .background(LauncherPalette.background)
+        .background {
+            if showingHome { HomeBackdrop(game: homeSelected, covers: covers) }
+            else { LauncherWindowMaterial() }
+        }
         .background(LauncherWindowChrome())
+        .background(LauncherPadHost(navigation: navigation, update: configurePadNavigation))
+        .onReceive(model.controller.$deviceCount.dropFirst()) { _ in
+            DispatchQueue.main.async { navigation.source.refreshPresentation() }
+        }
         .ignoresSafeArea(.container, edges: .top)
         .preferredColorScheme(.dark)
         .tint(LauncherPalette.cream)
-        .font(.manrope(13))
-        .frame(minWidth: 900, idealWidth: 1280, minHeight: 680, idealHeight: 900)
+        .font(LauncherTheme.TypeStyle.detail)
+        .labelStyle(LauncherLabelStyle())
+        .frame(minWidth: 800, minHeight: 450)
         .onAppear { model.startup() }
         .sheet(isPresented: $model.sgradeUpgradeOpen) { SGradeUpgradeView(model: model).environmentObject(loc) }   // S 级优化升级（v0.4.0）
         .sheet(item: Binding(get: { installFor.map(OptionsTarget.init) }, set: { installFor = $0?.id })) { target in
@@ -162,7 +184,7 @@ struct LauncherView: View {
                 Text(text).font(.manrope(13, .semibold)).fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 if n.kind != .running {
-                    Button { model.libraryNotice = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).foregroundStyle(.secondary)
+                    Button { model.libraryNotice = nil } label: { Image(systemName: "xmark") }.controllerButtonStyle(.plain).foregroundStyle(.secondary)
                         .accessibilityIdentifier("notice.library.close")
                 }
             }
@@ -184,30 +206,29 @@ struct LauncherView: View {
     private var topBarRow: some View {
         HStack(spacing: 12) {
             // 点品牌名回欢迎页（社区贡献者补丁 #2）
-            // 版本号（11-11 维护者：玩家截图时我们一眼看出是哪一版）：正式版 v0.3.0，开发版 v0.2.9-dev+短提交号（build_app.py 写进 Info.plist）。
-            //   11-14 体验梳理第二轮：放到品牌名下面一行小字——右侧按钮在系统标题栏里、不给窗口内容让位，同一行时长版本号会被「玩家」等按钮盖住
-            VStack(alignment: .leading, spacing: 0) {
+            LauncherHeadingLine {
                 Button { installFor = nil; model.goToLibrary(); model.welcomeHome = true } label: {
-                    Text(brand).font(.manrope(19, .bold)).tracking(-0.5).lineLimit(1).fixedSize()
+                    Text(brand).font(.manrope(19, .bold)).tracking(-0.5)
                 }
-                .buttonStyle(.plain).accessibilityIdentifier("top.brand")
+                .controllerButtonStyle(.plain).controllerID("top.brand")
+            } subtitle: {
                 Text(verbatim: Self.displayVersion).font(.manrope(10.5, .semibold)).monospacedDigit().foregroundStyle(.secondary)
-                    .lineLimit(1).fixedSize().textSelection(.enabled).accessibilityIdentifier("topbar.version")
+                    .textSelection(.enabled).help(Self.displayVersion).accessibilityIdentifier("topbar.version")
             }
-            Spacer()
         }
-        .padding(.leading, 90).padding(.trailing, 24)   // the window's traffic lights sit in the transparent title bar
+        .padding(.leading, 90).padding(.trailing, max(24, titlebarActionsWidth + LauncherTheme.Space.medium))
         .frame(height: 52)   // = a unified toolbar's title bar: the system centres the traffic lights in it, so they share this bar's midline
         .background(TitlebarDoubleClick())
-        .background(UnifiedTitlebar(actions: topActions))
+        .background(UnifiedTitlebar(actions: topActions, actionsWidth: $titlebarActionsWidth))
     }
 
     /// 顶栏右侧的按钮放进标题栏本身：工具栏盖在窗口内容上，内容里的按钮收不到真实点击（11-08 维护者）。
     private var topActions: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
                 if model.loading { ProgressView().controlSize(.small) }
                 PlayerToolbarButton(loc: loc)   // 本地玩家（#623）：这次用谁的身份玩，点开切换 / 添加；标题栏另起视图树、环境对象传不进去，显式给
                 exportPill
+                backgroundTaskPill
                 batchPill
                 PhoneUpdateButton(model: model, language: uiLanguage)
                 phonePill
@@ -216,44 +237,73 @@ struct LauncherView: View {
                 updateButton
                 messagesButton
                 Button { installFor = nil; model.goToLibrary() } label: {
-                    Label(loc.t("s2arm.nav.library"), systemImage: "square.grid.2x2").font(.manrope(12.5, .semibold))
+                    Label(loc.t("s2arm.nav.library"), systemImage: "square.grid.2x2")
                 }
-                .buttonStyle(LauncherSecondaryButtonStyle())
-                .accessibilityIdentifier("top.library")
+                .controllerButtonStyle(ConsoleIconButtonStyle()).help(loc.t("s2arm.nav.library"))
+                .controllerID("top.library")
                 Button { model.showAddGames = true } label: {
-                    Label(loc.t("s2arm.action.import"), systemImage: "plus").font(.manrope(12.5, .semibold))
+                    Label(loc.t("s2arm.action.import"), systemImage: "plus")
                 }
-                .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
+                .controllerButtonStyle(ConsoleIconButtonStyle()).disabled(model.busy)
+                .help(loc.t("s2arm.action.import")).controllerID("top.import")
                 Button { model.showEnvironment = true } label: {
-                    HStack(spacing: 7) {
-                        Circle().fill(environmentColor).frame(width: 7, height: 7)
-                        Text(BackendText.launcherText("nav.settings", language: uiLanguage)).font(.manrope(12.5, .semibold))   // 设置：语言 / 存放位置 / 装机方式 / 环境检查（入口整理）
+                    Image(systemName: "gearshape").overlay(alignment: .topTrailing) {
+                        Circle().fill(environmentColor).frame(width: 5, height: 5).offset(x: 5, y: -3)
                     }
                 }
-                .buttonStyle(LauncherSecondaryButtonStyle())
+                .controllerButtonStyle(ConsoleIconButtonStyle())
+                .help(txt("nav.settings")).accessibilityLabel(txt("nav.settings")).controllerID("top.settings")
                 // 故障报修（11-13）：任何页面同一位置（顶栏最右，Windows 同位），点开就是全局「上传给开发者」弹窗（不针对某款，
                 //   作业层自动附最近一次失败的错误摘要）；报错页的指引 ReportHint 指的就是它
                 Button { model.diagUploadFor = "" } label: {
-                    Label(BackendText.launcherText("report.button", language: uiLanguage), systemImage: "exclamationmark.bubble").font(.manrope(12.5, .semibold))
+                    Label(BackendText.launcherText("report.button", language: uiLanguage), systemImage: "exclamationmark.bubble")
                 }
-                .buttonStyle(LauncherSecondaryButtonStyle())
-                .accessibilityIdentifier("top.report")
+                .controllerButtonStyle(ConsoleIconButtonStyle()).help(txt("report.button"))
+                .controllerID("top.report").accessibilityIdentifier("top.report")
         }
-        .padding(.trailing, 8)
+        .padding(.trailing, LauncherTheme.Metrics.libraryInset)
         .fixedSize()   // 放在标题栏里没有宽度约束，不固定的话按钮文字会被压成省略号
-        .labelStyle(.titleAndIcon)   // 工具栏里 Label 缺省只显示图标
+        .labelStyle(.titleAndIcon)   // Popovers keep their text; icon styles are local to each toolbar button.
         .tint(LauncherPalette.cream)
         .environment(\.colorScheme, .dark)
+        .environment(\.padControls, navigation)
+        .controllerButtonStyle(DefaultButtonStyle())
+        .toggleStyle(PadToggleStyle(SwitchToggleStyle()))
     }
 
     /// A unified toolbar makes the (transparent) title bar as tall as the top bar, and macOS then centres the close / minimise / zoom
     /// buttons vertically in it. The right-hand actions are its one item, so real clicks reach them.
     private struct UnifiedTitlebar<Actions: View>: NSViewRepresentable {
         let actions: Actions
+        @Binding var actionsWidth: CGFloat
+
+        final class ActionsHost: NSHostingView<Actions> {
+            var didLayout: (() -> Void)?
+            override func layout() { super.layout(); didLayout?() }
+        }
 
         final class Coordinator: NSObject, NSToolbarDelegate {
-            let host: NSHostingView<Actions>
-            init(_ actions: Actions) { host = NSHostingView(rootView: actions) }
+            let host: ActionsHost
+            @Binding private var width: CGFloat
+            init(_ actions: Actions, width: Binding<CGFloat>) {
+                host = ActionsHost(rootView: actions); _width = width
+                super.init()
+                host.didLayout = { [weak self] in self?.reportWidth() }
+            }
+            func update(_ actions: Actions, width: Binding<CGFloat>) {
+                _width = width; host.rootView = actions
+                reportWidth()
+            }
+            private func reportWidth() {
+                guard host.bounds.width > 0, abs(host.bounds.width - width) > 0.5 else { return }
+                // This hosting view lives outside the page's SwiftUI preference tree.
+                // Publish its actual AppKit width after layout, using the latest value.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.host.window != nil else { return }
+                    let value = self.host.bounds.width
+                    if value > 0, abs(value - self.width) > 0.5 { self.width = value }
+                }
+            }
             func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace] }
             func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace] }
             func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? { nil }
@@ -279,9 +329,9 @@ struct LauncherView: View {
             }
         }
 
-        func makeCoordinator() -> Coordinator { Coordinator(actions) }
+        func makeCoordinator() -> Coordinator { Coordinator(actions, width: $actionsWidth) }
         func makeNSView(context: Context) -> NSView { let h = Host(); h.coordinator = context.coordinator; return h }
-        func updateNSView(_ nsView: NSView, context: Context) { context.coordinator.host.rootView = actions }
+        func updateNSView(_ nsView: NSView, context: Context) { context.coordinator.update(actions, width: $actionsWidth) }
     }
 
     private struct OptionsTarget: Identifiable { let id: String }
@@ -304,10 +354,10 @@ struct LauncherView: View {
                 Spacer(minLength: 8)
                 if let link = (notice["url"] as? String).flatMap(URL.init(string:)) {
                     Button { NSWorkspace.shared.open(link) } label: { Text(txt("notice.details")).font(.manrope(12.5, .semibold)).underline() }
-                        .buttonStyle(.plain).foregroundStyle(LauncherPalette.cream)
+                        .controllerButtonStyle(.plain).foregroundStyle(LauncherPalette.cream)
                 }
                 Button { model.dismissNotice() } label: { Image(systemName: "xmark").font(.system(size: 11, weight: .bold)).frame(width: 22, height: 22).contentShape(Rectangle()) }
-                    .buttonStyle(.plain).foregroundStyle(LauncherPalette.cream.opacity(0.8)).help(txt("notice.close")).accessibilityLabel(txt("notice.close"))
+                    .controllerButtonStyle(.plain).foregroundStyle(LauncherPalette.cream.opacity(0.8)).help(txt("notice.close")).accessibilityLabel(txt("notice.close"))
             }
             .padding(.horizontal, 24).padding(.vertical, 10)
             .background(LauncherPalette.building.opacity(0.16))
@@ -327,19 +377,20 @@ struct LauncherView: View {
             // 草图：「以后再说」之后顶栏留「有新版 vX」，点开回到更新弹窗①（「现在更新并重启」在弹窗里；有局在跑时那里先拦下说明）
             Button { model.showUpdatePopup() } label: {
                 Label(txt("update.top.available").replacingOccurrences(of: "{0}", with: model.availableUpdate?["version"] as? String ?? ""), systemImage: "arrow.down.circle")
-                    .font(.manrope(12.5, .semibold))
             }
-            .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("top.update")
+            .controllerButtonStyle(ConsoleIconButtonStyle())
+            .help(txt("update.top.available").replacingOccurrences(of: "{0}", with: model.availableUpdate?["version"] as? String ?? ""))
+            .controllerID("top.update")
         case .failed(let code):
             // 失败原因直接写在按钮旁（人话 + 错误码），并给「打开下载页」：自动更新连不上 GitHub 时玩家能自己下（不再只藏在悬停提示里）
             HStack(spacing: 8) {
                 Button { model.downloadUpdate() } label: { Text(txt("update.retry")).font(.manrope(12.5, .semibold)) }
-                    .buttonStyle(LauncherSecondaryButtonStyle())
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle())
                 Text(txt("update.error." + code) + " · " + txt("update.code").replacingOccurrences(of: "{0}", with: code))
                     .font(.manrope(11.5)).foregroundStyle(.secondary).lineLimit(2).frame(maxWidth: 340, alignment: .leading)
                     .help(txt("update.error." + code)).textSelection(.enabled)
                 Button { NSWorkspace.shared.open(S2ArmLauncherModel.downloadPage) } label: { Text(txt("update.download_page")).font(.manrope(12.5, .semibold)) }
-                    .buttonStyle(LauncherSecondaryButtonStyle())
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle())
             }
         case .idle: EmptyView()
         }
@@ -350,17 +401,26 @@ struct LauncherView: View {
     /// 「消息」：公告和更新说明都在这里（旧的只在这里、不弹）；未读只算最新那条公告
     private var messagesButton: some View {
         Button { showMessages = true; model.openMessages() } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "bell")
-                Text(txt("messages.button")).font(.manrope(12.5, .semibold))
+            Image(systemName: "bell").overlay(alignment: .topTrailing) {
                 if model.unreadMessages > 0 {
-                    Text("\(model.unreadMessages)").font(.manrope(10.5, .bold)).foregroundStyle(.white)
-                        .padding(.horizontal, 5).padding(.vertical, 1).background(LauncherPalette.danger, in: Capsule())
+                    Circle().fill(LauncherPalette.danger).frame(width: 6, height: 6).offset(x: 4, y: -3)
                 }
             }
         }
-        .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("top.messages")
+        .controllerButtonStyle(ConsoleIconButtonStyle()).help(txt("messages.button"))
+        .accessibilityLabel(txt("messages.button")).accessibilityValue("\(model.unreadMessages)").controllerID("top.messages")
         .popover(isPresented: $showMessages, arrowEdge: .bottom) { MessagesPanel(model: model, language: uiLanguage) }
+    }
+
+    /// 非出包任务收起后，也保留一条可用手柄返回进度页的入口。
+    @ViewBuilder private var backgroundTaskPill: some View {
+        if let session = model.session, session.export == nil, !session.isPhoneJob, !model.isInline(session), model.sessionHidden {
+            Button { model.sessionHidden = false } label: {
+                Label(loc.t("home.currentTask"), systemImage: session.kind == .play ? "gamecontroller" : "list.bullet.rectangle")
+                    .font(.manrope(12.5, .semibold))
+            }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("top.currentTask")
+                .accessibilityLabel(loc.t("home.currentTask") + " · " + session.name)
+        }
     }
 
     /// 批量出包（v0.2.4）：清单页没开着时，这批正在出 / 上次还有没出完的 → 顶部胶囊回到清单页
@@ -374,7 +434,7 @@ struct LauncherView: View {
                         .font(.manrope(12.5, .semibold)).lineLimit(1)
                 }
             }
-            .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("top.batch")
+            .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("top.batch")
         }
     }
 
@@ -390,7 +450,7 @@ struct LauncherView: View {
                     }
                 }
             }
-            .buttonStyle(LauncherSecondaryButtonStyle())
+            .controllerButtonStyle(LauncherSecondaryButtonStyle())
         }
     }
 
@@ -406,7 +466,7 @@ struct LauncherView: View {
                         if let f = s.progress.fraction { Text("\(Int(f * 100))%").font(.manrope(12)).monospacedDigit().foregroundStyle(.secondary) }
                     }
                 }
-                .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.pill")
+                .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.pill")
             } else if let r = model.phoneResult {
                 Button { installFor = r.gameID } label: {
                     HStack(spacing: 7) {
@@ -415,7 +475,7 @@ struct LauncherView: View {
                              .replacingOccurrences(of: "{1}", with: r.ok && !model.installedTo.isEmpty ? model.installedTo : model.installTargetLabel)).font(.manrope(12.5, .semibold)).lineLimit(1)
                     }
                 }
-                .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.pill")
+                .controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.pill")
             }
         }
     }
@@ -447,15 +507,14 @@ private struct ControllerToolbarButton: View {
     }
     var body: some View {
         Button { show.toggle() } label: {
-            HStack(spacing: 7) {
-                Circle().fill(Color(nsColor: controller.buttonColor)).frame(width: 7, height: 7)
-                Text(NS2LauncherController.text("s2arm.controller.toolbar", lang)).font(.manrope(12.5, .semibold))
+            Image(systemName: "gamecontroller").overlay(alignment: .topTrailing) {
+                Circle().fill(Color(nsColor: controller.buttonColor)).frame(width: 5, height: 5).offset(x: 5, y: -3)
             }
         }
-        .buttonStyle(LauncherSecondaryButtonStyle())
+        .controllerButtonStyle(ConsoleIconButtonStyle())
         .help(controller.title(lang: lang) + "：" + toolbarStatus)   // #901：顶栏提示写实际手柄名
         .accessibilityLabel(controller.title(lang: lang) + "：" + toolbarStatus)
-        .accessibilityIdentifier("top.controller")
+        .controllerID("top.controller")
         .popover(isPresented: $show, arrowEdge: .bottom) {
             Switch2ProConnectionPopover(controller: controller, systems: systems, lang: lang)
         }

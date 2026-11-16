@@ -59,37 +59,57 @@ struct SGradeUpgradeBody: View {
     var sImage: NSImage = SGradeCardView.sGold
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(spacing: 12) {
-                Image(nsImage: sImage).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 34, height: 34)
-                Text(x("title")).font(.manrope(20, .bold))
-                    .foregroundStyle(LinearGradient(colors: [SGradeCardView.goldHi, SGradeCardView.gold, SGradeCardView.rose], startPoint: .leading, endPoint: .trailing))
-                Spacer()
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(spacing: 12) {
+                    Image(nsImage: sImage).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 34, height: 34)
+                    Text(x("title")).font(LauncherTheme.TypeStyle.title)
+                        .foregroundStyle(LinearGradient(colors: [SGradeCardView.goldHi, SGradeCardView.gold, SGradeCardView.rose], startPoint: .leading, endPoint: .trailing))
+                    Spacer()
+                }
+                content
             }
-            content
+            .padding(.horizontal, LauncherTheme.Space.page).padding(.top, LauncherTheme.Space.page)
+            .padding(.bottom, LauncherTheme.Space.section)
+            if games != nil || failure != nil {
+                LauncherSheetFooter {
+                    if failure == nil, upgrades.contains(where: \.iphone) {
+                        ViewThatFits(in: .horizontal) {
+                            HStack { installButton; exportButton; Spacer(); closeButton }
+                            VStack(alignment: .leading, spacing: 8) { installButton; exportButton; closeButton }
+                        }
+                    } else {
+                        Spacer()
+                        Button(x("ok")) { close() }.controllerButtonStyle(LauncherPrimaryButtonStyle())
+                            .keyboardShortcut(.defaultAction).controllerID("sgrade.upgrade.ok").controllerShortcut(.rightTrigger, .back)
+                    }
+                }.disabled(failure == nil && upgrades.contains(where: \.iphone) && busy)
+            }
         }
-        .padding(26).frame(width: 560)
+        .launcherSheet(.form, height: nil)
         .accessibilityIdentifier("sgrade.upgrade")
     }
 
+    private var upgrades: [SGradeScanGame] { (games ?? []).filter { $0.found && $0.total > 0 && !$0.off } }
+
     @ViewBuilder private var content: some View {
         if let failure {
-            Text(failure).font(.manrope(13)).foregroundStyle(.secondary)
-            okRow
+            Text(failure).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary)
         } else if let games {
             let found = games.filter(\.found)
-            let yes = found.filter { $0.total > 0 && !$0.off }, off = found.filter { $0.total > 0 && $0.off }
-            // 没有对应补丁拆两组（定稿表）：补丁库里有别的版本的 → 写版本号；一类都没有 → 补丁库里没有
+            let yes = upgrades, off = found.filter { $0.total > 0 && $0.off }
             let noVer = found.filter { $0.total == 0 && !$0.available.isEmpty }, no = found.filter { $0.total == 0 && $0.available.isEmpty }
             let missing = games.filter { !$0.found }
             if found.isEmpty {
-                Text(x("nothing")).font(.manrope(14)).fixedSize(horizontal: false, vertical: true)
-                okRow
+                Text(x("nothing")).font(LauncherTheme.TypeStyle.body).fixedSize(horizontal: false, vertical: true)
             } else if yes.isEmpty {
-                if !no.isEmpty { Text(x("none")).font(.manrope(14)); list(no.map { ($0.name, "") }) }
-                if !noVer.isEmpty { group(x("no.version"), noVer.map { ($0.name, versions($0)) }) }
-                if !off.isEmpty { group(x("off"), off.map { ($0.name, "") }) }
-                okRow
+                LauncherReadingPane {
+                    VStack(alignment: .leading, spacing: LauncherTheme.Space.large) {
+                        if !no.isEmpty { Text(x("none")).font(LauncherTheme.TypeStyle.body); list(no.map { ($0.name, "") }) }
+                        if !noVer.isEmpty { group(x("no.version"), noVer.map { ($0.name, versions($0)) }) }
+                        if !off.isEmpty { group(x("off"), off.map { ($0.name, "") }) }
+                    }
+                }
             } else {
                 Text(x("found").replacingOccurrences(of: "{0}", with: String(found.count))).font(.manrope(14, .medium))
                 let groups = VStack(alignment: .leading, spacing: 14) {
@@ -99,21 +119,14 @@ struct SGradeUpgradeBody: View {
                     if !off.isEmpty { group(x("off"), off.map { ($0.name, "") }) }
                     if !missing.isEmpty { group(x("missing"), missing.map { ($0.name, "") }) }
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                if games.count > 10 { ScrollView { groups }.frame(height: 300) } else { groups }   // 款多才滚动，少的直接排开
-                Text(x("macNote")).font(.manrope(12.5)).foregroundStyle(.secondary)
+                LauncherReadingPane { groups }
+                Text(x("macNote")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 if yes.contains(where: \.iphone) {
-                    Text(x("iphoneNote")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    // 英 / 日 / 法两个按钮横排放不下会截成「…」（v0.4.1 六语走查 W2）：放不下就竖排，每个按钮整句显示
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 10) { installButton; exportButton; Spacer(); closeButton }
-                        VStack(alignment: .leading, spacing: 8) { installButton; exportButton; closeButton }
-                    }.disabled(busy)
-                } else {
-                    okRow
+                    Text(x("iphoneNote")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
             }
         } else {
-            HStack(spacing: 8) { ProgressView().controlSize(.small); Text(x("scanning")).font(.manrope(13)).foregroundStyle(.secondary) }
+            HStack(spacing: 8) { ProgressView().controlSize(.small); Text(x("scanning")).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary) }
         }
     }
 
@@ -136,34 +149,43 @@ struct SGradeUpgradeBody: View {
         return parts.joined(separator: zh ? "、" : ", ")
     }
 
-    // 分组标题与游戏行要一眼分得开（11-14 体验走查：同号同色粗体分不清哪行是标题）：标题小一号、金 / 灰色、带款数，游戏行缩进
+    // Smaller, muted group headings; game rows share the page's leading edge and a common description column.
     private func group(_ title: String, _ rows: [(String, String)], gold: Bool = false) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("\(title) · \(rows.count)").font(.manrope(12, .semibold)).foregroundStyle(gold ? SGradeCardView.gold : .secondary)
-            list(rows).padding(.leading, 12)
+            Text("\(title) · \(rows.count)").font(LauncherTheme.TypeStyle.caption).foregroundStyle(gold ? SGradeCardView.gold : .secondary)
+            list(rows)
         }
     }
 
     private func list(_ rows: [(String, String)]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array(rows.enumerated()), id: \.offset) { _, r in
-                HStack(alignment: .firstTextBaseline) {
-                    Text(r.0).font(.manrope(13)).lineLimit(1)
-                    Spacer(minLength: 12)
-                    if !r.1.isEmpty { Text(r.1).font(.manrope(12)).foregroundStyle(.secondary) }
+        Grid(alignment: .leading, horizontalSpacing: LauncherTheme.Space.large, verticalSpacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { index, r in
+                GridRow(alignment: .firstTextBaseline) {
+                    Text(r.0).font(LauncherTheme.TypeStyle.detail).lineLimit(2)
+                        .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, LauncherTheme.Space.small)
+                        .gridCellColumns(r.1.isEmpty ? 2 : 1)
+                    if !r.1.isEmpty {
+                        Text(r.1).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, LauncherTheme.Space.small)
+                    }
+                }
+                if index < rows.count - 1 {
+                    Divider().opacity(0.18).gridCellUnsizedAxes(.horizontal)
                 }
             }
         }
     }
 
-    private var okRow: some View {
-        HStack { Spacer(); Button(x("ok")) { close() }.buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction) }
-    }
-    private var installButton: some View {   // 装法取值同作业层 install.INSTALL_MODES（device / export）
-        Button(x("install")) { upgrade("device") }.buttonStyle(.borderedProminent).accessibilityIdentifier("sgrade.upgrade.install").fixedSize()
+    private var installButton: some View {
+        Button(x("install")) { upgrade("device") }.controllerButtonStyle(LauncherPrimaryButtonStyle())
+            .controllerID("sgrade.upgrade.install").controllerShortcut(.rightTrigger).fixedSize()
     }
     private var exportButton: some View {
-        Button(x("export")) { upgrade("export") }.buttonStyle(.bordered).accessibilityIdentifier("sgrade.upgrade.export").fixedSize()
+        Button(x("export")) { upgrade("export") }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+            .controllerID("sgrade.upgrade.export").controllerShortcut(.rightTrigger, focused: true).fixedSize()
     }
-    private var closeButton: some View { Button(x("close")) { close() }.buttonStyle(.plain).foregroundStyle(.secondary).fixedSize() }
+    private var closeButton: some View {
+        Button(x("close")) { close() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+            .controllerID("sgrade.upgrade.close").controllerShortcut(.back).fixedSize()
+    }
 }

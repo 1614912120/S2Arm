@@ -301,6 +301,11 @@ def bundle(destination, developer_dir):
 # 快照不带 .git（瘦身约 28 MB）：出包各阶段原先在快照库里用 git 取的值，打包时（快照库已 commit + gc、文件都放齐、签名之前）用 git 算好写进 engine.json，
 #   读方有字段就用（pack/stage_keyfiles.sh engine_snap、pack/orch/roots.py snapshot、tools/stage_deps.py _listed）。不能签名后按文件重算：
 #   签名改写了快照里的 Mach-O（translator/dmsh_xlate_bin/dmsh_xlate 在直连库阶段的输入表里），按文件算出的对象号与提交里的不同，所有玩家的直连库都会重编
+# 只在打包时参与算键、玩家机上没人执行的文件：键算完、和 .git 一起从包里拿掉。
+#   translator/dmsh_xlate_bin/dmsh_xlate：翻译器的 .NET 启动壳（要系统装 .NET 才起得来）。直连库阶段的输入表登记了它，所以照算键；
+#   但出包作业里 dmsh_chain 只读同目录的 .source_sha 与几个 dll 的哈希，翻译走 NativeAOT 的 dsh_batch，没有地方执行它
+#   （去 .NET 静态扫描点名它）。从仓库删会改直连库的键、所有款重编，拿出包更便宜
+BUILD_ONLY = ("translator/dmsh_xlate_bin/dmsh_xlate",)
 SNAP_KEYS = ("commit", "stageFilesKeys", "scanTree", "romfsIndexOids", "listed")
 SNAP_STAGES = ("extract", "direct", "direct_seed")   # 玩家出包路径上调 stage_files_key 的阶段
 ROMFS_WRITER = ("services/S2A.Services/RomFsIndex.cs", "services/romfs_index", "services/romfs_index.sh", "compat/tree/Directory.Packages.props")
@@ -379,6 +384,8 @@ def seal_snapshot(destination, fingerprint):
     before = reader_values(destination)                 # 旧读法（git）
     fields = snapshot_fields(destination)
     _rmtree_writable(destination / ".git")
+    for rel in BUILD_ONLY:   # 键已按它们算进 engine.json：从包里拿掉不改任何键
+        (destination / rel).unlink(missing_ok=True)
     write_manifest(destination, fingerprint, snap=fields)
     after = reader_values(destination)                  # 新读法（engine.json）
     failed = [k for k, v in before.items() if k.startswith("sh_") and v[0]]
@@ -401,7 +408,10 @@ def precompile(root, python):
     python = Path(python)
     if not python.is_file():
         raise RuntimeError(f"预编 .pyc 要用 App 自带的 Python，没找到：{python}")
-    subprocess.run([str(python), "-I", "-m", "compileall", "-q", "-j", "0", "--invalidation-mode", "checked-hash", str(root)],
+    # -B：解释器起来时自己会导入 encodings / sitecustomize，不加 -B 就先把它们写成按时间戳失效的 .pyc，compileall 见已有就不重写；
+    #   装机改了源码时间后第一次起包里的 Python 就重写这 4 份（sitecustomize 关写字节码在它们之后才生效），签名封存坏（v0.4.4 候选验收⑦）。
+    #   -f：已有的一律按 checked-hash 重写。compileall 自己显式写 .pyc，不受 -B 影响
+    subprocess.run([str(python), "-I", "-B", "-m", "compileall", "-q", "-f", "-j", "0", "--invalidation-mode", "checked-hash", str(root)],
                    stdout=subprocess.DEVNULL, check=True)
 
 
@@ -410,8 +420,15 @@ def seal_runtime(resources):
     resources = Path(resources)
     lib = next((resources / "Runtime/python/lib").glob("python3.*"))
     (lib / "site-packages/sitecustomize.py").write_text(SITECUSTOMIZE)
-    for d in (lib, *(resources / name for name in ("Jobs", "GUIJobs") if (resources / name).is_dir())):
+    dirs = (lib, *(resources / name for name in ("Jobs", "GUIJobs") if (resources / name).is_dir()))
+    for d in dirs:
         precompile(d, resources / RUNTIME_PYTHON)
+    # 自检：签名封存的包里 .pyc 必须全是 checked-hash（标志 3）——按时间戳失效的那种，装机改了源码时间后第一次起包里的 Python 就会改写它、
+    #   签名封存坏（v0.4.4 候选验收⑦：4 份启动模块）。发现就停、不出包，出包时当场红，不等到候选验收
+    stale = [str(p.relative_to(resources)) for d in dirs for p in d.rglob("*.pyc")
+             if int.from_bytes(p.read_bytes()[4:8], "little") != 3]
+    if stale:
+        raise RuntimeError(f"内置 Python 有 {len(stale)} 份 .pyc 不是 checked-hash（装机后会被改写、签名封存坏）：{stale[:5]}")
 
 
 def write_manifest(destination, fingerprint, snap=None):

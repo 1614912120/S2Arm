@@ -20,11 +20,11 @@ import S2ArmAppleAdapter
                         "iphoneNote": "只换程序，手机上的游戏资源和存档都不动；自签导出请用原来的包名签名。", "ok": "确认", "close": "关闭",
                         "cat.widescreen": "满屏", "cat.fps": "帧率", "cat.cheat": "金手指 {0} 条", "cat.gfx": "画面"]
 
-    func render(_ games: [SGradeScanGame]?, _ name: String, lang: String? = nil) throws -> NSBitmapImageRep {
+    func render(_ games: [SGradeScanGame]?, _ name: String, lang: String? = nil, buttonTitles: [String: String] = [:]) throws -> NSBitmapImageRep {
         _ = NSApplication.shared
         let src = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Branding/s-gold.png").standardized
         let img = try XCTUnwrap(NSImage(contentsOf: src))
-        let view = SGradeUpgradeBody(games: games, failure: nil, zh: true, busy: false, x: { k in lang.map { BackendText.launcherText("sgrade.upgrade." + k, language: $0) } ?? Self.texts[k] ?? k }, upgrade: { _ in }, close: {}, sImage: img)
+        let view = SGradeUpgradeBody(games: games, failure: nil, zh: true, busy: false, x: { k in buttonTitles[k] ?? lang.map { BackendText.launcherText("sgrade.upgrade." + k, language: $0) } ?? Self.texts[k] ?? k }, upgrade: { _ in }, close: {}, sImage: img)
             .background(Color(red: 0.11, green: 0.11, blue: 0.12)).environment(\.colorScheme, .dark)
         let r = ImageRenderer(content: view); r.scale = 2
         let rep = try XCTUnwrap(NSBitmapImageRep(data: try XCTUnwrap(r.nsImage?.tiffRepresentation)))
@@ -64,12 +64,16 @@ import S2ArmAppleAdapter
         XCTAssertGreaterThan(none.pixelsHigh, scanning.pixelsHigh)
     }
 
-    // v0.4.1 六语走查 W2：英 / 日 / 法两个升级按钮横排放不下、被截成「…」。放不下改竖排：
-    //   中文两按钮 + 关闭 560 宽排得下（横排），法语「Connectez votre iPhone, mettre à niveau et installer」+「Exporter l'IPA pour l'auto-signature」排不下（竖排），所以法语页更高
+    // 同一正文、同一页宽，只改变按钮标题；不能用不同语言的总高度推断按钮是否换行，正文与页宽也会影响高度。
     func testLongButtonsStackInsteadOfTruncating() throws {
         let games = [Self.g("A", "甲", patches: ["fps": 1])]
-        let zh = try render(games, "buttons_zh", lang: "zh-Hans"), fr = try render(games, "buttons_fr", lang: "fr"), en = try render(games, "buttons_en", lang: "en")
-        XCTAssertGreaterThan(fr.pixelsHigh, zh.pixelsHigh + 40, "法语按钮排不下 → 竖排（多出两行按钮高）")
-        XCTAssertGreaterThan(en.pixelsHigh, zh.pixelsHigh + 40, "英语按钮排不下 → 竖排")
+        let short = try render(games, "buttons_short", lang: "en", buttonTitles: ["install": "Install", "export": "Export IPA", "close": "Close"])
+        let long = try render(games, "buttons_long", lang: "en", buttonTitles: [
+            "install": "Connect your iPhone, upgrade and install the selected games",
+            "export": "Export an upgraded IPA for signing with your own certificate",
+            "close": "Close"
+        ])
+        XCTAssertEqual(long.pixelsWide, short.pixelsWide)
+        XCTAssertGreaterThan(long.pixelsHigh, short.pixelsHigh + 40, "长按钮排不下时应竖排，不能截断到与短标题同高")
     }
 }

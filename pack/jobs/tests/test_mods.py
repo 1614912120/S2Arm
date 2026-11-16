@@ -49,17 +49,47 @@ class ModsTests(unittest.TestCase):
         self.assertEqual(r["imported"], ["HD Textures"])
         d = self.t / "lib" / GID / "mods" / "HD Textures" / "romfs"
         self.assertEqual(((d / "Data/a.bin").read_bytes(), (d / "b.txt").read_bytes()), (b"AA", b"B"))
-        self.assertEqual(mods.listing(self.c, self.game), [{"name": "HD Textures", "enabled": True, "files": 2, "bytes": 3}])
+        self.assertEqual(mods.listing(self.c, self.game), [{"name": "HD Textures", "enabled": True, "files": 2, "bytes": 3, "code": 0}])
 
     def test_variants_and_other_game_and_exefs(self):
-        # Ryujinx 结构 <程序号>/<名字>/romfs：同一包里两个变体各成一份；标了别的程序号的不收；exefs 补丁只报一句
+        # Ryujinx 结构 <程序号>/<名字>/romfs：同一包里两个变体各成一份；标了别的程序号的不收；exefs 代码补丁跟着那份 mod 收进 exefs/、报一句「重新打包后生效」（11-15）
         src = self.tree({f"{GID}/Blue/romfs/x.bin": b"1", f"{GID}/Red/romfs/x.bin": b"2",
                          "0100FFFF00000000/Other/romfs/y.bin": b"3", f"{GID}/Blue/exefs/1.pchtxt": b"@nsobid-00"}, "Colors")
         r = mods.import_paths(self.c, self.game, [str(src)])
         self.assertEqual(sorted(r["imported"]), ["Colors - Blue", "Colors - Red"])
         self.assertTrue(any("0100FFFF00000000" in n for n in r["notes"]))
-        self.assertTrue(any("exefs" in n for n in r["notes"]))
+        self.assertIn("「Colors - Blue」带 1 份代码补丁：重新打包这款（或 S 级优化升级）后生效", r["notes"])
         self.assertFalse((self.t / "lib" / GID / "mods" / "Colors - Other").exists())
+        self.assertEqual([(m["name"], m["files"], m["code"]) for m in mods.listing(self.c, self.game)], [("Colors - Blue", 1, 1), ("Colors - Red", 1, 0)])
+        self.assertEqual((self.t / "lib" / GID / "mods" / "Colors - Blue" / "exefs" / "1.pchtxt").read_bytes(), b"@nsobid-00")
+
+    def test_code_only_mod_index_and_digest(self):
+        # 只带代码补丁的 mod（60 帧 / 去黑边这类）：exefs/ 与 exefs_patches/<名>/ 都收进 mods/<名>/exefs；README 等别的文件不收。
+        # code_index：开着、关着的都进索引（运行时按文件夹在不在开关），路径 = <mod 名>/<文件>；code_digest：内容变才变，开关不变，没有代码补丁 = "-"
+        self.assertEqual(mods.code_digest(self.c, GID), "-")
+        self.assertIsNone(mods.code_index(self.c, self.game))
+        src = self.tree({f"atmosphere/exefs_patches/x/{'AB' * 16}.ips": b"PATCHEOF", "readme.txt": b"r",
+                         f"atmosphere/contents/{GID}/exefs/60fps.pchtxt": b"@nsobid-AB"}, "Smooth")
+        r = mods.import_paths(self.c, self.game, [str(src)])
+        self.assertEqual(sorted(r["imported"]), ["Smooth", "Smooth - x"])   # Atmosphere exefs_patches/<名>/ 也认，单成一份
+        home = self.t / "lib" / GID / "mods"
+        self.assertEqual([p.name for p in (home / "Smooth - x" / "exefs").iterdir()], [f"{'AB' * 16}.ips"])
+        mods.remove(self.c, self.game, ["Smooth - x"])
+        self.assertEqual(sorted(p.relative_to(home / "Smooth").as_posix() for p in (home / "Smooth").rglob("*") if p.is_file()), ["exefs/60fps.pchtxt"])
+        d1 = mods.code_digest(self.c, GID)
+        mods.set_enabled(self.c, self.game, {"Smooth": False})
+        self.assertEqual(mods.code_digest(self.c, GID), d1)   # 只关掉：记号不变（运行时开关，不用重编）
+        out = Path(mods.code_index(self.c, self.game))
+        self.assertEqual(out, self.t / "priv" / "community-cache" / "games" / GID / "mod")
+        rows = [l.split("\t") for l in (out / "INDEX.tsv").read_text(encoding="utf-8").splitlines()]
+        import hashlib
+        self.assertEqual(rows, [["game", "title_id", "path", "type", "source", "license", "in_pack", "sha256", "mod", "origin"],
+                                ["", GID, "Smooth/60fps.pchtxt", "pchtxt", "mod", "", "yes", hashlib.sha256(b"@nsobid-AB").hexdigest(), "Smooth", "Smooth/60fps.pchtxt"]])
+        self.assertEqual((out / "Smooth" / "60fps.pchtxt").read_bytes(), b"@nsobid-AB")
+        (home / ".off-Smooth" / "exefs" / "60fps.pchtxt").write_bytes(b"@nsobid-CD")
+        self.assertNotEqual(mods.code_digest(self.c, GID), d1)   # 内容变了：要重编
+        mods.remove(self.c, self.game, ["Smooth"])
+        self.assertEqual((mods.code_digest(self.c, GID), mods.code_index(self.c, self.game), out.exists()), ("-", None, False))   # 删光：索引目录也清掉
 
     def test_bare_romfs_folder_and_replace(self):
         src = self.tree({"romfs/a.bin": b"old"}, "Fix")
