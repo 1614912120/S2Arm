@@ -11,6 +11,7 @@
 
   romfs_img.py ls <镜像> [--img]          列「相对路径<TAB>长度」
   romfs_img.py cat <镜像> <相对路径> [--img]
+  romfs_img.py build <RomFS 目录> <输出镜像>   目录建成标准 RomFS 镜像（同 IMG 那段）
 
 只用标准库；路径一律 / 分隔，与 romfs_list.py 相同。"""
 import io
@@ -142,11 +143,33 @@ class _Slice(io.RawIOBase):
         self._f.close(); super().close()
 
 
+def build(romfs_dir, out, romfs_index=None):
+    """romfs_dir（解开的 RomFS 目录）→ 标准 RomFS 镜像文件 out（同 IMG 里那段：services/romfs_index --std，LibHac RomFsBuilder）。
+    先写 out.part 再改名，断了不留半个；romfs_index 缺省同 pack/img.py default_romfs_index（发版预编件 / 开发树现编）。→ out"""
+    import shlex, subprocess
+    if romfs_index is None:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from img import default_romfs_index
+        romfs_index = default_romfs_index()
+    part = os.fspath(out) + '.part'
+    open(part, 'wb').close()   # 写入方按已有文件打开（同 img.build）
+    try:
+        r = subprocess.run(shlex.split(romfs_index) + ['--std', os.fspath(romfs_dir), '-', part, '0'], capture_output=True, text=True)
+        if r.returncode:
+            raise RomfsError(f'出 RomFS 镜像失败（{romfs_index} 退出码 {r.returncode}）：{(r.stdout + r.stderr).strip()[-300:]}')
+        os.replace(part, out)
+    finally:
+        if os.path.exists(part): os.unlink(part)
+    return out
+
+
 def main(argv=None):
     a = sys.argv[1:] if argv is None else argv
     use_img = '--img' in a; a = [x for x in a if x != '--img']
+    if len(a) == 3 and a[0] == 'build':
+        build(a[1], a[2]); return
     if len(a) < 2 or a[0] not in ('ls', 'cat'):
-        sys.exit('用法：romfs_img.py ls <镜像> [--img] | romfs_img.py cat <镜像> <相对路径> [--img]')
+        sys.exit('用法：romfs_img.py ls <镜像> [--img] | romfs_img.py cat <镜像> <相对路径> [--img] | romfs_img.py build <RomFS 目录> <输出镜像>')
     img = RomfsImage.in_img(a[1]) if use_img else RomfsImage(a[1])
     if a[0] == 'ls':
         for rel, _, size in img.entries():

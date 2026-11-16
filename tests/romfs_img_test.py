@@ -81,4 +81,10 @@ with tempfile.TemporaryDirectory(prefix='romfs img test ') as t:
     cat = subprocess.run([sys.executable, str(R / 'pack/romfs_img.py'), 'cat', str(out), 'z/y/x/deep.dat', '--img'], capture_output=True).stdout
     ck(cat == files['z/y/x/deep.dat'], '⑤ cat --img 输出 = 夹具文件')
 
+    # ⑥ build：目录 → 独立镜像，与 romfs_index --std 直接出的逐字节相同；改名前失败不留半个
+    built = T / 'built.romfs'
+    romfs_img.build(rd, built, cmd)
+    ck(built.read_bytes() == std.read_bytes(), '⑥ build 出的镜像与 romfs_index --std 直接出的逐字节相同')
+    try: romfs_img.build(T / 'no_such_dir', T / 'bad.romfs', cmd); ck(False, '⑥ 目录不在应报红')
+    except RomfsError: ck(not (T / 'bad.romfs').exists() and not (T / 'bad.romfs.part').exists(), '⑥ 目录不在 → RomfsError，不留半个文件')
 print(f'romfs_img 单测：{"全通" if not bad else f"{bad} 项不通"}'); sys.exit(1 if bad else 0)
