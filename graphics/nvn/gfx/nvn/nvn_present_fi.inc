@@ -299,7 +299,7 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
                                                                cbt = CACurrentMediaTime(); gstart = x.GPUStartTime; gend = x.GPUEndTime; ok = x.error == nil; gms = (x.GPUEndTime - x.GPUStartTime) * 1000; if (x.error) MLOG("【红】 MetalFX frame interpolation failed: %s", x.error.description.UTF8String); dispatch_semaphore_signal(done); }];
             [c commit];
             // 预算内做完才上补出的帧；超时就不再等（审计 P1-189：原先超时后再等最多 1 秒才上真帧、才记票，30 帧款的上屏节拍被拖长）——直接往下上真帧、记票。
-            //   迟到的那次接着在 GPU 上跑完：它读的两张输入图由 in_busy 护着（出图线程写之前等，fi_in_wait），写的 mid_tex 下一次插值在同一命令队列上排在它后面
+            //   迟到的那次接着在 GPU 上跑完：它读的两张输入图由 in_busy 护着（出图线程见到被占就这一帧不写不补，fi_input_free），写的 mid_tex 下一次插值在同一命令队列上排在它后面
             int in_time = !dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(g_fi_budget_ms * 1e6)));
             if (in_time && ok) { have_mid = 1; last_pair_seq = seq; f->gpu_sum += gms; }
             if (in_time && gstart > 0 && gend >= gstart && cbt >= gend) { f->bd_enc += tenc; f->bd_queue += (gstart - tcommit) * 1000; f->bd_cb += (cbt - gend) * 1000; f->bd_n++; }   // 拆账只算预算内做完的（迟到的那次不等它，回调里的时刻这时还没写）
@@ -335,15 +335,12 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
                                  f->bd_enc = f->bd_queue = f->bd_cb = f->bd_n = 0; }
     fi_inflight_add(-1);   // 两张画布都交完（或没取到）：显示链可以挂了
 } }
-// 出图线程写输入图 in_tex[k] 之前：等这张图上没有还在算的插值（超时迟到的那次，见 fi_job）。最多等 1 秒（GPU 卡死时不永远挂住），超了记红照写
+// 这张输入图此刻能不能写：迟到的插值（fi_job 预算内没做完、接着在 GPU 上跑）还在读它就不能。不等（审计 P1-189：原先出图线程在这里最多等 1 秒，
+//   迟到一次就把出图线程挡住）——调用方这一帧不写输入、不补，只把真帧交给补帧队列按顺序上屏
 API_AVAILABLE(macos(26.0), ios(26.0))
-static void fi_in_wait(NvPresentFI *f, int k) {
-    pthread_mutex_lock(&g_pq_mu);
-    if (f->in_busy[k]) {
-        struct timespec dl; clock_gettime(CLOCK_REALTIME, &dl); dl.tv_sec += 1;
-        while (f->in_busy[k]) if (pthread_cond_timedwait(&g_pq_cv, &g_pq_mu, &dl)) { MLOG("【红】 present frame interpolation: input %d still read by a late interpolation after 1 s; writing anyway", k); break; }
-    }
-    pthread_mutex_unlock(&g_pq_mu);
+static int fi_input_free(NvPresentFI *f, int k) {
+    pthread_mutex_lock(&g_pq_mu); int busy = f->in_busy[k]; pthread_mutex_unlock(&g_pq_mu);
+    return !busy;
 }
 // 出图线程：游戏的一帧。返回 1 = 已接手（票由补帧队列记完成），-1 = 没接手（调用方照原样出图）
 API_AVAILABLE(macos(26.0), ios(26.0))
@@ -357,7 +354,11 @@ static int fi_frame(id<MTLTexture> src, const int crop[4], CAMetalLayer *layer, 
     const int *cp = cr.has ? cr.c : NULL;   // 块里用值拷贝
     fi_inflight_add(1);   // 出图线程还在 g_classic_busy 里：显示链此刻挂不上，任务派出后它会等这一笔
     if (fi_dup()) { dispatch_async(f->q, ^{ fi_job(f, layer, src, cr, flip, k, seq, period, ticket, 1, allow); }); return 1; }   // 拆账：不写输入
-    fi_in_wait(f, k);
+    if (!fi_input_free(f, k)) {   // 输入图还被迟到的插值读着：这一帧不写不补（good = 0 只上真帧），任务照样进同一队列，和在途的补帧按顺序上屏、不两路交帧；
+        //   这一帧不算进连续对（f->last_seq 不动），下一帧不会拿旧输入去插
+        static _Atomic uint64_t skips; if (atomic_fetch_add(&skips, 1) % 300 == 0) MLOG("present frame interpolation: input %d still read by a late interpolation; this frame is shown without interpolating (no wait)", k);
+        dispatch_async(f->q, ^{ fi_job(f, layer, src, cr, flip, k, seq, period, ticket, 0, allow); }); return 1;
+    }
     if (!fi_commit(f, 0, nil, ^int(id cb) { fi_crop c2 = cr; const int *c = c2.has ? c2.c : NULL; (void)cp;
             return fi_pass(cb, f->psoCopy, f->tab[0], f->uv[0], src, nil, f->in_tex[k], c, flip, 0, 0); },
         ^(int ok) { dispatch_async(f->q, ^{ fi_job(f, layer, src, cr, flip, k, seq, period, ticket, ok, allow); }); })) { fi_inflight_add(-1); fi_off("cannot write the interpolation input"); return -1; }

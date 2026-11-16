@@ -496,11 +496,12 @@ static void fps_link(int on) {   // on = 选中档高于 60（开高刷）；包
     const char *pin = getenv("DM_PRESENT_LINK");
     static int owned = -1; if (owned < 0) owned = !pin;   // 第一次进来时启动环境没给，才归补丁管
     if (!owned) return;
-    // 关高刷（选回 60 档 / 关帧率）时：补帧开着（DM_PRESENT_FI=1）就回到「不建显示链」，画面交还补帧（nvn_mtl.m mtl_init 同口径）；否则回 60 Hz 显示链
-    const char *fi = getenv("DM_PRESENT_FI"); int off = fi && !strcmp(fi, "1") ? 0 : 1;
-    setenv("DM_PRESENT_LINK", on ? "2" : off ? "1" : "0", 1);   // 图形层还没初始化：mtl_init 读环境
+    // 关高刷（选回 60 档 / 关帧率）时回 60 Hz 显示链（1）。补帧这一帧真补不补、要不要把显示链关成 0，归图形层按当时判（审计 P1-188：原先这里见 DM_PRESENT_FI=1
+    //   就写 0，不看是不是 Metal 3、补帧建没建起来、玩家局中关没关）：起局 graphics/nvn/gfx/nvn/nvn_mtl.m present_link_from_env（Metal 4 + 补帧才把 1 换成 0），
+    //   局中 nvn_present_fi.inc fi_link_follow（每帧按「这一帧补不补」在 0 与 1 之间切）
+    setenv("DM_PRESENT_LINK", on ? "2" : "1", 1);   // 图形层还没初始化：mtl_init 读环境
     int *pl = (int *)dlsym(RTLD_DEFAULT, "g_dm_present_link");   // 直连图形层（nvn_mtl.m）已初始化：直接改，下一帧 link_sync 对齐；不链直连层的构建 / 单测里没有
-    if (pl) *pl = on ? 2 : off;
+    if (pl) *pl = on ? 2 : 1;
     // 出图节拍（模拟给游戏的垂直同步，graphics/nvn/gfx/nvn/hle_nvn.c present_cfg，缺省 60 Hz）也要跟上：游戏设间隔 1 时每拍出一帧，节拍不放开，
     //   只放开显示链游戏照样只出 60 帧（11-13 维护者实机：一款游戏开 120 帧补丁仍 60 帧，日志「present tick 60 Hz」）。启动环境显式给了 DM_PRESENT_HZ 的不动
     static int hz_owned = -1; if (hz_owned < 0) hz_owned = !getenv("DM_PRESENT_HZ");

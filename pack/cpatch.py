@@ -206,7 +206,8 @@ def scan(index_dirs, exefs, log=None):
                 except (fpslocker.Unsupported, ValueError) as e:
                     skipped['FPSLocker：' + str(e)[:40]] = skipped.get('FPSLocker：' + str(e)[:40], 0) + 1; continue
                 meta = dict(meta, fps=60, ext=True, fpsl=rt)   # ext：代码段尾巴放声明代码、映像结尾放变量（同金手指规则）
-                out.append({'module': 'main', 'cat': 'fps', 'name': 'FPSLocker', 'writes': sorted(w.items()), 'license': r.get('license') or '', 'path': path, 'base': base, 'id': uid, 'meta': meta})
+                out.append({'module': 'main', 'cat': 'fps', 'name': 'FPSLocker', 'writes': sorted(w.items()), 'license': r.get('license') or '', 'path': path, 'base': base, 'id': uid, 'meta': meta,
+                            'origin': r.get('origin') or path})   # 上游原路径：fps_group 按它分组（审计 P1-193）
             elif kind == 'ips' or path.lower().endswith('.ips'):
                 bid = os.path.splitext(os.path.basename(path))[0]
                 ms = [m for m, b in mods.items() if re.fullmatch(r'[0-9A-Fa-f]{16,64}', bid) and bid_match(b, bid)]
@@ -1468,7 +1469,8 @@ def plan(root, default_on, index_dirs):
     ship = []
     for c in adapt_families(scan(index_dirs, exefs, log), exefs, log, root) + (scan_cheats(cheat_dirs, exefs, log, ship) if cheat_dirs else []):
         if c['id'] in excluded: continue
-        u = units.setdefault((c['id'], c['module']), {'cat': c['cat'], 'name': c['name'], 'license': c['license'], 'path': c['path'], 'writes': [], 'meta': c['meta']})
+        u = units.setdefault((c['id'], c['module']), {'cat': c['cat'], 'name': c['name'], 'license': c['license'], 'path': c['path'], 'writes': [], 'meta': c['meta'],
+                                                      'origin': c.get('origin') or c['path']})   # 上游原路径：第 13 列「组」按它算（审计 P1-193：原先单元只存缓存路径 files/<哈希>/…，每份一组）
         u['writes'] += c['writes']
     # 抢同一处时按目标选，不按索引先后（11-01 维护者：先到先得 = 随机选，01006F8002326000收进了 SpeedFix 120 帧版）。排在前面的先占位，后面同处的按「改同一处」落选：
     #   ① 帧率类：目标帧率 = 60 在前，取不到的其次，明确不是 60 的最后（我方目标 60 帧、只提画面帧；非帧率类不参与，视同第一档）
