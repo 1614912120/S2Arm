@@ -2155,7 +2155,8 @@ def _rmtree(p):
     def unlock(func, path, err):
         error = err[1] if isinstance(err, tuple) else err   # onerror 给 exc_info、onexc 给异常本身
         errno_ = getattr(error, "errno", None)
-        if func in (os.rmdir, os.unlink) and errno_ == errno.ENOENT:
+        if errno_ == errno.ENOENT:
+            # 删除期间目录可能被另一个清理者先移走；扫描阶段也按幂等删除处理。其他 I/O 错误仍需上报。
             return
         if func in (os.rmdir, os.unlink) and errno_ == errno.ENOTEMPTY:
             return _rmdir_past_os_junk(path, error)
