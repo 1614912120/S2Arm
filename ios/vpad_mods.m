@@ -10,12 +10,18 @@
 static NSURL *mods_dir(void) { char d[1024]; s2a_docs_path(d, sizeof d, "mods"); return [NSURL fileURLWithPath:@(d) isDirectory:YES]; }
 static const char *current_gid(void) { const char *g = getenv("S2A_LAUNCH_GAME_ID"); return g ? g : ""; }   // 同 game_options.m：起局上下文给的本款程序号；单款壳没有 = 不按程序号筛
 
+// 关掉的 mod：文件夹改名为 .off-<名字>（同电脑端 pack/jobs/mods.py OFF）；RomFsMods.cs 跳过 . 开头的文件夹 = 起局不叠，打开改回原名
+static NSString *const kOff = @".off-";
+static NSString *mod_name(NSURL *u) { NSString *n = u.lastPathComponent; return [n hasPrefix:kOff] ? [n substringFromIndex:kOff.length] : n; }
+static BOOL mod_on(NSURL *u) { return ![u.lastPathComponent hasPrefix:kOff]; }
 static NSArray<NSURL *> *mod_folders(void) {
-    NSArray<NSURL *> *all = [NSFileManager.defaultManager contentsOfDirectoryAtURL:mods_dir() includingPropertiesForKeys:@[NSURLIsDirectoryKey]
-                                                                          options:NSDirectoryEnumerationSkipsHiddenFiles error:nil] ?: @[];
+    NSArray<NSURL *> *all = [NSFileManager.defaultManager contentsOfDirectoryAtURL:mods_dir() includingPropertiesForKeys:@[NSURLIsDirectoryKey] options:0 error:nil] ?: @[];
     NSMutableArray *out = [NSMutableArray array];
-    for (NSURL *u in all) { NSNumber *dir = nil; [u getResourceValue:&dir forKey:NSURLIsDirectoryKey error:nil]; if (dir.boolValue) [out addObject:u]; }
-    return [out sortedArrayUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) { return [a.lastPathComponent compare:b.lastPathComponent]; }];   // 叠加顺序 = 名字升序（RomFsMods.cs）
+    for (NSURL *u in all) {
+        NSNumber *dir = nil; [u getResourceValue:&dir forKey:NSURLIsDirectoryKey error:nil];
+        if (dir.boolValue && (![u.lastPathComponent hasPrefix:@"."] || [u.lastPathComponent hasPrefix:kOff])) [out addObject:u];   // 别的 . 开头是导入中的临时目录
+    }
+    return [out sortedArrayUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) { return [mod_name(a) compare:mod_name(b)]; }];   // 叠加顺序 = 名字升序（RomFsMods.cs）
 }
 NSInteger s2a_mods_count(void) { return (NSInteger)mod_folders().count; }
 
@@ -88,10 +94,12 @@ static NSArray *find_romfs(NSURL *root, NSMutableArray<NSString *> *notes) {
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
     if (!_mods.count) { cell.textLabel.text = S2AL(@"mods.empty"); cell.textLabel.textColor = UIColor.secondaryLabelColor; return cell; }
     NSURL *m = _mods[ip.row]; long files; long long bytes; mod_stats(m, &files, &bytes);
-    cell.textLabel.text = m.lastPathComponent;
+    cell.textLabel.text = mod_name(m);
+    UISwitch *sw = [UISwitch new]; sw.on = mod_on(m); sw.accessibilityIdentifier = [@"mods.toggle." stringByAppendingString:mod_name(m)];
+    sw.tag = ip.row; [sw addTarget:self action:@selector(toggled:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = sw;
     cell.detailTextLabel.text = [NSString stringWithFormat:S2AL(@"mods.files"), files, [NSByteCountFormatter stringFromByteCount:bytes countStyle:NSByteCountFormatterCountStyleFile]];
     cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
-    cell.accessibilityIdentifier = [@"mods.item." stringByAppendingString:m.lastPathComponent];
+    cell.accessibilityIdentifier = [@"mods.item." stringByAppendingString:mod_name(m)];
     return cell;
 }
 - (UISwipeActionsConfiguration *)tableView:(UITableView *)tv trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)ip {
@@ -99,10 +107,17 @@ static NSArray *find_romfs(NSURL *root, NSMutableArray<NSString *> *notes) {
     NSURL *m = _mods[ip.row];
     UIContextualAction *del = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:S2AL(@"mods.delete") handler:^(UIContextualAction *a, UIView *v, void (^done)(BOOL)) {
         (void)a; (void)v; NSError *err = nil; BOOL ok = [NSFileManager.defaultManager removeItemAtURL:m error:&err];
-        if (!ok) NSLog(@"【红】mod：删 %@ 失败 %@", m.lastPathComponent, err.localizedDescription);
+        if (!ok) NSLog(@"【红】mod：删 %@ 失败 %@", mod_name(m), err.localizedDescription);
         [self reload]; done(ok);
     }];
     return [UISwipeActionsConfiguration configurationWithActions:@[del]];
+}
+- (void)toggled:(UISwitch *)sw {
+    if (sw.tag < 0 || sw.tag >= (NSInteger)_mods.count) return;
+    NSURL *m = _mods[sw.tag], *to = [mods_dir() URLByAppendingPathComponent:sw.on ? mod_name(m) : [kOff stringByAppendingString:mod_name(m)] isDirectory:YES];
+    NSError *err = nil;
+    if (![NSFileManager.defaultManager moveItemAtURL:m toURL:to error:&err]) NSLog(@"【红】mod：%@ %@ 失败 %@", mod_name(m), sw.on ? @"打开" : @"关掉", err.localizedDescription);
+    [self reload];
 }
 - (void)import {
     UIDocumentPickerViewController *p = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder] asCopy:NO];
@@ -122,7 +137,8 @@ static NSArray *find_romfs(NSURL *root, NSMutableArray<NSString *> *notes) {
             if (![fm createDirectoryAtURL:tmp withIntermediateDirectories:YES attributes:nil error:&err] || ![fm copyItemAtURL:f[1] toURL:[tmp URLByAppendingPathComponent:@"romfs"] error:&err]) {
                 [notes addObject:[NSString stringWithFormat:S2AL(@"mods.import.failed"), f[0], err.localizedDescription ?: @""]]; [fm removeItemAtURL:tmp error:nil]; continue;
             }
-            [fm removeItemAtURL:dst error:nil];   // 同名整份替换，不叠旧文件
+            [fm removeItemAtURL:dst error:nil];   // 同名整份替换，不叠旧文件；关着的同名那份也换掉（新导入的是开着的）
+            [fm removeItemAtURL:[mods_dir() URLByAppendingPathComponent:[kOff stringByAppendingString:f[0]] isDirectory:YES] error:nil];
             if (![fm moveItemAtURL:tmp toURL:dst error:&err]) { [notes addObject:[NSString stringWithFormat:S2AL(@"mods.import.failed"), f[0], err.localizedDescription ?: @""]]; continue; }
             [done addObject:f[0]];
         }

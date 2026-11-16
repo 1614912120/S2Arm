@@ -49,7 +49,7 @@ class ModsTests(unittest.TestCase):
         self.assertEqual(r["imported"], ["HD Textures"])
         d = self.t / "lib" / GID / "mods" / "HD Textures" / "romfs"
         self.assertEqual(((d / "Data/a.bin").read_bytes(), (d / "b.txt").read_bytes()), (b"AA", b"B"))
-        self.assertEqual(mods.listing(self.c, self.game), [{"name": "HD Textures", "files": 2, "bytes": 3}])
+        self.assertEqual(mods.listing(self.c, self.game), [{"name": "HD Textures", "enabled": True, "files": 2, "bytes": 3}])
 
     def test_variants_and_other_game_and_exefs(self):
         # Ryujinx 结构 <程序号>/<名字>/romfs：同一包里两个变体各成一份；标了别的程序号的不收；exefs 补丁只报一句
@@ -88,6 +88,38 @@ class ModsTests(unittest.TestCase):
         self.assertEqual(mods.listing(self.c, self.game), [])
         with self.assertRaises(Failure):
             mods.remove(self.c, self.game, ["Nope"])
+
+    def test_toggle_off_on_reimport_and_remove(self):
+        # 关掉 = 文件夹改名为 .off-<名字>（起局不叠、装机不推）；打开改回；关着时同名再导入 = 新的开着、旧的关着那份删掉；关着也能删。期望手写
+        home = self.t / "lib" / GID / "mods"
+        mods.import_paths(self.c, self.game, [str(self.tree({"romfs/a": b"a"}, "One"))])
+        mods.set_enabled(self.c, self.game, {"One": False})
+        self.assertEqual(([p.name for p in home.iterdir()], mods.listing(self.c, self.game)[0]["enabled"]), ([".off-One"], False))
+        mods.set_enabled(self.c, self.game, {"One": True})
+        self.assertEqual([p.name for p in home.iterdir()], ["One"])
+        mods.set_enabled(self.c, self.game, {"One": False})
+        mods.import_paths(self.c, self.game, [str(self.tree({"romfs/a": b"new"}, "One"))])
+        self.assertEqual(([p.name for p in home.iterdir()], (home / "One/romfs/a").read_bytes()), (["One"], b"new"))
+        mods.set_enabled(self.c, self.game, {"One": False})
+        mods.remove(self.c, self.game, ["One"])
+        self.assertEqual(list(home.iterdir()), [])
+        with self.assertRaises(Failure):
+            mods.set_enabled(self.c, self.game, {"Nope": True})
+
+    def test_push_follows_toggle(self):
+        # 关掉后装机：机上那份删掉；再打开：重新推
+        mods.import_paths(self.c, self.game, [str(self.tree({"romfs/a": b"a"}, "One"))])
+        calls = []
+        cl = types.SimpleNamespace(put=lambda src, rel: calls.append(("put", rel)), rm=lambda rel: (calls.append(("rm", rel)) or (True, "")))
+        ph = types.SimpleNamespace(client=lambda w: cl)
+        had = install.push_mods(self.c, ph, GID, {})
+        mods.set_enabled(self.c, self.game, {"One": False}); calls.clear()
+        had = install.push_mods(self.c, ph, GID, had)
+        base = f"Documents/games/{GID}/mods"
+        self.assertEqual((calls, had), ([("rm", f"{base}/One")], {}))
+        mods.set_enabled(self.c, self.game, {"One": True}); calls.clear()
+        install.push_mods(self.c, ph, GID, had)
+        self.assertEqual(calls, [("put", f"{base}/One/romfs/a")])
 
     def test_push_only_changed_and_removed(self):
         mods.import_paths(self.c, self.game, [str(self.tree({"romfs/a": b"a", "romfs/d/b": b"b"}, "Keep"))])
