@@ -16,6 +16,7 @@ SHA-256 记在 <输出包目录>.state.tsv（路径、字节数、源 mtime 纳�
 --check：清单最新则退出 0，否则 1（不改任何文件）。"""
 import ctypes, hashlib, json, multiprocessing as mp, os, shutil, sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tools'))
+from pool_workers import process_pool_size   # 进程池路数（Windows 至多 61，#1332）
 from progress import Ticker   # 出包进度（S2A_PROGRESS，tools/progress.sh）：克隆 + 算 SHA 两段按文件数记
 from refs_clone import clone_file as refs_clone   # Windows ReFS / 开发驱动器块克隆（#1100）
 import sha256_fast   # 文件 SHA：Windows 走 CNG（hashlib 在玩家 Python 上没用 SHA 指令，Windows 出包机单核 0.37 → 1.46 GB/s）
@@ -141,7 +142,7 @@ def main():
     if need:
         method = 'fork' if 'fork' in mp.get_all_start_methods() else 'spawn'
         ps = [p for _, p in need]
-        with mp.get_context(method).Pool(NJ) as pool: hs = [h for part in pool.imap(sha_block, [ps[i:i + 64] for i in range(0, len(ps), 64)]) for h in part]
+        with mp.get_context(method).Pool(process_pool_size(NJ)) as pool: hs = [h for part in pool.imap(sha_block, [ps[i:i + 64] for i in range(0, len(ps), 64)]) for h in part]
         for (rel, _), h in zip(need, hs): csha[rel] = h
     def fresh(rel, sz, mt):
         if not same_size_mtime(rel, sz, mt): return False
@@ -170,7 +171,7 @@ def main():
     csha.update((rel, h) for rel, h in copied.items() if rel not in csha)
     if todo:
         method = 'fork' if 'fork' in mp.get_all_start_methods() else 'spawn'
-        with mp.get_context(method).Pool(NJ) as pool:   # 只算新克隆 / 变了的文件
+        with mp.get_context(method).Pool(process_pool_size(NJ)) as pool:   # 只算新克隆 / 变了的文件
             need = [(rel, p) for rel, p in todo if rel not in csha]; ps = [p for _, p in need]   # 判沿用时已经算过 SHA 的不再算
             hs = [h for part in pool.imap(sha_block, [ps[i:i + 64] for i in range(0, len(ps), 64)]) for h in part]
             for (rel, _), h in zip(need, hs): shas[rel] = h
