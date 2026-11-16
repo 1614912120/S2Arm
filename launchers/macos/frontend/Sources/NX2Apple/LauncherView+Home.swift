@@ -56,6 +56,14 @@ extension LauncherView {
                 }
                 status(game).lineLimit(2)
             }
+            if game.playable, game.hostUpdate == "incompatible" {
+                // 新版改了宿主读产物的约定、换不了宿主：旧版本照常能玩，重新出一次 Mac 版才能用上新版修复（host_update.py；主线游戏库同一句）
+                HStack(spacing: 10) {
+                    Text(txt("library.hostUpdate.incompatible")).font(.manrope(12.5)).foregroundStyle(.white.opacity(0.75)).fixedSize(horizontal: false, vertical: true)
+                    Button(txt("library.hostUpdate.prepare")) { model.exportFor = game.id }
+                        .buttonStyle(.link).disabled(model.busy).controllerID("hero.hostUpdate")
+                }
+            }
             if let error = model.actionError(for: game.id) {
                 Text(loc.backend(error)).font(.manrope(12)).foregroundStyle(LauncherPalette.danger).lineLimit(2)
             }
@@ -73,6 +81,19 @@ extension LauncherView {
                 }
                 .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.selfSign")
                 .disabled(game.iphoneReady ? model.busy : model.busy && model.session?.export == nil)
+                // 主按钮是「开始游戏」时，出过 iPhone 包的款照样要能一键装到 iPhone（主线游戏库两个都在）
+                if game.playable, game.iphoneReady {
+                    Button { model.selfSigning = false; model.targetInstalledDevice(of: game); installFor = game.id } label: {
+                        Label(txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"), systemImage: "iphone")
+                    }
+                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.install").disabled(model.busy)
+                }
+                // 这款上次出包 / 装机 / 导出的结果页（主线游戏库「查看结果」）
+                if model.finishedExports[game.id] != nil, !(model.busy && model.session?.gameID == game.id) {
+                    Button { model.viewingResult = model.finishedExports[game.id] } label: { Image(systemName: "checkmark.seal") }
+                        .controllerButtonStyle(ConsoleIconButtonStyle(size: 52)).controllerID("hero.results")
+                        .help(txt("library.hero.results")).accessibilityLabel(txt("library.hero.results"))
+                }
                 Button { moreFor = game.id } label: { Image(systemName: "ellipsis") }
                     .controllerButtonStyle(ConsoleIconButtonStyle(size: 52)).controllerID("hero.more")
                     .help(loc.t("home.details")).accessibilityLabel(loc.t("home.details"))

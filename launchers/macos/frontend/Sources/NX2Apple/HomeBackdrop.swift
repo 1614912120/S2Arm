@@ -39,7 +39,8 @@ struct HomeBackdrop: View {
 
     @ViewBuilder private func artwork(size: CGSize) -> some View {
         // Try decoding each source independently: an unavailable banner must not hide a valid cover.
-        if let image = covers.image(game?.banner) ?? covers.image(game?.cover) {
+        // 玩家自己换过封面：大图也用玩家的封面（主线游戏库同一规则，玩家的选择优先于自带横幅）
+        if let image = (game?.customCover == true ? covers.image(game?.cover) : nil) ?? covers.image(game?.banner) ?? covers.image(game?.cover) {
             CoverFill(image: image).frame(width: size.width, height: size.height)
         } else {
             LinearGradient(colors: [Color(red: 0.13, green: 0.19, blue: 0.3), LauncherPalette.background],
