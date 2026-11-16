@@ -456,8 +456,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
     }
     if (group == 7 && row == 1) {   // 游戏语言（按款，11-13；定义表 game_settings.v1.json language）：跟随系统 + Switch 全部语言，存这款的 S2AGameLanguage，下次开游戏生效
         NSArray<NSString *> *values = s2a_ios_game_languages();
-        NSArray<NSString *> *labels = @[S2AL(@"settings.gameLanguage.system"), S2AL(@"settings.language.zhHans"), S2AL(@"settings.language.zhHant"), @"English (US)", @"English (UK)", S2AL(@"settings.gameLanguage.ja"), @"한국어", @"Français", @"Français (Canada)", @"Deutsch",
-                                        @"Español", @"Español (Latinoamérica)", @"Italiano", @"Nederlands", @"Português", @"Português (Brasil)", @"Русский", @"Polski", @"ไทย"];
+        NSMutableArray<NSString *> *labels = [NSMutableArray array]; for (NSString *v in values) [labels addObject:s2a_ios_game_language_label(v)];   // 名字同游戏库每款设置页（settings.m）
         NSUserDefaults *d = s2a_ios_settings_defaults();
         NSString *cur = [d stringForKey:S2AGameLanguageKey];
         // 只列这款支持的（11-14 维护者：读资源包 ctl/control.nacp 的支持语言标志，settings.m）；读不到 = 不知道，照旧列全部；已选的这款没有也留着
