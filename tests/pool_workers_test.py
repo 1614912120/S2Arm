@@ -2,7 +2,7 @@
 四处按核数开进程池的真实入口逐个跑（pack.py 算哈希、ui_lyt 宽屏布局、nxsh_extract 抽取着色器、shader_split 直连抽取），
 核数打成 88 / 128、模拟 Windows（只换 tools/pool_workers._windows，不碰全局 os.name），记下各处真正交给进程池的路数。期望手写：
   ① Windows：88 / 128 核 → 每处都是 61；② 非 Windows：128 核 → 128（不封顶）；③ 少于 61 的照给（16 核 → 16）
-池按记下的路数开但实际只起 2 个进程（不在测试机上真起 61 个），入口其余逻辑照跑"""
+池按记下的路数开但实际只起 2 个进程（不真起 61 个进程），入口其余逻辑照跑"""
 import concurrent.futures as cf, multiprocessing.context as mpc, os, runpy, shutil, subprocess, sys, tempfile
 from pathlib import Path
 from unittest import mock
