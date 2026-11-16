@@ -173,10 +173,4 @@ source "$H/pack/patch_ship.sh"; B=d1ed438c8bdaf4368b30daec53ed8e9b; printf 'sche
 ck "verified_builds 含本构建号（大小写不同）→ 随包" 'ipa_patch_ship $W/p1 $B'
 ck "构建号差一位 → 不随包" '! ipa_patch_ship $W/p1 ${B%b}c'
 ck "verified_builds 写在段里（不是文件头）→ 不随包" '! ipa_patch_ship $W/p2 $B'
-# 进程池路数（D-VV4J：88 核 Windows 出 iPhone 包停在「资源包 N/N」几小时——Windows 上 multiprocessing.Pool 超过 61 个进程卡死）：
-#   Windows 按 61 封顶，别的系统照给；0 / 负数按 1。期望手写
-got=$(cd "$H/pack" && python3 -c 'import os, unittest.mock as m, pack
-with m.patch.object(os, "name", "nt"): w = [pack.pool_size(n) for n in (88, 61, 8, 0)]
-print(w, [pack.pool_size(n) for n in (88, 0)])' 2> /dev/null)
-ck "进程池路数：Windows 88→61、61→61、8→8、0→1；别的系统 88→88、0→1（实得：${got:-读不到}）" '[ "$got" = "[61, 61, 8, 1] [88, 1]" ]'
 chmod -R u+w $T; rm -rf $T; [ $bad = 0 ] && echo "pack 单测全过" || { echo "pack 单测有不通"; exit 1; }

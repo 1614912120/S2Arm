@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath
 import nxfmt
 # 仓库里唯一的 RomFS 遍历（graphics/nvn/tools/romfs_list.py：walk 同 os.walk，heads 给清单里的文件头，同一份 RomFS 只读一次）
 sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'nvn', 'tools'))); import romfs_list
+sys.path.insert(0, os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', 'tools'))); from pool_workers import process_pool_size   # 进程池路数（Windows 至多 61，#1332）
 _NXFMT_SRC = 'graphics/tools/nxfmt.py'  # 字面路径给 pack/stage_inputs.py 收进抽取 / 直连库的源码键
 if os.path.basename(nxfmt.__file__) != os.path.basename(_NXFMT_SRC):
     raise ImportError(_NXFMT_SRC)
@@ -1063,7 +1064,7 @@ if __name__ == '__main__':
     miss = None
     if '--miss' in a: i = a.index('--miss'); miss = a[i + 1]; del a[i:i + 2]   # 运行时落盘的缺失着色器目录（NX_SHADER_MISS_DIR）
     # 资源目录可写 @<列表文件>（一行一个；11-05 Windows 出包机怪猎崛起 273 个追加内容逐个放进命令行超过 Windows 32767 字符上限）
-    outdir = a[0]; roots = [r for x in a[1:] for r in (open(x[1:], encoding='utf-8').read().splitlines() if x.startswith('@') else [x]) if r]; J = int(os.environ.get('J', '8')); os.makedirs(os.path.join(outdir, 'src'), exist_ok=True)
+    outdir = a[0]; roots = [r for x in a[1:] for r in (open(x[1:], encoding='utf-8').read().splitlines() if x.startswith('@') else [x]) if r]; J = process_pool_size(int(os.environ.get('J', '8'))); os.makedirs(os.path.join(outdir, 'src'), exist_ok=True)
     # PKZ Oodle 成员的游戏解码器（pkz_oodle）：没设 DM_OODLE_MODULES 时按第一个资源目录的父目录（标准产物根）补上，工作进程继承环境变量
     if not os.environ.get('DM_OODLE_MODULES'):
         for rd in roots:
