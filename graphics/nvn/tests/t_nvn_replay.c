@@ -1513,6 +1513,30 @@ static void t_buf_mirror(void) {   // 池镜像：首次使用建一份、按页
     nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK);
 }
 
+static void t_buf_multi_tail(void) {
+    nvn_be_sub_begin(); nvn_be_shutdown_session();
+    memset(g_pg_gen, 0, sizeof g_pg_gen); g_pg_tracked = 1; g_dirty_now = 100; g_nbw = 0;
+    nvn_be_pool_add(g_pmem, sizeof g_pmem);
+    uint64_t base = (uint64_t)(uintptr_t)g_pmem;
+    const int counts[] = {0, 1, 16, 17, 64, 65};
+    for (unsigned c = 0; c < sizeof counts / sizeof counts[0]; c++) {
+        uint64_t addr[66], len[66], off[66]; nvn_gpu_buf buf[66]; unsigned char ok[66];
+        memset(ok, 0xa5, sizeof ok); memset(buf, 0, sizeof buf); memset(off, 0xff, sizeof off);
+        for (int i = 0; i < 66; i++) { addr[i] = base + (uint64_t)i * 16; len[i] = 8; }
+        // Valid, zero-length and pool-tail failures on both sides of a chunk boundary.
+        len[15] = len[31] = 0;
+        addr[16] = addr[48] = base + sizeof g_pmem - 4;
+        CHECK(rp_buf_resolve_multi(counts[c], addr, len, buf, off, ok) == 1);
+        for (int i = 0; i < counts[c]; i++) {
+            int valid = i != 15 && i != 16 && i != 31 && i != 48;
+            CHECK(ok[i] == valid);
+            if (valid) CHECK(buf[i] != NULL && off[i] == (uint64_t)i * 16);
+        }
+        CHECK(ok[counts[c]] == 0xa5);
+    }
+    nvn_be_pool_del(g_pmem); nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK);
+}
+
 static void t_buf_ops(void) {   // 缓冲类命令只改游戏内存；GPU 顺序由使用点同步保证：先用的看到旧内容，后用的看到新内容
     nvn_be_shutdown_session(); nvn_unimpl_reset(); memset(g_pg_gen, 0, sizeof g_pg_gen); g_nbw = 0; g_dirty_now = 100; memset(g_pmem, 0, sizeof g_pmem);
     uint64_t base = (uint64_t)(uintptr_t)g_pmem; nvn_be_pool_add(g_pmem, sizeof g_pmem);
@@ -3775,6 +3799,7 @@ int main(int argc, char **argv) {
     t_decl_view();
     t_buf_mirror();
     t_buf_mirror_fail_once();
+    t_buf_multi_tail();
     t_buf_ops();
     t_copy_b2t();
     t_pass_clear_fold();
