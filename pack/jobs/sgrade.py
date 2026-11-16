@@ -111,18 +111,24 @@ def scan(c):
         pats = local_patches(c, gid, bid, oth) if bid else {}
         import patches as _p   # 维护者 11-15「两者合成一套」：没社区满屏补丁、这一版在宽屏已验证名单 → 满屏算我方通用满屏
         own = not pats.get("widescreen") and _p.own_widen(c, gid, bid)
-        games.append(dict(id=gid, name=g.get("name") or gid, program=where, build=bid, patches=pats, total=sum(pats.values()) + (1 if own else 0),
+        import sgrade_bf   # 直连库缺可读瓦片版着色器（_bf）：iPhone 看 game.json ios.bfGen，Mac 看运行版本清单 bfGen
+        from core import read
+        bf = dict(iphone=iphone and sgrade_bf.due(c, gid),
+                  mac=mac and sgrade_bf.stale(read(layout.image_mac(c, gid, create=False) / "manifest.json", {}).get("bfGen"))
+                      and (layout.image_mac(c, gid, create=False) / "shaders/direct/keys.tsv").is_file())
+        games.append(dict(id=gid, name=g.get("name") or gid, bfPending=bf, program=where, build=bid, patches=pats, total=sum(pats.values()) + (1 if own else 0),
                           ownWiden=bool(own), iphone=iphone, mac=mac, off=info.get("sgradeOff") is True,
                           versions={"mine": _p.display_version(c, g) or "",
                                     "available": {k: sorted(v) for k, v in oth.items() if not pats.get(k)}}))
     found = [x for x in games if x["program"] != "none"]
-    return dict(games=games, found=len(found), upgradable=sum(1 for x in found if x["total"] and not x["off"]),
+    return dict(games=games, found=len(found), upgradable=sum(1 for x in found if (x["total"] and not x["off"]) or any(x["bfPending"].values())),
                 noPatch=sum(1 for x in found if not x["total"]), missing=len(games) - len(found))
 
 
 def mac_all(c):
     """启动器打开时后台跑（v0.4.0）：有 Mac 运行版本的款逐款补上 S 级优化；补丁记号没变的 refresh_mac 自己跳过。一款出错不挡别的"""
     from rewrite_refresh import refresh_mac
+    import sgrade_bf
     games = [g for g in c.catalog()["games"] if (layout.image_mac(c, g["id"], create=False) / "exefs/main").is_file()]
     c.begin("给 Mac 游戏补上 S 级优化", 1, 1)
     done = []
@@ -131,6 +137,9 @@ def mac_all(c):
             with c.lock("execution"):   # 与开始游戏同一把锁：正在玩的那款不在运行中改
                 if refresh_mac(c, g["id"], layout.image_mac(c, g["id"], create=False)):
                     done.append(g["id"].upper())
+            # 老包直连库缺可读瓦片版着色器（_bf）：整份重出要几分钟到几十分钟，在锁外出；只有换进运行版本那一下拿「开始游戏」同一把锁
+            if sgrade_bf.upgrade_mac(c, g["id"], layout.image_mac(c, g["id"], create=False), lambda: c.lock("execution")) and g["id"].upper() not in done:
+                done.append(g["id"].upper())
         except (Failure, OSError) as e:
             c.emit("message", f"【黄】{g.get('name') or g['id']} 这次没补上：{str(e)[:160]}")
     if done:

@@ -505,9 +505,18 @@ static class LibPack
         {
             var n = System.Text.Json.Nodes.JsonNode.Parse(json) as System.Text.Json.Nodes.JsonObject; if (n == null) return null;
             n.Remove("fetch"); if (n["raster"] is System.Text.Json.Nodes.JsonObject r) r.Remove("scr_pos");
+            n.Remove("fn_lib");   // 批库名：重出时批库分组一变就大面积变（010074F013262000 22977 键），函数本身没变；覆盖层的反射保留旧容器的批库名（Merged），不靠它
             return n.ToJsonString();
         }
         catch (JsonException) { return null; }
+    }
+    /// <summary>覆盖层收的反射：旧反射为底（批库名 fn_lib 等指向旧容器里真有的东西），只换进可读瓦片版带进来的字段（片元 fetch、顶点 raster.scr_pos；新反射没有就删掉）</summary>
+    static byte[] Merged(byte[] oldJson, byte[] freshJson)
+    {
+        var o = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(oldJson); var f = (System.Text.Json.Nodes.JsonObject)System.Text.Json.Nodes.JsonNode.Parse(freshJson);
+        o.Remove("fetch"); if (f["fetch"] is { } fe) o["fetch"] = fe.DeepClone();
+        if (o["raster"] is System.Text.Json.Nodes.JsonObject orr) { orr.Remove("scr_pos"); if (f["raster"]?["scr_pos"] is { } sp) orr["scr_pos"] = sp.DeepClone(); }
+        return Utf8Out.GetBytes(o.ToJsonString());
     }
     /// <summary>
     /// 覆盖层：old = 玩家现有的主容器，fresh = 同一款用当前翻译器整份重出的容器（临时，不推）。只收「old 没有可读瓦片版、fresh 有」的键：
@@ -528,7 +537,7 @@ static class LibPack
             if (!newBf && (fj.AsSpan().SequenceEqual(oj) || !HasScrPos(fj))) continue;   // 没新 _bf：只收「多了非空 scr_pos」的顶点反射（空的证明不了什么，不推）
             string a = WithoutFetch(fj), b = WithoutFetch(oj);
             if (a == null || b == null || a != b) { if (newBf) skipped++; continue; }   // 别的字段也变了：配不上主容器里的旧库，不收（只有带新 _bf 的才计进「跳过」）
-            files[$"{key:x16}_b.json"] = fj;
+            files[$"{key:x16}_b.json"] = Merged(oj, fj);
             if (newBf) { files[$"{key:x16}_bf.metallib"] = f.Get(key, 2); added++; } else vjson++;   // 没有新 _bf、只多了 scr_pos 等的（顶点）：只换反射
         }
         if (added == 0) return (new(), $"[直连库] 覆盖层：没有要补的可读瓦片版（跳过 {skipped} 个反射别处也变了的键）", 0, skipped);
