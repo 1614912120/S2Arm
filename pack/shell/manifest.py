@@ -75,9 +75,9 @@ def _identity(source_commit, inputs, chain, ios_min, ios_sdk):
         raise ShellError("壳输入指纹要 16 位十六进制")
     if not isinstance(chain, str) or not re.fullmatch("[0-9a-z]{1,12}", chain):
         raise ShellError("直连链号不对（1–12 位）")
-    if not isinstance(ios_min, str) or not re.fullmatch(r"\d+(\.\d+){0,2}", ios_min):
-        raise ShellError("iOS 最低版本不对")
-    if not isinstance(ios_sdk, str) or not re.fullmatch(r"\d{1,3}", ios_sdk):
+    if not isinstance(ios_min, str) or not re.fullmatch(r"(tvos)?\d+(\.\d+){0,2}", ios_min):
+        raise ShellError("最低版本不对（iOS 写数字，Apple TV 带 tvos 前缀）")
+    if not isinstance(ios_sdk, str) or not re.fullmatch(r"(tvos)?\d{1,3}", ios_sdk):
         raise ShellError("iOS SDK 主版本不对")
 
 
