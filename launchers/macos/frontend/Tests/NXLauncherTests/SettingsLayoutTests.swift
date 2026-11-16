@@ -263,6 +263,7 @@ import S2ArmAppleAdapter
                 location: GameLocation(catalog: ["state": "ok", "path": first]))
             for stage in 0..<4 {
                 let model = stage < 2 ? fixture.model : S2ArmLauncherModel(client: fixture.model.provider.client)
+                fixture.quiet(model)
                 if stage >= 2 {
                     if stage == 3 { fixture.runner.storageResponse = ["locations": [], "last": ""] }
                     model.loadLocations()
@@ -1613,6 +1614,8 @@ private struct SearchControlPreview: View {
     let model: S2ArmLauncherModel
     let navigation = LauncherPadNavigation()
     let runner = SettingsRunner()
+    /// 模型想弹的提示框（标题：内容）：走记录不走真 NSAlert（runAlert 注入）
+    private(set) var alerts: [String] = []
     init() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("s2arm-settings-layout-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Jobs"), withIntermediateDirectories: true)
@@ -1620,7 +1623,10 @@ private struct SearchControlPreview: View {
         try Data().write(to: root.appendingPathComponent("Jobs/main.py"))
         model = S2ArmLauncherModel(client: JobClient(environment: JobEnvironment(privateRoot: root, resources: root,
             library: root.appendingPathComponent("library").path, libraryId: "layout-fixture"), runner: runner))
+        quiet(model)
     }
+    /// 这个夹具里建的模型（含重启后新建的）一律接上：提示框记下来，不弹真窗
+    func quiet(_ m: S2ArmLauncherModel) { m.runAlert = { [weak self] a in self?.alerts.append(a.messageText + "：" + a.informativeText); return .alertSecondButtonReturn } }
     func remove() { try? FileManager.default.removeItem(at: root) }
 }
 
