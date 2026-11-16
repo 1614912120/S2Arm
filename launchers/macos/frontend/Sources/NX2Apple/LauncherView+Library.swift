@@ -91,6 +91,9 @@ extension LauncherView {
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             Divider().opacity(0.3).padding(.vertical, 4)
+            if model.finishedExports[game.id] != nil, !(model.mainBusy && model.session?.gameID == game.id) {   // 这款上次出包 / 装机 / 导出的结果页（原首页圆钮）
+                moreRow(txt("library.hero.results"), "checkmark.seal") { model.viewingResult = model.finishedExports[game.id] }
+            }
             moreRow(loc.t("s2arm.export.action"), "shippingbox") { model.exportFor = game.id }
                 .controllerShortcut(.rightTrigger)
             moreRow(loc.t("s2arm.action.freeSpace"), "externaldrive") { spaceFor = game.id }

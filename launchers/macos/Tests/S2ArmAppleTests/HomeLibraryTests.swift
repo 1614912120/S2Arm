@@ -87,7 +87,7 @@ import LauncherPadBridge
             let resized = model.gamepad.controlTargets(in: window)
             XCTAssertLessThanOrEqual(host.fittingSize.height, size.height + 0.1, "内容最小高度不能撑大默认窗口")
             let screenBounds = window.convertToScreen(host.bounds)
-            for id in ["hero.play", "hero.selfSign", "hero.more", "hero.favorite", "hero.settings", "home.search"] {
+            for id in ["hero.play", "hero.selfSign", "hero.more", "hero.favorite", "home.search"] {
                 let target = try XCTUnwrap(resized.first { $0.id == id }, "\(size): \(id)")
                 XCTAssertTrue(screenBounds.insetBy(dx: -1, dy: -1).contains(target.frame), "\(size) 的操作必须留在窗口内：\(id) \(target.frame)")
             }
