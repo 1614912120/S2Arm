@@ -61,6 +61,42 @@ import S2ArmAppleAdapter
         XCTAssertEqual(runner.updates.first?["device"] as? String, "00008160-FIXTURE")
         XCTAssertTrue(S2ArmLauncherModel.autoUpdatePhoneOn(UserDefaults(suiteName: "s2arm-fresh-" + UUID().uuidString)!), "没碰过开关：缺省开")
     }
+
+    // 新版启动器首次读到游戏库（11-16「启动器升级并更新 IPA」）：有要更新的手机 → 后台 installUpdatePrepare 一次，横幅 准备好 / 准备不了 → 连上自动更新；
+    //   开关关 → 不准备、不显示、更新弹窗按钮照旧；装过手机 → 更新弹窗按钮写「更新启动器和 iPhone App」
+    func testPrepareBannerAfterLauncherUpdate() async throws {
+        _ = NSApplication.shared
+        let key = S2ArmLauncherModel.autoUpdatePhoneOffKey, before = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(before, forKey: key) }
+        func run(fails: Bool, on: Bool) async throws -> (S2ArmLauncherModel, KeptRunner) {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("s2arm-prep-" + UUID().uuidString)
+            addTeardownBlock { try? FileManager.default.removeItem(at: root) }
+            try FileManager.default.createDirectory(at: root.appendingPathComponent("Jobs"), withIntermediateDirectories: true)
+            try Data().write(to: root.appendingPathComponent("Jobs/main.py"))
+            let runner = KeptRunner(); runner.prepareFails = fails
+            runner.catalog = ["games": [[String: Any]](), "phoneDevices": 1,
+                              "phoneUpdates": [["device": "dev1", "games": [["gameId": "0100C9C00E25C000", "name": "A"]], "stale": [[String: Any]]()]]]
+            S2ArmLauncherModel.setAutoUpdatePhone(on)
+            let model = S2ArmLauncherModel(client: JobClient(environment: JobEnvironment(
+                privateRoot: root, resources: root, library: root.appendingPathComponent("lib").path, libraryId: "fixture"), runner: runner))
+            model.refresh()
+            for _ in 0..<300 where !model.libraryLoaded || model.phoneBanner == .preparing { try? await Task.sleep(for: .milliseconds(10)) }
+            return (model, runner)
+        }
+        let (ok, okRunner) = try await run(fails: false, on: true)
+        XCTAssertEqual(okRunner.prepared, 1, "有要更新的手机：准备一次")
+        XCTAssertEqual(ok.phoneBanner, .ready)
+        XCTAssertEqual(ok.phoneBannerLine?.key, "phone.update.banner.ready")
+        XCTAssertTrue(ok.updateAlsoPhone, "装过手机、开关开：更新弹窗写「更新启动器和 iPhone App」")
+        ok.phoneUpdates = []
+        XCTAssertNil(ok.phoneBannerLine, "手机已是本版：横幅收起")
+        let (bad, _) = try await run(fails: true, on: true)
+        XCTAssertEqual(bad.phoneBannerLine?.key, "phone.update.banner.on_connect", "准备不了：连上时更新")
+        let (off, offRunner) = try await run(fails: false, on: false)
+        XCTAssertEqual(offRunner.prepared, 0, "开关关：不准备")
+        XCTAssertNil(off.phoneBannerLine)
+        XCTAssertFalse(off.updateAlsoPhone, "开关关：更新弹窗按钮照旧")
+    }
 }
 
 private final class KeptRunner: JobProcessRunner {
@@ -69,6 +105,9 @@ private final class KeptRunner: JobProcessRunner {
     var kept: [String] = []
     var running = false
     var shellUpdate = false
+    var prepareFails = false
+    var prepared = 0
+    var catalog: [String: Any] = [:]
     func start(executable: URL, arguments: [String], environment: [String: String],
                onLine: @escaping (Data) -> Void, onStderr: @escaping (Data) -> Void,
                onExit: @escaping (Int32) -> Void) throws -> JobProcessHandle {
@@ -77,9 +116,12 @@ private final class KeptRunner: JobProcessRunner {
            let request = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             taskId = request["taskId"] as? String ?? ""; op = request["operation"] as? String ?? ""
             if op == "installUpdate" { updates.append(request) }
+            if op == "installUpdatePrepare" { prepared += 1 }
         }
-        let result: [String: Any] = op == "phoneKeptPull" ? ["device": "00008160-FIXTURE", "new": kept.count, "kept": kept, "shellUpdate": shellUpdate, "stale": [String](), "running": running] : [:]
-        let event: [String: Any] = ["schema": 1, "taskId": taskId, "type": "result", "state": "succeeded", "result": result, "message": ""]
+        let result: [String: Any] = op == "phoneKeptPull" ? ["device": "00008160-FIXTURE", "new": kept.count, "kept": kept, "shellUpdate": shellUpdate, "stale": [String](), "running": running]
+            : op == "catalog" ? catalog : [:]
+        let failed = op == "installUpdatePrepare" && prepareFails
+        let event: [String: Any] = ["schema": 1, "taskId": taskId, "type": "result", "state": failed ? "failed" : "succeeded", "result": result, "message": failed ? "fixture" : ""]
         DispatchQueue.main.async { onLine(try! JSONSerialization.data(withJSONObject: event)); onExit(0) }
         return Handle()
     }

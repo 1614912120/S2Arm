@@ -310,6 +310,7 @@ public sealed partial class EnvironmentWindow : Window
         Grid.SetColumn(rightBar, 1); header.Children.Add(rightBar);
         body.Children.Add(header);
         AddNoticeBar(body);
+        AddPhoneUpdateBar(body);
         if (unexpectedError.Length > 0)
         {
             // 全局兜底接住的意外错误（Program.cs）：启动器不退出，在顶部说清楚、给日志位置，玩家可以关掉提示继续用

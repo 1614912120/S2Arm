@@ -6,7 +6,13 @@
 //   就自动发起一次「更新 iPhone」。手机上正在玩（Windows 读不到进程，作业层按游玩心跳判）或查不清时不发起，下一轮再看。
 //   同一批只自动发起一次，没成（要确认 / 失败）就留给顶栏「更新 iPhone」按钮。有作业在跑时跳过这一轮。
 //   开关：privateRoot/auto-update-phone.off 存在 = 玩家关了壳自动更新（缺省开，存的是「关」，同 Mac S2AAutoUpdatePhoneOff）。
+// 启动器升级顺带更新 iPhone App（同 Mac S2ArmLauncherModel+PhoneBanner.swift）：更新弹窗按钮写「更新启动器和 iPhone App」（UpdateAlsoPhone）；
+//   新版启动器头一次读到要更新的手机 → 后台 installUpdatePrepare（不连手机），顶部横幅「正在更新 iPhone 版 S2Arm…」→「已准备好，连上手机后自动装」，
+//   作业不在 / 失败 →「手机连上时会自动更新」；自动 / 手动更新 iPhone 时横幅显示进度；装完 phoneUpdates 空了横幅自己收起。
 using System.Text.Json;
+using Avalonia;
+using Avalonia.Controls;
+using Avalonia.Media;
 using Avalonia.Threading;
 using S2Arm.Launcher.Protocol;
 
@@ -20,6 +26,55 @@ public sealed partial class EnvironmentWindow
 
     private string AutoUpdatePhoneOffPath => Path.Combine(privateRoot, "auto-update-phone.off");
     private bool AutoUpdatePhoneOn => !File.Exists(AutoUpdatePhoneOffPath);
+
+    /// <summary>横幅状态："" 不显示 / preparing / ready / onConnect</summary>
+    private string phoneBanner = "";
+    private bool phonePrepareTried;
+
+    /// <summary>更新弹窗主按钮写「更新启动器和 iPhone App」：装过 iPhone、且没关自动更新 iPhone App</summary>
+    private bool UpdateAlsoPhone => (catalog?.PhoneDevices ?? 0) > 0 && AutoUpdatePhoneOn;
+
+    /// <summary>这次启动头一次读到要更新的手机：后台准备一次</summary>
+    private async Task PreparePhoneUpdateAsync()
+    {
+        if (phonePrepareTried || catalog is not { PhoneUpdates.Count: > 0 } || !AutoUpdatePhoneOn || connectedFolder is null || libraryId is null) return;
+        phonePrepareTried = true;
+        phoneBanner = "preparing"; Render();
+        var ok = false;
+        try { ok = (await PackJobClient.RunAsync(PackRequest("installUpdatePrepare", ""), null, CancellationToken.None)).Report.Succeeded; }
+        catch (Exception error) when (error is LibraryProtocolException or IOException or UnauthorizedAccessException or ArgumentException or
+            InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception) { }
+        if (phoneBanner == "preparing") { phoneBanner = ok ? "ready" : "onConnect"; Render(); }
+    }
+
+    /// <summary>横幅这一刻的文案键（Percent 非空 = 进行中、不给 ×）：在更新 iPhone → 正在更新；否则按准备结果；手机已是本版 → null</summary>
+    private (string Key, long? Percent)? PhoneBannerLine()
+    {
+        if (phoneBanner.Length == 0) return null;
+        if (phoneUpdating) return ("phone.update.banner.preparing", -1);   // 更新进度事件只刷新顶栏那一格（RefreshLive），横幅不写会停住的百分比；-1 = 进行中、不给 ×
+        if (catalog is not { PhoneUpdates.Count: > 0 }) return null;
+        return phoneBanner switch { "preparing" => ("phone.update.banner.preparing", null), "ready" => ("phone.update.banner.ready", null), _ => ("phone.update.banner.on_connect", null) };
+    }
+
+    private void AddPhoneUpdateBar(StackPanel body)
+    {
+        if (PhoneBannerLine() is not { } line) return;
+        var row = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 10 };
+        var text = new TextBlock { Text = T(line.Key), FontSize = 13, FontWeight = FontWeight.SemiBold,
+            Foreground = Ink, TextWrapping = TextWrapping.Wrap, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
+        Avalonia.Automation.AutomationProperties.SetAutomationId(text, "notice.phoneUpdate");
+        row.Children.Add(text);
+        if (line.Percent is null)
+        {
+            var close = new Button { Content = "✕", Padding = new Thickness(8, 4), Background = Brushes.Transparent, Foreground = Ink };
+            ToolTip.SetTip(close, T("notice.close"));
+            Avalonia.Automation.AutomationProperties.SetName(close, T("notice.close"));
+            Avalonia.Automation.AutomationProperties.SetAutomationId(close, "notice.phoneUpdate.close");
+            close.Click += (_, _) => { phoneBanner = ""; Render(); };
+            Grid.SetColumn(close, 1); row.Children.Add(close);
+        }
+        body.Children.Add(new Border { Child = row, Padding = new Thickness(16, 10), CornerRadius = new CornerRadius(10), Background = new SolidColorBrush(Colors.White, 0.06) });
+    }
 
     private void StartPhoneAutoUpdate()
     {

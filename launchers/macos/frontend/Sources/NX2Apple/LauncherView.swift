@@ -68,6 +68,7 @@ struct LauncherView: View {
             topBar
             if !showingHome { Divider().opacity(0.3) }
             noticeBar
+            phoneUpdateBar
             libraryNoticeBar
             if model.batchShown {
                 BatchExportView(model: model, covers: covers, install: { installFor = $0 }, freeSpace: { spaceFor = $0 }, uiLanguage: uiLanguage)
@@ -177,6 +178,26 @@ struct LauncherView: View {
     }
 
     /// 删除游戏 / 清除缓存的进行中与结果（S2ArmLauncherModel.libraryNotice）：点下就出现，成功几秒后自己收起，失败留着等玩家关
+    /// 新版启动器首次启动后的 iPhone 版 S2Arm 横幅（S2ArmLauncherModel+PhoneBanner.swift）：准备中 / 已准备好 / 连上自动更新 / 更新进度
+    @ViewBuilder private var phoneUpdateBar: some View {
+        if let line = model.phoneBannerLine {
+            HStack(spacing: 10) {
+                if line.percent != nil || model.phoneBanner == .preparing { ProgressView().controlSize(.small) }
+                else { Image(systemName: "iphone.and.arrow.forward").foregroundStyle(LauncherPalette.cream) }
+                Text(loc.t(line.key).replacingOccurrences(of: "{0}", with: "\(line.percent ?? 0)")).font(.manrope(13, .semibold)).monospacedDigit()
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                if line.percent == nil {
+                    Button { model.phoneBanner = nil } label: { Image(systemName: "xmark") }.controllerButtonStyle(.plain).foregroundStyle(.secondary)
+                        .help(loc.t("notice.close")).accessibilityLabel(loc.t("notice.close")).accessibilityIdentifier("notice.phoneUpdate.close")
+                }
+            }
+            .padding(.horizontal, 34).padding(.vertical, 10)
+            .background(LauncherPalette.cream.opacity(0.10))
+            .accessibilityIdentifier("notice.phoneUpdate")
+        }
+    }
+
     @ViewBuilder private var libraryNoticeBar: some View {
         if let n = model.libraryNotice {
             let text = loc.t(n.key + "." + { switch n.kind { case .running: "running"; case .done: "done"; case .failed: "failed" } }())
