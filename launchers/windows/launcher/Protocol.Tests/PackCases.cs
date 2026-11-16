@@ -161,6 +161,18 @@ public static class PackCases
               (string?)ipa["shellDir"] == Path.GetFullPath(paths.Shell) && (int?)ipa["parentPid"] == Environment.ProcessId &&
               (string?)ipa["resources"] == Path.GetFullPath(AppContext.BaseDirectory),
             "request: ipa carries game, library id, bundled shell, bundled resources (fonts) and launcher pid");
+        // 界面语言照原样带（#502：法文界面原先不带 uiLanguage，作业层回落中文，自签导出文件夹与说明成了中文）
+        var langBefore = JobLanguage.Current;
+        try
+        {
+            foreach (var lang in new[] { "fr", "ja", "zh-Hant", "en", "zh-Hans" })
+            {
+                JobLanguage.Current = lang;
+                var p = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "install", "0100FD70134FA000"), "win-lang");
+                check(p.TryGetValue("uiLanguage", out var got) && (string?)got == lang, $"request: interface language {lang} is passed to the job layer as is");
+            }
+        }
+        finally { JobLanguage.Current = langBefore; }
         foreach (var op in new[] { "installCheck", "install", "installRemove", "installRestore" })
         {
             var r = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", op, "0100FD70134FA000"), "win-2");
