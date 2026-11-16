@@ -230,6 +230,7 @@
 "vpad.menu.face.xbox" = "Buttons: Xbox layout";
 "vpad.menu.face.xbox.note" = "Xbox button positions; the bottom button confirms";
 "vpad.menu.gyro" = "Phone gyro";
+"vpad.menu.gyro.note" = "Xbox-style controllers such as 8BitDo or GameSir only have motion controls in Switch mode.";
 "vpad.menu.haptic.note" = "A light tap when you press a button";
 "vpad.menu.holdLock.note" = "Hold for 2 s to lock; this game only";
 "vpad.menu.hud" = "Performance overlay";

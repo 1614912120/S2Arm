@@ -229,6 +229,7 @@
 "vpad.menu.face.xbox" = "Boutons : disposition Xbox";
 "vpad.menu.face.xbox.note" = "Positions des boutons Xbox ; le bouton du bas confirme";
 "vpad.menu.gyro" = "Gyro du téléphone";
+"vpad.menu.gyro.note" = "Les manettes au format Xbox, comme celles de 8BitDo ou GameSir, n'ont les commandes de mouvement qu'en mode Switch.";
 "vpad.menu.haptic.note" = "Un léger coup quand vous appuyez sur un bouton";
 "vpad.menu.holdLock.note" = "Maintenir 2 s pour verrouiller ; ce jeu uniquement";
 "vpad.menu.hud" = "Superposition de performances";

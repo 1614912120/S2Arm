@@ -229,6 +229,7 @@
 "vpad.menu.face.xbox" = "ボタン：Xboxレイアウト";
 "vpad.menu.face.xbox.note" = "Xboxのボタン配置。下ボタンが決定です。";
 "vpad.menu.gyro" = "スマホジャイロ";
+"vpad.menu.gyro.note" = "8BitDo や GameSir など Xbox 型のコントローラーは、Switch モードに切り替えるとモーション操作が使えます。";
 "vpad.menu.haptic.note" = "ボタンを押したときに軽く振動します";
 "vpad.menu.holdLock.note" = "2秒長押しでロック。このゲームのみ有効。";
 "vpad.menu.hud" = "パフォーマンスオーバーレイ";
