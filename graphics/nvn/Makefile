@@ -1,5 +1,5 @@
 # 直连图形层（NVN→Metal，graphics/nvn/gfx 原样搬入 + host/ 替身头 + host_adapt.m）→ 静态库，被宿主 / iOS App 链进去（graphics/build.mk）。
-# 编译参数照上游：Mac 用 -O2（原先照上游早期的 -O1；11-11 帧回放测速 tools/frame_bench.sh 同一帧对照：提交线程指令 -6.8%、周期约 -5%），iOS 也用 -O2（原先照上游 Xcode Release 的 -Os；11-16 同一录像 Mac 回放 -O2 / -Os 对照：稳态提交线程指令 5470 万 vs 6030 万 / 帧，-Os 多约 10%，周期多约 5%）。
+# 编译参数照上游：Mac 用 -O2（原先照上游早期的 -O1；11-11 帧回放测速 tools/frame_bench.sh 同一帧对照：提交线程指令 -6.8%、周期约 -5%），iOS 同它的 Xcode Release（-Os，ARC，gnu11）。
 # 直连层用 Metal 4 不加可用性判断：编译下限照 S2Arm，屏蔽 unguarded-availability；只在支持 Metal 4 的系统上走直连（gfxmode.c 就绪判定）
 # ROOT 可由调用方在命令行给无空格别名（tools/nospace.sh）：下面的绝对路径都从 ROOT 拼，不用 CURDIR / abspath（会解析回带空格的真路径）
 ROOT  := $(abspath ../..)
@@ -91,7 +91,7 @@ $(OUT)/mac/libnvn.a: $(SRCS) $(HDRS) Makefile $(SRCSTAMP) $(PGO_STAMP) $(PGO_DEP
 $(OUT)/ios/libnvn.a: $(SRCS) $(HDRS) Makefile $(SRCSTAMP) $(PGO_STAMP) $(PGO_DEP)
 	@mkdir -p $(OUT)/ios
 	d=$$(mktemp -d $@.o.XXXXXX) && trap 'rm -rf "$$d" "$@.$$$$"' EXIT \
-	  && (cd "$$d" && for f in $(addprefix $(ROOT)/graphics/nvn/,$(SRCS)); do clang $(PFX) -std=gnu11 -O2 -g $(PGO_CF) -fobjc-arc $(IOS_FLAGS) $(WARN) $(INC) -c $$f -o $$(echo $$f | sed 's|.*/gfx/nvn/||; s|/|_|g').o || exit 1; done) \
+	  && (cd "$$d" && for f in $(addprefix $(ROOT)/graphics/nvn/,$(SRCS)); do clang $(PFX) -std=gnu11 -Os -g $(PGO_CF) -fobjc-arc $(IOS_FLAGS) $(WARN) $(INC) -c $$f -o $$(echo $$f | sed 's|.*/gfx/nvn/||; s|/|_|g').o || exit 1; done) \
 	  && ar rcs $@.$$$$ "$$d"/*.o && { $(LIBCHK); } && mv -f $@.$$$$ $@
 
 # GL 层运行时兜底的 GLSL 翻译（gfx/gl/gl_xlate.c，含改写层 gl_glsl_es.c）+ glslang 静态库 → libglx.a：只链进宿主与 iOS App（graphics/build.mk）。
