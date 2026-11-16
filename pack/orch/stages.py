@@ -408,12 +408,18 @@ def romfsidx_key(current):
     kt = digest('\n'.join(oids) + '\n')
     h = hashlib.sha256()
     base = current / 'romfs'
-    size = module('graphics/nvn/tools/romfs_list.py', '_orch_romfs_list').file_size   # 目录形态同 stat().st_size；只有镜像 romfs.std 时从镜像取长度
-    for directory, dirs, files in romfs_walk(base):
+    # 一次盘点（romfs_list.scan：每个条目 lstat 一次；镜像形态从镜像文件表取长度）拿大小，不再逐个文件 stat（11-16 实测：4.2 万个文件的款 3.4–4 秒 → 0.09 秒）；
+    #   遍历顺序与每行字节同原先（walk 同一棵盘点、目录名 / 文件名排序；普通文件 lstat 大小 = stat 大小），键逐字节不变（tests/romfsidx_key_test.py 对拍）。
+    #   不是普通文件的条目（软链等，产物根里本来没有）照旧按路径跟随取大小
+    lister = module('graphics/nvn/tools/romfs_list.py', '_orch_romfs_list')
+    tree = lister.scan(base)
+    sizes = {e.rel: e.lstat.st_size for e in tree.entries if e.lstat is not None and stat.S_ISREG(e.lstat.st_mode)}
+    for directory, dirs, files in tree.walk():
         dirs.sort()
         for name in sorted(files):
             p = Path(directory) / name
-            h.update(f'{p.relative_to(base).as_posix()}\t{size(p)}\n'.encode())
+            rel = p.relative_to(base).as_posix()
+            h.update(f'{rel}\t{sizes[rel] if rel in sizes else lister.file_size(p)}\n'.encode())
     over = overlay_sizes(current)
     if over:   # 界面布局覆盖层（_uilayout）：覆盖文件的大小也进键（没有覆盖层的版本键与原先相同）
         h.update(''.join(f'ui_overlay\t{n}\t{over[n]}\n' for n in sorted(over)).encode())
