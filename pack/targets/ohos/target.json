@@ -1,0 +1,131 @@
+{
+  "schema": "s2a.target.v1",
+  "id": "ohos",
+  "execution": "host",
+  "host": {
+    "requires": {
+      "os": [
+        "windows"
+      ],
+      "arch": [
+        "x86_64",
+        "arm64"
+      ],
+      "tools": [
+        "python3",
+        "dotnet10",
+        "DevEco",
+        "hdc"
+      ]
+    }
+  },
+  "device": {
+    "os": "ohos",
+    "arch": "arm64",
+    "bundle": "com.xiaoboluo.s2arm.probe"
+  },
+  "entry": "pack/targets/ohos/cli.py",
+  "recipes": [
+    {
+      "id": "prepare",
+      "operation": "prepare",
+      "stages": [
+        "game.extract",
+        "code.rewrite",
+        "sysdata.prepare",
+        "modules.signable",
+        "resources.index"
+      ]
+    },
+    {
+      "id": "hap",
+      "operation": "build",
+      "stages": [
+        "app.build",
+        "app.signature"
+      ]
+    }
+  ],
+  "stages": [
+    {
+      "id": "game.extract",
+      "description": "提取原始游戏",
+      "implementation": "pack/targets/ohos/cli.py",
+      "execution": "build",
+      "startsGame": false,
+      "observation": "milestone"
+    },
+    {
+      "id": "code.rewrite",
+      "description": "改写 ARM64 模块",
+      "implementation": "pack/targets/ohos/cli.py",
+      "execution": "build",
+      "startsGame": false,
+      "observation": "milestone"
+    },
+    {
+      "id": "sysdata.prepare",
+      "description": "准备系统数据",
+      "implementation": "pack/targets/ohos/cli.py",
+      "execution": "build",
+      "startsGame": false,
+      "observation": "milestone"
+    },
+    {
+      "id": "modules.signable",
+      "description": "生成可签名代码载体",
+      "implementation": "pack/targets/ohos/cli.py",
+      "execution": "build",
+      "startsGame": false,
+      "observation": "milestone"
+    },
+    {
+      "id": "resources.index",
+      "description": "生成资源索引",
+      "implementation": "pack/targets/ohos/cli.py",
+      "execution": "build",
+      "startsGame": false,
+      "observation": "milestone"
+    },
+    {
+      "id": "resources.package",
+      "description": "打包游戏资源",
+      "implementation": "pack/targets/ohos/cli.py",
+      "execution": "build",
+      "startsGame": false,
+      "observation": "milestone"
+    },
+    {
+      "id": "app.build",
+      "description": "构建鸿蒙安装包",
+      "implementation": "pack/targets/ohos/cli.py",
+      "execution": "build",
+      "startsGame": false,
+      "observation": "milestone"
+    },
+    {
+      "id": "app.signature",
+      "description": "验签",
+      "implementation": "pack/targets/ohos/cli.py",
+      "execution": "build",
+      "startsGame": false,
+      "observation": "milestone"
+    },
+    {
+      "id": "resources.send",
+      "description": "传输资源",
+      "implementation": "pack/targets/ohos/cli.py",
+      "execution": "build",
+      "startsGame": false,
+      "observation": "milestone"
+    },
+    {
+      "id": "app.install",
+      "description": "同签安装",
+      "implementation": "pack/targets/ohos/cli.py",
+      "execution": "build",
+      "startsGame": false,
+      "observation": "milestone"
+    }
+  ]
+}
