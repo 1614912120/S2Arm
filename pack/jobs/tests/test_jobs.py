@@ -1089,6 +1089,36 @@ class JobsTests(unittest.TestCase):
             self.assertEqual(archive.read(f"pso/{A}.tsv"), b"S\t0123456789abcdef_b\t1\nC\t1111222233334444_b\n")
             self.assertIn(f"pso/{A}.tsv", json.loads(archive.read("manifest.json"))["files"])
 
+    def test_diagnostics_zip_budget_skips_optional_members_and_records_them(self):
+        # 整包预算（DIAGNOSTIC_ZIP_BUDGET，收件 30 MB 上限）：日志先放；放不下的可选成员（这里是管线记录）跳过、记进 manifest budget.skipped，
+        #   整包压缩后不超预算。预算临时压到 600 KB，三份各 400 KB 不可压缩的管线记录只放得下 1 份。期望按规则手写
+        import zipfile
+        from unittest import mock
+        games = ["0100AAAA00000000", "0100BBBB00000000", "0100CCCC00000000"]
+        atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=g, name=g) for g in games]))
+        for g in games:
+            f = self.c.library / "temp" / g / "wire" / g / "pso_user.tsv"; f.parent.mkdir(parents=True, exist_ok=True); f.write_bytes(os.urandom(400 << 10))
+        (self.c.logs / "budget-host.log").write_text("宿主日志 一行\n" * 50, encoding="utf-8")
+        destination = self.root / "diag-budget.zip"; destination.unlink(missing_ok=True); self.c.r["path"] = str(destination)
+        with mock.patch.object(library, "DIAGNOSTIC_ZIP_BUDGET", 600 << 10):
+            library.diagnostics(self.c)
+        self.assertLessEqual(destination.stat().st_size, (600 << 10) + (64 << 10))   # 预算 + manifest / zip 目录
+        with zipfile.ZipFile(destination) as archive:
+            pso = sorted(n for n in archive.namelist() if n.startswith("pso/"))
+            self.assertEqual(pso, [f"pso/{games[0]}.tsv"])
+            self.assertIn("logs/budget-host.log", archive.namelist())
+            manifest = json.loads(archive.read("manifest.json"))
+            self.assertEqual(manifest["budget"]["skipped"], [f"pso/{games[1]}.tsv", f"pso/{games[2]}.tsv"])
+            self.assertEqual(manifest["budget"]["limit"], 600 << 10)
+
+    def test_diagnostics_zip_budget_absent_when_everything_fits(self):
+        # 预算放得下时 manifest 不出现 budget（现有 manifest 形状不变）
+        import zipfile
+        destination = self.root / "diag-budget-fits.zip"; destination.unlink(missing_ok=True); self.c.r["path"] = str(destination)
+        library.diagnostics(self.c)
+        with zipfile.ZipFile(destination) as archive:
+            self.assertNotIn("budget", json.loads(archive.read("manifest.json")))
+
     def test_diagnostics_carries_shader_salvage(self):
         # 着色器补料（dsh_salvage.inc）：各款 temp/<号>/wire/<号>/shader_miss/ 的 index.tsv 与成对的 <键>.ctl / .code 原样进 shader_miss/<号>/；
         #   不认的文件名、缺 .code 的半对、链接不放；每款超上限时索引先放、成对放不下整对不放。期望按规则手写
