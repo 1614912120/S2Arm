@@ -9939,6 +9939,17 @@ static NSArray<WarmTask *> *warm_parse(NSArray<NSString *> *paths, long *lines) 
             n++;
         }
     }
+    // 同一对网格 / 片元（同一 pso_skey、同一任务着色器）既有补齐行（pad ≠ 0）又有不补齐行（pad 0）：不补齐那行丢掉。不补齐的那条是被拒过的——网格没写片元读的
+    //   user(locn)，绘制路径被拒后才要补齐变体（mtk_pso / vp_ask），但请求编译时已把 pad 0 记进 pso_user.tsv、又被收进包的种子；照它预热必拒（D-75KF 等 32 张卡，
+    //   0400486024DEC000 植被 6d42a320e50657a3 / 5ee0857829bbb3fd：iOS 报 locn5 不配、部分 Mac 编译服务连接中断 XPC_ERROR_CONNECTION_INTERRUPTED）
+    { NSMutableSet<NSString *> *padded = [NSMutableSet set];
+      for (WarmTask *t in tasks) if (t->kind == 4 && t->pad) [padded addObject:[NSString stringWithFormat:@"%@|%@", [t->rs[0] base64EncodedStringWithOptions:0], t->tkey]];
+      if (padded.count) {
+          NSIndexSet *drop = [tasks indexesOfObjectsPassingTest:^BOOL(WarmTask *t, NSUInteger i, BOOL *stop) { (void)i; (void)stop;
+              return t->kind == 4 && !t->pad && [padded containsObject:[NSString stringWithFormat:@"%@|%@", [t->rs[0] base64EncodedStringWithOptions:0], t->tkey]]; }];
+          if (drop.count) { MLOG("pipeline prewarm: %lu unpadded task / mesh lines dropped (the same pair has a padded line: the unpadded one was refused)", (unsigned long)drop.count);
+                            [tasks removeObjectsAtIndexes:drop]; n -= (long)drop.count; }
+      } }
     *lines = n; return tasks;
 }
 // 预热插队（11-06 卡顿线，异度3 测试设备1 冷装读档）：清单按录制局「首次用到的先后」排，读档直接进的场景，它的管线在 12796 行的清单里排第 12679–12744 行；
