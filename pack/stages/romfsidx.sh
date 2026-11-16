@@ -12,7 +12,7 @@
 # 所以排在会改 romfs 的阶段（宽屏界面布局）之后。与现行 .stage_romfsidx 相同就跳过。
 set -u
 G=${1:?款}; H=$(cd "$(dirname "$0")/.." && pwd); R=$(cd "$H/.." && pwd); source "$H/roots.sh"; source "$H/stage_keyfiles.sh"; stage_deps_on || exit 1; SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")   # 实际读入进键（pack/stage_keyfiles.sh）
-CUR=$(root_cur "$G"); [ -n "$CUR" ] && [ -d "$CUR/romfs" ] || { echo "【红】$G 现行产物根没有 romfs/"; exit 1; }
+CUR=$(root_cur "$G"); [ -n "$CUR" ] && { [ -d "$CUR/romfs" ] || [ -f "$CUR/romfs.std" ]; } || { echo "【红】$G 现行产物根没有 romfs/（或镜像 romfs.std）"; exit 1; }   # RomFS 目录或镜像都行（romfs_list.py image_of）
 OI=$(romfs_writer_oids "$R"); KT=$(printf '%s\n' "$OI" | shasum -a 256 | cut -c1-16) \
   && [ "$(printf '%s\n' "$OI" | grep -c .)" = 4 ] \
   || { echo "【红】取不到索引写法文件的对象号（RomFsIndex.cs / romfs_index / romfs_index.sh / Directory.Packages.props，改过名就同笔改这里）"; exit 1; }
@@ -34,10 +34,10 @@ for d, ds, fs in romfs_list.walk(r):
     ds.sort()
     for f in sorted(fs):
         p = os.path.join(d, f); q = os.path.relpath(p, r)
-        h.update(f'{q}\t{over.get(q.replace(os.sep, "/"), os.path.getsize(p))}\n'.encode())
+        h.update(f'{q}\t{over.get(q.replace(os.sep, "/"), romfs_list.file_size(p))}\n'.encode())   # file_size：目录形态同 os.path.getsize，镜像形态（romfs.std）从镜像取长度
 print(h.hexdigest()[:16])
 PY
-)
+) && [ -n "$KR" ] || { echo "【红】$G 盘点 RomFS 算索引键失败（${CUR}/romfs 或 romfs.std）"; exit 1; }
 K=$(printf '%s %s' "$KR" "$KT" | shasum -a 256 | cut -c1-16)
 KB=$K; K=$(stage_deps_key "$CUR" romfsidx "$KB" "$SELF") || exit 1
 root_stage_done "$CUR" romfsidx "$K" && { echo "🟢 $G 现行已是 RomFS 索引 ${K}，跳过"; exit 0; }

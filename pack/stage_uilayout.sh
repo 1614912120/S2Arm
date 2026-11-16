@@ -15,22 +15,25 @@ G=${1:?款}; WD=${2:-2346}; H=$(cd "$(dirname "$0")" && pwd); R=$(cd "$H/.." && 
 CUR=$(root_cur "$G"); [ -n "$CUR" ] && [ -f "$CUR/exefs/main" ] || { echo "【红】$G 没有现行产物根"; exit 1; }
 [ -d "$CUR/romfs" ] || [ -f "$CUR/romfs.std" ] || { echo "🟢 $G 现行产物根没有 romfs/，跳过（界面不加宽）"; exit 0; }
 SRC=$(sed -n 's/^src=//p' "$CUR/seed.txt" 2>/dev/null | head -1); ORIG=$SRC/romfs
-[ -n "$SRC" ] && [ -d "$ORIG" ] || { echo "【红】$G 找不到原版 romfs（现行 seed.txt 的 src=${SRC:-无}）：覆盖包只从原版生成"; exit 1; }
+# 原版是目录 romfs/ 或镜像 romfs.std 都行（graphics/nvn/tools/romfs_list.py image_of；生成器 ui_lyt.py 与下面盘点读 RomFS 都经 romfs_list）
+[ -n "$SRC" ] && { [ -d "$ORIG" ] || [ -f "$ORIG.std" ]; } || { echo "【红】$G 找不到原版 romfs（现行 seed.txt 的 src=${SRC:-无}）：覆盖包只从原版生成"; exit 1; }
 GEN=$R/graphics/widen/scan/ui_lyt.py
 TV=$(cat "$GEN" "$R/graphics/widen/scan/yaz0enc.c" 2>/dev/null | shasum -a 256 | cut -c1-12)
 # 原版身份（审计 #1534 P1-54）：生成器读的原版 Layout / UI / Pack 的盘点身份（graphics/nvn/tools/romfs_list.py：相对路径 + 大小 + 修改时间纳秒，只 lstat）进覆盖包目录名。
 #   原先只按构建号 + 屏宽 + 工具版本：重解包 / 只换数据的更新让原版 romfs 变了而构建号没变，目录还在就照盖上一份覆盖。阶段键仍按覆盖文件内容算，重生成出来一样的不出新版本
 SI=$(/usr/bin/python3 -c 'import hashlib, os, sys; sys.path.insert(0, sys.argv[1]); import romfs_list
 h = hashlib.sha256()
+has = 0
 for d in ("Layout", "UI", "Pack"):
     p = os.path.join(sys.argv[2], d)
-    if os.path.isdir(p):
+    if romfs_list.is_dir(p):   # 同 os.path.isdir；原版只有镜像 romfs.std 时看镜像里有没有这个目录
+        has = 1
         i = romfs_list.scan(p).identity
         if i is None: sys.exit(1)
         h.update(f"{d} {i}\n".encode())
-print(h.hexdigest()[:12])' "$R/graphics/nvn/tools" "$ORIG") || { echo "【红】$G 盘点不了原版 romfs 的 Layout / UI / Pack（${ORIG}）"; exit 1; }
+print(h.hexdigest()[:12], has)' "$R/graphics/nvn/tools" "$ORIG") || { echo "【红】$G 盘点不了原版 romfs 的 Layout / UI / Pack（${ORIG}）"; exit 1; }
+has=${SI#* }; SI=${SI%% *}   # has = 原版有 Layout / UI / Pack 之一（目录或镜像里）
 BID=$(xxd -s 0x40 -l 16 -p "$CUR/exefs/main"); OV=${S2A_WIDEN_DIR:-${S2A_RUN_ROOT:-$HOME/.s2arm/run}/s2arm/widen}/${G}_$BID/ui_w${WD}_${TV}_$SI
-has=0; for d in Layout UI Pack; do [ -d "$ORIG/$d" ] && has=1; done
 if [ ! -d "$OV" ] && [ $has = 1 ] && [ -f "$GEN" ]; then
   T=$OV.tmp.$$; rm -rf "$T"; mkdir -p "$T"
   # 生成有报错（解不开 / 改坏的包）只打黄：报错的包不覆盖、其余照常（宽屏是画质项，不挡出包；10-28 0100F2C0115B6000带字典 zstd 全报错，整款出不了包）
@@ -81,15 +84,18 @@ fi
 #   把原版放进覆盖层、记进清单（同 Windows pack/orch/stages.py _uilayout restore），读到的与原先「就地恢复原版」相同；相同的不进覆盖层
 RST=$(printf '%s\n' "$PREV" | grep -v '^$' | while read -r f; do printf '%s\n' "$FL" | grep -qxF -- "$f" || echo "$f"; done)
 n=0; m=$(printf '%s\n' "$RST" | grep -c .); RSO=
+# 原版一个文件拷到 $2：原版是目录照旧 _root_cp；只有镜像 romfs.std 时从镜像按字节写（graphics/nvn/tools/romfs_list.py read_file）
+orig_cp() { if [ -d "$ORIG" ]; then _root_cp "$ORIG/$1" "$2"; else /usr/bin/python3 -c 'import sys; sys.path[:0] = [sys.argv[1]]; import romfs_list
+open(sys.argv[3], "wb").write(romfs_list.read_file(sys.argv[2]))' "$R/graphics/nvn/tools" "$ORIG/$1" "$2"; fi; }
 if [ -n "$LEGACY" ]; then
-  while read -r f; do [ -n "$f" ] || continue; rm -f "$W/romfs/$f" && _root_cp "$ORIG/$f" "$W/romfs/$f" || { root_abort "$G" "$TAG"; echo "【红】恢复原版 $f 失败"; exit 1; }; done <<< "$PREV"
+  while read -r f; do [ -n "$f" ] || continue; rm -f "$W/romfs/$f" && orig_cp "$f" "$W/romfs/$f" || { root_abort "$G" "$TAG"; echo "【红】恢复原版 $f 失败"; exit 1; }; done <<< "$PREV"
 elif [ -n "$RST" ]; then
   RSO=$(printf '%s\n' "$RST" | /usr/bin/python3 -c "$RF
 for r in rels: ro(r) == rb(r) or print(r)" "$R/graphics/nvn/tools" "$R/pack" "$ORIG" "$W/romfs") || { root_abort "$G" "$TAG"; echo "【红】$G 比不了上一版覆盖文件与原版"; exit 1; }
 fi
 _root_rm "$W/ui_overlay" || { root_abort "$G" "$TAG"; echo "【红】清旧覆盖层失败"; exit 1; }
 while read -r f; do [ -n "$f" ] || continue; mkdir -p "$(dirname "$W/ui_overlay/romfs/$f")" && _root_cp "$OV/romfs/$f" "$W/ui_overlay/romfs/$f" || { root_abort "$G" "$TAG"; echo "【红】覆盖 $f 失败"; exit 1; }; n=$((n + 1)); done < <(printf '%s\n' "$FL")
-while read -r f; do [ -n "$f" ] || continue; mkdir -p "$(dirname "$W/ui_overlay/romfs/$f")" && _root_cp "$ORIG/$f" "$W/ui_overlay/romfs/$f" || { root_abort "$G" "$TAG"; echo "【红】恢复原版 $f 失败"; exit 1; }; done < <(printf '%s\n' "$RSO")
+while read -r f; do [ -n "$f" ] || continue; mkdir -p "$(dirname "$W/ui_overlay/romfs/$f")" && orig_cp "$f" "$W/ui_overlay/romfs/$f" || { root_abort "$G" "$TAG"; echo "【红】恢复原版 $f 失败"; exit 1; }; done < <(printf '%s\n' "$RSO")
 FL=$(printf '%s\n%s\n' "$FL" "$RSO" | grep -v '^$' | LC_ALL=C sort -u)
 # 读到的 RomFS 变了，RomFS 索引要重出（索引按覆盖层的大小建，pack/stages/romfsidx.sh）
 # 旧索引 romfs.s2aidx 同一次提交里删掉（10-21 帧率能耗线实证：只删 .stage_romfsidx 时，本阶段提交到索引阶段重出之间的几分钟里现行根「索引记 868 字节、文件已是 871 字节」，
