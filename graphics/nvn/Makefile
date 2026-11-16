@@ -40,6 +40,11 @@ PGO_DEP := $(PGO_BIN)
 endif
 PGO_STAMP := $(OUT)/.pgo_cfg
 $(shell mkdir -p $(OUT); [ "$$(cat $(PGO_STAMP) 2>/dev/null)" = '$(PGO_CF)' ] || printf '%s' '$(PGO_CF)' > $(PGO_STAMP))
+# 二进制剖析数据在解析时按需转好（同上面两个戳）：库依赖它，要是只在建库时才转，换输出目录 / 只问 make -q 都会判「依赖缺失要重建」
+#   （tests/nvn_lib_srclist_test.sh ① ③），门禁常驻树白编一遍。解析时转不出（没有 xcrun 的机器）就留给下面这条规则在建库时转
+ifneq ($(PGO_DEP),)
+$(shell [ $(PGO_BIN) -nt $(PGO_TXT) ] || { mkdir -p $(OUT)/pgo && DEVELOPER_DIR=$(DEVELOPER_DIR) xcrun llvm-profdata merge -o $(PGO_BIN).$$$$ $(PGO_TXT) 2>/dev/null && mv -f $(PGO_BIN).$$$$ $(PGO_BIN); })
+endif
 $(PGO_BIN): $(PGO_TXT)
 	@mkdir -p $(OUT)/pgo
 	DEVELOPER_DIR=$(DEVELOPER_DIR) xcrun llvm-profdata merge -o $@.$$$$ $< && mv -f $@.$$$$ $@
