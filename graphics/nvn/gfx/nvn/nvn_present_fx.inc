@@ -21,7 +21,7 @@
 }
 @end
 @implementation NvPresentFX @end
-static NvPresentFX *g_present_fx_slots[4];
+static NvPresentFX *g_present_fx_slots[6];   // 0–2 上屏槽、3 同步截屏；4 / 5 补帧的补出帧 / 真帧（nvn_present_fi.inc fi_present_fx，补帧队列串行独占，命令槽信号量护着在途）
 
 static Class present_fx_class(void) {
     static Class c; static int tried;

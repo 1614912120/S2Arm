@@ -252,6 +252,19 @@ static int fi_pass(id cb, id<MTLRenderPipelineState> pso, id table, id<MTLBuffer
     enc_end_on(en, YES);
     return 1;
 }
+// 锐利放大（S2A_SCALING_FILTER=MetalFX）也作用于补帧上屏的两张：画面比视口小时，拷进放大器输入 → MetalFX 空间放大 → 画进画布（同 present_encode_m4 的不抗锯齿那支）。
+//   原先补帧自己把画面双线性拷上屏，开着补帧锐利放大不生效。slot 4 = 补出帧（命令槽 1）、5 = 真帧（命令槽 2）：各自只在本命令槽上用，fi_commit 等上一次提交做完才重用，
+//   放大器的输入 / 输出图不会被在途的那次读着时改写。→ 1 编好 / 0 失败 / -1 这一帧不放大（没开、不是放大、放大器建不出），调用方走原路
+API_AVAILABLE(macos(26.0), ios(26.0))
+static int fi_present_fx(id cb, int slot, id<MTLTexture> src, id<MTLTexture> dst, const int *crop, BOOL flip, id<MTLBuffer> uv, id tab) {
+    present_options();
+    NvPresentFX *fx = present_fx_for(slot, src, dst, crop, YES);
+    if (!fx) return -1;
+    if (!present_blit_m4(cb, src, fx->input, crop, fx->cropUV, fx->cropTable, flip, 0)) return 0;
+    static _Atomic int said[2]; if (!atomic_fetch_add(&said[slot == 5], 1)) MLOG("present frame interpolation: %s frames go through MetalFX spatial upscaling %lux%lu → %lux%lu (sharp upscaling)", slot == 5 ? "real" : "interpolated", (unsigned long)fx->iw, (unsigned long)fx->ih, (unsigned long)fx->output.width, (unsigned long)fx->output.height);
+    present_fx_encode(cb, fx, fx->input);
+    return present_blit_m4(cb, fx->output, dst, NULL, uv, tab, NO, 1);
+}
 // 在命令槽 s 上编码并提交（dr 非空 = 这次画进画布）。after 在 GPU 做完的回调里调。槽的分配器要等它上一次提交做完才能重用
 API_AVAILABLE(macos(26.0), ios(26.0))
 static int fi_commit(NvPresentFI *f, int s, id<CAMetalDrawable> dr, int (^enc)(id cb), void (^after)(int ok)) {
@@ -317,9 +330,10 @@ static void fi_job(NvPresentFI *f, CAMetalLayer *layer, id<MTLTexture> src, fi_c
     //   两侧黑边隔一帧一有，看着闪）：有补丁画幅就按它，没有照旧按输入图比例
     double pa = s2a_cpatch_present_aspect();
     if (have_mid) { id<CAMetalDrawable> dm = [layer nextDrawable]; NSUInteger vh = (NSUInteger)f->h, vw = pa > 0 ? (NSUInteger)llround(f->h * pa) : (NSUInteger)f->w;
-        if (dm && fi_commit(f, 1, dm, ^int(id cb) { return dup ? present_blit_m4(cb, src, dm.texture, crop, f->uv[2], f->tab[2], flip, 1) : fi_pass(cb, f->psoCopy, f->tab[2], f->uv[2], mid, nil, dm.texture, NULL, NO, vw, vh); }, nil)) { fi_count_on(dm, &g_fi_on_mid); [dm present]; mid_shown = 1; f->shown_mid++; } }
+        if (dm && fi_commit(f, 1, dm, ^int(id cb) { if (dup) return present_blit_m4(cb, src, dm.texture, crop, f->uv[2], f->tab[2], flip, 1);
+                                                      int r = fi_present_fx(cb, 4, mid, dm.texture, NULL, NO, f->uv[2], f->tab[2]); return r >= 0 ? r : fi_pass(cb, f->psoCopy, f->tab[2], f->uv[2], mid, nil, dm.texture, NULL, NO, vw, vh); }, nil)) { fi_count_on(dm, &g_fi_on_mid); [dm present]; mid_shown = 1; f->shown_mid++; } }
     id<CAMetalDrawable> dr = [layer nextDrawable];
-    if (dr && fi_commit(f, 2, dr, ^int(id cb) { return present_blit_m4(cb, src, dr.texture, crop, f->uv[3], f->tab[3], flip, 1); }, ^(int ok) { (void)ok; fi_ticket_done(ticket); })) {
+    if (dr && fi_commit(f, 2, dr, ^int(id cb) { int r = fi_present_fx(cb, 5, src, dr.texture, crop, flip, f->uv[3], f->tab[3]); return r >= 0 ? r : present_blit_m4(cb, src, dr.texture, crop, f->uv[3], f->tab[3], flip, 1); }, ^(int ok) { (void)ok; fi_ticket_done(ticket); })) {
 #if !TARGET_OS_SIMULATOR
         present_note(dr, ticket); fi_count_on(dr, &g_fi_on_real);
         if (mid_shown) [dr presentAfterMinimumDuration:half]; else [dr present];
