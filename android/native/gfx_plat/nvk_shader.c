@@ -479,7 +479,7 @@ static void ubo_facts_add(struct facts *f, int st) {
         if (request_texture_fact((uint32_t)(has_tv && tv.set_format ? tv.format : t.d.format), (uint32_t)(has_tv && tv.set_target ? tv.target : t.d.target), t.d.depth, &nf, why, sizeof why)) continue;
         int n = f->ntex++;
         memcpy(f->tfmt[n], nf.format, sizeof f->tfmt[n]); memcpy(f->tsmp[n], nf.sampler_type, sizeof f->tsmp[n]);
-        f->tex[n] = (struct s2a_compile_texture_src){(const char *const[]){"vs", "fs", "gs"}[st], e->c[i].word, e->c[i].cbuf, f->tsmp[n], f->tfmt[n], nf.is_buffer, nf.normalized, 0, nf.array_length};
+        f->tex[n] = (struct s2a_compile_texture_src){st == 0 ? "vs" : st == 1 ? "fs" : "gs", e->c[i].word, e->c[i].cbuf, f->tsmp[n], f->tfmt[n], nf.is_buffer, nf.normalized, 0, nf.array_length};
     }
 }
 // 快路摘要用：这份着色器学过的每个坐标此刻指向的贴图的编译事实（格式 / 目标 / 深度；读不到记「无」）
@@ -1187,7 +1187,7 @@ static uint64_t input_sig(const struct rp_shader_req *q, const struct s2a_direct
         // 几何阶段（VS|FS|GS）在重场景里极少出现，不进上面那张小表：直接算这 32 格的摘要（省下每次比 32 个句柄）。
         if (stages & 4u) MIX(rp_tex_fact_sig(rp_S.tex[2], 32, rp_S.tex_base, rp_S.tex_pool_n));
         if (stages & 4u) MIX(sep_fact_sig(2));
-        if (g_ubo_need_n) for (int st = 0; st < ((stages & 4u) ? 3 : 2); st++) MIX(ubo_fact_sig(st));
+        if (g_ubo_need_n) for (int st = 0; st < 3; st++) if (st < 2 || (stages & 4u)) MIX(ubo_fact_sig(st));
     }
     #undef MIX
     return h;
