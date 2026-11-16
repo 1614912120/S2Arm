@@ -981,6 +981,19 @@ Java_org_s2arm_android_NativeBridge_configureThreadedRenderer(JNIEnv *env, jclas
 #endif
 }
 
+// 玩家画质选项：宿主创建前设 S2A_HIGH_QUALITY（1 = 高画质，0 = 更省电），后端上屏读它决定是否走 EASU（调试开关 nvk_upscale 可覆盖）。
+//   玩家入口，发布包也认（不走 s2a_debug_entries_open）
+extern "C" JNIEXPORT jint JNICALL
+Java_org_s2arm_android_NativeBridge_configureHighQuality(JNIEnv *, jclass, jboolean on) {
+#ifdef S2A_ANDROID_GAME_RUNTIME
+    if (g_game_host) return EBUSY;
+    return ::setenv("S2A_HIGH_QUALITY", on ? "1" : "0", 1) == 0 ? 0 : errno;
+#else
+    (void)on;
+    return ENOSYS;
+#endif
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_org_s2arm_android_NativeBridge_configureReadonlyRangeCheck(JNIEnv *, jclass, jboolean enabled) {
 #ifdef S2A_ANDROID_GAME_RUNTIME

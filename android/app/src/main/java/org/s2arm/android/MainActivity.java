@@ -361,6 +361,11 @@ public class MainActivity extends Activity
                 if (error != 0) throw new IllegalStateException("Threaded renderer configuration failed: " + error);
                 Log.i("S2Arm", "Threaded renderer (GPU emulation / Vulkan split): " + threadedMode
                     + (threadedExtra ? " (extra)" : " (default)"));
+                // 玩家画质选项（游戏库页「高画质 / 更省电」，缺省更省电）
+                boolean highQuality = getSharedPreferences("display", MODE_PRIVATE).getBoolean("quality_high", false);
+                error = NativeBridge.configureHighQuality(highQuality);
+                if (error != 0) throw new IllegalStateException("Quality configuration failed: " + error);
+                Log.i("S2Arm", "Quality: " + (highQuality ? "high" : "saver"));
             }
             // Last configuration before host creation; the shared services read this
             // same process environment on their normal startup path.

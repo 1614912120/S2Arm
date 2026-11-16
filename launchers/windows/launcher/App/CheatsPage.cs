@@ -20,7 +20,7 @@ public sealed partial class EnvironmentWindow
     private bool cheatsLoading;
     // 玩家分享（11-15）：导入时勾了「分享给其他玩家」就把原文 + 游戏版本传给我们（pack/jobs/cheats.py share）；缺省勾不勾维护者定，改这一行
     //   （同 pack/jobs/cheats.py SHARE_DEFAULT、Mac LaunchSettingsSheet.shareDefault、iOS kS2ACheatsShareDefault）
-    private const bool CheatsShareDefault = true;
+    private const bool CheatsShareDefault = false;   // 11-15 维护者「金手指分享缺省不勾」
     private bool cheatsShare = CheatsShareDefault;
 
     private void OpenCheats(LibraryGame game)

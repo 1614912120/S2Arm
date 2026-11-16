@@ -150,7 +150,7 @@ def atomic_text(p, text):
 # 玩家分享（11-15 维护者：「支持玩家自己导入金手指，还能收集更多金手指文件」）：导入时勾了「分享给其他玩家」就把原文连同程序号、构建号
 #   传到诊断上传 Worker（diag.s2arm.com/v1/cheats，release/diag/worker.js；不碰补丁库发布令牌），取件后收进补丁库「玩家分享」上游
 #   s2arm/player-cheats，下一次补丁库发布后别的玩家出包时带上（缺省关、标未验证）。只传金手指原文和游戏版本，不带设备 / 账号信息
-SHARE_DEFAULT = True   # 勾选框缺省勾不勾（维护者定，改这一行）
+SHARE_DEFAULT = False   # 勾选框缺省勾不勾（维护者定，改这一行；11-15「金手指分享缺省不勾」）
 SHARE_URL = "https://diag.s2arm.com/v1/cheats"
 PLAYER_REPO = "s2arm/player-cheats"   # 玩家分享上游的库名（补丁库按它记来源）：这类条目开之前提示一句可能坏存档，不拦
 

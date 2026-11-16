@@ -14,7 +14,7 @@ uint64_t s2a_program_id(void) __attribute__((weak_import));
 // 玩家分享（11-15 维护者：「支持玩家自己导入金手指，还能收集更多金手指文件」）：导入时开着「分享给其他玩家」就把原文 + 程序号 + 构建号传到
 //   诊断上传 Worker（diag.s2arm.com/v1/cheats，同 Mac / Windows pack/jobs/cheats.py share），收进补丁库「玩家分享」上游，别的玩家出包时带上（缺省关）。
 //   只传金手指原文和游戏版本，不带设备 / 账号信息。开关记在 App 级（所有游戏共用），缺省取 kS2ACheatsShareDefault（维护者定，改这一行）
-static const BOOL kS2ACheatsShareDefault = YES;
+static const BOOL kS2ACheatsShareDefault = NO;   // 11-15 维护者「金手指分享缺省不勾」
 static BOOL cheats_share_on(void) { id v = [NSUserDefaults.standardUserDefaults objectForKey:@"S2ACheatsShare"]; return v ? [v boolValue] : kS2ACheatsShareDefault; }
 static void cheats_share(NSString *name, NSData *data) {
     const char *b = s2a_main_build_id ? s2a_main_build_id() : NULL; uint64_t gid = s2a_program_id ? s2a_program_id() : 0;
