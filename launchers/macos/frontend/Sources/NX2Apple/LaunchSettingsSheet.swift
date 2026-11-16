@@ -345,7 +345,7 @@ struct LaunchSettingsSheet: View {
     }
 
     /// 缺省勾不勾「分享给其他玩家」（维护者定，改这一行；同 pack/jobs/cheats.py SHARE_DEFAULT、iOS kS2ACheatsShareDefault）。玩家上次的选择记在 App 级
-    static let shareDefault = true
+    static let shareDefault = false   // 11-15 维护者「金手指分享缺省不勾」
     private func importCheats() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true; panel.canChooseDirectories = false
