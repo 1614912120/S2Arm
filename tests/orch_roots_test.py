@@ -295,7 +295,7 @@ class RootsTest(unittest.TestCase):
         self.assertEqual((self.home / 'single2').read_bytes(), b'AAA')
 
     def test_shared_tree_written_in_place_is_refused_at_commit(self):
-        # 11-16 总指挥：硬链接的前提「aoc/ 只许整目录替换、不许原地改」要有守护。期望手写：
+        # 11-16 维护者：硬链接的前提「aoc/ 只许整目录替换、不许原地改」要有守护。期望手写：
         #   ① 阶段原地改 aoc/d1/a.bin → 提交报冲突、点名 aoc/d1/a.bin，现行不变；② 整目录换掉 aoc/（aoc 阶段那条路）→ 正常提交、内容是新的；
         #   ③ 不动 aoc/、只改别处 → 正常提交
         first = self.seed()
