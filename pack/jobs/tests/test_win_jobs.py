@@ -73,6 +73,18 @@ class RuntimeEnv(unittest.TestCase):
         self.assertEqual(env["LC_ALL"], "C.UTF-8", "机器上 LANG=C / en_US 时 cygpath 在中文处截断路径（#85）")
 
 
+    def test_git_usr_bin_keeps_only_named_programs(self):
+        # 安装包瘦身（11-16）：usr/bin 只带引擎脚本文本里叫得出名字的程序 + bash 等必带件；vim 一族照旧不带。期望手写
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("brw", ROOT / "launchers/windows/bundle_runtime_win.py")
+        brw = importlib.util.module_from_spec(spec); spec.loader.exec_module(brw)
+        d = Path(tempfile.mkdtemp()); self.addCleanup(lambda: __import__("shutil").rmtree(d, ignore_errors=True))
+        for n in ("sort.exe", "svn.exe", "vim.exe", "bash.exe", "sh.exe", "msys-2.0.dll", "join.exe", "joined.exe"):
+            (d / n).write_bytes(b"not a PE")
+        texts = ["printf 'x' | sort -u | join - other.tsv", "# 编辑用 vim"]
+        self.assertEqual(brw.git_keep(d, texts), {"sort.exe", "join.exe", "bash.exe", "sh.exe", "msys-2.0.dll"})
+        self.assertEqual(brw.pe_imports(d / "sort.exe"), [], "不是 PE：没有导入")
+
     def test_env_cmd_saves_player_path_before_replacing_it(self):
         # Metal 工具装在自定义目录、只加进 PATH：s2arm_env.cmd 换 PATH 之前存进 S2A_USER_PATH，作业层按它找（11-09 Windows 出包机实测 #137）
         import importlib.util
