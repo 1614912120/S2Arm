@@ -86,6 +86,14 @@ class ProgramStoreTests(unittest.TestCase):
         self.assertEqual(self.names(self.store / "recipe.tar.zst"), ["cpatch.tsv", "cpatch_rows.tsv", "ctl/control.nacp", "main.npdm", "widen_sites.tsv"])
         self.assertFalse((layout.find_game(self.c, GID) / "image/ios/kit").exists())
 
+    def test_romfs_image_is_not_a_program_part(self):
+        # RomFS 直出后产物根顶层多了游戏资源镜像 romfs.std（原先是 romfs/ 目录）：它不进程序缓存，也不进常驻配方
+        product = self.product(); (product / "romfs.std").write_bytes(b"R" * 4096)
+        sgrade.save_program(self.c, GID, self.exefs())
+        kit = library.save_container_kit(self.c, GID, product)
+        self.assertFalse((kit / "romfs.std").exists())
+        self.assertNotIn("romfs.std", self.names(self.store / "recipe.tar.zst"))
+
     def test_cache_deleted_rebuilds_same_kit(self):
         for rows, seen in (("", "-"), ("p main 1 2 3 # x\n", "rows")):
             with self.subTest(rows=bool(rows)):
