@@ -3768,7 +3768,39 @@ static void t_invalidated_attachment_pin(void) {
     res_fresh();
 }
 
+static void t_sync_reuse_after_gpu_write(void) {
+    g_flag_sync_lag = 1; g_buf_cpu_auto = 1;
+    memset(g_pmem, 0x11, sizeof g_pmem);
+    uint64_t addr = (uint64_t)(uintptr_t)g_pmem;
+    nvn_be_pool_add(g_pmem, sizeof g_pmem); nvn_be_sub_begin();
+    nvn_gpu_buf b = NULL; uint64_t off = 0;
+    CHECK(rp_buf_resolve(&g_fake_cmd, addr, 16, &b, &off));
+    CHECK(rp_post_gpu_write(addr, 16)); memset(b->cpu + off, 0x22, 16);
+    nvn_be_sub_commit(); uint64_t f = nvn_be_last_fence();
+    // A successful wait grants CPU reuse. GPU writeback must have landed first.
+    CHECK(nvn_be_wait(f, 0) == 0);
+    fake_complete(NVN_GPU_DONE_OK);
+    CHECK(nvn_be_wait(f, 0) == 1 && g_pmem[0] == 0x22);
+    memset(g_pmem, 0x33, 16);
+    // A later read-only submission can retain the existing overlap path.
+    nvn_be_sub_begin(); nvn_be_sub_commit();
+    CHECK(nvn_be_wait(nvn_be_last_fence(), 0) == 1);
+    fake_complete(NVN_GPU_DONE_OK); CHECK(g_pmem[0] == 0x33);
+    // A queued event is also observable CPU memory, not a read-only submission.
+    volatile uint32_t ev = 0; stream a = {0};
+    uint8_t *r = put(&a, OP_SIGNAL_EVENT, 16); volatile uint32_t *pv = &ev; uint32_t mode = 0, value = 7;
+    memcpy(r, &pv, 8); memcpy(r+8, &mode, 4); memcpy(r+12, &value, 4); end(&a);
+    submit1(&a); CHECK(nvn_be_wait(nvn_be_last_fence(), 0) == 0);
+    fake_complete(NVN_GPU_DONE_OK); CHECK(ev == 7);
+    uint64_t ts[2] = {0, 0}; stream t = {0}; g_tick = 7777;
+    q_counter(&t, OP_REPORT_COUNTER, NVN_COUNTER_TYPE_TIMESTAMP, ts); end(&t);
+    submit1(&t); CHECK(nvn_be_wait(nvn_be_last_fence(), 0) == 0);
+    fake_complete(NVN_GPU_DONE_OK); CHECK(ts[1] == 7777);
+    nvn_be_pool_del(g_pmem); g_buf_cpu_auto = 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--sync-reuse")) { t_sync_reuse_after_gpu_write(); printf("sync reuse: %d checks, %d failures\n", g_checks, g_fail); return g_fail != 0; }
     t_invalidated_attachment_pin();
     t_registered_view_pin();
     t_state_persists();
