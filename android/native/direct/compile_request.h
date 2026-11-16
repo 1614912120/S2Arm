@@ -97,6 +97,8 @@ struct s2a_compile_request_input {
     const char *translator_closure;
     struct s2a_compile_stage_src stages[3];
     int stage_count;
+    // Android new replay VS+FS pair opts in. Zero preserves legacy requests.
+    int requires_linked_varying_interface;
     struct s2a_compile_graphics_src gfx;
     struct s2a_compile_texture_src textures[S2A_COMPILE_TEXTURE_MAX];   // 真实绑定的纹理事实；0 条 = 没有可用来源
     int texture_count;

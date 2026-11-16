@@ -405,6 +405,10 @@ int s2a_compile_request_build(const struct s2a_compile_request_input *in,
         const struct s2a_compile_stage_src *s = &in->stages[i];
         if (!s->stage || !s->code || !s->code_bytes || !s->control || !s->control_bytes) return -1;
     }
+    if (in->requires_linked_varying_interface != 0 && in->requires_linked_varying_interface != 1) return -1;
+    if (in->requires_linked_varying_interface &&
+        (in->stage_count != 2 || strcmp(in->stages[0].stage, "vs") ||
+         strcmp(in->stages[1].stage, "fs"))) return -1;
 
     struct sb b;
     memset(&b, 0, sizeof b);
@@ -423,6 +427,11 @@ int s2a_compile_request_build(const struct s2a_compile_request_input *in,
     sb_puts(&b, ",");
     // 与描述符/统一编译器常量同一值（graphics.h S2A_GRAPHICS_RUNTIME_COMPILER_ABI），不另写字面量。
     sb_key_string(&b, "runtimeCompilerABI", "s2a-direct-compile-v1");
+    // The linked interface changes only the Android direct paired VS+FS
+    // program; absent means legacy independent interface semantics.
+    if (in->requires_linked_varying_interface) {
+        sb_puts(&b, ",\"requiresLinkedVaryingInterface\":true");
+    }
     sb_puts(&b, ",");
     sb_key_u32(&b, "sourceParserVersion", 1);
     // 描述符种类校验的调试开关只在这里判一次（debug_gate.h 两道门 + debug.s2a.kind_check），

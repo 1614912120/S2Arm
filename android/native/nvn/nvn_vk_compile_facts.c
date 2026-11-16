@@ -869,6 +869,10 @@ int nvk_w2_capsule_claim(const struct s2a_compile_request_input *in, struct nvk_
         cap->input.original.stamp.source_epoch != s2a_source_epoch() ||
         in->session != cap->input.original.stamp.session || in->generation != cap->input.original.stamp.generation ||
         in->stage_count < 1 || in->stage_count > 2 || !in->profile_json || !in->profile_bytes) goto reject;
+    // Linked policy is request-local identity, not a diagnostic normalization.
+    // Reject before deriving correspondence; keep the frozen capsule untouched.
+    if ((in->requires_linked_varying_interface != 0 && in->requires_linked_varying_interface != 1) ||
+        in->requires_linked_varying_interface != cap->identity.requires_linked_varying_interface) goto reject;
     struct s2a_input_identity check = cap->identity;
     // A request may add tess after lookup identity creation. Keep both inputs
     // untouched: derive a separate expected request from the original owned
