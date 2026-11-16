@@ -19,7 +19,7 @@ tiers_json="$repo/android/tests/vk/profiles/s2a_sim_tiers.json"
 profiles_sha=b502e9b0d7508e06e6300af272548cf0ee32f380
 profiles_url=https://github.com/KhronosGroup/Vulkan-Profiles.git
 
-all=(no_bc no_d24 no_vertex_stores no_clip_distance no_dual_src_blend no_calibrated_timestamps no_mirror_clamp no_exact16 no_depth_clamp no_vertex_divisor no_custom_border)
+all=(no_bc no_d24 no_vertex_stores no_clip_distance no_int16 no_dual_src_blend no_calibrated_timestamps no_mirror_clamp no_exact16 no_depth_clamp no_vertex_divisor no_custom_border)
 want=("$@"); [ ${#want[@]} -gt 0 ] || want=("${all[@]}")
 for t in "${want[@]}"; do
     case " ${all[*]} " in *" $t "*) ;; *) echo "未知档：${t}（可用：${all[*]}）" >&2; exit 64 ;; esac
@@ -129,6 +129,11 @@ check_tier() {
             has "$log" "shaderClipDistance=0 shaderCullDistance=0" || red no_clip_distance "层没藏住 shaderClipDistance / shaderCullDistance"
             has "$log" "【红】设备没启用 shaderClipDistance" || red no_clip_distance "没看到写裁剪距离按特性点名报红（#1072）"
             has "$log" "C1072a 缺特性时 UNSUPPORTED 并点名特性" || red no_clip_distance "C1072a 没跑完" ;;
+        no_int16)
+            run_tier no_int16 "$log" || rc=$?
+            [ "$rc" -eq 0 ] || red no_int16 "run.sh rc=${rc}，期望没有 shaderInt16 也建得了设备、契约绿、0 条 validation（#1340）"
+            has "$log" "C1340 16 位整数按程序要求：设备 shaderInt16=0" || red no_int16 "层没藏住 shaderInt16"
+            has "$log" "C1340 缺 shaderInt16 时声明 Int16 的模块具名拒收，不声明的照常建" || red no_int16 "C1340 没跑完" ;;
         no_dual_src_blend)
             run_tier no_dual_src_blend "$log" || rc=$?
             [ "$rc" -eq 0 ] || red no_dual_src_blend "run.sh rc=$rc"

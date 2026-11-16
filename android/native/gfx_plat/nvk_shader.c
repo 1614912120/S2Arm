@@ -24,6 +24,7 @@
 #include "../../../graphics/nvn/gfx/nvn/dmsh_chain.h"   // b-<DMSH_CHAIN>-vk：出包预编库目录名（同 nvn_vk_draw.c）
 #include "direct/program_cache.h"
 #include "direct/sha256.h"
+#include "direct/spirv_storage.h"   // s2a_spirv_declares_cap（#1340 Int16 按程序拒收）
 #include "direct/jv.h"
 #include "s2a_direct_host.h"
 #include "nvn/nvn_vk_program_result.h"
@@ -142,6 +143,10 @@ static unsigned g_pool_reason_count;
 
 static void sha256(const void *p, size_t n, uint8_t out[32]) { s2a_sha256 c; s2a_sha256_init(&c); s2a_sha256_update(&c, p, n); s2a_sha256_final(&c, out); }
 static void red1(const char *name, const char *why) { if (nvn_unimpl("shader", name, NULL) == 1) nvn_plat_log(NVN_PLAT_LOG_RED, "shader", why); }
+// 后端拒装着色器时记哪一项（#1340）：设备没 shaderInt16、模块又声明了 Int16 的，具名 int16_not_supported（只拒这个程序，不整局停）；其余照旧。
+static void red_load(nvn_gpu_rc rc, const nvn_gpu_shader_src *src, const char *fallback, const char *why) {
+    red1(rc.code == NVN_GPU_E_UNSUPPORTED && s2a_spirv_declares_cap(src->blob, src->bytes, 22) == 1 ? "int16_not_supported" : fallback, why);
+}
 // 不需要 _GNU_SOURCE 的 strdup：快照要活过后台线程，profile 原文 / closure / profileHash 必须各存一份。
 static char *dup_str(const char *s) {
     if (!s) return NULL;
@@ -664,7 +669,8 @@ static struct entry *build(const uint8_t *bytes, size_t len, const struct s2a_so
         nvn_gpu_shader_src src = {0}; src.stage = (nvn_gpu_stage)st; src.kind = NVN_GPU_BLOB_SPIRV;
         src.blob = fp.stage[st].spirv; src.bytes = fp.stage[st].spirv_bytes; src.entry = "main"; src.layout = &L;
         nvn_gpu_err err = {0};
-        if (!nvn_gpu_ok(nvn_gpu_shader_load(&src, &e->prog.sh[st], &err))) { red1("shader_load_failed", err.why); e->failed = 1; }
+        nvn_gpu_rc lr = nvn_gpu_shader_load(&src, &e->prog.sh[st], &err);
+        if (!nvn_gpu_ok(lr)) { red_load(lr, &src, "shader_load_failed", err.why); e->failed = 1; }
         if (views[st].c1 && views[st].c1_bytes >= 0x100) { memcpy(e->prog.c1[st], views[st].c1, 0x100); e->prog.c1_ok |= (uint8_t)(1u << st); }
     }
     nvn_vk_program_free(&fp);
@@ -1403,7 +1409,8 @@ static struct entry *build_compute(const uint8_t *bytes, size_t len, const struc
         nvn_gpu_layout L = {0}; L.ent = e->prog.ent[0]; L.nent = e->prog.nent[0]; L.support_bytes = cp.support_bytes; L.id_src = "s2a-direct-program-v1";
         nvn_gpu_shader_src ss = {0}; ss.stage = NVN_GPU_SH_CS; ss.kind = NVN_GPU_BLOB_SPIRV; ss.blob = cp.stage.spirv; ss.bytes = cp.stage.spirv_bytes; ss.entry = "main"; ss.layout = &L;
         nvn_gpu_err err = {0};
-        if (!nvn_gpu_ok(nvn_gpu_shader_load(&ss, &e->prog.sh[0], &err))) { red1("compute_shader_load_failed", err.why); e->failed = 1; }
+        nvn_gpu_rc lr = nvn_gpu_shader_load(&ss, &e->prog.sh[0], &err);
+        if (!nvn_gpu_ok(lr)) { red_load(lr, &ss, "compute_shader_load_failed", err.why); e->failed = 1; }
         if (src->c1 && src->c1_bytes >= 0x100) { memcpy(e->prog.c1[0], src->c1, 0x100); e->prog.c1_ok |= 1; }
     }
     nvn_vk_program_free_compute(&cp);

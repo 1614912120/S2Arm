@@ -26,6 +26,7 @@
 #include "nvn_vk_bcdec.h"
 #include "nvn_fmt_info.h"
 #include "vk_device.h"
+#include "spirv_storage.h"   // s2a_spirv_declares_cap（C1340）
 #include "nvn_plat_vk.h"
 
 // 平台件替身：无头表面（lavapipe 没有窗口系统）。交换链、取图、呈现段、信号量与布局都是真的，校验层照查。
@@ -4207,6 +4208,72 @@ static void c1072a_vertex_caps(const char *dir) {
     c1072a_case(dir, "vs_clip.vert", 0, &f->shaderClipDistance, "shaderClipDistance", 1);
     c1072a_case(dir, "vs_cull.vert", 0, &f->shaderCullDistance, "shaderCullDistance", 1);
     printf("C1072a 缺特性时 UNSUPPORTED 并点名特性，只读存储负控照建\n");
+}
+
+// C1340：shaderInt16 按程序要求（#1340）。手造两份最小计算模块，只差一行 OpCapability Int16（外加一个 16 位整数类型）。
+// 设备没有 shaderInt16（清掉「已启用记录」或模拟机型档真藏掉）：带 Int16 的模块装载即 UNSUPPORTED、why 点名 shaderInt16、
+// 不交给驱动；不带的照常装、照常建计算管线。设备真有：恢复后带 Int16 的也照常建（validation 0 条）。
+// 负对照：撤掉 nvn_gpu_shader_load 里的 Int16 检查，第一条断言变红。
+static const uint32_t *c1340_module(int int16, size_t *bytes) {
+    static uint32_t w[2][64];
+    uint32_t *o = w[int16 ? 1 : 0];
+    size_t k = 0;
+    o[k++] = 0x07230203u; o[k++] = 0x00010000u; o[k++] = 0; o[k++] = 6; o[k++] = 0;   // 头：魔数 / 1.0 / 生成器 / bound / 0
+    o[k++] = 2u << 16 | 17; o[k++] = 1;                                  // OpCapability Shader
+    if (int16) { o[k++] = 2u << 16 | 17; o[k++] = 22; }                  // OpCapability Int16
+    o[k++] = 3u << 16 | 14; o[k++] = 0; o[k++] = 1;                      // OpMemoryModel Logical GLSL450
+    o[k++] = 5u << 16 | 15; o[k++] = 5; o[k++] = 1; o[k++] = 0x6e69616du; o[k++] = 0;   // OpEntryPoint GLCompute %1 "main"
+    o[k++] = 6u << 16 | 16; o[k++] = 1; o[k++] = 17; o[k++] = 1; o[k++] = 1; o[k++] = 1;   // OpExecutionMode %1 LocalSize 1 1 1
+    o[k++] = 2u << 16 | 19; o[k++] = 2;                                  // %2 = OpTypeVoid
+    o[k++] = 3u << 16 | 33; o[k++] = 3; o[k++] = 2;                      // %3 = OpTypeFunction %2
+    if (int16) { o[k++] = 4u << 16 | 21; o[k++] = 5; o[k++] = 16; o[k++] = 1; }   // %5 = OpTypeInt 16 1
+    o[k++] = 5u << 16 | 54; o[k++] = 2; o[k++] = 1; o[k++] = 0; o[k++] = 3;   // %1 = OpFunction %2 None %3
+    o[k++] = 2u << 16 | 248; o[k++] = 4;                                 // OpLabel
+    o[k++] = 1u << 16 | 253;                                             // OpReturn
+    o[k++] = 1u << 16 | 56;                                              // OpFunctionEnd
+    *bytes = k * 4;
+    return o;
+}
+static nvn_gpu_rc c1340_build(int int16, nvn_gpu_shader *sh, nvn_gpu_pipe *cp, nvn_gpu_err *e) {
+    size_t bytes = 0;
+    const uint32_t *m = c1340_module(int16, &bytes);
+    nvn_gpu_shader_src src;
+    memset(&src, 0, sizeof src);
+    src.stage = NVN_GPU_SH_CS; src.kind = NVN_GPU_BLOB_SPIRV; src.entry = "main"; src.blob = m; src.bytes = bytes;
+    *sh = NULL; *cp = NULL;
+    memset(e, 0, sizeof *e);
+    nvn_gpu_rc r = nvn_gpu_shader_load(&src, sh, e);
+    if (!OK(r) || !*sh) return r;
+    nvn_gpu_stage_desc cs;
+    memset(&cs, 0, sizeof cs);
+    cs.sh = *sh;
+    return nvn_gpu_cpipe_get(&cs, NVN_GPU_PIPE_SYNC, cp, e);
+}
+static void c1340_int16_per_program(void) {
+    size_t b16 = 0, b0 = 0;
+    const uint32_t *m16 = c1340_module(1, &b16), *m0 = c1340_module(0, &b0);
+    CHECK(s2a_spirv_declares_cap(m16, b16, 22) == 1, "C1340 扫描器没认出 OpCapability Int16");
+    CHECK(s2a_spirv_declares_cap(m0, b0, 22) == 0, "C1340 扫描器把不带 Int16 的模块认成带");
+    CHECK(s2a_spirv_declares_cap(m0, 16, 22) == -1, "C1340 扫描器对不完整的头应返回 -1");
+    VkBool32 *f = &g_dev.core_features.shaderInt16;
+    const VkBool32 has = *f;
+    printf("C1340 16 位整数按程序要求：设备 shaderInt16=%u\n", (unsigned)has);
+    nvn_gpu_shader sh; nvn_gpu_pipe cp; nvn_gpu_err e;
+    *f = VK_FALSE;
+    nvn_gpu_rc r = c1340_build(1, &sh, &cp, &e);
+    CHECK(r.code == NVN_GPU_E_UNSUPPORTED && !sh && !cp && strstr(e.why, "shaderInt16"),
+          "C1340 缺 shaderInt16 时声明 Int16 的模块应 UNSUPPORTED 且点名，实 %d「%s」", r.code, e.why);
+    if (sh) nvn_gpu_shader_release(sh);
+    r = c1340_build(0, &sh, &cp, &e);
+    CHECK(OK(r) && sh && cp, "C1340 缺 shaderInt16 时不声明 Int16 的模块应照常建：%d %s", r.code, e.why);
+    if (sh) nvn_gpu_shader_release(sh);
+    *f = has;
+    if (has) {
+        r = c1340_build(1, &sh, &cp, &e);
+        CHECK(OK(r) && sh && cp, "C1340 有 shaderInt16 时声明 Int16 的模块应照常建：%d %s", r.code, e.why);
+        if (sh) nvn_gpu_shader_release(sh);
+    }
+    printf("C1340 缺 shaderInt16 时声明 Int16 的模块具名拒收，不声明的照常建\n");
 }
 
 // C60b：Unknown 存储视图须按已启用的 without-format 写特性建管线。
@@ -9223,6 +9290,7 @@ int main(int argc, char **argv) {
     if (!open_backend()) return 1;
     c60b_unknown_image_tbuf(argv[1]);
     c1072a_vertex_caps(argv[1]);
+    c1340_int16_per_program();
     CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C60b close：%d %s", e18.rc.code, e18.why);
     if (!open_backend()) return 1;
     c60c_unknown_image_tbuf_read(argv[1]);

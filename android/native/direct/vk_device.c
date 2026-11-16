@@ -215,7 +215,8 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
         // The older backend does not use the per-program guard.
         "vertexPipelineStoresAndAtomics",
 #endif
-        "shaderStorageImageWriteWithoutFormat", "shaderInt16",
+        // shaderInt16 不在这里（#1340）：生成器不声明 Int16，设备有就启用；声明了的程序在建程序时按程序拒收。
+        "shaderStorageImageWriteWithoutFormat",
         "occlusionQueryPrecise", "shaderImageGatherExtended", "samplerAnisotropy", "depthClamp",
     };
     for (unsigned i = 0; i < sizeof required / sizeof *required; i++) {
@@ -227,7 +228,6 @@ int s2a_vk_device_create(struct s2a_vk_device *out, char *why, size_t why_size) 
         else if (!strcmp(name, "vertexPipelineStoresAndAtomics")) value = features.vertexPipelineStoresAndAtomics;
 #endif
         else if (!strcmp(name, "shaderStorageImageWriteWithoutFormat")) value = features.shaderStorageImageWriteWithoutFormat;
-        else if (!strcmp(name, "shaderInt16")) value = features.shaderInt16;
         else if (!strcmp(name, "occlusionQueryPrecise")) value = features.occlusionQueryPrecise;
         else if (!strcmp(name, "shaderImageGatherExtended")) value = features.shaderImageGatherExtended;
         else if (!strcmp(name, "samplerAnisotropy")) value = features.samplerAnisotropy;
