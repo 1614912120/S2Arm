@@ -215,24 +215,28 @@ static void mtk_kick(MTLMeshRenderPipelineDescriptor *m, NSString *names, const 
         os_unfair_lock_unlock(&g_pso_mtk_lock);
     } });
 }
-// A draw that cannot be skipped waits on the submit thread for its pipeline's background build, at most mtk_budget_ms() a frame in all (DM_NVN_MESH_WAIT_MS); past the budget the draw is
-//   skipped as before and waits again the next frame. → the pipeline, nil (skipped)
+// A draw that cannot be skipped waits on the submit thread for its pipeline's background build until it is ready, capped only by the stuck-compiler limit every other draw that cannot
+//   be skipped goes by (pso_unsafe_wait_ms, DM_NVN_PSO_UNSAFE_WAIT_MS, default 10 s; 0 = no cap); past that cap it is skipped with a red line. → the pipeline, nil (skipped)
+//   D-84J2（11-15，Mac M1 Max）：原先每帧共 250 ms 预算（DM_NVN_MESH_WAIT_MS），超了照跳——跳过的是「某阶段写存储」或「目标跨帧保留内容」的那笔，下游读到没写的数据，
+//   3 局 GPU 挂死 / 缺页都出在网格管线首用、紧挨着「没等到、本帧跳过」的那一帧。跳这种绘制在哪块芯片上都不对（老芯片更容易撞上）：不能跳过的就等到编好，
+//   只有可丢的（纯颜色输出、本帧新开的目标，mtk_sync_why 返回 NULL）才首用跳过、后台编。DM_NVN_MESH_WAIT_MS 只留作诊断对照：设了就回到每帧预算的旧做法
 static uint64_t g_mtk_waits, g_mtk_wait_ns, g_mtk_wait_max, g_mtk_wait_over, g_mtk_wait_frame = UINT64_MAX, g_mtk_wait_frame_ns;
 static int g_mtk_budget = -1;   // ms; -1: not read yet (t_nvn_mesh ④d sets it)
-static int mtk_budget_ms(void) { if (g_mtk_budget < 0) { const char *e = getenv("DM_NVN_MESH_WAIT_MS"); g_mtk_budget = e ? atoi(e) : 250; } return g_mtk_budget; }
+static int mtk_budget_ms(void) { if (g_mtk_budget < 0) { const char *e = getenv("DM_NVN_MESH_WAIT_MS"); g_mtk_budget = e && *e ? atoi(e) : 0; } return g_mtk_budget; }   // 0 = no per-frame budget (wait per draw up to pso_unsafe_wait_ms)
 static id mtk_wait(const mtk_key *mk, const char *why) {
     uint64_t f = atomic_load_explicit(&g_cur_frame, memory_order_relaxed); if (f != g_mtk_wait_frame) { g_mtk_wait_frame = f; g_mtk_wait_frame_ns = 0; }
-    uint64_t budget = (uint64_t)mtk_budget_ms() * 1000000ull, t0 = bp_now(); __unsafe_unretained id p = nil; int done = 0;
+    uint64_t budget = (uint64_t)mtk_budget_ms() * 1000000ull, cap = (uint64_t)pso_unsafe_wait_ms() * 1000000ull, t0 = bp_now(); __unsafe_unretained id p = nil; int done = 0;
     while (!mtk_pace()) {
         os_unfair_lock_lock(&g_pso_mtk_lock); p = hm_get_id(&g_pso_mtk, mk); os_unfair_lock_unlock(&g_pso_mtk_lock);
         if (p != g_pso_mtk_building) { done = 1; break; }
-        if (g_mtk_wait_frame_ns + (bp_now() - t0) >= budget) break;
+        if (budget ? g_mtk_wait_frame_ns + (bp_now() - t0) >= budget : (cap && bp_now() - t0 >= cap)) break;
         usleep(200);
     }
     uint64_t dt = bp_now() - t0; g_mtk_wait_frame_ns += dt; g_mtk_waits++; g_mtk_wait_ns += dt; if (dt > g_mtk_wait_max) g_mtk_wait_max = dt;
     if (!done) g_mtk_wait_over++;
-    if (!(g_mtk_waits & (g_mtk_waits - 1)) || !done) MLOG("task / mesh draw that cannot be skipped (%s) waited for its background pipeline %.1f ms (%s); %llu waits so far, %.1f ms in all, longest %.1f ms, %llu past the %d ms frame budget (skipped)",
-        why, dt / 1e6, done ? "ready" : "not ready: skipped this frame", (unsigned long long)g_mtk_waits, g_mtk_wait_ns / 1e6, g_mtk_wait_max / 1e6, (unsigned long long)g_mtk_wait_over, mtk_budget_ms());
+    if (!(g_mtk_waits & (g_mtk_waits - 1)) || !done) MLOG("%stask / mesh draw that cannot be skipped (%s) waited for its background pipeline %.1f ms (%s); %llu waits so far, %.1f ms in all, longest %.1f ms, %llu not ready in time (skipped; %s %d ms)",
+        done ? "" : "【红】 ", why, dt / 1e6, done ? "ready" : "not ready: skipped this frame", (unsigned long long)g_mtk_waits, g_mtk_wait_ns / 1e6, g_mtk_wait_max / 1e6, (unsigned long long)g_mtk_wait_over,
+        mtk_budget_ms() ? "per-frame budget DM_NVN_MESH_WAIT_MS" : "stuck-compiler cap DM_NVN_PSO_UNSAFE_WAIT_MS", mtk_budget_ms() ? mtk_budget_ms() : pso_unsafe_wait_ms());
     return done && p != NSNull.null ? p : nil;
 }
 // Why a mesh draw whose pipeline is not built yet may not be skipped (nil: it may, its pipeline builds in the background); the same rules as skip_safe / first_skip_ok
