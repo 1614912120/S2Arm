@@ -152,7 +152,7 @@ ck "源文件读被拒：分类 access_denied、点名是源文件" '[ "$(cat "$
 
 # ---- Windows 挂载卷：RomFS 发布拒绝按目录改名退避；非 Windows 不重试 ----
 run "$T/p1" --test-romfs-publish "$T/publish"
-ck "发布拒绝句柄等待后成功；非 Windows 直接失败；持续拒绝按 9 档退避并给出路径建议，暂存保留" '[ "$(cat "$T/p1.rc")" = 0 ] && grep -q "Windows 同盘句柄测试：" "$T/p1" && grep -q "负对照：windows=false 的直接发布遇一次 E_ACCESSDENIED 即原样失败" "$T/p1" && grep -q "负控：持续拒绝 → 按 dirrename 重试 9 次（总等待 60.8 秒）后报红" "$T/p1"'
+ck "发布拒绝句柄等待后成功；非 Windows 直接失败；持续拒绝按 9 档退避并给出路径建议，暂存保留" '[ "$(cat "$T/p1.rc")" = 0 ] && grep -qE "Windows 同盘句柄(测试|对照)：" "$T/p1" && grep -q "负对照：windows=false 的直接发布遇一次 E_ACCESSDENIED 即原样失败" "$T/p1" && grep -q "负控：持续拒绝 → 按 dirrename 重试 9 次（总等待 60.8 秒）后报红" "$T/p1"'
 
 echo "-----"
 echo "$([ "$fail" = 0 ] && echo "✓" || echo "✗") nx_unpack 解包失败回归：$((pass + fail)) 项，不通 $fail"
