@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 S2Arm contributors
-"""游戏程序常驻与现建（11-16 维护者「程序部分极致压缩」，总指挥细化）。
+"""游戏程序常驻与现建（11-16 维护者「程序部分极致压缩」）。
 
 常驻（layout.program_store：默认位置根 .programs/<程序号>/，删游戏文件夹 / 释放空间都不碰，只有「删除游戏」才删）：
   exefs.tar.zst   原始程序（exefs 里的模块与 main.npdm，sgrade.save_program 存的那份）
