@@ -147,7 +147,7 @@ def bids_of(path, data):
 
 
 CHEAT_LIBS = {'bad1dea/NXCheats', 'HamletDuFromage/switch-cheats-db', 'ChanseyIsTheBest/NX-60FPS-RES-GFX-Cheats'}
-CHEAT = re.compile(r'(?:^|/)cheats/([0-9A-Fa-f]{16})\.txt$', re.I)
+CHEAT = re.compile(r'(?:^|/)cheats/(?:[^/]+/)?([0-9A-Fa-f]{16})\.txt$', re.I)   # 也认多一层目录：cheats/<程序号或游戏名>/<构建号>.txt（tomvita/MyNXCheats 的写法，11-16）
 
 
 def members(full):
