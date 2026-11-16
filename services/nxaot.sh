@@ -76,9 +76,11 @@ print(next((d['version'].strip('[]').split(',')[0] for fw in j['project']['frame
     echo "$L $FW" > "$O.tmp/ldflags.txt"
     echo "运行时包 ${RV}；用时 $(( $(date +%s) - t0 )) 秒" > "$O.tmp/info.txt"
     rm -rf "$O"; mv "$O.tmp" "$O"
-    # 不在这里清旧版本（10-21 原生层线实证：「每平台只留最新 2 份」删掉了别的树刚拿到路径、还没链接完的那份，ld 报 libs2a_cs.a not found）：
-    #   清理归维护方 gc.sh（${S2A_PRIVATE_TOOLS}，公开仓没有）——每平台留最新 3 份，30 分钟内用过的一律不动（下面每次取用都刷新目录时间）；
-#   公开检出没有清理方，换键后的旧版本留在缓存目录里，要回收空间就手动删旧键目录
+    # 新写了一份：按出包可重建缓存同一口径回收（pack/jobs/cache_retention.py trim：总量上限 = 0.25 ×（盘剩余 + 缓存总量），最久没用的先删）。
+    #   1 小时内用过的一律不删（下面每次取用都刷新目录时间）：10-21 原生层线实证「每平台只留最新 2 份」删掉了别的树刚拿到路径、还没链接完的那份，
+    #   ld 报 libs2a_cs.a not found，按用过的时间保护就不会。缓存在缺省位置时连同运行区里别的可重建缓存一起算总量，另指的（门禁共用）只算它自己
+    RR=${S2A_RUN_ROOT:-$HOME/.s2arm/run}/s2arm
+    if [ "$B" = "$RR/cache/nxaot" ]; then python3 "$ROOT/pack/jobs/cache_retention.py" trim "$RR" > /dev/null 2>&1; else python3 "$ROOT/pack/jobs/cache_retention.py" trim "$RR" "$B" > /dev/null 2>&1; fi
 fi
 touch "$O"   # 取用即续租：gc 按目录时间判「30 分钟内用过」不删，链接方拿到路径后不会被清掉
 say "🟢 nxaot（${RID}）：$(cat "$O/info.txt")，libs2a_cs.a $(( $(stat -f %z "$O/libs2a_cs.a") >> 20 )) MB（键 ${K}）"
