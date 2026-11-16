@@ -150,6 +150,10 @@ ck "写自己的工作目录被拒：分类 access_denied、点名是 S2Arm 的�
 S2A_NXUNPACK_TEST_THROW=denied-src run "$T/d2" "$K" "$T/od2" "$T/junk.bin"
 ck "源文件读被拒：分类 access_denied、点名是源文件" '[ "$(cat "$T/d2.rc")" = 1 ] && grep -q "【原因 access_denied】" "$T/d2" && grep -q "被拒的是源文件" "$T/d2"'
 
+# ---- Windows 挂载卷：RomFS 并行写完后发布目录被拒时先 flush，再只重试一次 ----
+run "$T/p1" --test-romfs-publish "$T/publish"
+ck "发布遇一次 E_ACCESSDENIED：flush 后重试成功；旧直接 move 与持续拒绝负控仍失败" '[ "$(cat "$T/p1.rc")" = 0 ] && grep -q "正控：一次 E_ACCESSDENIED → flush 1 次 → 重试发布成功" "$T/p1" && grep -q "负对照：旧的直接 Directory.Move 遇一次 E_ACCESSDENIED 即失败" "$T/p1" && grep -q "负控：持续 E_ACCESSDENIED → 原样失败" "$T/p1"'
+
 echo "-----"
 echo "$([ "$fail" = 0 ] && echo "✓" || echo "✗") nx_unpack 解包失败回归：$((pass + fail)) 项，不通 $fail"
 [ "$fail" = 0 ]

@@ -206,6 +206,10 @@ static partial class P {
         Copies.Clear();
     }
     static int Run(string[] a) {
+        if (a.Length == 2 && a[0] == "--test-romfs-publish") {
+            try { RomfsExtraction.TestPublish(a[1]); return 0; }
+            catch (Exception e) { Console.Error.WriteLine("🔴 " + e.Message); return 1; }
+        }
         // 单测注入（tests/nx_unpack_fail_test.sh）：造并行读包那种 AggregateException——第一条普通异常、第二条缺密钥，走真实的兜底路径
         if (Environment.GetEnvironmentVariable("S2A_NXUNPACK_TEST_THROW") == "agg-key")
             throw new AggregateException(new Exception("并行任务一：普通异常"), new LibHac.Common.Keys.MissingKeyException("单测：缺密钥", "titlekek_10", LibHac.Common.Keys.KeyType.Common));

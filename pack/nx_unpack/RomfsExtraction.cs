@@ -33,6 +33,78 @@ static class RomfsExtraction {
         ? a.InnerExceptions.Count > 0 && a.InnerExceptions.All(IsDataHashFailure)
         : e is HorizonResultException h && h.ResultValue == ResultFs.NonRealDataVerificationFailed.Value;
 
+    static bool IsAccessDenied(Exception e) => e is UnauthorizedAccessException ||
+        e is IOException && (e.HResult == unchecked((int)0x80070005) || e.HResult == 13);
+
+    static void FlushFiles(string root) {
+        foreach (string path in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)) {
+            using var file = new FileStream(path, FileMode.Open, FileAccess.Write, FileShare.ReadWrite);
+            file.Flush(true);
+        }
+    }
+
+    static void Publish(string stage, string destination, Action<string, string> move,
+                        Action<string> flush, bool windows) {
+        try { move(stage, destination); }
+        catch (Exception e) when (windows && IsAccessDenied(e)) {
+            // 部分 Windows 挂载卷在并行分段写完后，立即改名会因卷内待提交写入返回 E_ACCESSDENIED。
+            // 显式 FlushFileBuffers 后只重试一次；真实权限错误仍由第二次 move 抛出。
+            flush(stage);
+            Console.WriteLine("🟡 Windows 卷拒绝立即发布 RomFS；已刷新暂存文件并重试一次");
+            move(stage, destination);
+        }
+    }
+
+    internal static void TestPublish(string root) {
+        if (Directory.Exists(root) || File.Exists(root)) throw new IOException("测试目录已存在（不覆盖）");
+        string stage = Path.Combine(root, "stage"), destination = Path.Combine(root, "published");
+        Directory.CreateDirectory(stage);
+        byte[] expected = { 0x53, 0x32, 0x41, 0x00, 0x7f };
+        File.WriteAllBytes(Path.Combine(stage, "payload.bin"), expected);
+        int moves = 0, flushes = 0;
+        void DenyFirstMove(string from, string to) {
+            if (++moves == 1) throw new IOException("synthetic access denied", unchecked((int)0x80070005));
+            Directory.Move(from, to);
+        }
+        Publish(stage, destination, DenyFirstMove, path => { flushes++; FlushFiles(path); }, windows: true);
+        if (moves != 2 || flushes != 1 || Directory.Exists(stage) ||
+            !File.ReadAllBytes(Path.Combine(destination, "payload.bin")).SequenceEqual(expected))
+            throw new InvalidDataException("访问拒绝后的 flush 重试未保留完整输出");
+        Console.WriteLine("🟢 合成正控：一次 E_ACCESSDENIED → flush 1 次 → 重试发布成功；文件内容一致");
+
+        string oldStage = Path.Combine(root, "old-stage"), oldDestination = Path.Combine(root, "old-published");
+        Directory.CreateDirectory(oldStage);
+        File.WriteAllBytes(Path.Combine(oldStage, "payload.bin"), expected);
+        int oldMoves = 0;
+        void OldDirectMove(string from, string to) {
+            oldMoves++;
+            throw new IOException("synthetic access denied", unchecked((int)0x80070005));
+        }
+        try {
+            OldDirectMove(oldStage, oldDestination);
+            throw new InvalidDataException("旧的直接 move 负对照不应成功");
+        } catch (IOException e) when (e.Message == "synthetic access denied") { }
+        if (oldMoves != 1 || !Directory.Exists(oldStage) || Directory.Exists(oldDestination))
+            throw new InvalidDataException("直接 move 负对照没有复现首次拒绝");
+        Console.WriteLine("🟢 负对照：旧的直接 Directory.Move 遇一次 E_ACCESSDENIED 即失败");
+
+        string deniedStage = Path.Combine(root, "denied-stage"), deniedDestination = Path.Combine(root, "denied-published");
+        Directory.CreateDirectory(deniedStage);
+        File.WriteAllBytes(Path.Combine(deniedStage, "payload.bin"), expected);
+        int deniedMoves = 0, deniedFlushes = 0;
+        void AlwaysDeny(string from, string to) {
+            deniedMoves++;
+            throw new IOException("synthetic persistent access denied", unchecked((int)0x80070005));
+        }
+        try {
+            Publish(deniedStage, deniedDestination, AlwaysDeny, path => { deniedFlushes++; FlushFiles(path); }, windows: true);
+            throw new InvalidDataException("持续访问拒绝不应被吞掉");
+        } catch (IOException e) when (e.Message == "synthetic persistent access denied") { }
+        if (deniedMoves != 2 || deniedFlushes != 1 || !Directory.Exists(deniedStage) || Directory.Exists(deniedDestination))
+            throw new InvalidDataException("持续访问拒绝未保留暂存目录或被错误吞掉");
+        Console.WriteLine("🟢 合成负控：持续 E_ACCESSDENIED → 原样失败；暂存保留、目标未创建");
+    }
+
     internal static Result Extract(Func<IntegrityCheckLevel, IStorage> open, string destination, bool patched,
                                    long partSize = PartSize, int parallelism = 0) {
         if (partSize <= 0) throw new ArgumentOutOfRangeException(nameof(partSize));
@@ -49,7 +121,7 @@ static class RomfsExtraction {
                 string first = (e is AggregateException g ? g.InnerExceptions.ToArray() : new[] { e }).OfType<ReadPlace>().Select(r => r.Message).FirstOrDefault();
                 result = Attempt(open, stage, IntegrityCheckLevel.None, partSize, parallelism) with { Bypassed = true, FirstBad = first };
             }
-            Directory.Move(stage, destination);
+            Publish(stage, destination, Directory.Move, FlushFiles, OperatingSystem.IsWindows());
             return result;
         } finally {
             if (Directory.Exists(stage)) Directory.Delete(stage, true);
