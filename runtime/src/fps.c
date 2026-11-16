@@ -204,7 +204,7 @@ int s2a_fps_present_at(uint64_t now);   // 核心按传入的时间算（单测�
 int s2a_fps_present_hook(void) { return s2a_fps_present_at(plat_now_ns()); }
 int s2a_fps_present_at(uint64_t now) {
     // 关着时也记，再开的第一帧按真实帧间隔算；换局时清零。
-    if (!eff_table()) { g_present_last = now; return atomic_load(&g_have); }
+    if (!eff_table()) { g_present_last = now; return g_own && atomic_load(&g_have); }
     if (g_spd_slot >= 0) {
         int st = fs_step();
         if (st > 0) {   // 帧步在跑：步长是宿主定的整数 vsync，出图也按它保持
