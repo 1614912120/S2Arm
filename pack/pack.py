@@ -23,6 +23,10 @@ from pkg_inputs_key import content_keyed   # 哪些源按全内容进包键（�
 COPIED = [0]   # Windows 上没克隆成、退回整份拷贝的文件数（收尾打一行黄）
 LINKED = [0]   # Windows 上没克隆成、改用同卷硬链接的文件数
 NJ = int(os.environ.get('J') or os.environ.get('S2A_JOBS') or os.cpu_count() or 1)   # 并行路数（tools/cores.sh S2A_JOBS）
+def pool_size(n):
+    """进程池路数：Windows 上 multiprocessing.Pool 超过 61 个进程会卡死（结果线程等子进程用 WaitForMultipleObjects，上限 64 个句柄，
+    多了在后台线程里抛错、主线程永远等不到结果）。D-VV4J：88 核玩家出 iPhone 包每次停在「资源包 N/N」几个小时；天眼实测 Pool(61) 0.6 秒、Pool(62) 不动"""
+    return max(1, min(n, 61)) if os.name == 'nt' else max(1, n)
 if sys.platform == 'darwin':
     libc = ctypes.CDLL('libc.dylib', use_errno=True); libc.clonefile.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]
 def copy_sha(src, dst):   # 整份拷贝、边拷边算 SHA-256（11-06 出包速度线：拷完再回头读一遍源算 SHA，0100F2C0115B6000 16 GB 多读一遍）→ SHA
@@ -120,7 +124,7 @@ def main():
     if need:
         method = 'fork' if 'fork' in mp.get_all_start_methods() else 'spawn'
         ps = [p for _, p in need]
-        with mp.get_context(method).Pool(NJ) as pool: hs = [h for part in pool.imap(sha_block, [ps[i:i + 64] for i in range(0, len(ps), 64)]) for h in part]
+        with mp.get_context(method).Pool(pool_size(NJ)) as pool: hs = [h for part in pool.imap(sha_block, [ps[i:i + 64] for i in range(0, len(ps), 64)]) for h in part]
         for (rel, _), h in zip(need, hs): csha[rel] = h
     def fresh(rel, sz, mt):
         if not same_size_mtime(rel, sz, mt): return False
@@ -145,7 +149,7 @@ def main():
     csha.update((rel, h) for rel, h in copied.items() if rel not in csha)
     if todo:
         method = 'fork' if 'fork' in mp.get_all_start_methods() else 'spawn'
-        with mp.get_context(method).Pool(NJ) as pool:   # 只算新克隆 / 变了的文件
+        with mp.get_context(method).Pool(pool_size(NJ)) as pool:   # 只算新克隆 / 变了的文件
             need = [(rel, p) for rel, p in todo if rel not in csha]; ps = [p for _, p in need]   # 判沿用时已经算过 SHA 的不再算
             hs = [h for part in pool.imap(sha_block, [ps[i:i + 64] for i in range(0, len(ps), 64)]) for h in part]
             for (rel, _), h in zip(need, hs): shas[rel] = h
