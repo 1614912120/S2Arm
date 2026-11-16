@@ -435,6 +435,11 @@ s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" \
     "$android_dir/app/src/main/java/org/s2arm/android/Playtime.java" \
     "$android_dir/tests/PlaytimeTest.java"
 s2a_gate_step java -cp "$out/java" org.s2arm.android.PlaytimeTest "$android_dir/app/src/main/res"
+# 游戏库「重新打开帧率补丁」（StallOff：停帧救场标记在本款 state 目录，删了下次起局照常开；删不掉报真原因）
+s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" \
+    "$android_dir/app/src/main/java/org/s2arm/android/StallOff.java" \
+    "$android_dir/tests/StallOffTest.java"
+s2a_gate_step java -cp "$out/java" org.s2arm.android.StallOffTest
 # 停帧看门屏上提示（StallNotice：救场横幅定时收、「可能还在加载」等清除才收），文案对 s2a_ui_text.h
 s2a_gate_step javac -encoding UTF-8 -d "$out/java" \
     "$android_dir/app/src/main/java/org/s2arm/android/StallNotice.java" \

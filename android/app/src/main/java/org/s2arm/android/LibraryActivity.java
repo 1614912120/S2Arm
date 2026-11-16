@@ -33,6 +33,7 @@ public final class LibraryActivity extends Activity {
     private TextView modsGame;
     private Button modsZip, modsFolder;
     private LinearLayout modsList;
+    private LinearLayout stallRow;   // 停帧救场关掉的帧率补丁：有标记才显示（StallOff）
     /** 原地使用的约定位置：文件夹选择器从这里打开（在的话）；deploy_game.py --in-place 也推到这下面。 */
     static final String IN_PLACE_DIR = "S2Arm/Games";
     // Bundle name waiting for the system file picker (kept across activity recreation).
@@ -66,6 +67,15 @@ public final class LibraryActivity extends Activity {
             @Override public void openSettings() { toggleMore(); }
         });
         root.addView(shelf, new android.widget.FrameLayout.LayoutParams(-1, -1));
+        // 停帧救场关掉的帧率补丁（StallOff）：正中那款有标记才出这一行（放在面板最上面：面板要滚动，放底下玩家看不到），「重新打开」删标记、下次起局照常开
+        stallRow = new LinearLayout(this); stallRow.setOrientation(LinearLayout.VERTICAL);
+        TextView stallNote = new TextView(this); stallNote.setText(R.string.stall_off_note); stallNote.setTextColor(0xFFFFFFFF);
+        stallRow.addView(stallNote);
+        Button stallReopen = new Button(this); stallReopen.setText(R.string.stall_reopen);
+        stallReopen.setOnClickListener(v -> reopenStall());
+        stallRow.addView(stallReopen);
+        stallRow.setVisibility(android.view.View.GONE);
+        more.addView(stallRow);
         Button importButton = new Button(this); importButton.setText(R.string.import_game);
         importButton.setOnClickListener(v -> startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE), PICK_PACKAGE));
         more.addView(importButton);
@@ -176,6 +186,7 @@ public final class LibraryActivity extends Activity {
     /** 面板打开：对准正中那款，列出它的 mod。 */
     private void openMods(String titleId) {
         modsTitle = titleId;
+        stallRow.setVisibility(titleId != null && StallOff.marked(getFilesDir(), titleId) ? android.view.View.VISIBLE : android.view.View.GONE);
         modsList.removeAllViews();
         if (titleId == null) {
             modsGame.setText(getString(R.string.mods_no_game));
@@ -185,6 +196,16 @@ public final class LibraryActivity extends Activity {
         modsGame.setText(getString(R.string.mods_for_game, label(titleId)));
         setModsEnabled(!modsBusy);
         if (!modsBusy) mods(null);
+    }
+
+    /** 重新打开停帧救场关掉的帧率补丁：删这款的标记，删不掉在状态行说真原因、这一行留着。 */
+    private void reopenStall() {
+        String titleId = modsTitle;
+        if (titleId == null) return;
+        String why = StallOff.reopen(getFilesDir(), titleId);
+        if (why != null) { show(getString(R.string.stall_reopen_failed, why)); return; }
+        android.util.Log.i("S2Arm", "帧率补丁重新打开：删了 " + titleId + " 的停帧救场标记，下次起局照常开");
+        stallRow.setVisibility(StallOff.marked(getFilesDir(), titleId) ? android.view.View.VISIBLE : android.view.View.GONE);
     }
 
     private void setModsEnabled(boolean on) { modsZip.setEnabled(on); modsFolder.setEnabled(on); }
