@@ -118,7 +118,10 @@ void s2a_ios_test_save_op(void) {
     @autoreleasepool {
         NSString *op = @(e); NSRange c = [op rangeOfString:@":"]; if (c.location == NSNotFound) { fprintf(stderr, "[S2A 测试存档] 开关格式不对：%s\n", e); return; }
         NSString *kind = [op substringToIndex:c.location], *path = [op substringFromIndex:c.location + 1];
-        if (![path hasPrefix:@"/"]) path = [NSHomeDirectory() stringByAppendingPathComponent:path];   // 相对路径按 App 容器根（电脑端经 devicectl 推拉用的就是容器内相对路径）
+        if (![path hasPrefix:@"/"]) {   // 相对路径按 App 容器根（电脑端经 devicectl 推拉用的就是容器内相对路径）；容器根取 realpath：/var 是指向 /private/var 的链接，服务层拒收含链接的路径
+            char *home = realpath(NSHomeDirectory().fileSystemRepresentation, NULL);
+            path = [(home ? @(home) : NSHomeDirectory()) stringByAppendingPathComponent:path]; free(home);
+        }
         if ([kind isEqualToString:@"export"]) { fprintf(stderr, "[S2A 测试存档] 导出 → %s：%s\n", path.UTF8String, test_save_call(@{@"operation": @"export", @"path": path}).UTF8String); return; }
         if (![kind isEqualToString:@"restore"]) { fprintf(stderr, "[S2A 测试存档] 不认识的操作：%s\n", e); return; }
         NSString *ins = test_save_call(@{@"operation": @"inspect", @"path": path});
