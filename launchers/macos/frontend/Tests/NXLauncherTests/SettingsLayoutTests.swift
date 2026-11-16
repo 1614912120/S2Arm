@@ -417,6 +417,39 @@ import S2ArmAppleAdapter
         }
     }
 
+    /// 11-16 维护者「出包的时候没办法同时安装其他游戏到 iPhone 上，这个控制纯属多余」：手机作业走独立的手机槽。期望按规则手写：
+    ///   A 在出包（主槽）时装 B → 立刻发 install、主槽那单不动；装 A → 排队不发；手机槽忙时再装 B → 排队；主槽 A 结束 → A 的装机接上
+    func testInstallRunsWhileAnotherGameExportsAndQueuesRealConflicts() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.runner.catalogGameCount = 2
+        fixture.model.refresh()
+        for _ in 0..<200 where fixture.model.games.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        let a = try XCTUnwrap(fixture.model.games.first { $0.id == "fixture" }), b = try XCTUnwrap(fixture.model.games.first { $0.id == "fixture-1" })
+        func installs(_ id: String) -> Int { fixture.runner.requests.filter { $0["operation"] as? String == "install" && $0["gameId"] as? String == id }.count }
+        var export = JobSession(kind: .export, gameID: a.id, name: a.name); export.export = ExportRun(platforms: [.ios])
+        fixture.model.session = export   // A 正在出包（主槽）
+        XCTAssertTrue(fixture.model.mainBusy && !fixture.model.phoneBusy)
+
+        fixture.model.install(b, device: "dev-1")
+        XCTAssertEqual(fixture.model.phoneSession?.gameID, b.id, "A 出包时装 B：手机槽立刻起")
+        XCTAssertEqual(fixture.model.session?.gameID, a.id, "主槽那单不动")
+        fixture.model.install(a, device: "dev-1")
+        XCTAssertTrue(fixture.model.phoneQueued(a.id), "装正在出包的 A：排队")
+        fixture.model.install(b, device: "dev-1")
+        XCTAssertEqual(fixture.model.phoneQueue.map(\.gameID), [a.id, b.id], "手机槽忙时再装 B：排在后面")
+        for _ in 0..<200 where installs(b.id) < 1 || fixture.model.phoneBusy { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(installs(a.id), 0, "A 还在出包：A 的装机不发")
+        for _ in 0..<200 where installs(b.id) < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(installs(b.id), 2, "手机槽空了：排着的 B 接上（A 被主槽占着跳过它）")
+        XCTAssertEqual(fixture.model.phoneQueue.map(\.gameID), [a.id])
+
+        fixture.model.finish(.completed, message: "")   // A 出包结束
+        for _ in 0..<200 where installs(a.id) < 1 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(installs(a.id), 1, "A 出完：A 的装机接上")
+        XCTAssertTrue(fixture.model.phoneQueue.isEmpty)
+    }
+
     func testExportNameControllerOpensKeyboardWithoutRenameAlert() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }

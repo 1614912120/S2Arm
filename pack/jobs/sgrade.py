@@ -19,21 +19,22 @@ from pathlib import Path
 import layout
 from core import Failure
 
-PROGRAM_DIR = "original-exefs"
+PROGRAM_DIR = layout.PROGRAM_EXEFS
 MODULES = ("main", "main.npdm", "sdk") + tuple(f"subsdk{i}" for i in range(10))
 
 
 def saved_program(c, gid):
-    d = layout.path(c, gid, PROGRAM_DIR, create=False)
+    d = layout.program_exefs(c, gid)
     return d if (d / "main").is_file() and (d / "main.npdm").is_file() else None
 
 
 def save_program(c, gid, exefs):
-    """原始程序存一份到这款游戏文件夹（已存且主程序相同就不动）→ 存下的目录；源目录不完整 → None"""
+    """原始程序存一份到游戏程序专用文件夹（layout.program_store；已存且主程序相同就不动）→ 存下的目录；源目录不完整 → None"""
     exefs = Path(exefs)
     if not ((exefs / "main").is_file() and (exefs / "main.npdm").is_file()):
         return None
-    dest = layout.path(c, gid, PROGRAM_DIR)
+    dest = layout.program_exefs(c, gid)
+    dest.parent.mkdir(parents=True, exist_ok=True)
     if (dest / "main").is_file() and (dest / "main").read_bytes()[0x40:0x60] == (exefs / "main").read_bytes()[0x40:0x60]:
         return dest
     tmp = dest.with_name(PROGRAM_DIR + ".partial")

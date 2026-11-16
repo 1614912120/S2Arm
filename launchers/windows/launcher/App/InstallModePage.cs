@@ -192,7 +192,8 @@ public sealed partial class EnvironmentWindow
     /// sgradeUpgrade = 壳已是本版也重组容器、给游戏程序补上 S 级优化（install.update_phone）
     private async Task UpdatePhoneAsync(bool acceptStale, IReadOnlyList<string> repack, IReadOnlySet<string>? accept = null, bool ask = true, string? mode = null, bool sgradeUpgrade = false)
     {
-        if (installBusy || packRunning || connectedFolder is null || libraryId is null) return;
+        if (connectedFolder is null || libraryId is null) return;
+        if (QueuePhone(null, () => UpdatePhoneAsync(acceptStale, repack, accept, ask, mode, sgradeUpgrade))) return;   // 出包在跑不挡；手机上有作业在跑 → 排队
         accept ??= new HashSet<string>();
         lastUpdate = (acceptStale, repack, accept);   // 失败页「重试」/ 挤掉确认的「仍然继续」按同样的参数再来
         lastUpdateMode = mode; lastUpdateSGrade = sgradeUpgrade;
@@ -255,7 +256,7 @@ public sealed partial class EnvironmentWindow
         if (libraryOperation is { IsCompleted: false } reload) await reload;   // 最后一款出好后在重读游戏库：读完再装（iPhone 就绪状态）
         foreach (var id in ids)
         {
-            if (installBusy || packRunning || batchRunning || BatchGame(id) is not { } game) return;
+            if (batchRunning || BatchGame(id) is not { } game) return;   // 出包 / 别的装机在跑不停这串：InstallAsync 自己排队
             selectedGame = game.Id; readinessFor = game.Id; readiness = null; installCheckFailed = false;
             Navigate("install");
             await CheckInstallAsync();   // 只为拿到装到哪台（InstallDevice）；清单没全勾也照装，作业层报真实原因

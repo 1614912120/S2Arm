@@ -46,7 +46,7 @@ def main_build(c, game):
         return head(shared_dir(c, game) / "extract/exefs/main")
     except (OSError, ImportError, Failure):
         pass
-    for p in (layout.image_mac(c, gid, create=False) / "exefs/main", layout.path(c, gid, "original-exefs", create=False) / "main"):
+    for p in (layout.image_mac(c, gid, create=False) / "exefs/main", layout.program_exefs(c, gid) / "main"):   # 原始程序在游戏程序专用文件夹（layout.program_store）
         try:
             if p.is_file():
                 return head(p)

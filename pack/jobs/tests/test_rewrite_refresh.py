@@ -399,6 +399,7 @@ class OriginalExefsFormatTests(unittest.TestCase):
              patch.object(build, "extract_valid", return_value=False), \
              patch.object(rr.layout, "image_mac", return_value=self.tmp / "no-mac"), \
              patch.object(rr.layout, "path", return_value=self.saved), \
+             patch.object(rr.layout, "program_exefs", return_value=self.saved), \
              patch.object(library, "selected_packages", return_value=rows):
             return rr.original_exefs(self.c, self.game, self.tmp / "work")
 
