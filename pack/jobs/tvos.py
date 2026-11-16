@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -183,11 +184,74 @@ def tv_shell(c):
     elif c.r.get("engineBundle"):
         d = Path(c.r.get("resources") or c.private) / "Shell-tvOS"
     else:
-        d = Path(c.env().get("S2A_RUN_ROOT") or Path.home() / ".s2arm/run") / "s2arm/cache/shell-tvos" / packer.current_shell_id(c)
+        d = Path(c.env().get("S2A_RUN_ROOT") or Path.home() / ".s2arm/run") / "s2arm/cache/shell-tvos" / tv_shell_id(c)
     manifest = d / "manifest.json"
     if not manifest.is_file():
         raise Failure("这台电脑上还没有 Apple TV 版的预编壳：先给这款出一次 Apple TV 包，再装到 Apple TV。", code="tool_missing", internal=str(d))
-    return d, ((read(manifest, {}) or {}).get("details") or {}).get("shellId") or packer.current_shell_id(c)
+    return d, ((read(manifest, {}) or {}).get("details") or {}).get("shellId") or tv_shell_id(c)
+
+
+ASTC_PACK = "astc.pack"   # 资源包里的 BC → ASTC 预转包（pack/astc_pack.py 出；宿主在电视上见到就设 NXGAL_ASTC_PACK，ios/tv_host.m）
+
+
+def derive(c, gid, extraction):
+    """出 Apple TV 包（ipa 作业带 platform = "tvos"，iPhone 版刚交付、解包目录还没清时调）：电视与 iPhone 跑同一份改写产物，差别只在
+    组装时镜像包标的平台（ios/embed.py 按 S2A_APPLE_OS 写）、tvOS 壳、和多一个 ASTC 预转包（A15 不支持 BC 贴图，不转会在 CPU 上整张解成未压缩、
+    贴图内存涨 4–8 倍，电视约 2 GB 就被系统结束）。所以：
+      ① image/tvos/kit、image/tvos/.pack 从 image/ios 克隆（APFS 克隆不占空间；资源包同一份，电视上按 Library/Caches 推）
+      ② 解开的 romfs → image/tvos/.pack/astc.pack（只给电视推，iPhone 资源包不带）
+      ③ 开发树本机还没有本版 tvOS 壳就出一个（发版应用自带 Shell-tvOS/）
+      ④ game.json 记 tvos：壳号、兼容判据、资源包号（usable_kit 按它判）"""
+    import host_update
+    src = layout.image_ios(c, gid, create=False)
+    if not (src / layout.IOS_KIT / "main.npdm").is_file() or not (src / layout.IOS_PACK / "manifest.json").is_file():
+        raise Failure("iPhone 版没出好，Apple TV 包从它派生：先看上面 iPhone 那一步的报错。", code="package_failed")
+    dst = tv_image(c, gid)
+    dst.mkdir(parents=True, exist_ok=True)
+    for name in (layout.IOS_KIT, layout.IOS_PACK):
+        tmp = dst / (name + ".partial")
+        shutil.rmtree(tmp, ignore_errors=True)
+        r = subprocess.run(["cp", "-cR", str(src / name), str(tmp)], capture_output=True, text=True)   # APFS 克隆；不同卷时 cp 自动退成整份拷贝
+        if r.returncode:
+            shutil.rmtree(tmp, ignore_errors=True)
+            raise Failure("Apple TV 包的文件拷不出来：" + (r.stderr.strip().splitlines() or ["?"])[-1], code="package_failed")  # 非玩家句
+        shutil.rmtree(dst / name, ignore_errors=True)
+        os.replace(tmp, dst / name)
+    romfs = Path(extraction) / "romfs"
+    if romfs.is_dir():
+        c.begin("把贴图预转成 Apple TV 能直接用的格式（BC → ASTC，只做一次）")
+        log = c.logs / (c.task + "-astc.log")
+        c.run([sys.executable, "-X", "utf8", "-B", c.engine / "pack/astc_pack.py", "build", romfs, dst / layout.IOS_PACK / ASTC_PACK], log, c.env())
+        # 进资源包清单（推送按 index.tsv 推、机上按 index_sha256 认装好没有）：只改 tvOS 这份（克隆出来的，os.replace 写新文件，不动 iPhone 那份）
+        from sgrade_bf import add_to_pack
+        add_to_pack(dst / layout.IOS_PACK, ASTC_PACK, [ASTC_PACK])
+    else:   # 没有 romfs 的款（只有程序）：不用预转
+        c.emit("message", "这款没有 RomFS，Apple TV 包不用预转贴图")
+    sid = tv_shell_id(c)
+    shell = Path(c.env().get("S2A_RUN_ROOT") or Path.home() / ".s2arm/run") / "s2arm/cache/shell-tvos" / sid
+    if not (shell / "manifest.json").is_file() and not c.r.get("tvShellDir") and not (c.engine / "Shell-tvOS").is_dir():
+        c.begin("出 Apple TV 预编壳（本版第一次）")
+        tmp = shell.parent / (".tmp." + sid + "." + str(os.getpid()))
+        shutil.rmtree(tmp, ignore_errors=True); shell.parent.mkdir(parents=True, exist_ok=True)
+        c.run(["bash", c.engine / "pack/shell_build.sh", tmp], c.logs / (c.task + "-tvshell.log"), tv_env(c))
+        os.replace(tmp, shell)
+    want = read(dst / layout.IOS_PACK / "manifest.json", {}).get("index_sha256") or ""
+    layout.update_info(c, gid, **{PLATFORM: dict(shellId=sid, pack=want, astc=(dst / layout.IOS_PACK / ASTC_PACK).is_file(), at=time.time(),
+                                                  **(host_update.engine_compat(c) or {}))})
+
+
+def tv_env(c):
+    """组装 / 出壳子进程的环境：S2A_APPLE_OS=tvos（ios/embed.py 按 tvOS 写镜像包平台，pack/shell/manifest.py 按 tvOS 算壳编号）"""
+    return dict(c.env(), S2A_APPLE_OS="tvos")
+
+
+def tv_shell_id(c):
+    """本引擎该用的 tvOS 壳编号（同 ipa.current_shell_id，按 tvOS 算）"""
+    r = subprocess.run([sys.executable, "-X", "utf8", "-c", "from pack.shell.manifest import current_id; print(current_id('tvos'))"], cwd=c.engine, env=c.env(),
+                       capture_output=True, text=True)
+    if r.returncode or not r.stdout.strip():
+        raise Failure("算不出本引擎的 Apple TV 壳编号：" + ((r.stderr or "").strip().splitlines() or ["?"])[-1], code="tool_missing")  # 非玩家句
+    return r.stdout.strip()
 
 
 def usable_kit(c, gid, sid):
@@ -239,7 +303,7 @@ def assemble(c, gid, others, shell, sid):
         c.run([sys.executable, "-X", "utf8", "-B", c.engine / "pack/ship_ext.py", "container", "--shell", shell, "--out", app, "--bundle-id", packer.CONTAINER_BUNDLE,
                "--icon", icon, "--sign", "none", "--custom", out / "custom.json", "--host-abi", str(host_update.HOST_ABI),
                "--version", packer.release_version(c.engine), "--display-version", packer.display_version(c.engine),
-               *[x for r in roots.values() for x in ("--game", r)], *banners], log, c.env())
+               *[x for r in roots.values() for x in ("--game", r)], *banners], log, tv_env(c))
     except Failure as e:
         text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
         shutil.rmtree(out, ignore_errors=True)

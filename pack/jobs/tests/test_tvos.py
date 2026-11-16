@@ -326,5 +326,81 @@ class ExportPlanTest(unittest.TestCase):
         self.assertEqual(items["items"][0]["platforms"] if isinstance(items, dict) else items[0]["platforms"], ["mac", "iphone", "appletv"])
 
 
+class DeriveTest(TvCase):
+    """出 Apple TV 包（tvos.derive，ipa 作业 platform = tvos）：从 image/ios 派生，ASTC 包进 tvOS 资源包清单，game.json 记 tvos。期望手写"""
+    def make_ios(self):
+        img = layout.path(self.c, G, "image", "ios")
+        (img / "kit").mkdir(parents=True); (img / "kit/main.npdm").write_bytes(b"npdm")
+        pack = img / ".pack"; pack.mkdir()
+        (pack / "game.img").write_bytes(b"IMG")
+        (pack / "index.tsv").write_text("game.img\t3\tabc\n", encoding="utf-8")
+        (pack / "manifest.json").write_text(json.dumps(dict(version=3, files=1, total=3, index_sha256="old")), encoding="utf-8")
+        return img
+
+    def test_derive_clones_and_adds_astc(self):
+        img = self.make_ios()
+        ex = self.root / "extract"; (ex / "romfs").mkdir(parents=True)
+        runs = []
+        def run(argv, log, env=None, **k):
+            runs.append([str(a) for a in argv])
+            if "astc_pack.py" in str(argv[4]): Path(argv[7]).write_bytes(b"ASTC" * 4)   # 16 字节假包（argv = python -X utf8 -B 脚本 build romfs 输出）
+        shell = self.root / "run/s2arm/cache/shell-tvos/sid1"; shell.mkdir(parents=True); (shell / "manifest.json").write_text("{}")
+        with um.patch.object(self.c, "run", side_effect=run), um.patch.object(tvos, "tv_shell_id", return_value="sid1"), \
+             um.patch.dict("os.environ", {"S2A_RUN_ROOT": str(self.root / "run")}), um.patch.object(self.c, "env", return_value={"S2A_RUN_ROOT": str(self.root / "run")}):
+            tvos.derive(self.c, G, ex)
+        tv = layout.path(self.c, G, "image", "tvos", create=False)
+        # ① kit / 资源包派生出来，iPhone 那份清单不动
+        self.assertEqual((tv / "kit/main.npdm").read_bytes(), b"npdm")
+        self.assertEqual((img / ".pack/index.tsv").read_text(), "game.img\t3\tabc\n")
+        # ② ASTC 预转读解开的 romfs、写进 tvOS 资源包，清单多一行 astc.pack（16 字节，SHA-256 手算），index_sha256 = 新 index.tsv 的 SHA-256
+        self.assertEqual([r[4:8] for r in runs if "astc_pack.py" in r[4]], [[str(self.c.engine / "pack/astc_pack.py"), "build", str(ex / "romfs"), str(tv / ".pack/astc.pack")]])
+        import hashlib
+        row = "astc.pack\t16\t" + hashlib.sha256(b"ASTC" * 4).hexdigest()
+        ix = "game.img\t3\tabc\n" + row + "\n"
+        self.assertEqual((tv / ".pack/index.tsv").read_text(), ix)
+        m = json.loads((tv / ".pack/manifest.json").read_text())
+        self.assertEqual((m["files"], m["total"], m["index_sha256"]), (2, 19, hashlib.sha256(ix.encode()).hexdigest()))
+        # ③ 壳已在本机缓存：不出壳；④ game.json 记 tvos
+        self.assertFalse([r for r in runs if "shell_build.sh" in " ".join(r)])
+        info = layout.game_info(self.c, G)["tvos"]
+        self.assertEqual((info["shellId"], info["pack"], info["astc"]), ("sid1", m["index_sha256"], True))
+
+    def test_derive_needs_ios_first(self):
+        with self.assertRaises(Failure) as e:
+            tvos.derive(self.c, G, self.root / "extract")
+        self.assertEqual(e.exception.code, "package_failed")
+
+
+class PlatformTest(unittest.TestCase):
+    """镜像包 Mach-O 平台（ios/macho_dylib.py：iOS 2、tvOS 3，tvOS 的 dyld 不加载标成 iOS 的库）与壳编号按平台分（pack/shell/manifest.py）。期望手写"""
+    def test_dylib_platform(self):
+        import struct, tempfile
+        root = Path(__file__).resolve().parents[3]
+        sys.path.insert(0, str(root / "ios")); import macho_dylib
+        def build_version(**k):
+            with tempfile.TemporaryDirectory() as t:
+                p = Path(t) / "x.dylib"
+                macho_dylib.write(p, "@rpath/x.dylib", text=[("__swcode", 14, macho_dylib.PURE_INSTRUCTIONS, [b"\x1f\x20\x03\xd5" * 4])], **k)
+                d = p.read_bytes(); n, off = struct.unpack_from("<I", d, 16)[0], 32
+                for _ in range(n):
+                    cmd, size = struct.unpack_from("<II", d, off)
+                    if cmd == 0x32: return struct.unpack_from("<III", d, off + 8)   # platform, minos, sdk
+                    off += size
+        self.assertEqual(build_version(), (2, 18 << 16, 18 << 16))
+        self.assertEqual(build_version(minos=(26, 0), platform=3), (3, 26 << 16, 26 << 16))
+
+    def test_shell_id_per_platform(self):
+        root = Path(__file__).resolve().parents[3]
+        sys.path.insert(0, str(root)); from pack.shell import manifest as m
+        with um.patch.object(m, "inputs_key", return_value="K"), um.patch.dict("os.environ", {}, clear=False):
+            import os; os.environ.pop("S2A_APPLE_OS", None)
+            ios, tv = m.current_id(), m.current_id("tvos")
+            os.environ["S2A_APPLE_OS"] = "tvos"; via_env = m.current_id(); os.environ.pop("S2A_APPLE_OS")
+        _, _, chain, im, sdk = m._defaults("ios")
+        self.assertEqual(ios, m.shell_id("K", chain, im, sdk))   # iOS 壳编号口径不变（不带前缀）
+        self.assertNotEqual(ios, tv); self.assertEqual(tv, via_env)
+        self.assertTrue(m._defaults("tvos")[3].startswith("tvos") and m._defaults("tvos")[4].startswith("tvos"))
+
+
 if __name__ == "__main__":
     unittest.main()

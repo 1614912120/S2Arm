@@ -372,6 +372,9 @@ def _build(c):
     deliver(c, gid, product_root(c, gid), pack_dir, ipa)
     import sgrade   # iPhone 设置页的 S 级状态底料（版本对照 / 满屏来源 / 出包时选不打入；手机上没有补丁库，开关与自动关由手机本机算）
     sgrade.write_kit_state(c, gid, layout.ios_kit(c, gid))
+    if c.r.get("platform") == "tvos":   # Apple TV（11-15）：同一份改写产物派生（pack/jobs/tvos.py derive），要在清解包目录之前（ASTC 预转读 romfs）
+        import tvos
+        tvos.derive(c, gid, extraction)
     prune_unless_follow_up(c, gid)
     cache_result = trim(c.work_root, current_gid=gid, **compiler_policy)
     from cache_retention import engine_installed_at, prune_tool_keys
