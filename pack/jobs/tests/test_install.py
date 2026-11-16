@@ -2360,7 +2360,7 @@ class PhoneGamesTruthTests(unittest.TestCase):
                 self.assertEqual(install.phone_removed(self.c, ph), want)
 
     def test_deleted_here_then_assemble_says_deleted_not_elsewhere(self):
-        # 11-16 总指挥：在这台电脑上「删除游戏」B（library.drop_from_container 把它从设备记录摘掉），手机账本里它还在、手机上也有资源 →
+        # 11-16：在这台电脑上「删除游戏」B（library.drop_from_container 把它从设备记录摘掉），手机账本里它还在、手机上也有资源 →
         #   组壳先问（container_would_drop），提示句是「已从这台电脑的游戏库删除」那句，不能是「在别的电脑上装的」（玩家会去找另一台电脑）
         import library
         atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=self.A, name="甲")]))   # B 已从游戏库删掉
