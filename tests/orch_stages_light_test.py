@@ -19,6 +19,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from pack.orch import roots, stages, refresh
 
 
+
+def replace_bytes(path, data):
+    """换掉一个源文件（先删再写新文件），不原地改写：Windows 上建产物根时 RomFS 与解包目录是硬链接（roots.copy_file link_ok），
+    原地写会连带改到共享存储里那份，开发 / 门禁机上它还被封成只读（roots.seal）。真实流程里原版换了是重新解包、出的是新文件"""
+    path.unlink(missing_ok=True)
+    path.write_bytes(data)
+
+
 class LightTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='s2a-orch-light-')
@@ -294,7 +302,7 @@ class LightTest(unittest.TestCase):
         self.assertEqual((layout / 'one').read_bytes(), b'original one')
         self.assertEqual((layout / 'two').read_bytes(), b'original two')
         # 审计 #1534 P1-54：原版换了（同大小、修改时间变）、构建号与工具都没变 → 不再用上一份覆盖包（目录名带原版身份），去重新生成
-        (layout / 'one').write_bytes(b'ORIGINAL one')
+        replace_bytes(layout / 'one', b'ORIGINAL one')
         os.utime(layout / 'one', ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
         with patch.object(stages.Stages, '_layout_tools', side_effect=stages.StageError('regenerate', 75)):
             with self.assertRaises(stages.StageError) as error:
@@ -380,7 +388,12 @@ class LightTest(unittest.TestCase):
         roots.remove_owned(self.source / 'romfs'); image = self.source / 'romfs.std'; image.write_bytes(b'')
         env = dict(os.environ, DOTNET_ROOT=os.environ.get('DOTNET_ROOT', os.path.expanduser('~/.dotnet')))
         env['PATH'] = env['DOTNET_ROOT'] + os.pathsep + env['PATH']
-        r = subprocess.run(['bash', str(stages.REPO / 'services/romfs_index.sh'), '--std', str(tree), '-', str(image), '0'], env=env, capture_output=True, text=True)
+        import shlex
+        from pack import img
+        tool = img.default_romfs_index()   # 正式出包同一个取法：Windows 发版件是预编的 romfs_index.exe，开发树走 services/romfs_index.sh
+        if os.name == 'nt' and tool.startswith('bash '):
+            self.skipTest('Windows 开发树没有预编 romfs_index.exe（S2A_PREBUILT_TOOLS）；bash 可能是 WSL 的、认不了 Windows 路径')
+        r = subprocess.run([*shlex.split(tool), '--std', str(tree), '-', str(image), '0'], env=env, capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr[-300:])
         blob = image.read_bytes()
         refresh.seed(self.store, '原创', self.source)
@@ -439,7 +452,7 @@ class LightTest(unittest.TestCase):
         (repo / files[0]).write_text(script, encoding='utf-8', newline='\n')
         layout = self.source / 'romfs/Layout'
         layout.mkdir(exist_ok=True)
-        (layout / 'one').write_bytes(b'original layout input')
+        replace_bytes(layout / 'one', b'original layout input')
         return repo, files, counter
 
     def test_layout_imports_and_native_decoder_change_both_cache_and_stage_keys(self):
