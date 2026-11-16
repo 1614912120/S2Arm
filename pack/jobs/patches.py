@@ -237,6 +237,11 @@ def fetch(c, game, exefs, target="mac"):
         dirs.append(str(d))
     if rows:
         print(f"补丁：{gid} 统一包 {len(rows)} 份（{'、'.join(f'{k} {len(v)}' for k, v in sorted(out.items()))}）", file=sys.stderr)
+    import mods   # 玩家导入的 mod 带的代码补丁（11-15 维护者：出包 / S 级升级时编进程序，运行时跟 mod 开关走）
+    md = mods.code_index(c, game)
+    if md:
+        dirs.append(md)
+        print(f"补丁：{gid} 玩家导入的 mod 代码补丁一并编入（{md}）", file=sys.stderr)
     return dirs
 
 
@@ -295,6 +300,7 @@ def prepare(c, game, extraction, env, target="mac"):
 #   读产物根里编译器自己的记录（pack/cpatch.py plan / prune）：cpatch.tsv = 最终打进去的；cpatch_plan.log 的「收 / 不收 / 移植不了」行与
 #   cpatch_excluded.tsv（改写器缺口剔掉的）= 没打上的及原因。原因翻成玩家看得懂的话；本来就不该打的（版本不对、同画幅已收另一份、本款有我方帧率表）不算失败、不列
 _WHY = (   # (原因里出现的字样, 给玩家的话)；None = 不算失败
+    (("mod 构建号对不上",), "result.why.version"),  # 非玩家句（玩家自己导入的 mod 是别的版本的：要告诉玩家，pack/cpatch.py scan mod_miss）
     (("版本不对", "同画幅", "我方帧率表"), None),  # 非玩家句
     (("与 ", "改同一处"), "result.why.conflict"),  # 非玩家句
     (("超出模块映像", "不在可写数据区", "代码段末页", "原值不符", "数据格式", "不配套", "位表", "不认"), "result.why.mismatch"),  # 非玩家句
@@ -317,7 +323,7 @@ def _why(text):
 
 def _cat_of(uid, cat=""):
     k = uid.split(":", 1)[0]
-    return {"wsauto": "widescreen", "widescreen": "widescreen", "fps": "fps", "gfx": "gfx", "cheat": "cheat"}.get(k) or (cat if cat in CATS else "gfx")
+    return {"wsauto": "widescreen", "widescreen": "widescreen", "fps": "fps", "gfx": "gfx", "cheat": "cheat", "mod": "mod"}.get(k) or (cat if cat in CATS else "gfx")
 
 
 def outcome(root):
@@ -457,6 +463,8 @@ def match(c):
     port_versions = [v for v, cs in sorted(others.items(), key=key) if "widescreen" in cs] if port else []
     if port:
         others = {v: cs - {"widescreen"} for v, cs in others.items() if cs - {"widescreen"}}
+    import mods   # 玩家导入的 mod 带的代码补丁（11-15 维护者「打包页增加 mod 导入，S 级优化又升级了」）：出包时一并编进去，单列一类 mod（不参与补丁库版本比对，出包时按构建号对得上的才打）
+    exact["mod"] = sum(m["code"] for m in mods.listing(c, game))
     return dict(build=build, version=version, exact=exact, total=sum(exact.values()), port=port, portVersions=port_versions, ownWiden=own_widen(c, gid, build),
                 others=[dict(version=v, cats=[k for k in CATS if k in cs]) for v, cs in sorted(others.items(), key=key)])
 
