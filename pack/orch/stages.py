@@ -209,17 +209,18 @@ def layout_source_identity(original):
 def rewrite_inputs(root):
     root = Path(root)
     paths = [p for p in (root / 'exefs').iterdir() if p.is_file()]
-    if (root / 'romfs').is_dir():
+    # RomFS 按路径读经 romfs_list（is_dir / open_file：romfs/ 不在、只有 romfs.std 镜像时从镜像盘点与读，键与目录形态相同）
+    walker = module('graphics/nvn/tools/romfs_list.py', '_orch_romfs_list')
+    if walker.is_dir(root / 'romfs'):
         def fail(error):
             raise error
-        walker = module('graphics/nvn/tools/romfs_list.py', '_orch_romfs_list')
         for directory, _, names in walker.walk(root / 'romfs', onerror=fail):
             paths.extend(Path(directory) / n for n in names if n.lower().endswith(('.nro', '.nrr')))
     h = hashlib.sha256(b'rewrite-inputs-v1\0')
     for path in sorted(paths, key=lambda p: os.fsencode(p.relative_to(root).as_posix())):
         rel = os.fsencode(path.relative_to(root).as_posix())
         content = hashlib.sha256()
-        with path.open('rb') as stream:
+        with walker.open_file(path) as stream:
             for block in iter(lambda: stream.read(1024 * 1024), b''):
                 content.update(block)
         h.update(len(rel).to_bytes(8, 'little') + rel + content.digest())

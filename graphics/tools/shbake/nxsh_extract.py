@@ -26,12 +26,12 @@ def trpfs_report(root, outdir, stat, rf=None):
     rep = os.path.join(outdir, 'trpfs.tsv')
     for rel in sorted(romfs_list.listdir(root)):
         p = os.path.join(root, rel)
-        if not p.endswith('.trpfs') or not os.path.exists(p[:-1] + 'd'):
+        if not p.endswith('.trpfs') or not romfs_list.exists(p[:-1] + 'd'):
             continue
         # 读不了的容器（打不开 / FlatBuffers 偏移越界抛 struct.error）只记这一个红、接着列下一个，不打断整次抽取（审计 #846 F-trpfs-extract-abort：
         #   原先 open 失败时 finally 里 fsrc 未绑定 → UnboundLocalError，struct.error 也不在捕获列表里，两者都从这里冒出去、后面的 pak / 目录不再扫）
         try:
-            with open(p, 'rb') as fsrc:
+            with romfs_list.open_file(p) as fsrc:
                 for off, name, size, rows in T.walk(p, p[:-1] + 'd'):
                     packs += 1
                     for h, comp, ln, doff in rows:
@@ -652,8 +652,8 @@ def find_zsdicts(roots, outd):   # 资源里所有 zstd 字典：文件本身是
     paths = [p for p in paths if maybe(p)]
     def dicts(p):   # → 这个文件里的字典（文件本身，或 SARC 成员）
         try:
-            if os.path.getsize(p) > 8 << 20: return []
-            with open(p, 'rb') as f:
+            if romfs_list.file_size(p) > 8 << 20: return []
+            with romfs_list.open_file(p) as f:
                 b = f.read(ZSTD_BLOCK_IN)
                 # 不带字典号的 zstd 帧先只解开头 4 字节：不是 SARC 就不会有字典成员，不必整读整解（#639：0400486024DEC000 这类有 5.9 万个，解出来是 SARC 的只有 1 个）
                 if b[:4] == b'\x28\xb5\x2f\xfd' and not z.ZSTD_getDictID_fromFrame(b, len(b)) and zstd_head(b) != b'SARC': return []
@@ -900,8 +900,8 @@ def top_wwise(p):   # 顶层文件是确证的 Wwise 音频包 → 'AKPK' / 'BKH
     #   11-01 出包线：异度3 sound/*.pck（AKPK）4.1 GB 逐段 zlib 盲扫、零着色器；12 款现行根抽取记录 0 条来自这类文件。Wwise 包只装 WEM 音频与音频库，不含着色器
     #   AKPK（文件包）：'AKPK' u32 头长 u32 版本 1；头长 + 8 ≤ 文件长。BKHD（音频库）：'BKHD' u32 段长 u32 版本（Wwise 2008–2024 实际取值 < 0x200）；段长 + 8 ≤ 文件长
     try:
-        with open(p, 'rb') as f: h = f.read(12)
-        n = os.path.getsize(p)
+        with romfs_list.open_file(p) as f: h = f.read(12)
+        n = romfs_list.file_size(p)
     except OSError: return None
     if len(h) < 12: return None
     m, a, b = h[:4], *struct.unpack_from('<II', h, 4)
@@ -911,14 +911,14 @@ def top_wwise(p):   # 顶层文件是确证的 Wwise 音频包 → 'AKPK' / 'BKH
 def skip_wwise(root, p, stat):   # 跳过的每个文件记进日志（款由调用方的日志定位，这里写路径与字节数）；核查模式不跳
     w = top_wwise(p)
     if not w or WWISE_AUDIT: return False
-    stat['Wwise 音频包不扫'] += 1; stat['Wwise 音频包不扫（字节）'] += os.path.getsize(p)
-    print(f'跳过 Wwise 音频包（{w}）：{_rel(p, root)}\t{os.path.getsize(p)} 字节', file=sys.stderr, flush=True)
+    stat['Wwise 音频包不扫'] += 1; stat['Wwise 音频包不扫（字节）'] += romfs_list.file_size(p)
+    print(f'跳过 Wwise 音频包（{w}）：{_rel(p, root)}\t{romfs_list.file_size(p)} 字节', file=sys.stderr, flush=True)
     return True
 BIG = 128 << 20   # 超过这么大的顶层文件：zlib 流扫描按 BIG 字节一段分给各进程（暗黑三 Common.cpk 2.5 GB 单进程扫 117 秒，整步被最大的文件卡住）
 def big_split(p):   # 要分段扫 zlib 的大文件：顶层不是 zstd / Yaz0 / SARC（那些照常整读解开）
     try:
-        if os.path.getsize(p) <= BIG: return False
-        with open(p, 'rb') as f: m = f.read(0x80)
+        if romfs_list.file_size(p) <= BIG: return False
+        with romfs_list.open_file(p) as f: m = f.read(0x80)
     except OSError: return False
     return m[:4] not in (b'\x28\xb5\x2f\xfd', b'Yaz0', b'SARC', b'pkzl') and not _vendor(m)   # 厂商归档（Telltale 465 MB 的 ttarch2）整读后按成员 visit
 def work(args):
@@ -926,24 +926,22 @@ def work(args):
     for p in files:
         if skip_wwise(root, p, stat): continue
         try:
-            with open(p, 'rb') as f:
-                if f.read(4) == b'pkzl':   # 按索引逐成员解压；不整读大 PKZ，也不排盲扫分段作业
-                    import mmap
-                    with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as data:
-                        stat['顶层文件'] += 1; visit(_rel(p, root), data, rows, blobs, stat)
-                    continue
+            # 读内容按路径经 romfs_list（目录形态同 open / mmap；RomFS 不落散文件、只有镜像时从镜像读）
+            with romfs_list.open_file(p) as f: pk = f.read(4) == b'pkzl'
+            if pk:   # 按索引逐成员解压；不整读大 PKZ，也不排盲扫分段作业
+                with romfs_list.map_file(p) as data:
+                    stat['顶层文件'] += 1; visit(_rel(p, root), data, rows, blobs, stat)
+                continue
             if big_split(p):   # 大文件 mmap 着整扫容器与相邻对（不整读进内存），zlib 流由 work_zlib 分段扫
-                import mmap
-                with open(p, 'rb') as f: data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+                data = romfs_list.map_file(p)
                 stat['顶层文件'] += 1; stat['叶子文件'] += 1; scan_blob(_rel(p, root), data, rows, blobs, stat); continue
-            data = open(p, 'rb').read()
+            data = romfs_list.read_file(p)
         except Exception: stat['读失败'] += 1; continue
         stat['顶层文件'] += 1; visit(_rel(p, root), data, rows, blobs, stat)
     flush(blobs, outdir); return rows, stat
 def work_zlib(args):   # 大文件的一段：只认起点在 [lo, hi) 的 zlib 流；往前多解 16 MB 接上跨段的尾巴（单个流不超过 16 MB，见 scan_zlib 的解压上限）
-    import mmap
     root, p, lo, hi, outdir = args; rows, blobs, stat = [], {}, collections.Counter()
-    with open(p, 'rb') as f: data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+    data = romfs_list.map_file(p)
     # 不再因整个大文件里出现过 BNSH 就跳过流扫描（大乱斗 data.arc 17.6 GB 里有 4 个 BNSH，整份没扫 zstd 帧）：多扫的按键去重
     if data[:4] != b'BAHS': scan_zlib(_rel(p, root), data, rows, blobs, stat, lo, hi, 16 << 20); scan_zstd_frames(_rel(p, root), data, rows, blobs, stat, lo, hi); scan_crilayla(_rel(p, root), data, rows, blobs, stat, lo, hi); scan_streams(_rel(p, root), data, rows, blobs, stat, lo, hi)
     undecoded(_rel(p, root), data, lo, min(hi, len(data))); _COVER.pop(_rel(p, root), None)
@@ -988,7 +986,7 @@ def work_kpka(args):   # RE 引擎 pak 的一批条目（已按补丁链取最�
     import re_pak
     es, outdir = args; rows, blobs, stat = [], {}, collections.Counter(); fs = {}
     for p, h, off, csz, usz, attr in es:
-        f = fs.get(p) or fs.setdefault(p, open(p, 'rb'))
+        f = fs.get(p) or fs.setdefault(p, romfs_list.open_file(p))
         try: data = re_pak.read(f, off, csz, usz, attr)
         except re_pak.Unsupported as e: stat[f'RE pak 条目不支持：{e}'] += 1; continue
         except Exception: stat['RE pak 条目解码失败'] += 1; continue
@@ -1008,15 +1006,14 @@ def scan_unity(root, files, stat, known=None):
     for p in files:   # known = 调用方给的文件头表（RomFS 清单前 32 字节，判下面两种文件够用）；表里没有的才读盘
         if known is not None and p in known: heads[p] = known[p]; continue
         try:
-            with open(p, 'rb') as f: heads[p] = f.read(32)
+            with romfs_list.open_file(p) as f: heads[p] = f.read(32)
         except OSError: pass
     for p in files:   # 资源包先（类型树在这里）
         if not unity_res.is_bundle(heads.get(p, b'')): continue
         # 只读映射 + 逐个节点解（unity_res.iter_bundle）：原先整个包读进内存、全部解开再每个节点复制一份，
         #   v0.3.0 Windows 8 GB 机 3.45 GB 的 Unity 游戏第一个文件就 MemoryError
-        import mmap
         try:
-            with open(p, 'rb') as f, mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as mm:
+            with romfs_list.map_file(p) as mm:
                 for n, b in unity_res.iter_bundle(mm):
                     try: entries(f'{_rel(p, root)}//{n}', b)
                     except Exception: stat['UnityFS 包内文件不是序列化文件'] += 1
@@ -1036,8 +1033,8 @@ def scan_unity(root, files, stat, known=None):
         else:
             if len(h) < 32: continue   # 文件长在偏移 24 的 8 字节
             declared_size = struct.unpack_from('>Q', h, 24)[0]
-        if declared_size != os.path.getsize(p): continue   # 头里记的文件长 = 实际长（动森 34 个文件头前几项碰巧像，这一项不像）
-        try: entries(_rel(p, root), open(p, 'rb').read())
+        if declared_size != romfs_list.file_size(p): continue   # 头里记的文件长 = 实际长（动森 34 个文件头前几项碰巧像，这一项不像）
+        try: entries(_rel(p, root), romfs_list.read_file(p))
         except Exception: stat['Unity 序列化文件解析失败'] += 1
     return rows, blobs
 def work_casc(args):
@@ -1076,8 +1073,8 @@ if __name__ == '__main__':
     rf.write('# 包名\t包偏移\t文件哈希\t压缩\t长度\t数据偏移\n')
     try:
         for rd in roots:
-            if os.path.isdir(rd):
-                trpfs_report(os.path.join(rd, 'arc') if os.path.isdir(os.path.join(rd, 'arc')) else rd, outdir, stat, rf)
+            if romfs_list.is_dir(rd):
+                trpfs_report(os.path.join(rd, 'arc') if romfs_list.is_dir(os.path.join(rd, 'arc')) else rd, outdir, stat, rf)
     finally:
         rf.close()
     # 字典目录：调用方给了 NXSH_ZSDICT 就往那里累加（tools/shscan.sh 分批扫：第一批小文件里收到的字典后面各批都用），没给用输出目录下 zsdict/
@@ -1131,7 +1128,7 @@ if __name__ == '__main__':
             stat['CASC 条目'] += len(E); stat['CASC 扫的条目'] += len(pick)
             with cf.ProcessPoolExecutor(J) as ex:
                 for r, s in ex.map(work_casc, [(cd, pick[i::J * 4], outdir) for i in range(J * 4)]): rows += r; stat.update(s)
-        zt = [(root, p, lo, min(lo + BIG, os.path.getsize(p)), outdir) for p in files if big_split(p) and not (top_wwise(p) and not WWISE_AUDIT) for lo in range(0, os.path.getsize(p), BIG)]
+        zt = [(root, p, lo, min(lo + BIG, romfs_list.file_size(p)), outdir) for p in files if big_split(p) and not (top_wwise(p) and not WWISE_AUDIT) for lo in range(0, romfs_list.file_size(p), BIG)]
         with cf.ProcessPoolExecutor(J) as ex:
             fz = [ex.submit(work_zlib, t) for t in sorted(zt, key=lambda t: t[1])]
             for r, s in ex.map(work, [(root, files[i::J * 8], outdir) for i in range(J * 8)]): rows += r; stat.update(s)
@@ -1160,7 +1157,7 @@ if __name__ == '__main__':
         f.write('# 键\t阶段\t来源\t变体号\n')
         for r in sorted(set(rows), key=lambda r: (r[2], r[3], r[1], r[0])): f.write('\t'.join(map(str, r)) + '\n')
     if WWISE_AUDIT:   # 跳过规则的反例：着色器记录的来源顶层文件是确证 Wwise 包（分母 = 本次扫到的 Wwise 包个数与字节）
-        ww = {os.path.relpath(p, rd) for rd in roots if os.path.isdir(rd) for dp, dn, fn in romfs_list.walk(rd) for f in fn for p in [os.path.join(dp, f)] if top_wwise(p)}
+        ww = {os.path.relpath(p, rd) for rd in roots if romfs_list.is_dir(rd) for dp, dn, fn in romfs_list.walk(rd) for f in fn for p in [os.path.join(dp, f)] if top_wwise(p)}
         bad = [r for r in rows if str(r[2]).split('@')[0].split('#')[0].split('|')[0] in ww]
         stat['Wwise 核查：包个数'] = len(ww); stat['【红】Wwise 核查：来自音频包的着色器记录（跳过规则反例）' if bad else 'Wwise 核查：反例'] = len(bad)
         for r in bad[:20]: print(f'【红】Wwise 核查反例：{r[2]} → {r[0]}', file=sys.stderr, flush=True)
