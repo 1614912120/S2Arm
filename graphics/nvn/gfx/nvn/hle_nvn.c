@@ -1284,6 +1284,10 @@ static int prog_stage_index_parts(const void *control, uint32_t nctl, const void
 }
 #endif
 
+// 着色器控制段 / 代码区地址可用：不在最低 64 KB 里（任何布局下那里都没有游戏内存；空地址加小偏移都落在这里，11-16 D-XDQS 代码区 = 0x100），且虚拟池里已映射（nvn_host_readable）。
+//   不按游戏地址空间核权限：单测 / 回放工具的着色器在宿主自己的内存里，按地址空间核会误判、整批丢键
+int nvn_host_readable(uint64_t a, uint64_t n);   // 本文件后面定义
+static int shader_bytes_readable(uint64_t a, uint64_t n) { return a >= 0x10000 && nvn_host_readable(a, n); }
 // mapped = 1: computed only when the code area is in a registered memory pool (at SetShaders: Mario sets some programs with an unmapped address first and fills it in before the first draw)
 static int keys_hash(const NVNshaderData *sd, int mapped, uint8_t out[8]) {
     uint32_t ncode = 0; void *mb; uint64_t mo;
@@ -1291,15 +1295,19 @@ static int keys_hash(const NVNshaderData *sd, int mapped, uint8_t out[8]) {
     // S2Arm: a control pointer that is no user address (above 2^47: Diablo III once had float data here, 0x3f80000000000000, and crashed reading it) is reported with the
     // program's state and not read; the stage then has no key and is reported missing from the map instead of crashing
     if ((uint64_t)(uintptr_t)sd->control >= (1ull << 47)) { static _Atomic int n; if (atomic_fetch_add(&n, 1) < 8) LOG("【红】 shader control section pointer %p is not an address (code %#llx): the program object was overwritten", sd->control, (unsigned long long)sd->data); return 0; }
+    if (!shader_bytes_readable((uint64_t)(uintptr_t)sd->control, 0x880)) { static _Atomic int nc; if (atomic_fetch_add(&nc, 1) < 8) LOG("【红】 shader control section %p is not readable: no key, the stage is reported missing", sd->control); return 0; }
     // Switch 2 (NVN2 control section, nvn2.h): the key rule of nvn2_key. Keyed at the first use (prog_key, mapped = 0), never at SetShaders: on Pokopia 4 of 6 code areas hashed at
     //   SetShaders differed from the code at the first draw (pokopia-native, MIT)
     if (nvn2_on() && nvn2_ctl(sd->control)) {
         if (mapped) return 0;
         uint32_t n2 = nvn2_code_len(sd->control);
+        if (sd->data && n2 && n2 < (1u << 24) && !shader_bytes_readable(sd->data, n2)) { static _Atomic int n2r; if (atomic_fetch_add(&n2r, 1) < 8) LOG("【红】 shader code area %#llx +%#x is not readable (NVN2 control %p): no key, the stage is reported missing", (unsigned long long)sd->data, n2, sd->control); return 0; }
         return nvn2_key(sd->control, sd->data && n2 && n2 < (1u << 24) ? (const void *)(uintptr_t)sd->data : NULL, out);   // as the Switch 1 rule below at mapped = 0
     }
+    // 控制段 / 代码区读之前核可读（11-16 D-XDQS：代码区地址是游戏拿空缓冲地址加 0x100 算的 0x100，宿主读它段错误）：读不了就不算键，本阶段按「不在着色器表」报，不崩
     memcpy(&ncode, (const uint8_t *)sd->control + 0x704, 4);
     int code = sd->data && ncode && ncode < (1u << 24);
+    if (code && !shader_bytes_readable(sd->data, ncode)) { static _Atomic int nd; if (atomic_fetch_add(&nd, 1) < 8) LOG("【红】 shader code area %#llx +%#x is not readable (control %p): no key, the stage is reported missing", (unsigned long long)sd->data, ncode, sd->control); return 0; }
     if (mapped && !(code && nvn_be_addr(sd->data, ncode, &mb, &mo))) return 0;
     // Control +0x20 holds the section's own length: sections of at least 0x880 bytes (all of Mario's, Engage's, Dread's and 13 Sentinels') use the first 0x880; SDK 10's 3D World has 0x850-byte ones followed by other data, so only their own length is used (shader_split.py ctl_len)
     uint32_t nctl = 0x880, own; memcpy(&own, (const uint8_t *)sd->control + 0x20, 4);
@@ -4017,7 +4025,10 @@ NVN(nvnBufferFinalize, void, NVNbuffer *buf) {
     // 先核魔数：游戏可能 Finalize 没 Initialize 过的对象，那时 pool 字段是垃圾，不能解引用
     if (BF(buf)->magic == MAGIC('B', 'U', 'F', 0) && BF(buf)->pool && BF(buf)->pool->mem)
         buf_reg_del((uint64_t)(uintptr_t)(BF(buf)->pool->mem) + (uint64_t)BF(buf)->off);
-    ((buf_t *)buf)->magic = 0;
+    // 已 Finalize：写专用魔数（不是 0），池 / 偏移照留。真驱动 Finalize 后对象里存的地址还在，游戏 Finalize 后再取地址照样拿到原值（11-16 D-XDQS：
+    //   010051F0207B2000 iPad 对魔数 0 的缓冲取地址，我们回空、游戏加 0x100 当着色器代码地址，宿主算着色器键时读 0x100 崩）。buf_dead 据此区分「已 Finalize」与「从没初始化成功」
+    if (BF(buf)->magic == MAGIC('B', 'U', 'F', 0)) ((buf_t *)buf)->magic = MAGIC('B', 'U', 'F', 'x');
+    else if (BF(buf)->magic != MAGIC('B', 'U', 'F', 'x')) ((buf_t *)buf)->magic = 0;   // 再 Finalize 一次：保持「已 Finalize」
 }
 NVN(nvnBufferSetDebugLabel, void, NVNbuffer *buf, const char *s) { (void)buf; (void)s; }
 // 初始化没成功的缓冲（BufferInitialize 回了 0：池没有存储，11-14 D-MDVK 签名丢了内存上限权限、堆申请失败）：游戏常不看返回值接着用，
@@ -4026,6 +4037,10 @@ static inline int pool_cpu_none(const pool_t *o);
 static int buf_dead(const NVNbuffer *buf, const char *who) {
     const buf_t *b = BF(buf);
     if (b->magic == MAGIC('B', 'U', 'F', 0) && b->pool && (b->pool->mem || pool_cpu_none(b->pool))) return 0;
+    // 已 Finalize、池还活着：同真驱动回存着的地址（报红一次，便于核是哪款在 Finalize 后还用缓冲）
+    if (b->magic == MAGIC('B', 'U', 'F', 'x') && b->pool && b->pool->magic == MAGIC('P', 'O', 'O', 'L') && (b->pool->mem || pool_cpu_none(b->pool))) {
+        static _Atomic int nf; if (atomic_fetch_add(&nf, 1) < 4) LOG("【红】 %s：缓冲 %p 已 Finalize 仍在用，池还活着：同真驱动回它存着的地址 / 映射", who, (const void *)buf);
+        return 0; }
     static _Atomic int n; if (atomic_fetch_add(&n, 1) < 8) LOG("【红】 %s：缓冲 %p 没初始化成功或池没有存储（魔数 %#x、池 %p）：回空，不解引用", who, (const void *)buf, b->magic, (const void *)b->pool);
     return 1;
 }
