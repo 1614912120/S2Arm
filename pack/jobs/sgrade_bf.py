@@ -122,8 +122,8 @@ def _clone_file(src, dst):
 
 def ios_inputs(c, gid, work):
     """iPhone 款的重出原料 → (产物根形态目录, 来处 game.img / mac) 或 (None, 'none')。见文件头的取材顺序"""
-    import img
     import sgrade
+    img = _img(c)
     pack, kit = layout.ios_pack(c, gid), layout.ios_kit(c, gid)
     mac = layout.image_mac(c, gid, create=False)
     exefs = sgrade.saved_program(c, gid) or ((mac / "exefs") if (mac / "exefs/main").is_file() and (mac / "exefs/main.npdm").is_file() else None)
@@ -131,7 +131,7 @@ def ios_inputs(c, gid, work):
     if gimg.is_file() and exefs is not None:
         root = Path(work) / "src"
         h = img.header(str(gimg))
-        _unpack_romfs(str(gimg), h["romfs"][0], root / "romfs") if h["romfs"][1] else (root / "romfs").mkdir(parents=True)
+        _unpack_romfs(img, str(gimg), h["romfs"][0], root / "romfs") if h["romfs"][1] else (root / "romfs").mkdir(parents=True)
         with open(gimg, "rb") as f:
             for rel, off, size in img.entries(str(gimg)):   # 追加内容等其余条目（aoc/… 与 aoc.tsv）原样放回产物根
                 if rel.startswith("aoc/") or rel == "aoc.tsv":
@@ -163,9 +163,16 @@ def _copy_range(f, off, size, dst):
             g.write(b); left -= len(b)
 
 
-def _unpack_romfs(path, base, out):
+def _img(c):
+    """pack/img.py（不在作业层目录里；作业层别处起子进程调它，这里要读它的格式函数 header / entries / std_files）"""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("s2a_pack_img", Path(c.engine) / "pack/img.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    return m
+
+
+def _unpack_romfs(img, path, base, out):
     """game.img 标准 RomFS 段整份展开（img.std_files 只读元数据，这里按偏移拷数据）"""
-    import img
     out.mkdir(parents=True)
     with open(path, "rb") as f:
         for rel, (off, size) in img.std_files(path, base).items():
