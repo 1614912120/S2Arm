@@ -352,8 +352,15 @@ def seal_runtime(resources):
     resources = Path(resources)
     lib = next((resources / "Runtime/python/lib").glob("python3.*"))
     (lib / "site-packages/sitecustomize.py").write_text(SITECUSTOMIZE)
-    for d in (lib, *(resources / name for name in ("Jobs", "GUIJobs") if (resources / name).is_dir())):
+    dirs = (lib, *(resources / name for name in ("Jobs", "GUIJobs") if (resources / name).is_dir()))
+    for d in dirs:
         precompile(d, resources / RUNTIME_PYTHON)
+    # 自检：签名封存的包里 .pyc 必须全是 checked-hash（标志 3）——按时间戳失效的那种，装机改了源码时间后第一次起包里的 Python 就会改写它、
+    #   签名封存坏（v0.4.4 候选验收⑦：4 份启动模块）。发现就停、不出包，出包时当场红，不等到候选验收
+    stale = [str(p.relative_to(resources)) for d in dirs for p in d.rglob("*.pyc")
+             if int.from_bytes(p.read_bytes()[4:8], "little") != 3]
+    if stale:
+        raise RuntimeError(f"内置 Python 有 {len(stale)} 份 .pyc 不是 checked-hash（装机后会被改写、签名封存坏）：{stale[:5]}")
 
 
 def write_manifest(destination, fingerprint, snap=None):
