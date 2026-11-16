@@ -30,6 +30,8 @@ CS = re.compile(r"Directory\.(Enumerate|Get)(Files|Directories|FileSystemEntries
 
 # (文件, 范围（Python 函数名 / shell 行内特征串 / C# 方法外层：*）) → 理由
 ALLOW = {
+    ("pack/jobs/tvos.py", "verify:rglob"):
+        "误判：列的是出包产物资源包目录（image/tvos/.pack，核对电视上推过去的文件齐不齐），不是 RomFS",
     ("pack/img.py", "convert:walk"):
         "误判：删的是出包目录 pack_dir 里搬进 game.img 后留下的空目录（自下而上），不是 RomFS",
     ("translator/shader_split.py", "main:listdir"):

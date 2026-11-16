@@ -12,5 +12,5 @@ got=$(cd "$H" && scan compat services graphics platform launchers tests/visual)
 ck "① 全仓没有裸 OperatingSystem.IsIOS()（实得：${got:-无}）" '[ -z "$got" ]'
 mkdir -p "$T/src"; printf 'class A { bool x = OperatingSystem.IsIOS(); }\n' > "$T/src/a.cs"; printf 'class B { bool y = (OperatingSystem.IsIOS() || OperatingSystem.IsTvOS()); }\n' > "$T/src/b.cs"
 got2=$(scan "$T/src")
-ck "② 裸写法报红且点名 a.cs:1、带 IsTvOS 的不报（实得：$got2）" '[ "$(printf "%s\n" "$got2" | grep -c .)" = 1 ] && printf "%s" "$got2" | grep -q "a.cs:1:"'
+ck "② 裸写法报红且点名 a.cs:1、带 IsTvOS 的不报（实得：${got2}）" '[ "$(printf "%s\n" "$got2" | grep -c .)" = 1 ] && printf "%s" "$got2" | grep -q "a.cs:1:"'
 [ $bad = 0 ] && echo "✅ apple_tvos_guard_test 全过" || { echo "🔴 apple_tvos_guard_test 有不通项"; exit 1; }

@@ -24,7 +24,7 @@ OS=${S2A_APPLE_OS:-ios}; export S2A_APPLE_OS=$OS
 case $OS in ios) SDKN=iphoneos; SDKK=IPHONEOS_SDK_MAJOR; GX=; ENT=$R/pack/app.entitlements ;; tvos) SDKN=appletvos; SDKK=TVOS_SDK_MAJOR; GX=-tvos; ENT=$R/pack/app_tvos.entitlements ;;
   *) echo "【红】S2A_APPLE_OS 只认 ios / tvos，给的是 $OS"; exit 1 ;; esac
 # 壳编号里记了 SDK 主版本（tools/toolchain.env，审计 P1-124）：实际 SDK 对不上就不出，免得同一个编号对应两种链接 SDK
-SDKV=$(xcrun --sdk $SDKN --show-sdk-version 2> /dev/null) || { echo "【红】读不出 $SDKN SDK 版本（xcrun --sdk $SDKN）"; exit 1; }
+SDKV=$(xcrun --sdk $SDKN --show-sdk-version 2> /dev/null) || { echo "【红】读不出 ${SDKN} SDK 版本（xcrun --sdk ${SDKN}）"; exit 1; }
 SDKM=$(awk -F= -v k=$SDKK '$1 == k { print $2 }' "$R/tools/toolchain.env")
 [ "${SDKV%%.*}" = "$SDKM" ] || { echo "【红】这台机器的 $SDKN SDK 是 ${SDKV}，tools/toolchain.env 钉的主版本是 ${SDKM}：换 Xcode 大版本要同时改 $SDKK"; exit 1; }
 source "$R/tools/cores.sh"; s2a_cores || exit 1
