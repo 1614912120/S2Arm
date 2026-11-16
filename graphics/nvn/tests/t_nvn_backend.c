@@ -83,6 +83,7 @@ SIG(nvn_gpu_tex_upload_blocklinear, void (*)(nvn_gpu_cmd, nvn_gpu_tex, uint32_t,
 SIG(nvn_gpu_shader_load, nvn_gpu_rc (*)(const nvn_gpu_shader_src *, nvn_gpu_shader *, nvn_gpu_err *));
 SIG(nvn_gpu_shader_release, void (*)(nvn_gpu_shader));
 SIG(nvn_gpu_pipe_get, nvn_gpu_rc (*)(const nvn_gpu_pipe_desc *, int, nvn_gpu_pipe *, nvn_gpu_err *));
+SIG(nvn_gpu_pipe_lookup, int (*)(const nvn_gpu_pipe_desc *, nvn_gpu_pipe *));
 SIG(nvn_gpu_cpipe_get, nvn_gpu_rc (*)(const nvn_gpu_stage_desc *, int, nvn_gpu_pipe *, nvn_gpu_err *));
 SIG(nvn_gpu_cmd_begin, nvn_gpu_rc (*)(const nvn_gpu_cmd_desc *, nvn_gpu_cmd *, nvn_gpu_err *));
 SIG(nvn_gpu_cmd_abort, void (*)(nvn_gpu_cmd));
@@ -123,7 +124,7 @@ SIG(nvn_vsync_start, int (*)(uint32_t, nvn_vsync_fn, void *, char *, size_t));
 SIG(nvn_vsync_stop, void (*)(void));
 // #968 消费审查定稿 ①（10-30）：组合采样项 view 与 samp 同时装得下、互不重叠（原稿两者在同一个 union 里，只能放一个）
 _Static_assert(offsetof(nvn_gpu_binding, u.ts.samp) >= offsetof(nvn_gpu_binding, u.ts.view) + sizeof(nvn_gpu_view), "TEX_SAMP 的 view 与 samp 重叠");
-#define N_SIG 63   // 上面 SIG 的条数：nvn_gpu_* 61 + nvn_vsync_* 2（.mk 按两个头文件分别核对声明数，漏登记一个新函数会红）
+#define N_SIG 64   // 上面 SIG 的条数：nvn_gpu_* 62 + nvn_vsync_* 2（.mk 按两个头文件分别核对声明数，漏登记一个新函数会红）
 
 int main(void) {
     // 运行期只做一件不依赖实现的事：典型调用点的结构体能按契约填出来（零初始化 + 字段可写），证明头文件里的类型完整可用
