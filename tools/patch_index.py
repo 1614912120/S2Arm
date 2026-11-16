@@ -211,6 +211,12 @@ def half(path, roots):
 
 
 UPRES = []    # 本次扫描不收的改内部分辨率满屏补丁：(路径, 包内路径, (宽, 高), sha256)；同一份内容在别处（被分成别的类）也不收
+# 已定因会崩、规则还判不出来的单份补丁（按内容 sha256 前 16 位，同 pack/cpatch.py 编号）：不收。根修是出包时按数据流判
+#   「nop 掉的指令原本写的寄存器后面还被读」（0.5.0 之后带普查上），到时这张表应清空
+KNOWN_BAD = {
+    'e8b51176ead1bcd3': '11-16 帖子 3 台 / 4 次 Mac 崩：nop 掉 main+0x5edb3c 取名字地址的 adrp/add，残值被当名字指针，进拍照模式读 0x8',
+    '7a1aa34f90ab0756': '11-16 同上同一函数：nop 掉 main+0x5eda78 的 adrp/add，残值被当名字指针传进比较',
+}
 HALVES = []   # 本次扫描不收的半边：(文件, 包内路径或空, sha256)；scan 收尾按 sha256 把别的库里同一份内容也去掉
 
 
@@ -380,8 +386,9 @@ def scan(mirror, keep_local=False, cheat_libs=False):
                 else:
                     row(rel, rel, data)
     gone = {h for _, _, h in HALVES} | {h for *_, h in UPRES}
-    kept = [r for r in rows if r['kind'] == 'cheat' or r['sha256'] not in gone]
+    kept = [r for r in rows if r['kind'] == 'cheat' or (r['sha256'] not in gone and r['sha256'][:16] not in KNOWN_BAD)]
     print(f'改内部渲染分辨率的满屏补丁不收：{len(UPRES)} 份', file=sys.stderr)
+    print(f'已定因会崩的补丁（KNOWN_BAD）不收：{sum(1 for r in rows if r["sha256"][:16] in KNOWN_BAD)} 行', file=sys.stderr)
     print(f'配套是显存 / 堆配置、只能收到 exefs 半边的补丁不收：{len(HALVES)} 份（去掉 {len(rows) - len(kept)} 行，含别的库里同一份内容）', file=sys.stderr)
     return kept
 

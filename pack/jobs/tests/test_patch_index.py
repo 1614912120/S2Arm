@@ -1,5 +1,5 @@
 """补丁索引生成（tools/patch_index.py，11-13：压缩包里的补丁与金手指、按内容去重）。临时镜像目录，期望按规则手写"""
-import hashlib, io, json, os, shutil, sys, tempfile, unittest, zipfile
+import hashlib, io, json, os, shutil, sys, tempfile, unittest, unittest.mock, zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import patch_index
@@ -95,6 +95,17 @@ class PatchIndexTests(unittest.TestCase):
         self.assertEqual(sorted(r["sha256"] for r in rows if r["cat"] == "widescreen"), sorted(hashlib.sha256(x).hexdigest() for x in (ok, named, commented)))
         self.assertNotIn(hashlib.sha256(up).hexdigest(), {r["sha256"] for r in rows})
         self.assertEqual(sorted(x[2] for x in patch_index.UPRES), [(2560, 1440), (3440, 1440)])
+
+    def test_known_bad_patches_are_not_indexed(self):
+        # 11-16：已定因会崩的单份补丁按内容编号（sha256 前 16 位）不收，别的照收。期望手写：表里那份不在索引里、旁边那份在
+        bad, good = b"@nsobid-AABBCCDDEEFF00112233445566778899\n@enabled\n00001000 1F2003D5\n", b"@nsobid-AABBCCDDEEFF00112233445566778899\n@enabled\n00001004 1F2003D5\n"
+        g = self.m / "orig__mods" / "Odyssey [0100000000010000]"
+        (g / "GQ3/exefs").mkdir(parents=True); (g / "GQ3/exefs/1.3.0.pchtxt").write_bytes(bad)
+        (g / "Other/exefs").mkdir(parents=True); (g / "Other/exefs/1.3.0.pchtxt").write_bytes(good)
+        with unittest.mock.patch.dict(patch_index.KNOWN_BAD, {hashlib.sha256(bad).hexdigest()[:16]: "测试"}):
+            got = {r["sha256"] for r in patch_index.dedupe(patch_index.scan(str(self.m))) if "0100000000010000" in r["gids"]}
+        self.assertEqual(got, {hashlib.sha256(good).hexdigest()})
+        self.assertEqual(set(patch_index.KNOWN_BAD), {"e8b51176ead1bcd3", "7a1aa34f90ab0756"})
 
     def test_cheat_libraries_are_not_indexed_twice(self):
         os.rename(self.m / "orig__mods", self.m / "ChanseyIsTheBest__NX-60FPS-RES-GFX-Cheats")
