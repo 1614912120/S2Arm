@@ -276,7 +276,7 @@ def state(c, game, match=None):
                   "autoOff": auto([("fps", "fps60")]), "versions": versions("fps")}
     # 画面：Mac 才打（iPhone 一律 mac_only）
     gfx = [it for it in community.packed_patches(c, gid) if it["kind"] == "gfx"]
-    gon = [it for it in gfx if pset.get(it["id"]) is not False]
+    gon = [it for it in gfx if community.patch_on(pset, it)]   # 没选过：降负载的缺省关（11-16）
     gkeys = [("patch", it["id"]) for it in gfx]
     if opted: s = "opted_out"
     elif not gfx: s = missing("gfx")

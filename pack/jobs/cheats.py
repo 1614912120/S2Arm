@@ -261,8 +261,8 @@ def _on_now(c, game):
     keys = sorted(set((d / "enabled.txt").read_text(encoding="utf-8").splitlines()) - {""}) if (d / "enabled.txt").is_file() else []
     import community
     data = community.load_launch(c, gid)
-    # 开着的补丁：11-13 起没选过 = 默认开，所以按包里编进去的、玩家没关过的算（不只是 launch.json 里写了 True 的）
-    patches = sorted(it["id"] for it in community.packed_patches(c, gid) if data["patches"].get(it["id"]) is not False)
+    # 开着的补丁：按包里编进去的、这一局实际开着的算（同 launch_env 的 community.patch_on：玩家选过的照选的，没选过 other 与降负载画面补丁关、其余开）
+    patches = sorted(it["id"] for it in community.packed_patches(c, gid) if community.patch_on(data["patches"], it))
     # 帧率补丁（编号 fps:）跟「60 帧」开关走、不在 packed_patches 里：包里有帧率补丁且开关没关 → 算一条（iOS 同口径，ios/game_options.m s2a_ios_crash_suspects_for）
     fps = bool(community.fps_levels(c, gid)) and data["settings"].get("fps60", True) is not False
     # 自适应满屏一族（编号 wsauto:）跟「满屏」开关走、也不在 packed_patches 里（11-15 候选自测：崩了没关它）：有这一族且开关没关 → 算一条，关 = 关满屏开关（iOS 同口径）
