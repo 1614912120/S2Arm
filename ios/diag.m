@@ -27,6 +27,13 @@ NSUserDefaults *s2a_ios_settings_defaults(void);   // settings.m：诊断局开�
 #include "s2a_sesdiag.h"
 #include "diag_upload.h"   // 上传给开发者：结果判断（纯 C，单测 t_diag_upload）
 
+// 弱链接[lab]：s2a_foreign_scan（runtime/src/pack_apply.c 容器里属主不是 App 的条目清点；输入工作台不链原生核，取不到就不写这一项）
+unsigned s2a_foreign_scan(const char *home, uint64_t *bytes, char *line, size_t n) __attribute__((weak_import));
+static NSDictionary *container_foreign(void) {
+    if (!s2a_foreign_scan) return nil;
+    uint64_t bytes = 0; char line[1600] = ""; unsigned n = s2a_foreign_scan(NSHomeDirectory().fileSystemRepresentation, &bytes, line, sizeof line);
+    return @{@"count": @(n), @"bytes": @(bytes), @"summary": @(line)};
+}
 static NSString *docs(void) { return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject; }
 // 资源包根：启动上下文给了本款资源包就读它（上下文文件 / 多款容器选了游戏：v0.3.0 起在 Library 下，s2a_docs.h s2a_pack_root）；
 //   单款兼容照旧 Documents/资源包（不随 S2A_GAME_DATA，同改造前）
@@ -284,6 +291,50 @@ static NSURL *build_zip(NSUInteger cap, BOOL slim, NSString **err) {
             [fm createDirectoryAtPath:[W stringByAppendingPathComponent:@"pso"] withIntermediateDirectories:YES attributes:nil error:nil];
             if ([fm copyItemAtPath:e[1] toPath:[W stringByAppendingPathComponent:rel] error:nil]) { [files addObject:@{@"path": rel, @"bytes": @(n), @"truncated": @NO}]; used += n; [seen addObject:gid]; }
         } }
+    // 着色器补料（graphics/nvn/host/dsh_salvage.inc，同 Mac pack/jobs/library.py 口径）：多款容器 games/<号>/wire/<号>/shader_miss/、单款包 wire/<号>/shader_miss/ 里
+    //   库里没有 / 现编失败的着色器（index.tsv + 成对的 <键>.ctl / .code），每款打成一个 tar 放 shader_miss/<号>.tar（诊断包成员数有上限：
+    //   tools/diagnostic_report.py MAX_FILES 1000）；取件归档进管线种子目录 rt_shaders/、出包编进那款的直连库。只有游戏着色器字节与键，不含个人信息、不过脱敏。
+    //   每款至多 9 MB（运行时 8 MB + 索引余量）、合计至多 10 MB（整包压缩后 ≤ 30 MB，给日志 / 截图留地方）；索引先放，每键两份成对放（放不下整对不放）；
+    //   同一款只收一处（多款容器那份优先）；不跟链接
+    {   NSMutableArray *srcs = [NSMutableArray array];
+        NSString *G = [D stringByAppendingPathComponent:@"games"], *Wd = [D stringByAppendingPathComponent:@"wire"];
+        for (NSString *gid in [[fm contentsOfDirectoryAtPath:G error:nil] sortedArrayUsingSelector:@selector(compare:)])
+            [srcs addObject:@[gid, [[[[G stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"wire"] stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"shader_miss"]]];
+        for (NSString *gid in [[fm contentsOfDirectoryAtPath:Wd error:nil] sortedArrayUsingSelector:@selector(compare:)])
+            [srcs addObject:@[gid, [[Wd stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"shader_miss"]]];
+        NSCharacterSet *notHex = [[NSCharacterSet characterSetWithCharactersInString:@"0123456789ABCDEF"] invertedSet];
+        NSRegularExpression *keyCtl = [NSRegularExpression regularExpressionWithPattern:@"^[0-9a-f]{16}\\.ctl$" options:0 error:nil];
+        NSMutableSet *seen = [NSMutableSet set]; unsigned long long used = 0;
+        for (NSArray *e in srcs) {
+            NSString *gid = [e[0] uppercaseString], *sd = e[1];
+            if (gid.length != 16 || [gid rangeOfCharacterFromSet:notHex].location != NSNotFound || [seen containsObject:gid]) continue;
+            if (![[fm attributesOfItemAtPath:sd error:nil].fileType isEqualToString:NSFileTypeDirectory]) continue;
+            [seen addObject:gid];
+            NSMutableArray *groups = [NSMutableArray arrayWithObject:@[@"index.tsv"]];
+            for (NSString *f in [[fm contentsOfDirectoryAtPath:sd error:nil] sortedArrayUsingSelector:@selector(compare:)])
+                if ([keyCtl firstMatchInString:f options:0 range:NSMakeRange(0, f.length)]) [groups addObject:@[f, [[f substringToIndex:16] stringByAppendingString:@".code"]]];
+            NSMutableData *tar = [NSMutableData data]; unsigned long long game = 0;
+            for (NSArray *names in groups) {
+                NSMutableArray *datas = [NSMutableArray array]; unsigned long long n = 0; BOOL ok = YES;
+                for (NSString *nm in names) { NSString *fp = [sd stringByAppendingPathComponent:nm];
+                    if (![[fm attributesOfItemAtPath:fp error:nil].fileType isEqualToString:NSFileTypeRegular]) { ok = NO; break; }
+                    NSData *d = [NSData dataWithContentsOfFile:fp]; if (!d) { ok = NO; break; } [datas addObject:d]; n += d.length; }
+                if (!ok || !n || game + n > (9ull << 20) || used + game + n > (10ull << 20)) continue;
+                for (NSUInteger i = 0; i < names.count; i++) {   // ustar：512 字节头（名、模式、大小八进制、校验和）+ 数据补齐到 512
+                    NSData *d = datas[i]; char h[512]; memset(h, 0, sizeof h);
+                    snprintf(h, 100, "%s", [names[i] UTF8String]); memcpy(h + 100, "0000644", 7); memcpy(h + 108, "0000000", 7); memcpy(h + 116, "0000000", 7);
+                    snprintf(h + 124, 12, "%011llo", (unsigned long long)d.length); memcpy(h + 136, "00000000000", 11); h[156] = '0'; memcpy(h + 257, "ustar", 6); memcpy(h + 263, "00", 2);
+                    memset(h + 148, ' ', 8); unsigned sum = 0; for (int b = 0; b < 512; b++) sum += (unsigned char)h[b]; snprintf(h + 148, 8, "%06o", sum); h[155] = ' ';
+                    [tar appendBytes:h length:512]; [tar appendData:d]; static const char z[512]; if (d.length % 512) [tar appendBytes:z length:512 - d.length % 512];
+                }
+                game += n;
+            }
+            if (!game) continue;
+            static const char z2[1024]; [tar appendBytes:z2 length:1024];   // tar 结尾两个空块
+            NSString *rel = [NSString stringWithFormat:@"shader_miss/%@.tar", gid];
+            [fm createDirectoryAtPath:[W stringByAppendingPathComponent:@"shader_miss"] withIntermediateDirectories:YES attributes:nil error:nil];
+            if ([tar writeToFile:[W stringByAppendingPathComponent:rel] atomically:NO]) { [files addObject:@{@"path": rel, @"bytes": @(tar.length), @"truncated": @NO}]; used += game; }
+        } }
     if (copyFailed) {
         [fm removeItemAtPath:W error:nil];
         if (err) *err = S2AL(@"diag.error.redact");
@@ -311,6 +362,8 @@ static NSURL *build_zip(NSUInteger cap, BOOL slim, NSString **err) {
         @"device": @{@"model": hw_model(), @"ios": UIDevice.currentDevice.systemVersion, @"ram_mb": @(NSProcessInfo.processInfo.physicalMemory >> 20),
                      @"gpu_family": gpu_family(), @"low_power": @(NSProcessInfo.processInfo.lowPowerModeEnabled)},
         @"settings": @{@"language": NSLocale.preferredLanguages.firstObject ?: @""},
+        // 容器里属主不是 App 的条目（#569：App 改不了删不掉、只有卸载能清；pack_apply.c s2a_foreign_scan）：个数、文件实占、最早那条的路径 / 时间 / 属主——定是哪种安装方式或迁移造成的
+        @"container_foreign": container_foreign() ?: (id)NSNull.null,
         @"sessions": sessions, @"metrickit": @{@"crash": @(crash), @"hang": @(hang), @"exit": @(exits)}, @"files": files };
     [[NSJSONSerialization dataWithJSONObject:manifest options:NSJSONWritingPrettyPrinted | NSJSONWritingSortedKeys error:nil]
         writeToFile:[W stringByAppendingPathComponent:@"manifest.json"] atomically:NO];

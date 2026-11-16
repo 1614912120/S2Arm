@@ -7072,10 +7072,6 @@
   "en": "The chosen device ({0}) hasn't been paired with this computer yet: plug it in, unlock it and tap Trust on the device (after that it can also install over the same Wi-Fi)."
  },
  {
-  "source": "重新打开 S2Arm（会自动修好），再从电脑推送一次。",
-  "en": "Reopen S2Arm (it fixes this automatically), then push from the computer again."
- },
- {
   "source": "清出空间后点「重试」。",
   "en": "Free up some space, then tap Retry."
  },
@@ -9754,5 +9750,9 @@
  {
   "source": "mod 开关格式不对。",
   "en": "Invalid mod switch request."
+ },
+ {
+  "source": "重试没用：先在游戏菜单「存档管理」里导出存档（存到 S2Arm 文件夹以外，比如 iCloud 云盘），再删除并重新安装 S2Arm，装好后导回存档。",
+  "en": "Retrying won’t help: export your saves from the game menu (Manage saves) to a place outside the S2Arm folder, such as iCloud Drive, delete and reinstall S2Arm, then import the saves again."
  }
 ]

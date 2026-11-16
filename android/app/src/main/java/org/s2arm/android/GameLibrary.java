@@ -245,7 +245,7 @@ final class GameLibrary {
             try {   // 不取整库锁：每个包装进去时只锁它那一款
                 ContentResolver cr = context.getContentResolver();
                 Map<String, String> ids = new HashMap<>();
-                walk(cr, tree, ids);
+                walk(cr, tree, ids, null);
                 // 选了包所在的上一级（或放着几款游戏的文件夹）不挡：在里面找出所有游戏包逐个导入，一个失败不影响其他（不堵门）
                 List<String> roots = packageRoots(ids.keySet());
                 if (roots.isEmpty())
@@ -314,8 +314,8 @@ final class GameLibrary {
         };
     }
 
-    // Every file and folder under the picked tree, by package-relative path.
-    private static void walk(ContentResolver cr, Uri tree, Map<String, String> ids) throws IOException {
+    // Every file and folder under the picked tree, by package-relative path; folders also go to dirs when given (mod import).
+    static void walk(ContentResolver cr, Uri tree, Map<String, String> ids, java.util.Set<String> dirs) throws IOException {
         ArrayDeque<String[]> todo = new ArrayDeque<>();   // {path prefix, document id}
         todo.add(new String[] {"", DocumentsContract.getTreeDocumentId(tree)});
         String[] columns = {DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME,
@@ -328,7 +328,10 @@ final class GameLibrary {
                 while (c.moveToNext()) {
                     String path = dir[0].isEmpty() ? c.getString(1) : dir[0] + "/" + c.getString(1);
                     ids.put(path, c.getString(0));
-                    if (DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2))) todo.add(new String[] {path, c.getString(0)});
+                    if (DocumentsContract.Document.MIME_TYPE_DIR.equals(c.getString(2))) {
+                        todo.add(new String[] {path, c.getString(0)});
+                        if (dirs != null) dirs.add(path);
+                    }
                 }
             }
         }

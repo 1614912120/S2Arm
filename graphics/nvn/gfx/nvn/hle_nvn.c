@@ -1323,7 +1323,17 @@ static int keys_hash_early(const NVNshaderData *sd, uint8_t out[8]) {
 int prog_key(const prog_t *p, unsigned st, uint8_t key[8]) {
     if (st >= p->nstage) return 0;
     prog_keys_t *k = pk_get(p, 1);
-    if (!(k->ok >> st & 1)) { keys_hash(&p->sd[st], 0, k->key[st]); k->ok |= (uint8_t)(1u << st); }
+    if (!(k->ok >> st & 1)) {
+        int got = keys_hash(&p->sd[st], 0, k->key[st]); k->ok |= (uint8_t)(1u << st);
+        // S2Arm D-WQPH（11-15，Mac 奥日2 1.2.0：5 局每局 18–136 支「not in the shader map」，现编汇总成功 / 失败 / 跳过全 0）：SetShaders 时代码区还没进已登记的内存池
+        //   （keys_hash mapped=1 不算键），那支没进首遇现编的待编表；到这里首用才算出键，dm_shader_miss_late 对 Switch 1 只认待编表里有的键，于是不在库里的整支丢、不现编。
+        //   这里补登记（与 SetShaders 同一个入口：库里有就直接返回，没有就拷控制段进待编表 / 后台预编），控制段刚被 keys_hash 读过。NVN2 照旧走 dm_shader_miss_late 自己的首用登记
+        if (got && !(nvn2_on() && nvn2_ctl(p->sd[st].control))) {
+            static _Atomic uint64_t n; uint64_t c = atomic_fetch_add(&n, 1) + 1;
+            if (!(c & (c - 1))) LOG("[nvn] shaders keyed at first use (code not in a registered memory pool at SetShaders): %llu so far; handed to the first-use compile like SetShaders' keys", (unsigned long long)c);
+            dm_shader_miss(k->key[st], p->sd[st].data, p->sd[st].control);
+        }
+    }
     memcpy(key, k->key[st], 8);
     return 1;
 }
