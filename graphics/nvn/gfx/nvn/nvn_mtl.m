@@ -5949,6 +5949,7 @@ static void defer_fallback(void);
 static int g_el_w, g_el_h, g_el_draws; static char g_el_key[12];
 static int enc_label_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_ENC_LABEL"); v = e && atoi(e); } return v; }
 static int g_nbcrt; static void bcrt_flush(void);   // shadows of block-compressed render targets used by the open pass (see bcrt_attach)
+static int g_unb; static p_set_rt g_unb_rt; static uint64_t g_unb_n, g_unb_land;   // a held empty binding (see unb_on)
 static void rp_end(void) { if (!g_rlane) geo_run_flush(); if (g_enc) { AP_B;
     if (enc_label_on()) { static uint64_t lf = ~0ull, base; uint64_t f = atomic_load(&g_cur_frame); if (f != lf) { lf = f; base = g_stat_pass - 1; }   // Intra-frame serial: the same pass has the same name every frame, so the table can aggregate by name
         [(id)g_enc setLabel:[NSString stringWithFormat:@"p%02llu %dx%d %s d%d", (unsigned long long)(g_stat_pass - base), g_el_w, g_el_h, g_el_key[0] ? g_el_key : "-", g_el_draws]]; }
@@ -5962,7 +5963,9 @@ static void rp_end(void) { if (!g_rlane) geo_run_flush(); if (g_enc) { AP_B;
     rr_finish(ranged);
 #endif
     AP_E(0);
-} }
+}
+    if (g_unb) { g_unb = 0; R.rt = g_unb_rt; }   // a held unbind takes effect once the pass with the old targets has ended (see unb_on)
+}
 // The format an attachment is actually attached with: the view's format if the view changes the format and can be attached, otherwise the base texture's. Shared by attaching (attach) and pipeline prediction (pso_predict_rest) so both agree --
 // prediction used the base format, so for a pass written through an sRGB view (Mario's last pass) the predicted pipeline had the wrong format and the real one was compiled at the first draw (from d2r-mobile e2a0c9a9b)
 // A compressed texture as a render target (The Legend of Zelda: Breath of the Wild a 32x32 RGTC1 (BC4) texture, Tears of the Kingdom a 32x32x32 3D one drawn one depth plane per pass, both written
@@ -12356,7 +12359,38 @@ static void lp_finish(void) {
     cb_put(dcb);
 }
 static const p_set_rt *set_rt_op(const uint8_t *op, p_set_rt *t) { op_hdr h; memcpy(&h, op, sizeof h); return set_rt_rec(op + 8, h.size, t); }   // a SET_RT record from its header (nvn_obj.h)
+// Pass continuity across redundant unbinds (DM_NVN_UNBIND_DEFER=1, off by default; nxnative d6b5fc1b / 87422462, MIT, from issue 2806): Unreal-engine titles set no targets
+//   before each draw and then the same targets again; the empty binding ended the pass, so every draw opened one that loaded and stored its targets (upstream report: about 550
+//   passes a frame, 424 of them load-all store-all, on a split-screen title). With the switch: ① an empty binding while a pass is open is held (g_unb) and the open pass stays,
+//   so the next SET_RT can take the same-target continuation; any op that is not pure state (unb_keeps) lands it first, and a pass ending for any other reason applies it (rp_end);
+//   ② rt_same compares views by the fields their flags set (the rest and _rsv hold whatever the game left in its stack slot) and ignores trailing empty colour slots.
+//   Off: exactly as before (memcmp of whole views, slot counts compared as recorded)
+static int unb_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_UNBIND_DEFER"); v = e && atoi(e) > 0; MLOG("pass continuity across redundant unbinds: %s (DM_NVN_UNBIND_DEFER)", v ? "on" : "off"); } return v; }
+static int view_same(const view_t *x, const view_t *y) {
+    if (x->set_levels != y->set_levels || x->set_layers != y->set_layers || x->set_format != y->set_format || x->set_target != y->set_target || x->set_swizzle != y->set_swizzle || x->set_dsmode != y->set_dsmode) return 0;
+    if (x->set_levels && (x->base_level != y->base_level || x->nlevels != y->nlevels)) return 0;
+    if (x->set_layers && (x->min_layer != y->min_layer || x->nlayers != y->nlayers)) return 0;
+    if (x->set_format && x->format != y->format) return 0;
+    if (x->set_target && x->target != y->target) return 0;
+    if (x->set_swizzle && memcmp(x->swz, y->swz, 4)) return 0;
+    if (x->set_dsmode && x->dsmode != y->dsmode) return 0;
+    return 1;
+}
+static int rt_same_loose(const p_set_rt *a, const p_set_rt *b) {
+    int na = a->n < 8 ? a->n : 8, nb = b->n < 8 ? b->n : 8;   // trailing empty colour slots do not change the set
+    while (na > 0 && !a->color[na - 1]) na--;
+    while (nb > 0 && !b->color[nb - 1]) nb--;
+    if (na != nb || !a->depth != !b->depth || (a->depth && a->depth->serial != b->depth->serial)) return 0;
+    static const view_t z;
+    if (a->depth && !view_same(a->has_dview ? &a->dview : &z, b->has_dview ? &b->dview : &z)) return 0;
+    for (int k = 0; k < na; k++) {
+        if (!a->color[k] != !b->color[k] || (a->color[k] && a->color[k]->serial != b->color[k]->serial)) return 0;
+        if (a->color[k] && !view_same(a->has_cview[k] ? &a->cview[k] : &z, b->has_cview[k] ? &b->cview[k] : &z)) return 0;
+    }
+    return 1;
+}
 static int rt_same(const p_set_rt *a, const p_set_rt *b) {   // Same set of targets: compare by texture serial and view (not by object pointer: the game may copy texture objects by value)
+    if (unb_on()) return rt_same_loose(a, b);
     if (a->n != b->n || !a->depth != !b->depth || (a->depth && a->depth->serial != b->depth->serial) || a->has_dview != b->has_dview) return 0;
     if (a->has_dview && memcmp(&a->dview, &b->dview, sizeof a->dview)) return 0;
     for (int k = 0; k < a->n && k < 8; k++) {
@@ -14546,6 +14580,15 @@ static void lc_take(NvProg *pr) {
     lc_land();
 }
 // The operations a waiting clear can wait across: they neither read nor write textures
+static int unb_keeps(uint32_t op) {   // pure state an open pass carries over to the targets set again (see unb_on); anything else lands a held unbind first
+    switch (op) {
+        case OP_SET_RT: case OP_VIEWPORTS: case OP_SCISSOR: case OP_DEPTH_RANGE: case OP_BIND_PROGRAM: case OP_BIND_STATE: case OP_BIND_VATTR: case OP_BIND_VSTREAM: case OP_BIND_VBUF:
+        case OP_BIND_UBO: case OP_BIND_SSBO: case OP_BIND_TEX: case OP_BIND_TEX1: case OP_BIND_SAMP: case OP_BIND_IMG: case OP_STENCIL: case OP_POLY_OFFSET: case OP_BLEND_COLOR:
+        case OP_ALPHA_REF: case OP_DEPTH_CLAMP: case OP_SET_PATCH_SIZE: case OP_VP_SWIZZLE: case OP_PRIM_RESTART: case OP_RAST_DISCARD: case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL:
+        case OP_JUMP: case OP_CALL: return 1;
+        default: return 0;
+    }
+}
 static int lc_keeps(uint32_t op) {
     switch (op) {
         case OP_SET_RT: case OP_CLEAR_COLOR: case OP_CLEAR_DS: case OP_DRAW: case OP_DRAW_IDX: case OP_BEGIN: case OP_JUMP: case OP_CALL:
@@ -16540,6 +16583,7 @@ void nvn_be_exec(const uint8_t *p) {
         if (g_allocprof) { static uint64_t last; static int prev = -1; uint64_t now = g_dev.currentAllocatedSize; if (prev >= 0 && prev < 64 && now > last) g_ap_bytes[prev] += now - last; last = now; prev = h.op; }
         if (g_hoist_n && hoist_take(p)) { if (g_fz.active && p == g_fz.rt2_op) { g_fz.phase = 2; g_rt_merged = 0; PD("F %llu merged pass enters the later pass's draws", g_stat_pass); } p += h.size; continue; }   // A pure-clear render pass already executed early / the start of a later pass already merged in   // Entering the later pass: the same-target continuation of the earlier pass ends here; the later pass reading the earlier pass's attachment is proven to be same-pixel by fz_p2_draw, and is no longer split by the continuation rule
         const void *a = p + 8;
+        if (g_unb && !unb_keeps(h.op) && !(h.op == OP_END && g_ret_n)) { g_unb_land++; PD("M %llu held unbind lands before op %u", g_stat_pass, (unsigned)h.op); rp_flush(); }   // see unb_on
         if (g_nlc && !lc_keeps(h.op) && !(h.op == OP_END && g_ret_n)) lc_land();   // see lc_keeps (a sub-list's end returns to its caller)
         if (g_gr.active && !geo_run_keeps(h.op)) geo_run_flush();   // only state settings and draws stay inside a geometry run (nvn_geometry.inc ①)
         switch (h.op) {
@@ -16617,6 +16661,10 @@ void nvn_be_exec(const uint8_t *p) {
                 p_set_rt rb; const p_set_rt *r = set_rt_rec(a, h.size, &rb); dsnap_stale();
                 if (defer_begin_q(p)) break;
                 int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
+                { int empty = !r->depth; for (int k = 0; k < r->n && k < 8; k++) if (r->color[k]) empty = 0;   // an empty binding: held while the pass stays open (see unb_on)
+                  if (empty && g_enc && g_enc_mode != 1 && !pend && R.has_rt && unb_on()) { g_unb = 1; g_unb_rt = *r;
+                      if (!g_unb_n++) MLOG("held unbind: first case pass %llu", g_stat_pass); PD("M %llu empty binding held", g_stat_pass); break; }
+                  g_unb = 0; }   // targets again: compared with the open pass's below (a different set ends it as before)
                 if (g_enc && !pend && R.has_rt && tbdr_on() && rt_range_same(&R.rt,r)) {
                     g_rt_merged = g_rt_range_active = g_rt_range_pending = 1; R.rt = *r; break; }
                 if (g_enc && g_fz.active && g_fz.phase == 1 && fz_reuse_op(p) && !pend && g_enc_mode != 1 && R.has_rt && tbdr_on() && rt_same(&g_fz.rt1, r)) {
