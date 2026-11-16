@@ -3788,6 +3788,10 @@
   "开始准备": "Commencer la préparation",
   "继续准备": "Continuer la préparation",
   "运行": "Jouer",
-  "停止": "Arrêter"
+  "停止": "Arrêter",
+  "显卡卡住了，S2Arm 把这局安全停下了。": "Le GPU s'est bloqué : S2Arm a arrêté cette session en toute sécurité.",
+  "再开一次一般能接着玩（存档停在游戏上次保存的地方）；同一处反复这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上。": "Relancer permet en général de continuer (la sauvegarde est celle du dernier enregistrement du jeu). Si cela se reproduit au même endroit, exportez un diagnostic depuis Vérification de l'environnement et joignez-le à un ticket GitHub.",
+  "显卡卡住了，这局被安全停下": "Le GPU s'est bloqué, cette session a été arrêtée en sécurité",
+  "游戏运行中显卡卡住了，S2Arm 为了不让整台电脑跟着卡死，停下了这局。存档停在游戏上次保存的地方。": "Le GPU s'est bloqué pendant le jeu. S2Arm a arrêté cette session pour éviter que tout le Mac ne se fige. La sauvegarde est celle du dernier enregistrement du jeu."
  }
 }
