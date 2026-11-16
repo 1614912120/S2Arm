@@ -43,6 +43,27 @@ int main(void) { @autoreleasepool {
         uint64_t *ph3 = NULL; uint32_t n3 = 0; id<MTLTexture> m3 = pkg_upload(&t, &stamp, nil, &ph3, &n3, 0);
         VERIFY(m3 && ph3 && n3 && atomic_load(ph_state(ph3, n3)) == PH_BAD, "③ 重传时逐页哈希：不崩、哈希判作废（状态 %d）", ph3 && n3 ? (int)atomic_load(ph_state(ph3, n3)) : -1);
         free(ph3); }
+    {   // 诊断#f83b30（v0.4.3 仍崩，tex_mtl → tp_fp_u → memmove）：存储页写过（在内存里）、之后改成不可访问——驻留不等于可读。
+        //   期望（手写）：④ tp_fp_u 不崩、这块按 0 记「没读」；⑤ GPU 写回账的 GOB 哈希不崩、按全 0 GOB；⑥ 整段读入口 tex_src 不崩、给出全 0 的副本。
+        //   反证：改前 tp_fp_u 用 mincore 驻留判「能读」直接 memcpy → Bus error: 10（同玩家现场），走不到汇总行
+        uint8_t *r2 = mmap(NULL, 2 * pg, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0); REQUIRE(r2 != MAP_FAILED);
+        memset(r2, 0x5A, 2 * pg); REQUIRE(!mprotect(r2, pg, PROT_NONE));
+        unsigned char inc = 0; REQUIRE(!mincore(r2, pg, (char *)&inc));
+        static pool_t p2; p2.mem = r2; p2.size = 2 * pg;
+        static tex_t t2; memset(&t2, 0, sizeof t2);
+        t2.d.target = 1; t2.d.format = 0x25; t2.d.width = 16; t2.d.height = 16; t2.d.depth = 1; t2.d.levels = 1;
+        nvn_tex_layout(&t2.d, &t2.L); t2.mem = r2; t2.pool = &p2; t2.serial = 2;
+        int ut = 0; (void)tp_fp_u(&t2, &ut);
+        VERIFY(ut == 1, "④ tp_fp_u：存储页驻留（mincore %s）但不可读 → 不崩、记「没读」（untouched=%d）", inc & MINCORE_INCORE ? "在内存" : "不在内存", ut);
+        gob_win w = gob_win_new(); uint64_t g = (uint64_t)(uintptr_t)r2 >> 9;
+        VERIFY(gob_hash_w(&w, g, g + 1) == gob_zero_hash(), "⑤ GOB 哈希：不可读的页按全 0 GOB、不读");
+        uint8_t *pp = NULL; const uint8_t *ss = tex_src(&t2, t2.L.size, &pp); int zero = 1; for (uint64_t i = 0; i < t2.L.size; i++) zero &= ss[i] == 0;
+        VERIFY(ss != t2.mem && pp && zero, "⑥ 整段读入口 tex_src：给出副本、全 0（%llu 字节）", (unsigned long long)t2.L.size);
+        free(pp);
+        // ⑦ 对照：同一页恢复可读后，tex_src 直接用原存储、tp_fp_u 照读（不把可读的也当成读不了）
+        REQUIRE(!mprotect(r2, pg, PROT_READ | PROT_WRITE)); ut = 0; (void)tp_fp_u(&t2, &ut); ss = tex_src(&t2, t2.L.size, &pp);
+        VERIFY(ut == 0 && ss == t2.mem && !pp, "⑦ 对照：可读时 tp_fp_u 照读（untouched=%d）、tex_src 用原存储", ut);
+        munmap(r2, 2 * pg); }
     printf("%s t_nvn_pkg_unreadable：%u 项，%u 项失败\n", fails ? "✗" : "✓", checks, fails);
     return fails ? 1 : 0;
 } }
