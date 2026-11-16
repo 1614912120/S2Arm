@@ -42,8 +42,8 @@ static void run(const char *dir, int pick_env, char *out, size_t n) {
     }
     close(pp[1]); ssize_t r = read(pp[0], out, n - 1); out[r > 0 ? r : 0] = 0; close(pp[0]); waitpid(c, NULL, 0);
 }
-// ⑤ 屏幕刷新率起局后才知道（Mac 建窗晚于选档）：期望（手算）——屏幕不知道按 60 开 L（40 55 链 1）；屏幕报 120 → 自动档重挑开 H（80 77 链 2）；
-//   再报 120 不重复动；玩家选过 60 档（s2a_cpatch_fps_pick）后屏幕变 120 不动（仍 40 55）
+// ⑤ 屏幕刷新率起局后才知道（Mac 建窗晚于选档）：期望（手算）——屏幕不知道按 60 开 L（40 55 链 1）；屏幕报 120 → 自动档仍是 L（40 55 链 1：
+//   11-16 #1285 起自动不上 120，120 Hz 屏上自动开 120 帧补丁、机器跑不满就是半速）；再报 120 不动；玩家选过 60 档后屏幕变 120 不动（仍 40 55）
 static void run_screen(const char *dir, char *out, size_t n) {
     int pp[2]; pipe(pp); pid_t c = fork();
     if (c == 0) {
@@ -128,7 +128,7 @@ int main(void) {
     run_group(1, got, sizeof got);
     CHECK(!strcmp(got, "8 00 00 33 份 0 0 60"), "⑥⑦ 第二组我方验过 → 只开它、按份问只有它选中：期望 8 00 00 33 份 0 0 60，实得 %s", got);
     run_screen(dir, got, sizeof got);
-    const char *want5 = "起 40 55 1 屏120 80 77 2 再报 80 77 选60后屏120 40 55";
+    const char *want5 = "起 40 55 1 屏120 40 55 1 再报 40 55 选60后屏120 40 55";
     CHECK(!strcmp(got, want5), "⑤ 起局后才知道屏幕 120 Hz：期望 %s，实得 %s", want5, got);
     run_rescue(dir, got, sizeof got);
     const char *want3 = "未开救 0 开 80 77 2 120 救 1 0 00 1 60 标记 fps 再救 0";

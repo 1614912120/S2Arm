@@ -109,7 +109,7 @@
 "settings.fps.patchTitle" = "Velocidad de fotogramas";
 "settings.fps.patchNote" = "Parche de la comunidad · hasta %ld fps";
 "settings.fps.pick" = "Nivel de velocidad de fotogramas";
-"settings.fps.pick.auto" = "Automático (coincidir con pantalla)";
+"settings.fps.pick.auto" = "Automático (60 FPS)";
 "settings.fps.pick.level" = "%ld fps";
 "settings.patchNote" = "Parche de la comunidad";
 "settings.fullscreen.patchNote" = "Parche de pantalla completa de la comunidad";

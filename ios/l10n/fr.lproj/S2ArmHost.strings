@@ -109,7 +109,7 @@
 "settings.fps.patchTitle" = "Fréquence d'images";
 "settings.fps.patchNote" = "Correctif de la communauté · jusqu'à %ld fps";
 "settings.fps.pick" = "Niveau de fréquence d'images";
-"settings.fps.pick.auto" = "Auto (selon l'écran)";
+"settings.fps.pick.auto" = "Auto (60 i/s)";
 "settings.fps.pick.level" = "%ld fps";
 "settings.patchNote" = "Correctif de la communauté";
 "settings.fullscreen.patchNote" = "Correctif plein écran de la communauté";

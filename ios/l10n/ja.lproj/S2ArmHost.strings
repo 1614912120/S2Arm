@@ -109,7 +109,7 @@
 "settings.fps.patchTitle" = "フレームレート";
 "settings.fps.patchNote" = "コミュニティパッチ · 最大 %ld fps";
 "settings.fps.pick" = "フレームレート レベル";
-"settings.fps.pick.auto" = "自動（画面に合わせる）";
+"settings.fps.pick.auto" = "自動（60 fps）";
 "settings.fps.pick.level" = "%ld fps";
 "settings.patchNote" = "コミュニティパッチ";
 "settings.fullscreen.patchNote" = "コミュニティ全画面パッチ";

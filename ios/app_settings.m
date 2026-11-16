@@ -510,7 +510,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
     }
     if (group == 0) {
         NSInteger kind = [self graphicsRows][row].integerValue;
-        if (kind == 20) {   // 帧率档位：自动（不超过屏幕刷新率的最高一档）/ 各档；选了存 S2AFpsPick，游戏里当场切（s2a_cpatch_fps_pick），否则下次进游戏生效
+        if (kind == 20) {   // 帧率档位：自动（不超过 60 帧的最高一档，120 档要玩家自己选，11-16 #1285）/ 各档；选了存 S2AFpsPick，游戏里当场切（s2a_cpatch_fps_pick），否则下次进游戏生效
             NSArray<NSNumber *> *lv = [self fpsLevels]; NSMutableArray *labels = [NSMutableArray arrayWithObject:S2AL(@"settings.fps.pick.auto")];
             for (NSNumber *n in lv) [labels addObject:[NSString stringWithFormat:S2AL(@"settings.fps.pick.level"), n.longValue]];
             NSInteger cur = [s2a_ios_settings_defaults() integerForKey:@"S2AFpsPick"], sel = cur > 0 ? (NSInteger)[lv indexOfObject:@(cur)] + 1 : 0;
