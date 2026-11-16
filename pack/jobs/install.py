@@ -1594,7 +1594,7 @@ def sign_with_apple_id(c, app, team, bid, ents, udid, log, steps, vision=False, 
         except Failure as e:
             if e.code in ("keychain_prompt",):   # 钥匙串框没人点：去掉扩展也一样要签，照原样报
                 raise
-            widget_skip(c, app, WIDGET_QUOTA if e.code == "free_appid_limit" else str(e).removeprefix("签名没成：") or e.code)
+            widget_skip(c, app, WIDGET_QUOTA if e.code == "free_appid_limit" else str(e).removeprefix("签名没成：") or e.code)  # 非玩家句（去前缀用）
     if steps: c.begin("申请开发描述文件（第一次要几十秒）", 3, 6, keychain=True)   # 用 Xcode 账号申请：可能弹钥匙串授权
     try:
         env = dict(c.env(), S2A_PROFILE_DEST=f"id={udid}") if vision and udid else None
@@ -1919,7 +1919,8 @@ class WinPhone:
                     self.bid = self.W.install_app(ns, say=lambda m: self.c.emit("message", m))
                 except self.W.Fail as e2:
                     raise win_install_failure(e2) from e2
-                self.c.diagnostic("这次没装小组件：" + (WIDGET_QUOTA if e.err == "free_appid_limit" else str(first)), code="widget_skipped", severity="warning")
+                why = WIDGET_QUOTA if e.err == "free_appid_limit" else str(first)
+                self.c.diagnostic(f"这次没装小组件：{why}", code="widget_skipped", severity="warning")
         rec = layout.load_device(self.c, self.key)
         layout.save_device(self.c, self.key, dict(rec, bundleId=self.bid))
 
