@@ -4120,6 +4120,7 @@ typedef struct { const uint8_t *phys; uint64_t gen; } vpte;
 struct vpool { const pool_t *pool; uint8_t *base; uint64_t len, size, top; int nrun; struct vrun { uint64_t lo, hi; } *run; vpte **pt;
     int nsh, csh; struct vshp { uint64_t off, stamp; } *sh;   // copied host pages (see vsh_*): offset in the pool, dirty stamp of the last copy
     int lv;   // 预留记进了低区账（vpool_lv_note；帧录虚拟池区里取的不在低区、不记）
+    _Atomic uint64_t gen; uint64_t id;   // gen：本池最近一次映射请求的全局代号（vpt_set）；id：建池序号（全局递增，池对象地址复用时区分新旧池）。GPU 写的稀疏贴图按它们跟映射（nvn_mtl.m gstex_*）
 #if defined(__ANDROID__)
     s2a_vp_alias_table alias;   // dst -> 背板源；vpool_map / vpool_release 维护（#1217 §2.8）
 #endif
@@ -4175,7 +4176,7 @@ static void vpool_unmap_range(uint8_t *base, uint64_t len) {   // 虚拟池区�
 static struct vpool *vpool_new(const pool_t *o, uint8_t *a, uint64_t len) {   // 建页表、登记（录时 vpool_reserve、回放 s2a_hle_vpool_load 共用）
     struct vpool *v = calloc(1, sizeof *v);
     if (!v || !(v->pt = calloc((o->size + (2u << 20) - 1) >> 21 ? (o->size + (2u << 20) - 1) >> 21 : 1, sizeof *v->pt))) die("sparse pool page table allocation failed");
-    v->pool = o; v->base = a; v->len = len; v->size = o->size;
+    static _Atomic uint64_t ids; v->pool = o; v->base = a; v->len = len; v->size = o->size; v->id = atomic_fetch_add(&ids, 1) + 1;
     vp_lock(); vpool_publish(v); vp_unlock();
     return v;
 }
@@ -4256,7 +4257,7 @@ static void vrun_set(struct vpool *v, uint64_t lo, uint64_t hi, int mapped) {
 // Page table of a sparse pool (see above). Caller holds g_vp_mu
 static const vpte *vpt_get(const struct vpool *v, uint64_t o) { const vpte *l = v->pt[o >> 21]; return l ? &l[(o >> 12) & (VPT_LEAF - 1)] : NULL; }
 static void vpt_set(struct vpool *v, uint64_t voff, uint64_t size, const uint8_t *phys) {
-    uint64_t gen = atomic_fetch_add(&g_vp_gen, 1) + 1;
+    uint64_t gen = atomic_fetch_add(&g_vp_gen, 1) + 1; atomic_store(&v->gen, gen);
     for (uint64_t o = 0; o < size; o += 0x1000) {
         vpte **l = &v->pt[(voff + o) >> 21];
         if (!*l && !phys) continue;   // never mapped: stays unmapped
@@ -5080,6 +5081,18 @@ int nvn_sparse_pool(const void *pool) {   // called per texture lookup: the hash
     const pool_t *o = pool; pthread_rwlock_rdlock(&g_vph_lk); int r = vpool_of(o) != NULL; pthread_rwlock_unlock(&g_vph_lk); return r;
 }
 uint64_t nvn_sparse_gen(void) { return atomic_load(&g_vp_gen); }
+// 一个虚拟池的映射代号与建池序号（nvn_mtl.m gstex_*：GPU 写的稀疏贴图在本池映射变了时才同步块；序号变了 = 池已收尾、地址被新池复用）；不是虚拟池 → 0
+void nvn_sparse_pool_gen(const void *pool, uint64_t *gen, uint64_t *id) {
+    const pool_t *o = pool; pthread_rwlock_rdlock(&g_vph_lk); struct vpool *v = vpool_of(o);
+    *gen = v ? atomic_load(&v->gen) : 0; *id = v ? v->id : 0; pthread_rwlock_unlock(&g_vph_lk);
+}
+// a 起 64 KB 背后的物理内存：16 个 4 KB 页是一整段连续物理内存时给它的地址，否则 0。同一物理内存背后的虚拟块共用一个 Metal 堆页（nvn_stex.inc，移植自 kartnative，MIT）
+uint64_t nvn_sparse_backing(const void *pool, uint64_t a) {
+    vp_lock(); struct vpool *v = vpool_at(pool, a); const uint8_t *p0 = NULL;
+    if (v) { uint64_t o = a - (uint64_t)(uintptr_t)v->base; const vpte *e = (o & 0xFFF) || o + 0x10000 > v->size ? NULL : vpt_get(v, o); p0 = e ? e->phys : NULL;
+        for (unsigned i = 1; p0 && i < 16; i++) { const vpte *f = vpt_get(v, o + i * 0x1000ull); if (!f || f->phys != p0 + i * 0x1000) p0 = NULL; } }
+    vp_unlock(); return (uint64_t)(uintptr_t)p0;
+}
 uint64_t nvn_sparse_copy(const void *pool, void *dst, uint64_t a, uint64_t n) {
     vp_lock(); struct vpool *v = vpool_at(pool, a); uint64_t miss = 0;
     if (!v) { vp_unlock(); memset(dst, 0, n); return n; }
