@@ -57,7 +57,7 @@ public sealed partial class EnvironmentWindow
             if (phoneAutoTried.Contains(batch) || ControlBusy || batchRunning) return false;
             phoneAutoTried.Add(batch);
             await RefreshLibraryAsync();   // 顶栏 / 更新页按刚读回的 phoneUpdates 画
-            _ = UpdatePhoneAsync(false, [], ask: false, device: device);
+            _ = UpdatePhoneAsync(false, [], ask: false, mode: "device", device: device);   // 自动更新只装到连着的手机：显式 device，不跟随「出完之后导出自签」的缺省
             return true;
         }
         finally { phoneAutoTicking = false; }
