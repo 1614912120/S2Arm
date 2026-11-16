@@ -274,7 +274,8 @@ public final class S2ArmEngineProvider: EngineProvider {
 
     public func install(gameId: String, teamId: String? = nil, device: String? = nil, acceptDropped: Bool = false, accept: Set<String> = [], mode: String? = nil,
                         events: EventSink = .discard) async throws -> InstallResult {
-        try await installer.install(gameId: gameId, teamId: teamId, device: device, acceptDropped: acceptDropped, accept: accept, mode: mode, events: events)
+        try await installer.install(gameId: gameId, teamId: teamId, device: device, acceptDropped: acceptDropped, accept: accept, mode: mode,
+                                    widget: settings.homeWidget, events: events)
     }
 
     public func exportPush(gameId: String?, device: String? = nil, events: EventSink = .discard) async throws -> [String] {
@@ -283,7 +284,8 @@ public final class S2ArmEngineProvider: EngineProvider {
     public func installMode() async throws -> InstallModeInfo { try await installer.installMode() }
     public func updatePhone(acceptStale: Bool = false, acceptDropped: Bool = false, accept: Set<String> = [], mode: String? = nil, sgradeUpgrade: Bool = false,
                             device: String? = nil, events: EventSink = .discard) async throws -> [String: Any] {
-        try await installer.updatePhone(acceptStale: acceptStale, acceptDropped: acceptDropped, accept: accept, mode: mode, sgradeUpgrade: sgradeUpgrade, device: device, events: events)
+        try await installer.updatePhone(acceptStale: acceptStale, acceptDropped: acceptDropped, accept: accept, mode: mode, sgradeUpgrade: sgradeUpgrade, device: device,
+                                        widget: settings.homeWidget, events: events)
     }
 
     public func restorePhone(device: String? = nil, events: EventSink = .discard) async throws {

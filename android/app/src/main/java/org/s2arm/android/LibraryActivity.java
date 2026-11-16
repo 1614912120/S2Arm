@@ -19,6 +19,9 @@ public final class LibraryActivity extends Activity {
     // #528 item 15: "the last game session ended abnormally", once, above the status line; never blocks the library.
     private LinearLayout notice;
     private TextView noticeText;
+    // 提示排在封面流下面（和它同在一列），占地方而不是盖在卡片的游戏名上；「更多」面板打开时右边让出面板的宽度
+    private LinearLayout.LayoutParams noticeParams;
+    private int panelWidth;
     private LinearLayout more;
     private android.widget.ScrollView moreScroll;
     private LibraryShelf shelf;
@@ -66,7 +69,13 @@ public final class LibraryActivity extends Activity {
             @Override public void openControllers() { toggleMore(); }
             @Override public void openSettings() { toggleMore(); }
         });
-        root.addView(shelf, new android.widget.FrameLayout.LayoutParams(-1, -1));
+        // 封面流（连同浮在它底部的状态行）占满余下的高度；「上一局异常结束」提示排在它下面，没有提示时高度为 0，封面流照旧满屏。
+        //   状态行照旧浮在卡片上（#1230 维护者选的做法：不为导入进度让卡片一缩一放）
+        android.widget.FrameLayout stage = new android.widget.FrameLayout(this);
+        stage.addView(shelf, new android.widget.FrameLayout.LayoutParams(-1, -1));
+        LinearLayout column = new LinearLayout(this); column.setOrientation(LinearLayout.VERTICAL);
+        column.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1f));
+        root.addView(column, new android.widget.FrameLayout.LayoutParams(-1, -1));
         // 停帧救场关掉的帧率补丁（StallOff）：正中那款有标记才出这一行（放在面板最上面：面板要滚动，放底下玩家看不到），「重新打开」删标记、下次起局照常开
         stallRow = new LinearLayout(this); stallRow.setOrientation(LinearLayout.VERTICAL);
         TextView stallNote = new TextView(this); stallNote.setText(R.string.stall_off_note); stallNote.setTextColor(0xFFFFFFFF);
@@ -135,9 +144,8 @@ public final class LibraryActivity extends Activity {
         TextView modsNote = new TextView(this);
         modsNote.setText(R.string.mods_note); modsNote.setTextColor(0xFFB0B0B0); modsNote.setTextSize(12);
         more.addView(modsNote);
-        root.addView(moreScroll, new android.widget.FrameLayout.LayoutParams(Math.round(320 * density), -1, android.view.Gravity.END));
-        // 状态区在底部：上一局异常结束的提示（有才显示），下面是状态行
-        LinearLayout footer = new LinearLayout(this); footer.setOrientation(LinearLayout.VERTICAL);
+        panelWidth = Math.round(320 * density);
+        root.addView(moreScroll, new android.widget.FrameLayout.LayoutParams(panelWidth, -1, android.view.Gravity.END));   // 在 column 之后加：面板盖在提示和状态行上面
         notice = new LinearLayout(this); notice.setOrientation(LinearLayout.VERTICAL); notice.setVisibility(android.view.View.GONE);
         notice.setPadding(pad, pad / 2, pad, pad / 2); notice.setBackgroundColor(0xE6332A12);
         noticeText = new TextView(this); noticeText.setTextColor(0xFFFFFFFF);
@@ -152,12 +160,12 @@ public final class LibraryActivity extends Activity {
         noticeDismiss.setOnClickListener(v -> hideNotice());
         noticeActions.addView(noticeExport); noticeActions.addView(noticeSave); noticeActions.addView(noticeDismiss);
         notice.addView(noticeActions);
-        footer.addView(notice);
+        noticeParams = new LinearLayout.LayoutParams(-1, -2);
+        column.addView(notice, noticeParams);
         // 状态行只给玩家看得懂的：导入进度、失败原因；库清单（Games: 文件数 / 哈希…）只进日志，不上屏
         status = new TextView(this); status.setVisibility(android.view.View.GONE);
         status.setTextColor(0xFFFFFFFF); status.setPadding(pad, pad / 2, pad, pad / 2); status.setBackgroundColor(0xB3000000);
-        footer.addView(status);
-        root.addView(footer, new android.widget.FrameLayout.LayoutParams(-1, -2, android.view.Gravity.BOTTOM));
+        stage.addView(status, new android.widget.FrameLayout.LayoutParams(-1, -2, android.view.Gravity.BOTTOM));
         setContentView(root);
         library = new GameLibrary(getApplicationContext(), new GameLibrary.Listener() {
             @Override public void onStatus(String text) { runOnUiThread(() -> {
@@ -176,6 +184,9 @@ public final class LibraryActivity extends Activity {
     private void toggleMore() {
         boolean open = moreScroll.getVisibility() == android.view.View.GONE;
         moreScroll.setVisibility(open ? android.view.View.VISIBLE : android.view.View.GONE);
+        // 面板开着时提示让出右边：三个按钮都露在面板左边，面板最下面几行也点得到
+        noticeParams.setMarginEnd(open ? panelWidth : 0);
+        notice.setLayoutParams(noticeParams);
         if (open) openMods(shelf.selectedId());
     }
 
@@ -353,7 +364,7 @@ public final class LibraryActivity extends Activity {
 
     private void show(String text) { status.setText(text); status.setVisibility(android.view.View.VISIBLE); }
 
-    // #528 item 15: the last game session died in the foreground (LastSession, the marker the :game process keeps).
+    // #528 item 15: the last game session died in the foreground or its shutdown never finished ("fg" / "end" in LastSession, the marker the :game process keeps).
     //   Asked once: the marker is cleared before the notice shows. Not while a game process lives (split screen can
     //   keep the game in front next to the library); "bg" or no marker never asks.
     private void checkLastSession() {

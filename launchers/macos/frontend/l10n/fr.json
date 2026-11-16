@@ -1837,6 +1837,7 @@
   "s2arm.controller.autoConnect": "Connecter automatiquement les manettes Switch 2",
   "s2arm.controller.disconnectOnClose": "Déconnecter à la fermeture du jeu",
   "s2arm.controller.openBluetooth": "Ouvrir les réglages Bluetooth",
+  "s2arm.controller.thirdPartyMotion": "Les manettes au format Xbox, comme celles de 8BitDo ou GameSir, n'ont les commandes de mouvement qu'en mode Switch.",
   "s2arm.controller.assignPlayers": "Attribuer les joueurs",
   "s2arm.controller.howPair": "Associer deux / Manette complète",
   "s2arm.controller.howPairKeys": "Appuyez simultanément sur L + R",
@@ -1854,5 +1855,10 @@
   "s2arm.controller.gameController": "Manette de jeu",
   "s2arm.controller.bluetooth": "Bluetooth",
   "s2arm.controller.toolbar": "Manette",
-  "s2arm.punct.list": ", "
+  "s2arm.punct.list": ", ",
+  "s2arm.env.widget.group": "Widget de l’écran d’accueil",
+  "s2arm.env.widget.title": "Inclure le widget de l’écran d’accueil sur l’iPhone",
+  "s2arm.env.widget.detail": "Un widget en forme de console pour l’écran d’accueil de l’iPhone, qui affiche vos jeux récents et les plus joués ; touchez une couverture pour jouer. Avec un identifiant Apple gratuit, chaque nouvelle installation utilise un App ID de plus (10 par 7 jours).",
+  "home.card.daysLeft": "Encore %d jours",
+  "home.card.expired": "Expiré"
 }

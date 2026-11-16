@@ -66,6 +66,79 @@ def classify(path, text='', repo=''):
     return 'other', '', ''
 
 
+# 画面类再分「降负载 / 提画质」（11-16 维护者：iOS 只收降负载类；判据 = 比游戏在我们这里的底座档默认少干活还是多干活）。
+#   信号只取补丁自己的：own_name 里的变体目录 / 文件名、文件头那行游戏名之后的变体说明、各段的段注释（//、# 行）；游戏名、作者署名、网址不算。
+#   同一份里两类都中、出现 900p–1080p（不知道这款底座原生多少，判不出升降）、或带中性改动（视野 / HUD / 颜色…，整份开关、iOS 不收中性）→ 认不出，仍留 gfx。
+_OFF = r'(?:disabl\w*|remov\w*|no|off|turn[ _-]*off|without|kill\w*|delet\w*)'
+LOAD = re.compile(_OFF + r'[ _-]*(?:the[ _-]*)?(?:fxaa|taa|smaa|aa\b|anti[ _-]*alias\w*|motion[ _-]*blur|camera[ _-]*blur|radial[ _-]*blur|blur|dof\b|depth[ _-]*of[ _-]*field|bloom|'
+                  r'shadows?|ambient[ _-]*occlusion|ssao|ao\b|fog|volumetric\w*|particles?|post[ _-]*process\w*|god[ _-]*rays?|light[ _-]*shafts?|reflections?|ssr\b|grass|foliage|lens[ _-]*flare)'
+                  r'|\b(?:fxaa|taa|smaa|anti[ _-]*alias\w*|motion[ _-]*blur|camera[ _-]*blur|dof|depth[ _-]*of[ _-]*field|bloom|ssao|ambient[ _-]*occlusion|fog|volumetric\w*|god[ _-]*rays?|lens[ _-]*flare|post[ _-]*process\w*)[ _-]*(?:off|disabled?|removed?)\b'   # 否定词写在后面：「Force FXAA Off」「Bloom Disabled」
+                  r'|(?:lower\w*|reduc\w*|decreas\w*|half)[ _-]*(?:the[ _-]*)?(?:render(?:ing)?[ _-]*)?(?:res\b|resolution|lod|shadows?|draw[ _-]*distance|particles?|grass|foliage)'
+                  r'|\b(?:360|480|504|540|576|600|648|720)p\b|\b(?:640|854|960|1024|1152|1280)[ _]*x[ _]*(?:360|480|540|576|648|720)\b'
+                  r'|performance[ _-]*mode|force[ _-]*handheld|handheld[ _-]*(?:mode|res\w*|profile|settings)|half[ _-]*res\w*|low[ _-]*(?:quality|settings|graphics|preset)'
+                  r'|dynamic[ _-]*res\w*[ _-]*(?:lower|min\w*|threshold|floor)')
+QUAL = re.compile(r'\b(?:1152|1200|1296|1440|1620|1800|2160|2880|4320)p\b|\b[2-8]k\b|\b(?:1920[ _]*x[ _]*1200|2[0-9]{3}[ _]*x[ _]*1[2-9][0-9]{2}|[3-9][0-9]{3}[ _]*x[ _]*[0-9]{4})\b'
+                  r'|(?:increas\w*|improv\w*|enhanc\w*|higher|better|high|boost\w*|max\w*|extend\w*|ultra)[ _-]*(?:the[ _-]*)?(?:render(?:ing)?[ _-]*)?(?:res\b|resolution|lod|shadows?|draw[ _-]*distance|quality|anisotrop\w*|textures?|detail|graphics|settings|preset|mip\w*|filtering)'
+                  r'|anisotrop\w*|\baf[ _]*x?16\b|\b16x[ _]*af\b|lod[ _-]*(?:increas\w*|boost\w*)|force[ _-]*max|upscal\w*|sharpen\w*|msaa|supersampl\w*|docked[ _-]*mode|force[ _-]*docked'
+                  r'|' + _OFF + r'[ _-]*(?:dynamic[ _-]*res\w*|resolution[ _-]*scaling|drs\b)|(?:lock\w*|fix\w*)[ _-]*(?:to[ _-]*)?(?:max|native)')
+QUAL_WH = re.compile(r'\b\d{3,4}[ _]*x[ _]*(?:1[2-9]\d\d|[2-9]\d{3})\b')   # 高 ≥ 1200 的宽×高
+# 判不出升降的：721p–1151p（900p–1080p 是底座 / 掌机一对常见写法，不知道这款底座原生多少）、同高度的宽×高
+AMBIG = re.compile(r'\b(?:7[3-9]\d|8\d\d|9\d\d|10\d\d|11[0-4]\d)p\b|\b\d{3,4}[ _]*x[ _]*(?:7[3-9]\d|8\d\d|9\d\d|10\d\d|11[0-4]\d)\b')
+RES_TOKEN = re.compile(r'\b\d{3,4}p\b|\b\d{3,4}[ _]*x[ _]*\d{3,4}\b|resolution|\bres\b')
+DYN = re.compile(r'dynamic[ _-]*res\w*|resolution[ _-]*scaling|\bdrs\b')
+DYN_LOWER = re.compile(r'dynamic[ _-]*res\w*[ _-]*(?:lower|min\w*|threshold|floor)')
+CODE_NOTE = re.compile(r'[0-9a-f]{20,}|\b(?:movz?|movk|movn|fmov|ldr\w*|str\w*|ldp|stp|add|sub|cmp|fcmp|orr|and|eor|lsl|lsr|nop|ret|bl?|br|blr|b\.\w+|cbn?z|tbn?z|fm(?:ul|add|in|ax)\w*|[su]cvtf|fcvt\w*)\s+(?:[wxsdqv]\d+|wzr|xzr|sp|#|\[)', re.I)   # 汇编备注：助记符后跟寄存器 / 立即数；20 位以上十六进制（构建号 / 数据串；16 位的程序号不算）
+NEUTRAL = re.compile(r'(?<![\d.])\d{1,2}\s*:\s*\d{1,2}(?![\d.])|stretch|\bfov\b|field[ _-]*of[ _-]*view|camera|\bhud\b|\bui\b|cursor|intro|skip|outlines?|colou?r|saturation|tint|vignette|letterbox|black[ _-]*bars|'
+                     r'\bcrop|zoom|brightness|gamma|contrast|crosshair|\bmenu|subtitle|font|cutscene|aspect|widescreen|ultra[ _-]*wide')
+
+
+def _dir_signals(path, text=''):
+    """补丁自己的变体说明（见上）：own_name 去掉文件名里的版本号、程序号与 [mods] 包名；pchtxt 文件头「# 游戏名 [程序号] 版本 - 变体」只取变体；段注释整行"""
+    parts = own_name(path).split('/')
+    out = []
+    for p in parts:
+        p = GID.sub(' ', re.sub(r'\.(?:pchtxt|ips|zip|rar|7z)$', '', p, flags=re.I))
+        p = re.sub(r'\bv?\d+(?:\.\d+)+\b', ' ', p)   # 版本号 1.3.0 / v2.7.7.92380（含 720 这类数字时不当分辨率）
+        if p.strip().lower() not in ('', 'exefs', 'mods'):
+            out.append(p)
+    head = True
+    for line in text.splitlines():
+        t = line.strip()
+        if not t or t.startswith('@'):
+            continue
+        if t.startswith(('#', '//')):
+            t = t.lstrip('#/ ').strip()
+            if CODE_NOTE.search(t):   # 汇编 / 十六进制备注（「mov w9, #0x500 (handheld resx)」「720 // 0005…」）说的是某条指令，不是这份补丁要做什么
+                continue
+            if head and GID.search(t):   # 文件头：游戏名 [程序号] 版本 - 变体 / ; 变体
+                head = False
+                m = re.search(r'01[0-9A-Fa-f]{14}\]?\s*(?:v?\d+(?:\.\d+)*)?\s*(.*)$', t)
+                t = re.sub(r'^[-;:,\s]+', '', m.group(1)) if m else ''
+            t = re.sub(r'\bv?\d+(?:\.\d+)+\b', ' ', t)
+            if t:
+                out.append(t)
+    return re.sub(r'https?://\S+', ' ', '\n'.join(out).lower())
+
+
+def gfx_dir(path, text=''):
+    """画面类的方向：load（降负载，iOS 收）/ quality（提画质，只进 Mac）/ ''（认不出或中性，iOS 不收）"""
+    s = _dir_signals(path, text)
+    if AMBIG.search(s):
+        return ''
+    load, qual = bool(LOAD.search(s)), bool(QUAL.search(s) or QUAL_WH.search(s))
+    # 降负载里混着动态分辨率开关（「关 FXAA 和动态分辨率」：关动态分辨率 = 锁最高档，是提画质）→ 认不出
+    if load and DYN.search(DYN_LOWER.sub(' ', s)):
+        return ''
+    # 只改掌机档分辨率（「720p handheld target」）：我们回给游戏的是底座档，掌机档那组数用不上，说不上降负载
+    if load and RES_TOKEN.search(s) and 'handheld' in s and not re.search(r'force[ _-]*handheld|handheld[ _-]*(?:mode|profile|settings)', s):
+        return ''
+    if load and not qual and not NEUTRAL.search(LOAD.sub(' ', s)):
+        return 'load'
+    if qual and not load:
+        return 'quality'
+    return ''
+
+
 def bids_of(path, data):
     name = os.path.splitext(os.path.basename(path))[0]
     if path.lower().endswith('.ips'):
@@ -74,7 +147,7 @@ def bids_of(path, data):
 
 
 CHEAT_LIBS = {'bad1dea/NXCheats', 'HamletDuFromage/switch-cheats-db', 'ChanseyIsTheBest/NX-60FPS-RES-GFX-Cheats'}
-CHEAT = re.compile(r'(?:^|/)cheats/([0-9A-Fa-f]{16})\.txt$', re.I)
+CHEAT = re.compile(r'(?:^|/)cheats/(?:[^/]+/)?([0-9A-Fa-f]{16})\.txt$', re.I)   # 也认多一层目录：cheats/<程序号或游戏名>/<构建号>.txt（tomvita/MyNXCheats 的写法，11-16）
 
 
 def members(full):
@@ -158,17 +231,19 @@ def scan(mirror, keep_local=False, cheat_libs=False):
                 lic = next((l.strip() for l in open(p, encoding='utf-8', errors='replace') if l.strip()), '')[:80]
                 break
         def row(rel, name, data, extra=None):
-            m = CHEAT.search(name)
+            m = CHEAT.search(name); gdir = ''
             if m:
                 if repo in CHEAT_LIBS and not cheat_libs:
                     return
                 kind, cat, tfps, aspect, bids = 'cheat', 'cheat', '', '', [m.group(1).upper()]
             else:
                 kind = 'ips' if name.lower().endswith('.ips') else 'pchtxt'
-                cat, tfps, aspect = classify(rel + '/' + name if extra else rel, data.decode('utf-8', 'replace') if kind == 'pchtxt' else '', repo)
+                text = data.decode('utf-8', 'replace') if kind == 'pchtxt' else ''
+                cat, tfps, aspect = classify(rel + '/' + name if extra else rel, text, repo)
+                gdir = gfx_dir(rel + '/' + name if extra else rel, text) if cat == 'gfx' else ''
                 bids = bids_of(name, data)
             rows.append(dict(repo=repo, commit=commit, path=rel, size=len(data), sha256=hashlib.sha256(data).hexdigest(), kind=kind, cat=cat,
-                             target_fps=tfps, aspect=aspect, gids=sorted({g.upper() for g in GID.findall(rel + '/' + name)}), bids=bids, license=lic, **(extra or {})))
+                             target_fps=tfps, aspect=aspect, **({'dir': gdir} if gdir else {}), gids=sorted({g.upper() for g in GID.findall(rel + '/' + name)}), bids=bids, license=lic, **(extra or {})))
             if keep_local:
                 rows[-1]['_local'] = local
         tree = true_paths(repo, commit) if os.environ.get('S2A_PATCH_INDEX_NO_GH') != '1' else None

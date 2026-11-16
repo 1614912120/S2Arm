@@ -1837,6 +1837,7 @@
   "s2arm.controller.autoConnect": "Conectar automáticamente mandos de Switch 2",
   "s2arm.controller.disconnectOnClose": "Desconectar al cerrar el juego",
   "s2arm.controller.openBluetooth": "Abrir Ajustes de Bluetooth",
+  "s2arm.controller.thirdPartyMotion": "Los mandos con forma de Xbox, como los de 8BitDo o GameSir, solo tienen controles de movimiento en modo Switch.",
   "s2arm.controller.assignPlayers": "Asignar jugadores",
   "s2arm.controller.howPair": "Unir dos / Mando completo",
   "s2arm.controller.howPairKeys": "Pulsa L + R a la vez",
@@ -1854,5 +1855,10 @@
   "s2arm.controller.gameController": "Mando de juego",
   "s2arm.controller.bluetooth": "Bluetooth",
   "s2arm.controller.toolbar": "Mando",
-  "s2arm.punct.list": ", "
+  "s2arm.punct.list": ", ",
+  "s2arm.env.widget.group": "Widget de pantalla de inicio",
+  "s2arm.env.widget.title": "Incluir el widget de pantalla de inicio en el iPhone",
+  "s2arm.env.widget.detail": "Un widget con forma de consola para la pantalla de inicio del iPhone que muestra tus juegos más recientes y más jugados; toca una portada para jugar. Con un Apple ID gratuito, cada instalación nueva usa un App ID más (10 cada 7 días).",
+  "home.card.daysLeft": "Quedan %d días",
+  "home.card.expired": "Caducado"
 }

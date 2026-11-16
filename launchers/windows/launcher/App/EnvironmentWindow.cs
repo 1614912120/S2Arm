@@ -389,8 +389,13 @@ public sealed partial class EnvironmentWindow : Window
     }
 
     /// <summary>设置页（入口整理）：界面语言 → 存放位置（游戏库 / iPhone 包 / 磁盘空间）→ 密钥 → 装机方式 → AI 操作 → 出包环境检查 → 运行路径（开发用）</summary>
+    private string settingsFrom = "library";
     private void RenderSettings(StackPanel body)
     {
+        var back = Action("nav.back", () => Navigate(settingsFrom == "settings" ? "library" : settingsFrom));   // 返回进来前那一页（11-16：原先只能再点一次顶栏设置图标、回不到出包页）
+        back.HorizontalAlignment = HorizontalAlignment.Left;
+        AutomationId(back, "settings.back");
+        body.Children.Add(back);
         body.Children.Add(Label(T("nav.settings"), 23));
 
         // 界面语言（原在顶栏）
@@ -443,6 +448,16 @@ public sealed partial class EnvironmentWindow : Window
                 Action("library.import_keys", () => BeginPicker(ChooseKeysAsync), !libraryBusy))));
 
         body.Children.Add(InstallModeCard());   // 装到 iPhone 的方式（v0.3.0，InstallModePage.cs）
+
+        var widgetRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };   // 主屏小组件（11-16，缺省开）
+        var widgetText = new StackPanel { Spacing = 4 };
+        widgetText.Children.Add(Label(T("environment.widget.title"), 16));
+        widgetText.Children.Add(Label(homeWidgetError.Length > 0 ? homeWidgetError : T("environment.widget.detail")));
+        widgetRow.Children.Add(widgetText);
+        var widgetToggle = new ToggleSwitch { IsChecked = HomeWidget, OnContent = "", OffContent = "", VerticalAlignment = VerticalAlignment.Center };
+        widgetToggle.IsCheckedChanged += (_, _) => { if (widgetToggle.IsChecked != HomeWidget) SetHomeWidget(widgetToggle.IsChecked == true); };
+        Grid.SetColumn(widgetToggle, 1); widgetRow.Children.Add(widgetToggle);
+        body.Children.Add(Card(widgetRow));
 
         var aiRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var aiText = new StackPanel { Spacing = 4 };

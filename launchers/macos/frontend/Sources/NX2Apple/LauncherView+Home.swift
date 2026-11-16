@@ -88,14 +88,14 @@ extension LauncherView {
                 HStack(spacing: 10) {
                     Text(txt("library.hostUpdate.incompatible")).font(.manrope(12.5)).foregroundStyle(.white.opacity(0.75)).fixedSize(horizontal: false, vertical: true)
                     Button(txt("library.hostUpdate.prepare")) { model.exportFor = game.id }
-                        .buttonStyle(.link).disabled(model.busy).controllerID("hero.hostUpdate")
+                        .buttonStyle(.link).disabled(model.mainBusy).controllerID("hero.hostUpdate")
                 }
             }
             if let error = model.actionError(for: game.id) {
                 Text(loc.backend(error)).font(.manrope(12)).foregroundStyle(LauncherPalette.danger).lineLimit(2)
             }
             HStack(spacing: 14) {
-                Button { homePrimary(game) } label: { Image(systemName: homePrimarySymbol(game)) }
+                Button { homePrimary(game) } label: { Label(homePrimaryTitle(game), systemImage: homePrimarySymbol(game)) }
                     .controllerButtonStyle(ConsolePlayButtonStyle()).disabled(model.cloudSyncing)
                     .keyboardShortcut(.return, modifiers: [])
                     .help(homePrimaryTitle(game)).accessibilityLabel(homePrimaryTitle(game))
@@ -106,23 +106,19 @@ extension LauncherView {
                 } label: {
                     fitLabel(txt("library.hero.selfSign"), "square.and.arrow.up")
                 }
-                .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.selfSign")
+                .controllerButtonStyle(ConsolePillButtonStyle()).controllerID("hero.selfSign")
                 .help(txt("library.hero.selfSign")).accessibilityLabel(txt("library.hero.selfSign"))
-                .disabled(game.iphoneReady ? model.busy : model.busy && model.session?.export == nil)
+                // 能直接导出的走手机槽（出包在跑也行，手机槽忙就排队）；要先出 iPhone 包的，主槽在跑非出包作业时等（出包在跑会排队）
+                .disabled(game.iphoneExportable ? model.phoneQueued(game.id) : model.mainBusy && model.session?.export == nil)
                 // 主按钮是「开始游戏」时，出过 iPhone 包的款照样要能一键装到 iPhone（主线游戏库两个都在）
                 if game.playable, game.iphoneReady {
                     Button { model.selfSigning = false; model.targetInstalledDevice(of: game); installFor = game.id } label: {
                         fitLabel(txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"), "iphone")
                     }
-                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.install").disabled(model.busy)
+                    .controllerButtonStyle(ConsolePillButtonStyle()).controllerID("hero.install")   // 只开装机窗：别的作业在跑，窗里点装机会排队
                     .help(txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"))
                 }
-                // 这款上次出包 / 装机 / 导出的结果页（主线游戏库「查看结果」）
-                if model.finishedExports[game.id] != nil, !(model.busy && model.session?.gameID == game.id) {
-                    Button { model.viewingResult = model.finishedExports[game.id] } label: { Image(systemName: "checkmark.seal") }
-                        .controllerButtonStyle(ConsoleIconButtonStyle(size: 52)).controllerID("hero.results")
-                        .help(txt("library.hero.results")).accessibilityLabel(txt("library.hero.results"))
-                }
+                // 只留两个人人认得的圆钮（…、♡）；「查看出包结果」「启动设置」收进「…」菜单（11-16 维护者：三条横杠看不出是启动设置，一行三种形状不统一）
                 Button { moreFor = game.id } label: { Image(systemName: "ellipsis") }
                     .controllerButtonStyle(ConsoleIconButtonStyle(size: 52)).controllerID("hero.more")
                     .help(loc.t("home.details")).accessibilityLabel(loc.t("home.details"))
@@ -133,9 +129,6 @@ extension LauncherView {
                     .help(loc.t(home.favorites.contains(game.id) ? "home.unfavorite" : "home.favorite"))
                     .accessibilityLabel(loc.t(home.favorites.contains(game.id) ? "home.unfavorite" : "home.favorite"))
                     .accessibilityAddTraits(home.favorites.contains(game.id) ? .isSelected : [])
-                Button { displayFor = game.id } label: { Image(systemName: "slider.horizontal.3") }
-                    .controllerButtonStyle(ConsoleIconButtonStyle(size: 52)).controllerID("hero.settings")
-                    .help(txt("library.menu.launchSettings")).accessibilityLabel(txt("library.menu.launchSettings"))
             }.padding(.top, compact ? 4 : 10)
         }
         .frame(maxWidth: min(740, size.width * 0.64), alignment: .leading)
@@ -251,6 +244,7 @@ extension LauncherView {
                         Image(systemName: "heart.fill").font(.system(size: 10)).padding(6).background(.black.opacity(0.6), in: Circle()).padding(8)
                     }
                 }
+                .overlay(alignment: .bottomLeading) { expiryBadge(game) }
                 .padding(5)
                 .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(focused ? 1 : selected ? 0.9 : 0), lineWidth: focused ? 3 : 2))
                 .shadow(color: .black.opacity(selected ? 0.4 : 0.2), radius: selected ? 12 : 6, y: 6)
@@ -262,6 +256,22 @@ extension LauncherView {
             .accessibilityAddTraits(selected ? .isSelected : []).controllerID("card." + game.id)
             .contextMenu { cardMenu(game) }
             .modifier(CardDrop(targeted: cardTargeted(game.id), artwork: artworkSide + 10) { dropOnCard($0, game: game) })
+    }
+
+    /// 卡片上的 iPhone 签名角标（旧版每张卡片下都有「还有 N 天 / 已过期」，新主题只在选中那款显示）：免费账号装过的款才有；
+    ///   还剩 1–2 天橙色、过期红色，其余白字深底——扫一眼就知道哪款要续签
+    @ViewBuilder func expiryBadge(_ game: GameSummary) -> some View {
+        if game.iphoneInstalledAt != nil, let days = game.iphoneDaysLeft() {
+            let color: Color = days == 0 ? LauncherPalette.danger : days <= 2 ? .orange : .white
+            Label(days == 0 ? loc.t("home.card.expired") : String(format: loc.t("home.card.daysLeft"), days), systemImage: "iphone")
+                .font(.manrope(11, .bold)).labelStyle(ConsoleBadgeLabelStyle())
+                .foregroundStyle(color)
+                .padding(.horizontal, 7).padding(.vertical, 4)
+                .background(.black.opacity(0.68), in: Capsule())
+                .overlay(Capsule().strokeBorder(color.opacity(days <= 2 ? 0.7 : 0.18)))
+                .padding(8)
+                .accessibilityIdentifier("card.expiry." + game.id)
+        }
     }
 
     private var homeFooter: some View {
@@ -277,14 +287,15 @@ extension LauncherView {
     private func homeHint(_ shortcut: PadShortcut, _ title: String) -> some View {
         HomeControllerHint(presentation: navigation.presentation, shortcut: shortcut, title: title)
     }
+    // 主按钮只在主槽有作业（出包 / 一局 / 导入…）时变成「回到当前任务」；手机作业在顶栏胶囊里看，不占主按钮
     private func homePrimarySymbol(_ game: GameSummary) -> String {
-        if model.busy { return "arrow.up.forward.app" }
+        if model.mainBusy { return "arrow.up.forward.app" }
         if game.playable { return model.cloudSyncing ? "arrow.triangle.2.circlepath" : "play.fill" }
         if game.iphoneReady { return "iphone.and.arrow.forward" }
         return "shippingbox"
     }
     func homePrimaryTitle(_ game: GameSummary) -> String {
-        if model.busy { return loc.t("home.currentTask") }
+        if model.mainBusy { return loc.t("home.currentTask") }
         if game.playable { return loc.t(model.cloudSyncing ? "s2arm.cloud.syncing" : "library.play") }
         if game.iphoneReady {
             return txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install")
@@ -292,7 +303,7 @@ extension LauncherView {
         return loc.t("home.prepare")
     }
     func homePrimary(_ game: GameSummary) {
-        if model.busy {
+        if model.mainBusy {
             model.sessionHidden = false
             if model.batchRunning { model.batchShown = true }
             return
@@ -382,5 +393,12 @@ private struct HomeControllerHint: View {
             Image(systemName: presentation.symbols[shortcut.displayed] ?? shortcut.displayed.symbol).font(.system(size: 19))
             Text(title).font(.manrope(11.5))
         }.fixedSize()
+    }
+}
+
+/// 角标里的小图标 + 字
+struct ConsoleBadgeLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 4) { configuration.icon.font(.system(size: 10, weight: .bold)); configuration.title }
     }
 }

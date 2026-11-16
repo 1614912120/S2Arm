@@ -37,7 +37,9 @@ import sizes
 #   中间另捞心跳行与最后一次崩溃现场，manifest.json 的 truncated 写明每份原长、留了多少、截掉多少。
 #   原先每份只留头尾各 16 KB + 心跳行，帧读数整段丢，玩家只能再传完整日志（#41）
 DELETE_LOCK_WAIT_S = 120   # 删除等执行锁的上限：启动器发删除前先取消这款在跑的任务，它杀子进程组收尾比短作业排队（core.LOCK_WAIT_S）久
-DIAGNOSTIC_LOG_LIMIT = 200 << 20     # 单份原文上限（压缩后约 20 MB）
+DIAGNOSTIC_LOG_LIMIT = 12 << 20     # 单份原文上限：诊断收件按成员解开后的大小收（tools/diag_contract/diag_contract.json limits.member_bytes 16 MB），
+#   超了整包被拒、玩家丢整份诊断（11-16 原先 200 MB，长局 Mac 日志整包 400）。头尾 12 MB + 中间心跳 / 现场段（≤ 约 160 KB）+ 脱敏与非法字节替换的余量仍在 16 MB 内；
+#   tests/diag_contract_test.sh 核「上限 + 中间段 + 余量 ≤ 契约 member_bytes」并真打超长日志过收件判定
 DIAGNOSTIC_LOG_HEAD = DIAGNOSTIC_LOG_LIMIT // 8
 DIAGNOSTIC_LOG_TAIL = DIAGNOSTIC_LOG_LIMIT - DIAGNOSTIC_LOG_HEAD
 DIAGNOSTIC_LOG_BEATS = 64000         # 中间心跳行最多保留这么多字节（10 秒一行，约一小时）
@@ -2256,21 +2258,21 @@ def sgrade_badge(c, gid, image):
     return False
 
 
-CONTAINER_KIT = layout.IOS_KIT   # 每款 image/ios/kit：装机组装容器要用的文件，出包成功后从产物根存一份独立副本（游戏库结构 v3；旧布局是 iPhone/<号>/container-kit）
+CONTAINER_KIT = layout.IOS_KIT   # 每款 .programs/<程序号>/kit（11-16 起；之前在 image/ios/kit）：装机组装容器要用的文件，出包成功后从产物根存一份独立副本（游戏库结构 v3；旧布局是 iPhone/<号>/container-kit）
 
 
 def save_container_kit(c, gid, root, dest=None):
     """把组装容器要读的文件（ship_ext.place_game / display_name / 随包表：顶层普通文件、ctl/control.nacp、programs/<n>/）存成不依赖产物根的副本。
     root 里的链接按内容拷，之后删产物根、RomFS 存储、Windows 的 work/ 都不影响装机、续签和单壳追加。没有 main.npdm 返回 None，不动旧的。
-    dest 给了（迁移旧布局时）就存成 dest/container-kit，否则存到这款的 image/ios/kit。"""
+    dest 给了（迁移旧布局时）就存成 dest/container-kit，否则存到游戏程序专用文件夹（layout.program_store）的 kit。"""
     root = Path(root)
     if not (root / "main.npdm").is_file():
         return None
-    out = Path(dest) if dest else layout.image_ios(c, gid)
+    out = Path(dest) if dest else layout.program_store(c, gid, create=True)
     out.mkdir(parents=True, exist_ok=True)
     name = "container-kit" if dest else CONTAINER_KIT
     kit, temporary = out / name, out / (name + ".partial")
-    managed = c.library if dest else layout.root_of(c, gid)
+    managed = c.library
     if temporary.exists():
         _rm(c, managed, temporary)
     def copy_files(source, dest):
@@ -2290,6 +2292,9 @@ def save_container_kit(c, gid, root, dest=None):
     if kit.exists():
         _rm(c, managed, kit)
     os.replace(temporary, kit)
+    legacy = layout.image_ios(c, gid, create=False) / CONTAINER_KIT
+    if not dest and legacy.is_dir():   # 游戏文件夹里旧位置的那份已被这次新存的取代
+        _rm(c, layout.root_of(c, gid), legacy)
     return kit
 
 
@@ -2465,11 +2470,13 @@ def prune_build(c, gid, *, retain_compiler=True, record=True):
 
 
 def drop_from_container(c, gid):
-    """游戏库里删了的款从各台手机的记录（devices/<设备>.json）摘掉，不装机：下次给那台装机时现组的容器就不再带它（#227）"""
+    """游戏库里删了的款从各台手机的记录（devices/<设备>.json）摘掉，不装机：下次给那台装机时现组的容器就不再带它（#227）。
+    同时记进这台的 deleted（本机删过的款）：手机上它还在时，组壳提示说「已从这台电脑的游戏库删除」，不说成「在别的电脑上装的」（11-16）"""
     gid = gid.upper()
     for key, rec in layout.devices(c):
         if gid in (rec.get("games") or {}):
             rec["games"].pop(gid)
+            rec["deleted"] = sorted(set(rec.get("deleted") or []) | {gid})
             layout.save_device(c, key, rec)
 
 
@@ -2505,6 +2512,11 @@ def delete(c):
             if moved:
                 trashed.append((c.work_root, moved))
         drop_from_container(c, gid)
+        programs = layout.program_store(c, gid)   # 删除游戏 = 从库里删掉、也从各台手机记录摘掉：这款的程序专用文件夹一并删
+        if programs.exists():
+            moved = _to_trash(c, c.library, programs, gid)
+            if moved:
+                trashed.append((c.library, moved))
         cat = c.catalog()
         cat["games"] = [g for g in cat["games"] if g["id"] != gid]
         atomic(c.library / "catalog.json", cat)
@@ -2605,7 +2617,7 @@ SPACE_PARTS = (
     ("legacy", "旧版残留", "旧版本留下的解包和中间文件，出包成功后不再保留；删了不影响已出好的包和 Mac 版本"),
     ("shaders", "着色器与出包缓存", "下次出包会重新翻译着色器（大游戏要多花较长时间）"),
     ("mac", "Mac 运行版本", "下次在 Mac 上玩之前会重新准备"),
-    ("ipa", "已出好的 iPhone 包", "删了要重新出包才能再装到 iPhone；已装好的游戏不受影响"),
+    ("ipa", "已出好的 iPhone 包", "只删资源包：手机上已装的不受影响，以后更新 S2Arm 也照样带上这款；要装到别的手机或重新推资源时再出一次包"),
 )
 SPACE_KEPT = ("saves", "logs")
 
@@ -2633,7 +2645,8 @@ def space_parts(c, gid):
     """{部件 id: [路径…]}，外加不给删的 saves / logs。路径都在游戏库或私有目录之内；不存在的不列"""
     out = layout.ios_work(c, gid, create=False)
     shared = {c.work_root / "cache" / "air", c.work_root / "cache" / "pso", c.work_root / "run" / "gal_dl_cache"}   # 各款共用的编库缓存：不归任何一款
-    ipa = [layout.image_ios(c, gid, create=False)]
+    layout.ios_kit(c, gid)   # 旧库程序件还在 image/ios/kit 的，先搬进专用文件夹（不随 iPhone 包一起删）
+    ipa = [layout.ios_pack(c, gid)]   # 只删资源包：程序件在专用文件夹（layout.program_store），删了 iPhone 包也照样能更新 S2Arm、带上这款
     gdir = layout.find_game(c, gid)
     parts = {
         "legacy": _build_entries(c, gid),   # 不含出包日志（下面 logs 项，只报不删）

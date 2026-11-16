@@ -647,6 +647,7 @@ s2a_gate_step "$PY" "$android_dir/tests/archive_check_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/compare_apks_test.py"
 s2a_gate_step "$PY" "$android_dir/tools/test_compare_apks.py"
 s2a_gate_step "$PY" "$android_dir/cs/test_nuget_verify.py"
+s2a_gate_step "$PY" "$android_dir/cs/test_static_cache.py"
 # doctor 源码布局与缓存契约（版本表、NDK 宿主目录、codec recipe-key 缓存）。
 s2a_gate_step "$PY" -B "$android_dir/doctor/test_doctor.py"
 

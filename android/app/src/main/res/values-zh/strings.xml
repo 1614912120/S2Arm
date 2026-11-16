@@ -127,4 +127,8 @@
     <string name="mods_note_exefs">里面的代码补丁（exefs 的 pchtxt / IPS）这里不收：只导入资源替换（romfs）</string>
     <string name="mods_note_empty">「%1$s」的 romfs 是空的，没收</string>
     <string name="mods_note">mod 下次起局生效，按文件夹名顺序叠，后面的覆盖前面的；取消勾选即关闭。改 mod 前先结束游戏。</string>
+    <string name="touch_appearance_opacity">按键不透明度</string>
+    <string name="touch_appearance_smaller">缩小</string>
+    <string name="touch_appearance_larger">放大</string>
+    <string name="touch_appearance_opacity_value">%1$d%%</string>
 </resources>

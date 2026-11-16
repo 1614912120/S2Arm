@@ -438,6 +438,26 @@ def refresh_library_ipa(c):
     return layout.phone_ipa(c)
 
 
+# 出包与装机并行（11-16 维护者「出包时也能装别的游戏到 iPhone」）：两把库锁，全局取锁顺序 = 手机锁 → 各款程序锁（按游戏号排序），不会成环。
+#   程序锁（.program-<游戏号>.lock）：护住这款的程序件（kit）、资源包（.pack）与 game.json 的 ios 记录——出包只在交付换件那几秒拿；
+#     装机 / 导出在 refresh_ios（可能原地改别款的 kit）+ 组壳（读各款 kit）那段拿它要带的全部款；推资源包期间不拿。
+#   手机锁（.phone.lock）：装机类作业（装到 iPhone / 更新 / 装回上一版 / 从手机删 / 推导出包 / 出包早装）一次一个——默认位置根的 S2Arm.ipa、
+#     S2Arm.previous.ipa 全库一份、不分设备，两台手机并行会互相换掉
+PROGRAM_LOCK_WAIT_S, PHONE_LOCK_WAIT_S = 1800, 7200
+
+
+@contextlib.contextmanager
+def program_locks(c, games):
+    with contextlib.ExitStack() as stack:
+        for g in sorted({str(g).upper() for g in games if g}):
+            stack.enter_context(c.lock("program-" + g, wait=PROGRAM_LOCK_WAIT_S))
+        yield
+
+
+def phone_lock(c):
+    return c.lock("phone", wait=PHONE_LOCK_WAIT_S)
+
+
 CONTAINER_BUNDLE = "io.s2arm.games"   # 组装时的占位包名：Mac 装机换成团队专属的 io.s2arm.games.<团队>（install.container_bundle_id）；Windows 由 plumesign 按账号定
 
 
@@ -446,13 +466,24 @@ def deliver(c, gid, root, pack_dir, ipa):
     先存容器件、再换资源包、最后写 game.json：中途被打断时 game.json 还是上一版的，资源包号对不上就按「变了」补推，不会少推"""
     import host_update
     from library import save_container_kit, _rm
-    if root is None or save_container_kit(c, gid, root) is None:
+    with program_locks(c, [gid]):
+        kit = None if root is None else save_container_kit(c, gid, root)
+    if kit is None:
         raise Failure("一键出包结束了，但产物根里没有组装 iPhone 版要用的文件（main.npdm），请查看日志。", code="package_failed")
     to_img(c, gid, root, pack_dir)
     want = read(Path(pack_dir) / "manifest.json", {}).get("index_sha256")
     if not want:
         raise Failure(f"资源包缺清单或清单没有 index_sha256（{pack_dir}）：请重新打 iPhone 包。", code="package_failed")
+    with program_locks(c, [gid]):   # 换资源包 + 记 ios：装机正在推 / 读这款时等它那段做完
+        _swap_pack(c, gid, pack_dir, want)
+    Path(ipa).unlink(missing_ok=True)
+
+
+def _swap_pack(c, gid, pack_dir, want):
+    import host_update
+    from library import _rm
     image = layout.image_ios(c, gid)
+    image.mkdir(parents=True, exist_ok=True)   # 程序件改存专用文件夹（layout.program_store）后，image/ios 不再由存程序件时顺带建
     managed = layout.root_of(c, gid)
     dest, old = image / layout.IOS_PACK, image / (layout.IOS_PACK + ".old")
     if old.exists():
@@ -469,7 +500,6 @@ def deliver(c, gid, root, pack_dir, ipa):
     from rewrite_refresh import rewriter_id   # 这次的改写产物出自哪版改写器：改写器以后修了，更新手机时只核记号不同的款（rewrite_refresh.py）
     from sgrade_bf import BF_GEN   # 这次的直连库出自本引擎翻译器：可读瓦片版代数（S 级升级按它判要不要补 _bf，pack/jobs/sgrade_bf.py）
     layout.update_info(c, gid, ios=dict(shellId=current_shell_id(c), pack=want, rewriterId=rewriter_id(c), bfGen=BF_GEN, **compat))
-    Path(ipa).unlink(missing_ok=True)
 
 
 CONSUME_MARK = ".img_consume_inflight"   # 出包工作目录里：写 IMG 正在边写边删产物根 RomFS（#746），写成功才删
@@ -550,7 +580,7 @@ def usable_kit(c, gid, sid, failed=()):
     kit = layout.ios_kit(c, gid)
     if not (kit / "main.npdm").is_file():
         return None
-    ios = layout.game_info(c, gid).get("ios") or {}
+    ios = layout.program_info(c, gid)   # 游戏文件夹被删了也读得到（专用文件夹的那份）
     if ios.get("shellId") == sid:
         return resolve_path(kit)
     want = host_update.engine_compat(c)

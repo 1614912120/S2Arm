@@ -1840,6 +1840,7 @@
   "s2arm.controller.autoConnect": "自動連線 Switch 2 手把",
   "s2arm.controller.disconnectOnClose": "關閉遊戲後斷開手把",
   "s2arm.controller.openBluetooth": "開啟藍牙設定",
+  "s2arm.controller.thirdPartyMotion": "八位堂、蓋世小雞這類 Xbox 外形的手把，切到 Switch 模式才有體感。",
   "s2arm.controller.assignPlayers": "分配玩家",
   "s2arm.controller.howPair": "兩隻合併 / 整隻手把",
   "s2arm.controller.howPairKeys": "同時按 L + R",
@@ -1857,5 +1858,10 @@
   "s2arm.controller.gameController": "遊戲手把",
   "s2arm.controller.bluetooth": "藍牙",
   "s2arm.controller.toolbar": "手把",
-  "s2arm.punct.list": "、"
+  "s2arm.punct.list": "、",
+  "s2arm.env.widget.group": "主畫面小工具",
+  "s2arm.env.widget.title": "裝到 iPhone 時附帶主畫面小工具",
+  "s2arm.env.widget.detail": "iPhone 主畫面上的遊戲機造型小工具：顯示最近玩的遊戲和玩得最多的遊戲，點封面直接開。使用免費 Apple ID 時，每次新裝會多用一個 App ID 名額（7 天 10 個）",
+  "home.card.daysLeft": "還剩 %d 天",
+  "home.card.expired": "簽名已過期"
 }

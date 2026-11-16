@@ -28,6 +28,7 @@ struct ExportView: View {
                     // S 级优化（Beta，11-13）：这款这个版本命中了哪些社区补丁，命中的出包时自动打入。11-15 起总是出：卡片里有「导入 Mod」入口
                     //   （维护者「打包页增加 mod 导入，S 级优化又升级了」；原「没匹配就整张不出」时玩家找不到入口，没匹配时只剩一句「没有这个版本的补丁」+ 导入 Mod）
                     SGradeCard(model: model, gameID: game.id)
+                    downstream
                     platforms
                 }
                 .frame(maxWidth: 1120, alignment: .leading)
@@ -42,6 +43,22 @@ struct ExportView: View {
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             LauncherView.fileURLs(providers) { urls in model.batchSeed = game.id; model.importGames(urls, partialResults: true) }
             return true
+        }
+    }
+
+    // ---- 下游深度方案（#1272）：选过之后在这里看得到选的是哪套、能改。没选过不出（导出 iPhone 时确认页会问）----
+    //   「更改」弹同一个确认页（DownstreamConfirmSheet）；没有待出的单，选完只记下选择，下次导出 iPhone 按新选择走
+    @ViewBuilder private var downstream: some View {
+        if let offer = game.downstream, let choice = offer.choice {
+            let lang = loc.lang.sharedCode
+            let current = choice.isEmpty ? (offer.text(lang)?.original ?? "") : offer.name
+            CardGroup(BackendText.launcherText("export.downstream.group", language: lang), footnote: BackendText.launcherText("export.downstream.note", language: lang)) {
+                CardRow(current) {
+                    Button(BackendText.launcherText("export.downstream.change", language: lang)) { model.downstreamPromptFor = game.id }
+                        .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy).controllerID("export.downstream.change")
+                }
+                .accessibilityIdentifier("export.downstream")
+            }
         }
     }
 
@@ -120,7 +137,7 @@ struct ExportView: View {
                 ForEach(ExportPlatform.allCases) { platform in tile(platform) }
             }
             locationRow
-            if model.exportTargets.contains(.ios) { TargetDeviceRow(model: model); InstallModeLine(model: model) }   // 签名 / 安装方式收进环境检查（v0.3.0），这里只读 + 更改
+            if model.exportTargets.contains(.ios) { IosAfterPackPicker(model: model) }   // 出完之后：装到 iPhone / 导出自签 IPA（11-16 维护者：一个入口、两条分叉各走到底）
             if let error = model.choiceError {
                 Text(loc.backend(error)).font(.manrope(12)).foregroundStyle(LauncherPalette.danger).fixedSize(horizontal: false, vertical: true)
             }
@@ -227,7 +244,7 @@ struct ExportView: View {
         }
         .controllerButtonStyle(.plain)
         .controllerID("export.platform." + platform.rawValue)
-        .disabled(!open || model.busy)
+        .disabled(!open || model.mainBusy)
         .busyHint(model, disabled: open)
         .padTarget("export." + platform.rawValue, scope: "main", radius: 16) { model.toggleExport(platform) }
         .accessibilityLabel(loc.t("s2arm.export.platform." + platform.rawValue))
@@ -283,20 +300,76 @@ struct ExportView: View {
             Button(loc.t("s2arm.job.cancel")) { model.exportFor = nil }
                 .controllerButtonStyle(LauncherSecondaryButtonStyle(prominent: true))
                 .keyboardShortcut(.cancelAction).controllerID("export.cancel").controllerShortcut(.back)
-            Button { model.export(game, location: location.isEmpty ? nil : location) } label: {
-                Label(model.busy ? x("action.queue") : count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"), systemImage: "shippingbox.fill")
+            Button { model.startExport(game, location: location.isEmpty ? nil : location) } label: {
+                Label(model.mainBusy || model.phoneHolds(game.id) ? x("action.queue") : startTitle, systemImage: "shippingbox.fill")
             }
             .controllerButtonStyle(LauncherPrimaryButtonStyle(prominent: true))
             .disabled(blocker?.stopsStart == true)   // 缺文件 / 缺 keys 只在左边提示，不置灰（作业层核实）
             .busyHint(model, disabled: blocker == .busy)   // 别的任务（非出包）在跑：说在等谁（出包在跑时这里是「排队」，不置灰）
             .keyboardShortcut(.defaultAction)
             .controllerID("export.start").controllerShortcut(.rightTrigger)
-            .padTarget("export.start", scope: "main", radius: LauncherTheme.Metrics.controlRadius) { model.export(game, location: location.isEmpty ? nil : location) }
-            .accessibilityLabel(count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"))
+            .padTarget("export.start", scope: "main", radius: LauncherTheme.Metrics.controlRadius) { model.startExport(game, location: location.isEmpty ? nil : location) }
+            .accessibilityLabel(startTitle)
             .accessibilityIdentifier("export.start")
         }
         .padding(.horizontal, LauncherTheme.Metrics.libraryInset).padding(.vertical, 16)
         .frame(maxWidth: .infinity)
+    }
+}
+
+extension ExportView {
+    /// 开始按钮：出 iPhone 时写清出完去哪（出包并装到 iPhone / 出包并导出自签包），只出 Mac 时照旧
+    var startTitle: String {
+        guard model.exportTargets.contains(.ios) else {
+            let count = model.exportTargets.count
+            return count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start")
+        }
+        return BackendText.launcherText(model.iosAfterPack == "export" ? "export.start.selfsign" : "export.start.install", language: loc.lang.sharedCode)
+    }
+}
+
+/// 出包页「出完之后」：两张卡二选一（记住到下次）。装到 iPhone → 下面是目标设备与签名身份；导出自签 IPA → 说清导到哪、用什么装、不用连手机
+struct IosAfterPackPicker: View {
+    @ObservedObject var model: S2ArmLauncherModel
+    @EnvironmentObject var loc: Localizer
+    private func x(_ id: String) -> String { BackendText.launcherText("export." + id, language: loc.lang.sharedCode) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(x("after.title")).font(.manrope(13, .semibold)).foregroundStyle(.secondary).padding(.leading, 2).padding(.top, 4)
+            HStack(alignment: .top, spacing: 12) {
+                option("install", x("after.install"), x("after.install_note"), "iphone.and.arrow.forward")
+                option("export", x("after.export"), x("after.export_note"), "square.and.arrow.up")
+            }.fixedSize(horizontal: false, vertical: true)   // 两张卡同高：按较高那张撑齐
+            if model.iosAfterPack == "export" {
+                EmptyView()
+            } else {
+                TargetDeviceRow(model: model)
+                InstallModeLine(model: model)
+            }
+        }
+    }
+
+    private func option(_ id: String, _ title: String, _ note: String, _ symbol: String) -> some View {
+        let on = model.iosAfterPack == id
+        return Button { model.iosAfterPack = id } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: on ? "largecircle.fill.circle" : "circle").font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(on ? LauncherPalette.cream : .secondary).padding(.top, 2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(title, systemImage: symbol).font(.manrope(14.5, .semibold)).foregroundStyle(.primary)
+                    Text(note).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(14).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(LauncherPalette.surface.opacity(on ? 0.95 : 0.55), in: RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(on ? LauncherPalette.cream.opacity(0.75) : .white.opacity(0.08), lineWidth: on ? 1.5 : 1))
+            .contentShape(RoundedRectangle(cornerRadius: 12))
+        }
+        .controllerButtonStyle(.plain).controllerID("export.after." + id)
+        .accessibilityAddTraits(on ? .isSelected : [])
+        .accessibilityIdentifier("export.after." + id)
     }
 }
 

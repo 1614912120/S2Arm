@@ -33,6 +33,34 @@ import S2ArmAppleAdapter
         XCTAssertFalse(again, "同一批只发起一次")
         XCTAssertEqual(runner.updates.count, 1)
         XCTAssertEqual(runner.updates.first?["device"] as? String, "00008160-FIXTURE", "带上回报的那台")
+        XCTAssertEqual(runner.updates.first?["mode"] as? String, "device", "自动更新显式装到手机，不跟随导出自签的缺省")
+    }
+
+    // 启动器升级顺带更新 iPhone App（11-16）：壳旧了且不用问（shellUpdate）→ 开关开着就自动更新一次；开关关 → 不发起；正在玩 → 不发起
+    func testShellUpdateFollowsSwitch() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("s2arm-shell-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("Jobs"), withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent("Jobs/main.py"))
+        let runner = KeptRunner(); runner.kept = []; runner.shellUpdate = true
+        let model = S2ArmLauncherModel(client: JobClient(environment: JobEnvironment(
+            privateRoot: root, resources: root, library: root.appendingPathComponent("lib").path, libraryId: "fixture"), runner: runner))
+        let key = S2ArmLauncherModel.autoUpdatePhoneOffKey, before = UserDefaults.standard.object(forKey: key)
+        defer { UserDefaults.standard.set(before, forKey: key) }
+        S2ArmLauncherModel.setAutoUpdatePhone(false)
+        let off = await model.keptModulesTick()
+        XCTAssertFalse(off, "开关关：壳旧了也不自动更新")
+        S2ArmLauncherModel.setAutoUpdatePhone(true); runner.running = true
+        let playing = await model.keptModulesTick()
+        XCTAssertFalse(playing, "正在玩：不更新")
+        runner.running = false
+        let first = await model.keptModulesTick()
+        for _ in 0..<300 where model.busy || runner.updates.count < 1 { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(first, "开关开、没在玩、壳旧了不用问：自动更新")
+        XCTAssertEqual(runner.updates.count, 1)
+        XCTAssertEqual(runner.updates.first?["device"] as? String, "00008160-FIXTURE")
+        XCTAssertTrue(S2ArmLauncherModel.autoUpdatePhoneOn(UserDefaults(suiteName: "s2arm-fresh-" + UUID().uuidString)!), "没碰过开关：缺省开")
     }
 }
 
@@ -41,6 +69,7 @@ private final class KeptRunner: JobProcessRunner {
     var updates: [[String: Any]] = []
     var kept: [String] = []
     var running = false
+    var shellUpdate = false
     func start(executable: URL, arguments: [String], environment: [String: String],
                onLine: @escaping (Data) -> Void, onStderr: @escaping (Data) -> Void,
                onExit: @escaping (Int32) -> Void) throws -> JobProcessHandle {
@@ -50,7 +79,7 @@ private final class KeptRunner: JobProcessRunner {
             taskId = request["taskId"] as? String ?? ""; op = request["operation"] as? String ?? ""
             if op == "installUpdate" { updates.append(request) }
         }
-        let result: [String: Any] = op == "phoneKeptPull" ? ["device": "00008160-FIXTURE", "new": kept.count, "kept": kept, "running": running] : [:]
+        let result: [String: Any] = op == "phoneKeptPull" ? ["device": "00008160-FIXTURE", "new": kept.count, "kept": kept, "shellUpdate": shellUpdate, "stale": [String](), "running": running] : [:]
         let event: [String: Any] = ["schema": 1, "taskId": taskId, "type": "result", "state": "succeeded", "result": result, "message": ""]
         DispatchQueue.main.async { onLine(try! JSONSerialization.data(withJSONObject: event)); onExit(0) }
         return Handle()
