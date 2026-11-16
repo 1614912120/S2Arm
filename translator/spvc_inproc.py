@@ -83,15 +83,32 @@ def lib_path():   # 库在哪（首次按需编）：本进程 ctypes 载入，�
 CLI = 'spirv-cross.exe' if WIN else 'spirv-cross'
 
 
+def upstream_msl():
+    """仓库 spirv_msl.cpp 换回上游原文的那一段（「// "fadd" intrinsic support」起到 FMul 一族结束）→ 上游原样的源码文本。
+    本仓改动段找不到（升级了上游 / 改动挪了位置）就报错，不悄悄编出带改动的命令行"""
+    import re
+    s = open(os.path.join(SRC, 'spirv_msl.cpp'), encoding='utf-8', newline='').read()
+    a = s.find('\t\t// "fadd" intrinsic support')
+    m = s.find('case SPVFuncImplFMul:', a)
+    nxt = re.search(r'\n\t\t(// [^\n]*\n\t\t)*case SPVFuncImpl', s[m + 10:]) if a >= 0 and m >= 0 else None
+    if not nxt or 'S2A:' not in s[a:m]:
+        raise RuntimeError('spirv_msl.cpp 里找不到本仓改动段（S2A: NoContraction），命令行版换不回上游原文：核 spvc_cli/msl_upstream_helpers.txt')
+    up = open(os.path.join(SHIM, 'msl_upstream_helpers.txt'), encoding='utf-8', newline='').read()
+    return s[:a] + up + s[m + 10 + nxt.start() + 1:]
+
+
 def cli_path():
     """命令行 spirv-cross（Windows 出包机，#1100 W6）：没有 Homebrew，用同一份仓库源码（vulkan-sdk 标签原样，= 链锁版本）编成
     <仓库>/build/spvc_cli/<编库摘要>/cli/bin/spirv-cross.exe，旁边写 versions.json（spirvCross = 「spirv-cross <版本>」，版本取 spvc_cli/gitversion.h 的标签），
     dmsh_chain.spirv_cross_identity 按它认版本（同 S2Arm.app 运行时目录的规矩）。Windows 上预包含 spvc_cli/win/cli.h，输出按二进制写、与 Mac 逐字节同。
-    Mac / Linux 照旧用系统装的 spirv-cross，不走这里"""
+    Mac / Linux 照旧用系统装的 spirv-cross，不走这里。
+    命令行版输出必须是上游原样（链锁 spirv-cross 一行两端同为上游版本号、Mac 用 Homebrew 原版）：仓库源码里 spirv_msl.cpp 有一处本仓改动
+    （7cfd7be8f NoContraction 辅助函数内联，只给进程内库用、按 identity() 另有身份），编命令行时在临时副本里把那一段换回上游原文
+    （spvc_cli/msl_upstream_helpers.txt），versions.json 写的上游版本号才是实话（11-16：此前 Windows 命令行带着改动却写上游号，下游据此当原版，6927 支里 2984 支不同）"""
     import json, re
     pre = prebuilt('cli', 'bin', CLI)   # 预编的同布局（cli/bin/spirv-cross.exe + cli/versions.json）
     if pre: return pre
-    d = os.path.join(ROOT, 'build', 'spvc_cli', _build_id(), 'cli'); b = os.path.join(d, 'bin'); p = os.path.join(b, CLI)
+    d = os.path.join(ROOT, 'build', 'spvc_cli', _build_id() + '-upstream', 'cli'); b = os.path.join(d, 'bin'); p = os.path.join(b, CLI)
     if os.path.exists(p): return p
     os.makedirs(b, exist_ok=True)
     with xlock.held(os.path.join(d, '.lock')):
@@ -102,7 +119,9 @@ def cli_path():
         try:
             cc = [*_cxx(), *[f for f in FLAGS if f != '-fPIC'], '-I' + SRC, '-I' + SHIM]
             pre = ['-include', os.path.join(SHIM, 'win', 'cli.h')] if WIN else []
-            procs = [subprocess.Popen([*cc, '-c', os.path.join(SRC, u + '.cpp'), '-o', os.path.join(tmp, u + '.o')]) for u in UNITS]
+            msl = os.path.join(tmp, 'spirv_msl.cpp')
+            with open(msl, 'w', encoding='utf-8', newline='') as f: f.write(upstream_msl())
+            procs = [subprocess.Popen([*cc, '-c', msl if u == 'spirv_msl' else os.path.join(SRC, u + '.cpp'), '-o', os.path.join(tmp, u + '.o')]) for u in UNITS]
             procs.append(subprocess.Popen([*cc, *pre, '-c', os.path.join(SRC, 'main.cpp'), '-o', os.path.join(tmp, 'main.o')]))
             if any(x.wait() for x in procs): raise RuntimeError('spirv-cross 命令行编译失败（见上方编译器输出）')
             exe = os.path.join(tmp, CLI)
