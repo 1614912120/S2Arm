@@ -33,6 +33,7 @@ import S2ArmAppleAdapter
         XCTAssertFalse(again, "同一批只发起一次")
         XCTAssertEqual(runner.updates.count, 1)
         XCTAssertEqual(runner.updates.first?["device"] as? String, "00008160-FIXTURE", "带上回报的那台")
+        XCTAssertEqual(runner.updates.first?["mode"] as? String, "device", "自动更新显式装到手机，不跟随导出自签的缺省")
     }
 
     // 启动器升级顺带更新 iPhone App（11-16）：壳旧了且不用问（shellUpdate）→ 开关开着就自动更新一次；开关关 → 不发起；正在玩 → 不发起

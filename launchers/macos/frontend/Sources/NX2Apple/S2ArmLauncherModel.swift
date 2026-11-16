@@ -446,7 +446,7 @@ public final class S2ArmLauncherModel: ObservableObject {
         if keptAutoTried.contains(batch) || busy { return false }
         keptAutoTried.insert(batch)
         let language = provider.client.environment.uiLanguage ?? "zh-Hans"
-        refresh { [weak self] in self?.updatePhone(acceptStale: false, repack: [], language: language, device: device, ask: false) }
+        refresh { [weak self] in self?.updatePhone(acceptStale: false, repack: [], language: language, device: device, ask: false, mode: "device") }   // 自动更新只装到连着的手机：显式 device，不跟随「出完之后导出自签」的缺省（那条只给玩家手点）
         return true
     }
 
