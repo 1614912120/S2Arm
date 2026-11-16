@@ -16,6 +16,31 @@ S2A_UNAME := $(shell uname -s)
 # 前端 / 玩家机器用 S2A_DEVELOPER_DIR 指自己的 Xcode（同 tools/toolchain.sh，#49）：不设 = toolchain.env 那套（10-23 Spare-host 全新机器实测：Makefile 不认，没装 27.1 的机器着色器键算不出）
 DEVELOPER_DIR := $(or $(S2A_DEVELOPER_DIR),$(_S2A_ENV_DD),$(shell S2A_TC_QUIET=1 bash -c '. tools/toolchain.sh > /dev/null && printf %s "$$DEVELOPER_DIR"' 2>/dev/null),$(shell xcode-select -p 2>/dev/null))
 export DEVELOPER_DIR MACOSX_DEPLOYMENT_TARGET MSBUILDDISABLENODEREUSE   # iOS 下限不导出（两个都导出时不带 -target 的宿主编译会当成 iOS，见 tools/toolchain.sh）
+# Apple 移动端出哪个平台（11-15 Apple TV 版）：ios（缺省）| tvos。`make ios S2A_APPLE_OS=tvos` 出 Apple TV 壳，与 iOS 同一套配方，
+#   只换 SDK / 目标三元组 / 系统下限 / C# 运行时标识 / 渲染器库产物目录；没显式给 BUILD 时 tvOS 产物放 build/tvos，与 iOS 的 build/ 互不覆盖
+S2A_APPLE_OS ?= ios
+ifeq ($(S2A_APPLE_OS),tvos)
+BUILD ?= build/tvos
+APPLE_SDK := appletvos
+APPLE_MIN := $(TVOS_DEPLOYMENT_TARGET)
+APPLE_MINFLAG := -mtvos-version-min=$(TVOS_DEPLOYMENT_TARGET)
+APPLE_TRIPLE := arm64-apple-tvos$(TVOS_DEPLOYMENT_TARGET)
+APPLE_RID := tvos-arm64
+APPLE_GFX_OUT := -tvos
+APPLE_PLATFORM := AppleTVOS
+APPLE_DEVICE_FAMILY := <array><integer>3</integer></array>
+else ifeq ($(S2A_APPLE_OS),ios)
+APPLE_SDK := iphoneos
+APPLE_MIN := $(IPHONEOS_DEPLOYMENT_TARGET)
+APPLE_MINFLAG := -mios-version-min=$(IPHONEOS_DEPLOYMENT_TARGET)
+APPLE_TRIPLE := arm64-apple-ios$(IPHONEOS_DEPLOYMENT_TARGET)
+APPLE_RID := ios-arm64
+APPLE_GFX_OUT :=
+APPLE_PLATFORM := iPhoneOS
+APPLE_DEVICE_FAMILY := <array><integer>1</integer><integer>2</integer></array>
+else
+$(error S2A_APPLE_OS 只认 ios / tvos，给的是 $(S2A_APPLE_OS))
+endif
 BUILD   ?= build
 CC      ?= clang
 CFLAGS  ?= -O2 -g -Wall -Wextra -Wno-unused-parameter

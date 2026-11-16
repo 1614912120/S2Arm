@@ -663,10 +663,10 @@ import S2ArmAppleAdapter
                 defer { navigation.detach(); window.close() }
                 let targets = navigation.controlTargets(in: window)
                 let checkbox = try XCTUnwrap(targets.first { $0.id == "export.sgrade.toggle" })
-                let platforms = targets.filter { $0.frame.height >= 142 && $0.frame.height < 240 }
-                    .sorted { $0.frame.minX < $1.frame.minX }
-                let mac = try XCTUnwrap(platforms.dropFirst().first)
                 print("export-checkbox \(language.code)/\(width): \(targets.map { "\($0.id)=\($0.frame)" }.joined(separator: ", "))")
+                // 平台卡按标识认（iPhone / Apple TV / Mac 三张，Apple TV 卡在出包机配了 Apple TV 时才有），不按高度猜
+                let platforms = targets.filter { $0.id.hasPrefix("export.platform.") }.sorted { $0.frame.minX < $1.frame.minX }
+                let mac = try XCTUnwrap(platforms.first { $0.id == "export.platform.mac" })
                 navigation.focus(mac.id); navigation.handle(.up)
                 XCTAssertEqual(navigation.focusedID, checkbox.id, "向上应先经过紧邻的平台上方的复选框，不能跳过整行")
                 navigation.focus("export.name"); navigation.handle(.down)

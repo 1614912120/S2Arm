@@ -80,7 +80,7 @@ public final class S2ArmShellHostModel {
                 installState: ((String) -> Int32)? = nil, installGame: ((String) -> Bool)? = nil, installProgress: ((String) -> (Int, Int)?)? = nil,
                 installPhase: ((String) -> (Int, Double?)?)? = nil, installFailure: ((String) -> String?)? = nil, installWait: (() -> Int32)? = nil,
                 now: @escaping () -> Date = Date.init, pickGameData: ((String) -> Void)? = nil, identityStore: GameIdentityStore = .live,
-                gamesRoot: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/games"), packGamesRoot: URL? = nil,
+                gamesRoot: URL = S2ArmContainer.gamesRoot(), packGamesRoot: URL? = nil,
                 imlNotice: (() -> String?)? = nil, installID: String = Bundle.main.bundlePath) {
         self.gamesRoot = gamesRoot
         self.packGamesRoot = packGamesRoot ?? Self.packGamesRoot(for: gamesRoot)
@@ -128,8 +128,12 @@ public final class S2ArmShellHostModel {
         //   S2A_SHELL_OPEN_LAYOUT_EDITOR=<游戏号> 起来直接盖上这款的「调整位置」编辑页
         //   S2A_SHELL_PLAY=<游戏号> 起来 2 秒后替人点这款的 Play（走同一条 requestPlay → C 出口；截图局别带 S2A_AUTOPLAY=1：没有视觉驾驶员时自动玩家判卡住、优雅退出）
         let env = ProcessInfo.processInfo.environment
+        #if os(tvOS)
+        guideOpen = false   // 三页引导讲的是 iPhone 上的触屏入口（右上齿轮、游戏里左上齿轮），电视上不弹
+        #else
         guideOpen = !stores.app.bool(forKey: Self.guideSeenKey) && env["S2A_SHELL_PLAY"] == nil && env["S2A_SHELL_OPEN_LAYOUT_EDITOR"] == nil
         if env["S2A_SHELL_GUIDE"] == "1" { guideOpen = true }   // 测试开关：看过也强制弹一次（真机截图验证排版用；同上，只有 devicectl / Xcode 起 App 能给）
+        #endif
         if let id = env["S2A_SHELL_OPEN_LAYOUT_EDITOR"], allGames.contains(where: { $0.id == id }) {
             editingLayout = id; NSLog("S2Arm 游戏库：S2A_SHELL_OPEN_LAYOUT_EDITOR 直接开 %@ 的调整位置页", id)
         }
@@ -324,9 +328,14 @@ public final class S2ArmShellHostModel {
     }
     private func packDir(_ id: String) -> URL { Self.packDir(id, games: gamesRoot, packs: packGamesRoot) }
     /// 游戏根是 <家>/Documents/games（宿主的取法）→ <家>/Library/Application Support/S2Arm/games；别的根（单测换了根）→ nil
+    ///   tvOS：资源包就在游戏目录里（<文档根>/games/<程序号>/资源包，宿主 s2a_docs.h），没有另外的新位置 → nil
     nonisolated static func packGamesRoot(for gamesRoot: URL, home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL? {
+        #if os(tvOS)
+        return nil
+        #else
         guard gamesRoot.standardizedFileURL.path == home.appendingPathComponent("Documents/games").standardizedFileURL.path else { return nil }
         return home.appendingPathComponent("Library/Application Support/S2Arm/games")
+        #endif
     }
 
     private func startTicker() {
@@ -366,7 +375,7 @@ public final class S2ArmShellHostModel {
 
     /// 库设置「云存档 → 选择文件夹…」（iCloud 存档同步，见 CloudSaves.swift）：iOS 弹系统文件夹选择器；Mac 上跑单测时没有界面
     static var pickCloudFolder: (() -> Void)? {
-        #if canImport(UIKit)
+        #if canImport(UIKit) && !os(tvOS)   // tvOS 没有文件夹选择器：nil = 库设置不出「云存档」这一组
         return { CloudFolderPicker.present() }
         #else
         return nil

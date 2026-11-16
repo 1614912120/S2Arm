@@ -7,8 +7,10 @@ public struct S2ArmShellHostView: View {
     let model: S2ArmShellHostModel
     public init(model: S2ArmShellHostModel) { self.model = model }
     public var body: some View {
-        LibraryView(games: model.games, controllers: model.controllers, actions: model.actions, input: model.input,
-                    padSnapshot: model.padSnapshot)
+        library
+            #if os(tvOS)
+            .disabled(model.playersOpen)   // 玩家页开着时焦点不落到背后的库界面上
+            #endif
             // 本地玩家（#623）：顶部玩家按钮显示这次用谁的身份玩，点开切换页
             .environment(\.shellPlayer, ShellPlayer(name: model.currentPlayer.displayName, open: { model.openPlayers() }))
             .overlay {
@@ -17,6 +19,9 @@ public struct S2ArmShellHostView: View {
                                      select: { model.selectPlayer($0) }, add: { model.addPlayer($0) },
                                      rename: { model.renamePlayer($0, $1) }, remove: { model.removePlayer($0) },
                                      close: { model.closePlayers() })
+                    #if os(tvOS)
+                        .onExitCommand { model.closePlayers() }   // 遥控器「返回」/ 手柄 B 关玩家页，不退到主屏
+                    #endif
                 }
             }
             .onAppear {
@@ -49,7 +54,7 @@ public struct S2ArmShellHostView: View {
                 }
             }
             .animation(.smooth(duration: 0.25), value: model.guideOpen)
-        #if canImport(UIKit)
+        #if canImport(UIKit) && !os(tvOS)
             // 回前台重判资源包：玩家去「文件」/ 访达拷完资源包回来，不用重开 App
             .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in model.refreshGameData() }
             // 虚拟手柄布局编辑页（设置里「按键布局 → 调整位置…」）：盖在库界面上，关了回到设置
@@ -64,6 +69,18 @@ public struct S2ArmShellHostView: View {
                                           save: { model.saveIdentity(id, name: $0, cover: $1) }, reset: { model.resetIdentity(id) }, close: { model.closeIdentityEditor(id) })
                 }
             }
+        #elseif os(tvOS)
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in model.refreshGameData() }
+        #endif
+    }
+
+    /// iOS：触屏 + 自绘手柄焦点的库界面；tvOS：遥控器 / 手柄走系统焦点的电视库界面（TVLibraryView）。两边同一个模型、同一套 actions
+    @ViewBuilder private var library: some View {
+        #if os(tvOS)
+        TVLibraryView(games: model.games, controllers: model.controllers, actions: model.actions, input: model.input)
+        #else
+        LibraryView(games: model.games, controllers: model.controllers, actions: model.actions, input: model.input,
+                    padSnapshot: model.padSnapshot)
         #endif
     }
 }
@@ -107,14 +124,14 @@ struct DeleteNoticeBar: View {
             case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
             case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Color(red: 1, green: 0.42, blue: 0.40))
             }
-            Text(Self.text(notice)).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white)
+            Text(Self.text(notice)).font(.system(size: 15 * ShellFonts.tvScale, weight: .semibold)).foregroundStyle(.white)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(.horizontal, 18).padding(.vertical, 12)
         .background(Color(red: 0.075, green: 0.075, blue: 0.082).opacity(0.96), in: Capsule())
         .overlay(Capsule().strokeBorder(.white.opacity(0.12)))
         .shadow(color: .black.opacity(0.45), radius: 20)
-        .frame(maxWidth: 560)
+        .frame(maxWidth: 560 * ShellFonts.tvScale)
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("delete.notice")
     }
