@@ -181,6 +181,7 @@ public final class S2ArmShellHostModel {
             if ledgerChanged { saveLedger() }
             if missing != notOnDevice { notOnDevice = missing; NSLog("S2Arm 游戏库：这台设备上 %d / %d 款可显示", allGames.count - missing.count, allGames.count) }
             exportWidget()   // 主屏小组件的数据（WidgetExport.swift）：内容变了才写
+            refreshNROPending()
             startTicker()
         }
         for i in allGames.indices {
@@ -526,6 +527,34 @@ public final class S2ArmShellHostModel {
         return IMLNotice(title: title, body: body)
     }
     public func closeIMLNotice() { stores.app.set(installID, forKey: Self.imlClosedKey); imlNotice = nil }
+
+    /// 待补文件（#8be819）：有的游戏把代码模块（NRO）藏在自有加密归档里，出包时取不到；第一次跑到那里宿主把游戏解开的整份存到
+    ///   <文档根>/games/<号>/wire/<号大写>/nro/<SHA-256>.nro（runtime/src/loader.c s2a_nro_keep），这一局随后闪退。
+    ///   手机连上电脑、启动器开着时，装机作业把它拉回、补进包，装好后删掉手机上这几份（pack/jobs/install.py pull_kept_nros）。
+    ///   所以「目录里还有这几份」= 还没补好：库顶提示一条（不拦开局；关了这次打开 App 内不再出，补好前下次打开还会出）
+    public private(set) var nroNotice: IMLNotice?
+    @ObservationIgnored private var nroPendingIDs: [String] = []
+    @ObservationIgnored private var nroNoticeClosed = false
+    nonisolated static func nroPending(gamesRoot: URL, ids: [String]) -> [String] {
+        let fm = FileManager.default
+        return ids.filter { id in
+            let dir = gamesRoot.appendingPathComponent(id, isDirectory: true).appendingPathComponent("wire/\(id.uppercased())/nro", isDirectory: true)
+            return ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).contains { $0.range(of: #"^[0-9a-f]{64}\.nro$"#, options: .regularExpression) != nil }
+        }
+    }
+    nonisolated static func nroNotice(names: [String]) -> IMLNotice? {
+        guard let first = names.first else { return nil }
+        let title = names.count == 1 ? String(format: shellText("%@ needs one more file"), first)
+                                     : String(format: shellText("%lld games need one more file: %@"), names.count, ListFormatter.localizedString(byJoining: names))
+        return IMLNotice(title: title, body: shellText("Connect your phone to your computer and open the S2Arm launcher. It adds the file automatically. Until then, the game will close again at the same point."))
+    }
+    private func refreshNROPending() {
+        let ids = Self.nroPending(gamesRoot: gamesRoot, ids: games.map(\.id))
+        guard ids != nroPendingIDs else { return }
+        nroPendingIDs = ids
+        nroNotice = nroNoticeClosed ? nil : Self.nroNotice(names: ids.map { identityName($0).isEmpty ? $0 : identityName($0) })
+    }
+    public func closeNRONotice() { nroNoticeClosed = true; nroNotice = nil }
 
     /// 删除进度与结果（宿主视图在库上方画一条提示）：正在删除 → 已删除（释放多少）/ 失败原因；结果停留 4 秒后自动收起
     public struct DeleteNotice: Equatable, Sendable {
