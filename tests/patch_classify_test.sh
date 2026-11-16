@@ -1,0 +1,28 @@
+#!/bin/bash
+# 门禁覆盖：tools/patch_index.py tools/patch_pack.py
+# 社区补丁分类单测（tools/patch_index.py classify / own_name，约 1 秒）：bash tests/patch_classify_test.sh
+# 11-15 奥德赛开场动画闪退：聚合仓库 generated-narrow-aspect/ 目录下的「关动态分辨率」「关 FXAA」被上层目录名里的 aspect 判成画幅类，
+#   绕过 iOS 不打画面类的规则跟着满屏默认打开；Switch-Emulator-Ultrawide-FPS-Mods 仓库名里的 Ultrawide 把同仓库的帧率 / 1080P / LOD 全判成画幅。
+# 期望（按规则手写）：类别只看补丁自己的名字（exefs 往上两级 + 文件名）与文件头，不看更上层的仓库 / 聚合目录名
+set -u; H=$(cd "$(dirname "$0")/.." && pwd)
+python3 - "$H" <<'PY'
+import sys; sys.path.insert(0, sys.argv[1] + '/tools'); import patch_index as P
+bad = 0
+def ck(name, got, want):
+    global bad
+    ok = got == want; bad |= not ok; print(('通 ' if ok else '不通 ') + f'{name}：期望 {want}，实得 {got}')
+C = [
+ ('① 聚合目录名带 aspect、补丁本身是关动态分辨率 → 画面', 'pacoa-kdbg/Switch-Emulator-Ultrawide-FPS-Mods/generated-narrow-aspect/Game [0100000000010000][mods]/[Disable Dynamic Resolution v1.3.0] Nova supplied/exefs/1.3.0.pchtxt',
+  '# Game [0100000000010000] v1.3.0 - Disable Dynamic Resolution', 'gfx'),
+ ('② 仓库名带 Ultrawide、补丁是 60 帧 → 帧率', 'Fl4sh9174/Switch-Emulator-Ultrawide-FPS-Mods/Game [0100000000010000][mods].zip/[60FPS Snapshot Mode v1.3.0]/exefs/1.3.0 v2.pchtxt',
+  '# GAME [0100000000010000] v1.3.0 - 60FPS', 'fps'),
+ ('③ mod 名写 21:9 → 画幅', 'Fl4sh9174/Switch-Emulator-Ultrawide-FPS-Mods/Game [0100000000010000][mods].zip/[21.9 Ultrawide Adjusted HUD v1.4.1]/exefs/1.3.0.pchtxt',
+  '# GAME [0100000000010000] v1.3.0 - 21:9 Ultrawide', 'widescreen'),
+ ('④ 变体只用数字命名、类别在上一级 Aspect Ratio → 画幅', "Kenji-NX/switch-pchtxt-mods/Game/010015100B514000/Aspect Ratio/16'10/exefs/1.0.0.pchtxt", '# Game [010015100B514000] v1.0.0', 'widescreen'),
+ ('⑤ 没有 exefs 结构：只看最后两段与文件头', 'repo/some aspect dir/Game/1080p.pchtxt', '# Game v1.0 - 1080p', 'gfx'),
+]
+for name, path, text, want in C: ck(name, P.classify(path, text)[0], want)
+ck('⑥ own_name 取 exefs 往上两级', P.own_name('a/b/c/[mod]/exefs/x.pchtxt'), 'c/[mod]/exefs/x.pchtxt')
+sys.exit(1 if bad else 0)
+PY
+r=$?; [ $r = 0 ] && echo "✅ patch_classify_test 全过" || { echo "🔴 patch_classify_test 有不通项"; exit 1; }

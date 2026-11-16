@@ -25,10 +25,23 @@ MAX = 2 << 20
 GID = re.compile(r'01[0-9A-Fa-f]{14}')
 
 
+def own_name(path):
+    """补丁自己的名字：Atmosphere 结构 <mod 名>/exefs/<文件> 取 mod 名的上一级起往后（变体只用数字命名时类别写在上一级，
+    如 Kenji-NX 的 Aspect Ratio/16'10/exefs/）；不是这种结构取最后两段。
+    再往上的仓库名、聚合目录名不算（11-15 奥德赛：pacoa-kdbg 的 generated-narrow-aspect/ 目录下「关动态分辨率」「关 FXAA」被目录名里的
+    aspect 判成画幅类，绕过 iOS 不打画面类的规则跟着满屏默认打开，开场动画闪退）"""
+    parts = [p for p in path.replace('\\', '/').split('/') if p]
+    low = [p.lower() for p in parts]
+    if 'exefs' in low:
+        i = len(low) - 1 - low[::-1].index('exefs')
+        return '/'.join(parts[max(0, i - 2):])
+    return '/'.join(parts[-2:])
+
+
 def classify(path, text=''):
-    """类别按路径 / 文件头关键词（同本机补丁库覆盖表口径）：帧率 / 画幅 / 其余画面"""
+    """类别按补丁自己的名字（own_name）/ 文件头关键词（同本机补丁库覆盖表口径）：帧率 / 画幅 / 其余画面"""
     # 先去网址（11-13）：作者署名里的仓库网址（github.com/StevensND/ue4-emuswitch-60fps）落在前 400 字内，「60fps」把同一作者的关景深 / 关抗锯齿 / 分辨率补丁全判成帧率 60
-    s = re.sub(r'https?://\S+', ' ', (path + '\n' + text[:400]).lower())
+    s = re.sub(r'https?://\S+', ' ', (own_name(path) + '\n' + text[:400]).lower())
     fps = re.search(r'(\d{2,3})\s*fps', s)
     if re.search(r'ultra\s*wide|widescreen|21[:x_.]9|32[:x_.]9|aspect', s):
         m = re.search(r'(\d{1,2}(?:\.\d)?)\s*[:x_\-](9|10)\b', s)
