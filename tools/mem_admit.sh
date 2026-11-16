@@ -62,12 +62,17 @@ _ma_total10() {
   awk -v b="$(_ma_physbytes)" -v p="${S2A_MEM_PCT:-70}" 'BEGIN{printf "%d", b/1073741824*p/100*10}'
 }
 _ma_find() { [ -f "$1" ] || return 0; awk -F'\t' -v c="$2" -v k="$3" '/^#/{next} $1==c&&$2==k{print $3, $4; exit}' "$1"; }
+# 实测行是不是跑飞值（#1312 评审）：参数 GB 值、第 7 列退出码 → 打印原因（是）/ 空（正常）。退出码非 0，或没记退出码却超过本机物理内存（只有跑飞会这样）
+_ma_badrow() { awk -v g="$1" -v r="$2" -v pb="$(_ma_physbytes)" 'BEGIN{if (r != "" && r != "0") print "实测跑失败（退出码 " r "）"; else if (r == "" && pb > 0 && g*1073741824 > pb) print "旧实测超过物理内存（跑飞）"}'; }
 # 实测表里本类别「实」行：样本数 ≥ S2A_MEM_CLASS_MIN_N（缺省 10）→ 「最大值 × S2A_MEM_CLASS_X（缺省 1.5） 同类实测最大×1.5」；样本不够 → 空
 #   只认正常跑完的样本（#1229）：第 7 列退出码非 0 的、没记退出码却超过本机物理内存的旧行（跑飞被杀才会这样）剔除，来源里写明剔了几条
 _ma_cmax() { [ -f "$1" ] || return 0; LC_ALL=C awk -F'\t' -v c="$2" -v n0="${S2A_MEM_CLASS_MIN_N:-10}" -v x="${S2A_MEM_CLASS_X:-1.5}" -v pb="$(_ma_physbytes)" '/^#/{next} $1==c&&$4=="实"{if (($7 != "" && $7 != "0") || ($7 == "" && pb > 0 && $3*1073741824 > pb)) {d++; next} n++; if ($3+0>m) m=$3+0} END{if (n >= n0 && m > 0) printf "%.1f 同类实测最大×%s%s\n", m*x, x, (d ? "（剔除跑失败 / 超物理内存的 " d " 条）" : "")}' "$1"; }
 _ma_need() {   # 类别 键 → 「十分之一GB 来源」（实 / 估 / 生键·同类实测最大×1.5 / 生键·核数比例…；实测表、估值表都没有本键 = 生键）；要先有 MA_TOTAL10 / MA_NCORES / MA_CORES
   local v src c n p10 f
-  v=$(_ma_find "$MA_TAB" "$1" "$2"); [ -n "$v" ] || v=$(_ma_find "$MA_SEED" "$1" "$2")
+  v=$(_ma_find "$MA_TAB" "$1" "$2")
+  # 本款自己那行是跑飞值：当估值处理（来源不是「实」→ 参与封顶上限），跑成功后由 _ma_writeback 按新实测覆盖（#1312 评审）
+  if [ -n "$v" ]; then f=$(_ma_badrow "${v%% *}" "$(awk -F'\t' -v c="$1" -v k="$2" '/^#/{next} $1==c&&$2==k{print $7; exit}' "$MA_TAB")"); [ -n "$f" ] && v="${v%% *} $f"; fi
+  [ -n "$v" ] || v=$(_ma_find "$MA_SEED" "$1" "$2")
   [ -n "$v" ] || { v=$(_ma_cmax "$MA_TAB" "$1"); [ -n "$v" ] && v="${v%% *} 生键·${v#* }"; }
   if [ -z "$v" ]; then   # ④ 生键：核数比例，封顶上限一半；同类有不够数的样本时取大
     c=$MA_CORES; [ "$c" -ge 1 ] || c=1; [ "$c" -le "$MA_NCORES" ] || c=$MA_NCORES
@@ -151,10 +156,11 @@ _ma_sig() { local a s=; for a in "${@:1:3}"; do s="$s ${a##*/}"; done; s=${s# };
 #   往低改只认同一命令（11-04 Switch2 线借 dsh/memrt_host0 的键跑别的命令，实测 0.4 把 5.7 覆盖了 → 该键下次少预留、可能吃光内存）：
 #   表里本键签名与本次不同（或旧行没签名）时只升不降，把本次签名记上；签名相同才按实测往低改
 _ma_writeback() {
-  local row old=0 osig= new=$3 sig=${5:-} g
-  row=$(awk -F'\t' -v c="$1" -v k="$2" '/^#/{next} $1==c&&$2==k{print $3 "\t" $6; exit}' "$MA_TAB" 2> /dev/null)
-  [ -n "$row" ] && { old=$(_ma_t10 "${row%%$'\t'*}"); osig=${row#*$'\t'}; }
-  if [ -n "$row" ] && [ "$new" -lt "$old" ] && { [ "$4" != 0 ] || [ "$osig" != "$sig" ]; }; then
+  local row old=0 osig= obad= new=$3 sig=${5:-} g
+  row=$(awk -F'\t' -v c="$1" -v k="$2" '/^#/{next} $1==c&&$2==k{print $3 "\t" $6 "\t" $7; exit}' "$MA_TAB" 2> /dev/null)
+  [ -n "$row" ] && { old=$(_ma_t10 "${row%%$'\t'*}"); osig=${row#*$'\t'}; obad=$(_ma_badrow "${row%%$'\t'*}" "${osig#*$'\t'}"); osig=${osig%%$'\t'*}; }
+  # 旧行是跑飞值（退出码非 0 / 超物理内存的旧行）：退出码 0 的新实测直接覆盖，不受借键保护（#1312 评审：否则这款以后每次都独占跑）
+  if [ -n "$row" ] && [ "$new" -lt "$old" ] && { [ "$4" != 0 ] || { [ -z "$obad" ] && [ "$osig" != "$sig" ]; }; }; then
     [ "$4" = 0 ] && [ -n "$osig" ] && _ma_say "【黄】mem_admit $1/${2}：本次命令「${sig}」与该键登记的「${osig}」不同，实测 $(_ma_gb "$new") GB 低于表里 $(_ma_gb "$old") GB，不往低改（借键不污染别人的实测）"
     [ "$4" = 0 ] && [ -z "$osig" ] || return 0
     new=$old
@@ -181,8 +187,8 @@ mem_admit() {
   read -r MA_NEED10 src <<< "$(_ma_need "$cls" "$key")"; MA_SRC=$src   # 来源写进排队行（11-04：看得出等的是缺省估值还是实测）
   mkdir -p "$MA_DIR" || return 2
   case $src in 生键*) _ma_say "【黄】mem_admit $cls/${key}：生键（实测表、估值表都没有本键），按${src#生键·}估 $(_ma_gb "$MA_NEED10") GB";; esac
-  if [ "$(_ma_phys10)" -le 0 ]; then
-    _ma_say "【红】mem_admit $cls/${key}：读不到本机物理内存（sysctl hw.memsize、/proc/meminfo 都没有），算不出放不放得下，不起"
+  if [ "$(_ma_phys10)" -le 0 ] && [ -z "${S2A_MEM_TOTAL_GB:-}" ]; then   # 给了 S2A_MEM_TOTAL_GB 就按它定上限（#1312 评审：原先给了它就能跑）
+    _ma_say "【红】mem_admit $cls/${key}：读不到本机物理内存（sysctl hw.memsize、/proc/meminfo 都没有）也没给 S2A_MEM_TOTAL_GB，算不出放不放得下，不起"
     return 125
   fi
   # 估值（非实测）超过上限：按上限预留 = 账空独占跑，跑完写回本款实测（#1229：原先超过物理内存就永久拒绝，一条跑飞的同类读数让本机所有新游戏出不了包）

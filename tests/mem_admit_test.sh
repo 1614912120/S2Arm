@@ -13,6 +13,8 @@
 #   ⑮ 估值（非实测）超过上限 / 本机物理内存（#1229）→ 不再永久拒绝：打【黄】按上限预留、账里有别人时排队、账空独占跑，跑完写回本款实测
 #   ⑮b 同类估值只用正常跑完的样本（#1229 / #1122：一条跑飞被杀的 143.2 GB 读数让 24 GB 机器上所有新游戏估 214.8 GB）：
 #     第 7 列退出码非 0 的行、没记退出码却超过物理内存的旧行不进同类最大值；写回时记退出码
+#   ⑮c 本款自己那行就是跑飞值（#1312 评审）：当估值处理、封顶上限独占跑；跑成功（退出码 0）后新实测覆盖它，命令签名不同也覆盖
+#   ⑰b 读不到物理内存但给了 S2A_MEM_TOTAL_GB：按它定上限照常跑（#1312 评审：只在两样都没有时报红）
 #   ⑰ 没有 sysctl 的出包机：物理内存读 /proc/meminfo 的 MemTotal（审计 #1534 P1-114），估值单照常放行
 #   ⑯ 门禁步 / 单测里没给 S2A_MEM_DIR → 报【红】退出 125，缺省共享账本目录不建不写
 #   ⑰ 给了出包进度文件 S2A_PROGRESS：排队时最新【排队】行写进 <进度文件>.wait（进程号<TAB>行），放行后删掉（审计 #1534 P1-110：出包心跳读它）
@@ -155,13 +157,25 @@ printf 'dsh\tc%s\t1.0\t实\t2026-11-10\tx\t0\n' 0 1 2 3 4 5 6 7 >> "$Z/mem/peak.
 env -u S2A_MEM_TOTAL_GB S2A_MEM_DIR=$Z/mem S2A_MEM_LOCK=$Z/mem.flock S2A_MEM_SEED=$Z/seed.tsv S2A_MEM_PHYS_BYTES=25769803776 \
   bash "$H/tools/mem_admit.sh" dsh new2 -- true > /dev/null 2>&1
 ck "⑮b 有效样本够 10 条：dsh/new2 预留 3.6 GB（= 2.4 × 1.5），来源写明剔除 2 条" 'grep -q "放行 dsh/new2：预留 3.6 GB（生键·同类实测最大×1.5（剔除跑失败 / 超物理内存的 2 条））" "$Z/mem/admit.log"'
+# ⑮c 本款自己那行是跑飞值：24 GiB（上限 16.8），dsh/run 143.2 退出码 137、dsh/leg 143.2 旧行没记退出码 → 来源不是「实」、预留封顶 16.8 GB、打【黄】；
+#   命令（签名与表里「old.sh」不同）退出 0、实测约 0.2 GB → 覆盖成新实测、第 7 列 0。旧码（4b2c74e4）：按「实」预留 143.2 GB 独占，且签名不同不往低改，以后每次独占
+C=$T/selfbad; mkdir -p "$C/mem"; : > "$C/seed.tsv"
+printf 'dsh\trun\t143.2\t实\t2026-11-10\told.sh\t137\ndsh\tleg\t143.2\t实\t2026-11-10\told.sh\n' > "$C/mem/peak.tsv"
+for k in run leg; do env -u S2A_MEM_TOTAL_GB S2A_MEM_DIR=$C/mem S2A_MEM_LOCK=$C/mem.flock S2A_MEM_SEED=$C/seed.tsv S2A_MEM_PHYS_BYTES=25769803776 S2A_MEM_SAMPLE_S=0.2 \
+  bash "$H/tools/mem_admit.sh" dsh $k -- python3 -c 'import time; b = bytearray(b"x") * (200 * 1024 * 1024); time.sleep(1.5)' > /dev/null 2>&1; done
+crow() { awk -F'\t' -v k="$1" '$2==k{print $3 "|" $7}' "$C/mem/peak.tsv"; }
+cok() { awk -v v="$(crow "$1")" 'BEGIN{split(v, a, "|"); exit !(a[1]+0 > 0 && a[1]+0 < 1 && a[2] == "0")}'; }
+ck "⑮c 本款跑飞行（退出码 137 / 超物理内存旧行）按估值封顶：run、leg 都预留 16.8 GB、有封顶【黄】" 'grep -q "放行 dsh/run：预留 16.8 GB（实测跑失败（退出码 137），封顶上限独占）" "$C/mem/admit.log" && grep -q "放行 dsh/leg：预留 16.8 GB（旧实测超过物理内存（跑飞），封顶上限独占）" "$C/mem/admit.log"'
+ck "⑮c 退出码 0 的新实测覆盖跑飞行（签名不同也覆盖）：run「$(crow run)」、leg「$(crow leg)」都 < 1 GB、退出码 0" 'cok run && cok leg'
 # ⑰ 没有 sysctl 的出包机（审计 #1534 P1-114：Windows Git Bash / Linux）：PATH 上的假 sysctl 失败、假 /proc/meminfo 写 MemTotal 16777216 kB（16 GiB），估值 dsh/p 6 → 放行、命令起；
 #   负对照同条件但没有 meminfo → 物理内存按 0，退 125（原缺陷的形状）
 Y=$T/nosysctl; mkdir -p "$Y/mem" "$Y/bin"; printf 'dsh\tp\t6\t估\n' > "$Y/seed.tsv"; printf '#!/bin/bash\nexit 1\n' > "$Y/bin/sysctl"; chmod +x "$Y/bin/sysctl"; printf 'MemTotal:       16777216 kB\nMemAvailable:   12582912 kB\n' > "$Y/meminfo"
 PATH=$Y/bin:$PATH S2A_MEM_DIR=$Y/mem S2A_MEM_LOCK=$Y/mem.flock S2A_MEM_SEED=$Y/seed.tsv S2A_MEM_MEMINFO=$Y/meminfo bash "$H/tools/mem_admit.sh" dsh p -- touch "$Y/ran" > /dev/null 2>&1; yrc=$?
 ck "⑰ 没有 sysctl、MemTotal 16 GiB：估值 6 GB 放行，退出 ${yrc}（期望 0）、命令起了" '[ "$yrc" = 0 ] && [ -e "$Y/ran" ]'
-PATH=$Y/bin:$PATH S2A_MEM_DIR=$Y/mem S2A_MEM_LOCK=$Y/mem.flock S2A_MEM_SEED=$Y/seed.tsv S2A_MEM_MEMINFO=$Y/none bash "$H/tools/mem_admit.sh" dsh p -- true > /dev/null 2>&1; nrc=$?
-ck "⑰ 负对照：没有 sysctl 也没有 meminfo → 退出 ${nrc}（期望 125，读不到物理内存报【红】）" '[ "$nrc" = 125 ] && grep -q "【红】mem_admit dsh/p：读不到本机物理内存" "$Y/mem/admit.log"'
+PATH=$Y/bin:$PATH env -u S2A_MEM_TOTAL_GB S2A_MEM_DIR=$Y/mem S2A_MEM_LOCK=$Y/mem.flock S2A_MEM_SEED=$Y/seed.tsv S2A_MEM_MEMINFO=$Y/none bash "$H/tools/mem_admit.sh" dsh p -- true > /dev/null 2>&1; nrc=$?
+ck "⑰ 负对照：没有 sysctl 也没有 meminfo、也没给 S2A_MEM_TOTAL_GB → 退出 ${nrc}（期望 125，读不到物理内存报【红】）" '[ "$nrc" = 125 ] && grep -q "【红】mem_admit dsh/p：读不到本机物理内存" "$Y/mem/admit.log"'
+PATH=$Y/bin:$PATH S2A_MEM_TOTAL_GB=10 S2A_MEM_DIR=$Y/mem S2A_MEM_LOCK=$Y/mem.flock S2A_MEM_SEED=$Y/seed.tsv S2A_MEM_MEMINFO=$Y/none bash "$H/tools/mem_admit.sh" dsh p -- touch "$Y/ran2" > /dev/null 2>&1; trc=$?
+ck "⑰b 读不到物理内存但给了 S2A_MEM_TOTAL_GB=10：本款（实）照常放行，退出 ${trc}（期望 0）、命令起了" '[ "$trc" = 0 ] && [ -e "$Y/ran2" ]'
 
 # ⑯ 单测防线：门禁步内（GATE_IN_STEP=1）没给 S2A_MEM_DIR，缺省账本在 HOME 下 → 【红】退出 125、命令没起、缺省目录没建
 G=$T/guard; mkdir -p "$G/home"
