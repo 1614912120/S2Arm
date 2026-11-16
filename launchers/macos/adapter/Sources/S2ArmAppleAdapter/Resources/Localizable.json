@@ -9384,6 +9384,10 @@
   "en": "Update S2Arm on iPhone"
  },
  {
+  "source": "准备更新 iPhone 上的 S2Arm",
+  "en": "Preparing the S2Arm update for iPhone"
+ },
+ {
   "source": "这台 Mac 没装 Xcode 的设备组件（CoreDevice），读不到连着的设备：打开一次 Xcode、按提示装附加组件后再试；也可以在出包页直接选机型",
   "en": "This Mac doesn't have Xcode's device components (CoreDevice), so connected devices can't be read. Open Xcode once and install the additional components when prompted, then try again; or pick the model directly on the build page"
  },
