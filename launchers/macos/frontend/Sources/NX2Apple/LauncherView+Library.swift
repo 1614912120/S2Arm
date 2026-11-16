@@ -75,13 +75,12 @@ extension LauncherView {
                     if game.iphoneReady {
                         // 包已出好：主按钮是装机 / 续签，重新出包退到次要
                         // 装过的款（续签 / 重装）：目标先设成当初装的那台，不换别的；要装到另一台在装机页改选
-                        Button { model.targetInstalledDevice(of: game); installFor = game.id } label: {
-                            // 导出模式：主按钮是「导出，自己签名安装」（维护者 11-13：两路分开，导出路不写「装到 iPhone」）
-                            LauncherHeroActionLabel(title: model.installMode.mode == "export" ? txt("export.done.export")
-                                                    : txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"),
-                                                    symbol: model.installMode.mode == "export" ? "square.and.arrow.up" : "iphone")
+                        Button { if !model.busy { model.selfSigning = false }; model.targetInstalledDevice(of: game); installFor = game.id } label: {   // 一键装：装机窗照装机画（不接着画上次导出的结局卡）
+                            LauncherHeroActionLabel(title: txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"), symbol: "iphone")
                         }
                         .buttonStyle(.plain).keyboardShortcut(.return, modifiers: []).accessibilityIdentifier("hero.install")
+                        // 导出自签包（11-15 维护者：导出不是装法，常驻一个看得见的次按钮，1 下开始导出、不经装机窗）
+                        heroCapsule(txt("library.hero.selfSign"), symbol: "square.and.arrow.up", id: "hero.selfSign", enabled: !model.busy) { model.exportSelfSign(game); if game.iphoneExportable { installFor = game.id } }
                         heroCapsule(loc.t("s2arm.export.action"), symbol: "shippingbox", id: "hero.export", enabled: queueable) { model.exportFor = game.id }
                     } else {
                         Button { model.exportFor = game.id } label: {
@@ -91,6 +90,8 @@ extension LauncherView {
                         .keyboardShortcut(.return, modifiers: [])
                         .accessibilityLabel(loc.t("s2arm.export.action")).accessibilityIdentifier("hero.export")
                         .padTarget("hero.export", scope: "main", radius: 30) { model.exportFor = game.id }
+                        // 没出过包的款点「导出自签包」：先出 iPhone 包、出完接着导出
+                        heroCapsule(txt("library.hero.selfSign"), symbol: "square.and.arrow.up", id: "hero.selfSign", enabled: queueable) { model.exportSelfSign(game) }
                     }
                     if game.playable {
                         // 开局前在同步 iCloud 存档：按钮写明在做什么（11-09 审查：原来点了几分钟没反应）

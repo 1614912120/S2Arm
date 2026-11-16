@@ -928,31 +928,20 @@ def devcert_items(c, item, udid):
     return got
 
 
-# 装到 iPhone 的方式（11-11 维护者定「怎么签、怎么装收成一套」）：device = 一键装（启动器签名并装；签名身份仍是 devcert 状态 active 与否，不另存）；
-#   export = 导出，自己签名安装（未签名 S2Arm.ipa + 各款 game.img 到文件夹）。存私有目录 install.json，Mac / Windows 两端读同一份；完成页临时换一次不改这里
-INSTALL_MODES = ("device", "export")
-
-
-def install_mode(c):
-    m = read(c.private / "install.json", {})
-    return m.get("mode") if isinstance(m, dict) and m.get("mode") in INSTALL_MODES else "device"
-
-
+# 导出自签包不再是一种「装法」（11-15 维护者：让玩家先去设置里切模式本身就是多出来的一道）：游戏库「装到 iPhone」与「导出自签包」两个按钮并排，
+#   导不导出只看这次请求带的 mode = export（wants_export）。原先存在私有目录 install.json 的装法设置作废：installMode 作业（两端启动时读签名身份）顺手删掉它，迁移一次
 def export_available(c):
-    """「导出，自己签名安装」能不能用：导出作业（export_phone，IMG + 未签名壳）在就是 True；两端为 False 时把这一项置灰写「下一版提供」"""
+    """导出作业（export_phone，IMG + 未签名壳）在不在"""
     return callable(globals().get("export_phone"))
 
 
 def install_mode_job(c):
-    """作业 installMode：带 mode 就改（只认 device / export；导出还不能用时拒收 export），不带只读 → {mode, exportAvailable, signMode}"""
-    mode = c.r.get("mode")
-    if mode is not None:
-        if mode not in INSTALL_MODES:
-            raise Failure(f"不认识的安装方式：{mode}", code="job_failed")
-        if mode == "export" and not export_available(c):
-            raise Failure("「导出，自己签名安装」下一版提供。", code="job_failed")
-        atomic(c.private / "install.json", dict(mode=mode))
-    return dict(mode=install_mode(c), exportAvailable=export_available(c), signMode="devcert" if devcert.active(c) else "appleId")
+    """作业 installMode：只读签名身份 → {signMode, exportAvailable}；旧版留下的装法设置 install.json 删掉（迁移一次）"""
+    try:   # 删不掉（Windows 上被杀软 / 别的进程占着）不碍事：wants_export 已经不看它，下次启动再删；这个作业是启动时读签名身份的，不能因此失败
+        (c.private / "install.json").unlink(missing_ok=True)
+    except OSError:
+        pass
+    return dict(exportAvailable=export_available(c), signMode="devcert" if devcert.active(c) else "appleId")
 
 
 # 导出给自签玩家（v0.3.1，维护者 11-12「导出，自己签名安装」）：游戏库根下这个文件夹放未签名 S2Arm.ipa + 各款 <游戏名>.img + 一份说明。
@@ -975,9 +964,8 @@ def export_dir(c):
 
 
 def wants_export(c):
-    """这次按导出走：请求带 mode（完成页「这次改为导出自签 / 一键装」临时换一次）就照它，不带按设置里的装法"""
-    m = c.r.get("mode")
-    return (m if m in INSTALL_MODES else install_mode(c)) == "export"
+    """这次按导出走：请求带 mode = export（游戏库「导出自签包」、完成页「这次改为导出自签」、S 级优化升级页「自签导出」）；没带 = 一键装"""
+    return c.r.get("mode") == "export"
 
 
 def _img_name(name, gid, used):
@@ -1405,7 +1393,7 @@ def readiness(c):
     item("deviceReady", dev_mode and stage == "", "{0} 已准备好安装".replace("{0}", kind), link["problem"] if stage == "prepare" else "", who="app", waiting=not paired or stage == "developerMode")
     account = (cert or {}).get("teamName") or "" if use_cert else (team["name"] or team["id"]) if team else ""
     return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=name, deviceKind=kind.lower() if one else "", account=account, ipaPath=ipa_path, imgPath=phone_img_path(c, gid), shaderCachePath=phone_shader_cache(c, gid),
-                signing="" if use_cert else signing_summary(c.env()), signMode="devcert" if use_cert else "appleId", devcert=cert, installMode=install_mode(c))
+                signing="" if use_cert else signing_summary(c.env()), signMode="devcert" if use_cert else "appleId", devcert=cert)
 
 
 def linked_sdk(exe):
@@ -1597,8 +1585,7 @@ def readiness_windows(c, gid):
         except (OSError, ValueError):
             kind = ""
     return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=udids[0] if len(udids) == 1 else "", deviceKind=kind,
-                account=(cert or {}).get("teamName") or "", ipaPath=ipa_path, imgPath=phone_img_path(c, gid), shaderCachePath=phone_shader_cache(c, gid), signMode="devcert" if use_cert else "appleId", devcert=cert,
-                installMode=install_mode(c))
+                account=(cert or {}).get("teamName") or "", ipaPath=ipa_path, imgPath=phone_img_path(c, gid), shaderCachePath=phone_shader_cache(c, gid), signMode="devcert" if use_cert else "appleId", devcert=cert)
 
 
 def devpush_client(c, udid, bid, work):
@@ -2143,7 +2130,7 @@ def update_phone(c):
     手机上的游戏库、存档不动。新壳认不得的款（要按新版重新出包）：没带 acceptStale 就停下报 container_stale 列出它们，玩家确认后不带它们装
     （它们的资源包和存档还在手机上，重新出包后再装就回来）。壳已是本版 → 不装，结果 updated = False"""
     import ipa as packer
-    if wants_export(c):   # 导出模式的「导出新版 S2Arm」：本版壳带上游戏库里能带的各款出到文件夹，玩家自己覆盖安装
+    if wants_export(c):   # 「导出新版 S2Arm」：本版壳带上游戏库里能带的各款出到文件夹，玩家自己覆盖安装
         return dict(export_phone(c), updated=True)
     c.begin("找签名账号与 iPhone", 1, 6)
     try:
@@ -2185,7 +2172,7 @@ def install(c):
     if scheme:
         return downstream.install_ios(c, next((g for g in c.catalog()["games"] if g["id"].upper() == gid.upper()), dict(id=gid)), scheme)
     ios_pack(c, gid)
-    if wants_export(c):   # 装法选了「导出，自己签名安装」（或完成页这次临时换成导出）：不连手机、不签名，出到文件夹；推不推到手机由玩家在完成页选（exportPush）
+    if wants_export(c):   # 这次是「导出自签包」：不连手机、不签名，出到文件夹；推不推到手机由玩家在完成页选（exportPush）
         return export_phone(c, gid)
     c.begin("找签名账号与 iPhone", 1, 6)
     return put_game(c, gid, phone_for(c))

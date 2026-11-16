@@ -1924,6 +1924,7 @@ def catalog(c):
         # 升级启动器不算要重新准备（11-08 维护者：覆盖升级状态要保留）：运行版本自带宿主，旧版照常能玩；输入变了才要重做
         game["needsPreparation"] = not game["ready"] or manifest.get("inputIdentity") != input_identity(game)
         game["iphoneReady"] = iphone_ready(c, game["id"])
+        game["iphoneExportable"] = game["iphoneReady"] and iphone_img(c, game["id"])   # 「导出自签包」能直接导出（单一 IMG 资源包）；旧格式要先重出
         game["downstream"] = downstream.describe(c, game)   # 下游深度方案（pack/downstream/schemes.json）：命中时启动器弹确认页
         game["sgrade"] = sgrade_badge(c, game["id"], image)   # 游戏库封面左上角金色 S（v0.4.0）
         game["iphoneRestorable"] = layout.phone_ipa(c, previous=True).is_file()   # 换壳后可装回上一版（install.restore_previous）
@@ -2609,6 +2610,15 @@ def iphone_ready(c, gid):
     try:
         return (kit / "main.npdm").stat().st_size > 0 and any(kit.glob("*.fixups.tsv")) and (pack / "manifest.json").is_file()
     except OSError:
+        return False
+
+
+def iphone_img(c, gid):
+    """这款的 iPhone 资源包是不是单一 IMG 形态（manifest format = img，同 install.img_pack）：是才能直接导出成 .img；
+    旧格式（散文件 / tar）点「导出自签包」时先重出 iPhone 包再导出（11-15 维护者：玩家点的是导出，就把导出做完）"""
+    try:
+        return json.loads((layout.ios_pack(c, gid) / "manifest.json").read_text(encoding="utf-8")).get("format") == "img"
+    except (OSError, ValueError, AttributeError):
         return False
 
 
