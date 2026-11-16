@@ -7,7 +7,7 @@ import argparse
 parser=argparse.ArgumentParser(description="Link the real OHOS native core and NativeAOT services; never insert ABI stubs")
 parser.add_argument('--ndk',type=Path,required=True)
 parser.add_argument('--aot-object',type=Path,required=True,help='NativeAOT S2A.Ohos.o')
-parser.add_argument('--hms-include',type=Path,required=True,help='HMS native include root for performance hints')
+parser.add_argument('--hms-include',type=Path,help='HMS native include root for performance hints')
 parser.add_argument('--out',type=Path,required=True)
 parser.add_argument('--native',type=Path,required=True)
 parser.add_argument('--audio',type=Path,required=True)
@@ -25,7 +25,7 @@ native=repo/'ohos/native'
 base=[cc,'--target=aarch64-linux-ohos','--sysroot='+str(ndk/'sysroot'),'-O2','-g','-fPIC','-ffunction-sections','-fdata-sections','-D_GNU_SOURCE','-fno-emulated-tls']
 includes=[repo/'runtime/include',repo/'android/native',native]
 base += ['-I'+str(x) for x in includes]
-base += ['-I'+str(args.hms_include.resolve())]
+if args.hms_include: base += ['-I'+str(args.hms_include.resolve())]
 commands=[]
 def run(name,args):
     p=subprocess.run(args,capture_output=True)

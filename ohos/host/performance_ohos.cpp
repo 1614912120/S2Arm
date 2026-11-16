@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 S2Arm contributors
+#if __has_include(<graphics_game_sdk/opengtx_base.h>) && __has_include(<GameServiceKit/game_performance.h>)
+#define S2A_HAS_HMS_HINTS 1
 #include <graphics_game_sdk/opengtx_base.h>
 #include <GameServiceKit/game_performance.h>
+#else
+#define S2A_HAS_HMS_HINTS 0
+#endif
 #include <qos/qos.h>
 #include <dirent.h>
 #include <dlfcn.h>
@@ -20,6 +25,7 @@ extern "C" uint64_t s2a_ohos_present_count(void);
 
 namespace {
 pthread_mutex_t mutex=PTHREAD_MUTEX_INITIALIZER;
+#if S2A_HAS_HMS_HINTS
 OpenGTX_Context *context;
 decltype(&HMS_OpenGTX_CreateContext) create_context;
 decltype(&HMS_OpenGTX_SetConfiguration) configure;
@@ -27,8 +33,10 @@ decltype(&HMS_OpenGTX_Activate) activate;
 decltype(&HMS_OpenGTX_Deactivate) deactivate;
 decltype(&HMS_OpenGTX_DestroyContext) destroy;
 decltype(&HMS_OpenGTX_DispatchGameSceneInfo) scene;
+#endif
 int width=1280,height=720,main_thread;
 bool foreground=true;
+#if S2A_HAS_HMS_HINTS
 OpenGTX_GameSceneInfo game_scene(OpenGTX_SceneID id, const char *description) {
     OpenGTX_GameSceneInfo info{};
     info.sceneID=id;info.description=const_cast<char*>(description);
@@ -36,15 +44,19 @@ OpenGTX_GameSceneInfo game_scene(OpenGTX_SceneID id, const char *description) {
     info.resolutionCurValue.height=height;info.resolutionCurValue.width=width;
     return info;
 }
+#endif
 std::atomic<bool> first_frame{false};
 // Presented-frame counter for the optional in-game FPS readout (both graphics paths call perf_present).
 std::atomic<uint64_t> presented{0};
 int render_thread,draw_thread;
+#if S2A_HAS_HMS_HINTS
 OpenGTX_ConfigDescription g_config;
 void temperature(OpenGTX_TempLevel level) { std::fprintf(stderr,"[OHOS game hints] thermalLevel=%d; system thermal policy retained\n",(int)level); }
+#endif
 }
 // Game Service Kit：上报“这是游戏”、场景与关键线程，系统据此调度；同时每 10 秒记一次系统给的温控和负载。
 // 运行时 dlopen，缺库或失败只记日志。DEBUG_S2A_NO_GAMEPERF=1 关。
+#if S2A_HAS_HMS_HINTS
 using E=GamePerformance_ErrorCode;
 #define GP(name) reinterpret_cast<decltype(&HMS_GamePerformance_##name)>(dlsym(lib,"HMS_GamePerformance_" #name))
 static const int initial_scene_fps=30;   // 第一个 10 秒窗口之前还没有测量值，只作占位
@@ -138,6 +150,9 @@ extern "C" void s2a_ohos_report_draw_thread(int tid) {
     draw_thread=tid;
     game_perf_scene(g_perf_lib,initial_scene_fps);
 }
+#else
+extern "C" void s2a_ohos_report_draw_thread(int) {}
+#endif
 // DEBUG_S2A_QOS_PROBE=<延迟秒>：游戏运行中逐档量一条新线程的计算速度，看 QoS / 绑核能不能拿到大核。
 struct QosProbeArg { int qos; unsigned long mask; double rate; int cpu; };
 static void *qos_probe_worker(void *p) {
@@ -189,6 +204,7 @@ static void *pgo_dump(void *p) {
     return nullptr;
 }
 // DEBUG_S2A_GTX_KEYS=1: 进局后按 3 秒 CPU 时间挑最忙的三条其他线程追加为 OpenGTX 关键线程（小菠萝同法）。
+#if S2A_HAS_HMS_HINTS
 static unsigned long long task_ticks(int tid) {
     char path[64],buf[512];std::snprintf(path,sizeof path,"/proc/self/task/%d/stat",tid);
     FILE *f=std::fopen(path,"r");if(!f)return 0;
@@ -228,6 +244,7 @@ static void *gtx_keys_main(void *) {
     std::fprintf(stderr,"[OHOS game hints] extra key threads %d(%llu) %d(%llu) %d(%llu) configure=%d\n",best[0],top[0],best[1],top[1],best[2],top[2],rc);
     return nullptr;
 }
+#endif
 extern "C" void s2a_ohos_perf_session(int w,int h) {
     width=w;height=h;main_thread=gettid();
 }
@@ -243,6 +260,7 @@ extern "C" void s2a_ohos_perf_begin(void) {
         pthread_t t;
         if(!pthread_create(&t,nullptr,pgo_dump,reinterpret_cast<void *>(static_cast<long>(std::atoi(e)))))pthread_detach(t);
     }
+#if S2A_HAS_HMS_HINTS
     game_perf_begin();
     void *library=dlopen("libopengtx.so",RTLD_NOW|RTLD_LOCAL);
     if(!library) { std::fprintf(stderr,"[OHOS game hints] OpenGTX unavailable; normal scheduling\n");return; }
@@ -270,6 +288,9 @@ extern "C" void s2a_ohos_perf_begin(void) {
         else { auto loading=game_scene(LOADING,"shader-cache-and-game-start");int sr=scene(context,&loading);std::fprintf(stderr,"[OHOS game hints] loading scene=%d size=%dx%d\n",sr,width,height); }
     } else std::fprintf(stderr,"[OHOS game hints] OpenGTX context unavailable\n");
     pthread_mutex_unlock(&mutex);
+#else
+    std::fprintf(stderr,"[OHOS game hints] built without HMS headers; public QoS and frame counters retained\n");
+#endif
 }
 extern "C" __attribute__((visibility("default"))) uint64_t s2a_ohos_present_count(void) {
     // The replay backend does not call the legacy perf_present hook. Its count
@@ -284,6 +305,7 @@ extern "C" __attribute__((visibility("default"))) uint64_t s2a_ohos_present_coun
 static uint64_t g_gtx_frames;
 static timespec g_gtx_time{};
 static void gtx_measured_sample(uint64_t total) {
+#if S2A_HAS_HMS_HINTS
     pthread_mutex_lock(&mutex);
     if (context && foreground) {
         timespec now;
@@ -300,6 +322,9 @@ static void gtx_measured_sample(uint64_t total) {
         g_gtx_frames=total;g_gtx_time=now;
     }
     pthread_mutex_unlock(&mutex);
+#else
+    (void)total;
+#endif
 }
 // 逐帧记账：设了 S2A_FRAMES_TSV 就写 frames.tsv（frame、wall_us 两列，读法同 tools/quicktest/verdict.py）。
 // 攒够一块才写盘，上屏线程平时只做一次格式化。没设时只有一次判断。
@@ -335,11 +360,15 @@ extern "C" void s2a_ohos_perf_present(void) {
     if (on && !(total % 128)) gtx_measured_sample(total);
     if(first_frame.exchange(true))return;
     pthread_mutex_lock(&mutex);
+#if S2A_HAS_HMS_HINTS
     if(context&&foreground) { auto info=game_scene(PLAYING,"game-frames-visible");int rc=scene(context,&info);std::fprintf(stderr,"[OHOS game hints] visible rendering scene=%d\n",rc); }
+#endif
     pthread_mutex_unlock(&mutex);
 }
 extern "C" void s2a_ohos_perf_foreground(int active) {
     pthread_mutex_lock(&mutex);foreground=active!=0;g_gtx_frames=0;
+#if S2A_HAS_HMS_HINTS
     if(context) { int rc=foreground?activate(context):deactivate(context);std::fprintf(stderr,"[OHOS game hints] foreground=%d result=%d\n",active,rc); }
+#endif
     pthread_mutex_unlock(&mutex);
 }
