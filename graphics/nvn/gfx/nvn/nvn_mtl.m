@@ -6408,6 +6408,7 @@ static void shmap_load_once(void) {
     uint8_t tess_dom_red;   // hull：哪些域已判定没有可用的核并报过红（位 = 域编码 0–2，位 3 = 未定义的域值 3；tess_hull_pso）
     // The argument buffer encoded last time
     id<MTLBuffer> ab_buf; uint64_t ab_gpu; size_t ab_off; uint64_t ab_pass, ab_size_sub, ab_pgen; uint32_t ab_binst;   // ab_pgen: g_psnap_gen when it was encoded (pool table addresses, pool_gpu)   // ABI2 additionally keys reuse by the submission owning its argument/support arenas
+    uint8_t tba_cand;   // tba_prepare: 0 not decided, 1 it has a binding read as a texture buffer / as 2D rows of one (the only ones that can need a GPU copy), 2 none
     uint8_t ab_patch;   // args_ubo_patchable: 0 not decided, 1 its block can be patched when only the uniform slots moved, 2 not
     uint8_t ab_ub;   // #968: that encode bound an s2a_flags.yzw copy (ub_support, an arena block of its submission): reused only within the same submission (ab_size_sub)
     id<MTLLibrary> bflib; int bflib_tried; NSMutableDictionary<NSString *, id<MTLFunction>> *bffn;   // bflib: readable-tile version <key>_bf (merge B step 2)
@@ -7256,6 +7257,7 @@ void nvn_be_prog_release(prog_t *p) { if (p->serial) serial_del(p->serial); }
 // At registration the whole texture object is snapshotted (NVN semantics: the descriptor has been written into the pool); view: the MTLTexture for that ID (a view or the base texture, held via CFBridgingRetain) and the serial-table / guest-write generations at the time it was obtained
 typedef struct { tex_t t; int ok; view_t v; int has_v; void *view; uint64_t view_id, view_rid, view_ser, view_dirty, view_ep; int view_pkg;   // view_pkg: CPU-written (packaged); only those depend on guest writes (view_dirty)
                  uint32_t view_pf; uint8_t view_tt;                         // view's pixel format / texture type, read once when it is set (the P1-20 probe compares them per binding without a message send)
+                 uint8_t view_tbu;                                          // view is a texture buffer at a pool offset off the linear-texture alignment (the only kind tba_copy copies), read once when it is set
                  void *alt, *alt_of; uint64_t alt_rid; uint8_t alt_type;   // alt: compatible view used when the shader's declared type differs from view (tex_fit), alt_of = the view it was built from
                  void *ar, *ar_of; uint64_t ar_rid;                         // ar: the alpha-from-red view for the profile's alpha_from_red shaders (tex_alpha_red), ar_of = the view it was built from
                  void *im, *im_of; uint64_t im_rid;                         // im: the view an image slot reads in the shader's pixel class (img_fit), im_of = the view it was built from
@@ -7764,7 +7766,8 @@ static id<MTLTexture> tex_by_id(int tid) {   // Caller holds g_rmu
             else vc_put(rp->t.serial, rp->t.pool, &k, v);
         }
     }
-    rp->view = (void *)CFBridgingRetain(v); rp->view_rid = v.gpuResourceID._impl; rp->view_pf = (uint32_t)v.pixelFormat; rp->view_tt = (uint8_t)v.textureType; rp->view_ser = sg; rp->view_dirty = dg; rp->view_ep = g_pkg_epoch;
+    rp->view = (void *)CFBridgingRetain(v); rp->view_rid = v.gpuResourceID._impl; rp->view_pf = (uint32_t)v.pixelFormat; rp->view_tt = (uint8_t)v.textureType; rp->view_ser = sg;
+    rp->view_tbu = v.textureType == MTLTextureTypeTextureBuffer && v.buffer && (v.bufferOffset % linear_align((uint32_t)v.pixelFormat)) != 0; rp->view_dirty = dg; rp->view_ep = g_pkg_epoch;
     return v;
 }
 // Hot-path object fetch: if the table entry is valid, return the table-held pointer directly (without ARC retain / autorelease), otherwise take the slow path to build / validate. Caller holds g_rmu.
@@ -11563,6 +11566,7 @@ static int g_defer_ab = -1, g_defer_ab_on;
 static int tba_copy(int tid, int exact) {   // exact < 0: read as a texture buffer (1D), the copy is its elements (#798)
     if (tid < 0 || tid >= g_ntreg || !g_treg[tid].ok || g_tba_n >= TBA_MAX) return 0;
     void *tv = NULL; (void)tex_fast_rid(tid, &tv); __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
+    if (tv && tv == g_treg[tid].view && !g_treg[tid].view_tbu) return 0;   // the cached view, aligned or not a texture buffer (read when it was set): no message sends
     if (!t || t.textureType != MTLTextureTypeTextureBuffer || !t.buffer || !(t.bufferOffset % linear_align(t.pixelFormat))) return 0;
     const tex_t *tt = &g_treg[tid].t; uint32_t w, h, row; int bw, bh, bpb = nvn_fmt_bpb(tt->d.format, &bw, &bh);
     if ((exact < 0 ? !bpb : !tbuf_geom(tt, t, exact, &w, &h, &row)) || tba_find(tt->serial, t)) return 0;
@@ -11590,9 +11594,20 @@ static uint32_t tbl_lead_of(NvShader *sh, int stage, const nvn_rbind *b) {
 }
 // Before a draw / dispatch: every buffer texture the stages read as 2D rows (wrapped 1D fetch) gets its GPU copy if it needs one (tba_copy). sh / stage: the program's stages (draw)
 //   or the compute shader (dispatch, stage 5)
+// Whether tba_prepare has anything to look at in x: a binding read as a texture buffer or as 2D rows of one, the cases its loop handles (the reflection is fixed: decided once)
+static int tba_cand(NvShader *x) {
+    if (x->tba_cand) return x->tba_cand == 1;
+    int c = 0;
+    for (int i = 0; i < x->rf.nb && !c; i++) { const nvn_rbind *b = &x->rf.b[i];
+        if (b->tbl && b->kind != NVN_RB_TBLEAD) continue;
+        c = b->kind == NVN_RB_TBUF || b->kind == NVN_RB_TBUFU || ((b->kind == NVN_RB_TEX || b->kind == NVN_RB_TEXD) && (MTLTextureType)b->dtt == MTLTextureTypeTextureBuffer) ||
+            (b->kind == NVN_RB_TEX && b->f1d && (MTLTextureType)b->dtt == MTLTextureType2D); }
+    x->tba_cand = c ? 1 : 2;
+    return c;
+}
 static void tba_prepare(NvShader *x0, NvShader *x1, NvShader *x2, NvShader *x3, NvShader *x4, int compute) {
     NvShader *sh[5] = {x0, x1, x2, x3, x4}; int made = 0;
-    for (int k = 0; k < 5; k++) { NvShader *x = sh[k]; if (!x) continue; int stage = compute ? 5 : k;
+    for (int k = 0; k < 5; k++) { NvShader *x = sh[k]; if (!x || !tba_cand(x)) continue; int stage = compute ? 5 : k;
         for (int i = 0; i < x->rf.nb; i++) { const nvn_rbind *b = &x->rf.b[i];
             if (b->tbl && b->kind != NVN_RB_TBLEAD) continue;   // #798 read through the lead view (tbl_view): no copy
             if (b->kind == NVN_RB_TBUF || b->kind == NVN_RB_TBUFU || (b->kind == NVN_RB_TEX && (MTLTextureType)b->dtt == MTLTextureTypeTextureBuffer)) {   // read as a texture buffer (#798)
