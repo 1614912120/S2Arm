@@ -185,7 +185,7 @@ public final class S2ArmShellHostModel {
                 if isRemoved(id) { missing.insert(id) }
                 want = listed == .playable ? .needsGameData : listed
             }
-            if installState(id) != 0, mark(id, "present") { ledgerChanged = true }   // 这款资源在（或正在装）：记「在」；删过的又回来了（电脑重装）也改回「在」
+            if installState(id) != 0, mark(id, "present", program: Self.programID(gamesRoot, id)) { ledgerChanged = true }   // 这款资源在（或正在装）：记「在」；删过的又回来了（电脑重装）也改回「在」
             noteDataSize(i, ready: [1, 4].contains(installState(id)))
             let fresh = want == .playable && isFresh(id)
             if allGames[i].game.isNew != fresh { allGames[i].game.isNew = fresh }
@@ -390,15 +390,17 @@ public final class S2ArmShellHostModel {
     /// 这台设备的游戏账本（游戏程序双端常驻方案 11-16）：App 容器 Documents/.s2a-games.json（点开头，「文件」App 里不显示），
     ///   {"version":1,"games":{"<游戏号>":{"state":"present"|"removed","at":<秒>,"program":"<程序摘要>"}}}。
     ///   写入方只有手机：玩家在 App 里删 → removed（资源不在时不显示，没删过的款显示「需要游戏数据」）；这款资源又在了（电脑重装 / 正在装）→ present。
-    ///   电脑经 s2a-devpush 按 appDataContainer 读这个相对路径，组壳时减去 removed 的款；program 由电脑侧约定，手机只原样保留。
+    ///   电脑经 s2a-devpush 按 appDataContainer 读这个相对路径，组壳时减去 removed 的款。program = 这款程序副本
+    ///   （<游戏根>/<游戏号>/.s2a-program/main，电脑装机时推）0x40–0x60 的 32 字节构建号、大写十六进制（同 pack/jobs/sgrade.py 判同一程序），没副本为空串。
+    ///   程序副本在这款游戏目录里：App 里删游戏时随目录一起挪进待删目录（存档 S2A/ 按删除页勾选），不另处理
     ///   旧版删除名单 <游戏根>/.s2a-removed.txt：首次读到时并进账本（removed），账本写成后删掉旧文件
     nonisolated static let ledgerName = ".s2a-games.json", legacyRemovedList = ".s2a-removed.txt"
     struct LedgerEntry: Codable, Equatable { var state: String; var at: Int; var program: String? }
     private struct LedgerFile: Codable { var version = 1; var games: [String: LedgerEntry] }
-    /// 账本位置：正式的游戏根（<家>/Documents/games）→ <家>/Documents/.s2a-games.json；别的根（单测）→ 放在根下，测试之间不串
+    /// 账本位置：正式的游戏根（<家>/Documents/games）→ 它的上一层即文档根下 .s2a-games.json（不另从家目录拼文档根）；别的根（单测）→ 放在根下，测试之间不串
     nonisolated static func ledgerURL(for gamesRoot: URL, home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL {
         gamesRoot.standardizedFileURL.path == home.appendingPathComponent("Documents/games").standardizedFileURL.path
-            ? home.appendingPathComponent("Documents").appendingPathComponent(ledgerName) : gamesRoot.appendingPathComponent(ledgerName)
+            ? gamesRoot.deletingLastPathComponent().appendingPathComponent(ledgerName) : gamesRoot.appendingPathComponent(ledgerName)
     }
     @ObservationIgnored private lazy var ledger: [String: LedgerEntry] = loadLedger()
     private func loadLedger() -> [String: LedgerEntry] {
@@ -407,17 +409,26 @@ public final class S2ArmShellHostModel {
         if let text = try? String(contentsOf: legacy, encoding: .utf8) {
             let stamp = Int(now().timeIntervalSince1970)
             for id in text.split(whereSeparator: \.isNewline).map(String.init) where !id.isEmpty && id.allSatisfy(\.isHexDigit) && games[id] == nil {
-                games[id] = LedgerEntry(state: "removed", at: stamp)
+                games[id] = LedgerEntry(state: "removed", at: stamp, program: "")
             }
             if saveLedger(games) { try? FileManager.default.removeItem(at: legacy) }
         }
         return games
     }
     private func isRemoved(_ id: String) -> Bool { ledger[id]?.state == "removed" }
-    /// 改一款的状态（不写文件，调用方批量后 saveLedger）；状态没变不动、不改时刻。返回改没改
-    private func mark(_ id: String, _ state: String) -> Bool {
-        guard ledger[id]?.state != state else { return false }
-        ledger[id] = LedgerEntry(state: state, at: Int(now().timeIntervalSince1970), program: ledger[id]?.program)
+    /// 这款程序副本的构建号（main 0x40–0x60，大写十六进制）；没副本 / 读不全 → 空串
+    nonisolated static func programID(_ gamesRoot: URL, _ id: String) -> String {
+        let url = gamesRoot.appendingPathComponent(id).appendingPathComponent(".s2a-program/main")
+        guard let h = try? FileHandle(forReadingFrom: url) else { return "" }
+        defer { try? h.close() }
+        guard (try? h.seek(toOffset: 0x40)) != nil, let d = try? h.read(upToCount: 32), d.count == 32 else { return "" }
+        return d.map { String(format: "%02X", $0) }.joined()
+    }
+    /// 改一款的状态（不写文件，调用方批量后 saveLedger）；状态没变不改时刻。program 给了就更新（记 present 时现读副本）。返回改没改
+    private func mark(_ id: String, _ state: String, program: String? = nil) -> Bool {
+        let old = ledger[id], keep = program ?? old?.program ?? ""
+        guard old?.state != state || old?.program != keep else { return false }
+        ledger[id] = LedgerEntry(state: state, at: old?.state == state ? old!.at : Int(now().timeIntervalSince1970), program: keep)
         return true
     }
     /// 写不进只记日志：最坏是删掉的款下次显示成「需要游戏数据」、电脑这次照旧带上它
