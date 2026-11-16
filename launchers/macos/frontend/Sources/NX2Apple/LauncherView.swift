@@ -184,12 +184,12 @@ struct LauncherView: View {
             HStack(spacing: 10) {
                 if line.percent != nil || model.phoneBanner == .preparing { ProgressView().controlSize(.small) }
                 else { Image(systemName: "iphone.and.arrow.forward").foregroundStyle(LauncherPalette.cream) }
-                Text(loc.t(line.key).replacingOccurrences(of: "{0}", with: "\(line.percent ?? 0)")).font(.manrope(13, .semibold)).monospacedDigit()
+                Text(txt(line.key).replacingOccurrences(of: "{0}", with: "\(line.percent ?? 0)")).font(.manrope(13, .semibold)).monospacedDigit()
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
                 if line.percent == nil {
                     Button { model.phoneBanner = nil } label: { Image(systemName: "xmark") }.controllerButtonStyle(.plain).foregroundStyle(.secondary)
-                        .help(loc.t("notice.close")).accessibilityLabel(loc.t("notice.close")).accessibilityIdentifier("notice.phoneUpdate.close")
+                        .help(txt("notice.close")).accessibilityLabel(txt("notice.close")).accessibilityIdentifier("notice.phoneUpdate.close")
                 }
             }
             .padding(.horizontal, 34).padding(.vertical, 10)
