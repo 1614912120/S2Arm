@@ -2281,7 +2281,9 @@ def save_container_kit(c, gid, root, dest=None):
     def copy_files(source, dest):
         dest.mkdir(parents=True, exist_ok=True)
         for p in source.iterdir():
-            if p.is_file() and not p.name.startswith(".") and p.suffix != ".log":
+            # 产物根顶层的 RomFS 镜像 romfs.std（RomFS 直出，原先是 romfs/ 目录、不在顶层普通文件里）是游戏资源，不是程序件：
+            #   不跳过就整份进程序缓存和常驻配方（11-16 Windows 端到端实测：小款配方 315 MB，组装容器本来也不读它）
+            if p.is_file() and not p.name.startswith(".") and p.suffix != ".log" and p.name != "romfs.std":
                 shutil.copyfile(p, dest / p.name)
     copy_files(root, temporary)
     if (root / "ctl/control.nacp").is_file():
