@@ -122,6 +122,8 @@ touch "$P/big.go"; wait
 # ㉒ #235：账本路径带空格（玩家 Mac 的账本在 ~/Library/Application Support 下）+ 一张发车时刻不是数字的坏票（别的版本写的 / 写了一半）：
 #   同 ⑧ 的布局，期望防饿死照常生效（big 排满后 small2 不插空）、坏票被跳过、不报 unbound variable。
 #   旧码：for f in $(ls …) 把每张票的路径按空格切成三段，一张票也读不到 → small2 插空起（本项红）
+# 下面按 bash 的英文报错「unbound variable」判「全程没有」：钉住报错语言，否则中文系统上 bash 报中文、这条反向断言假绿（11-16 维护者）
+export LC_MESSAGES=C
 S="$T/sp/Application Support"; mkdir -p "$S/mem"; export S2A_MEM_DIR=$S/mem S2A_MEM_LOCK=$S/mem.flock S2A_MEM_SEED=$Q/seed.tsv S2A_MEM_STARVE_S=600 S2A_MEM_AVAIL_GB=100
 printf '%s\t1\tdsh\tbad\ton\t0\n' $$ > "$S/mem/q.1000.$$"   # 本测试进程持有（不被当死票清掉），第 5 列是文字
 hold "$S" h; waitf "$S/h.in"; hold "$S" big; waitg "$S/mem/admit.log" '【排队】mem_admit dsh/big'
