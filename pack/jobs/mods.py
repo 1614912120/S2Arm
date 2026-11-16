@@ -14,6 +14,7 @@ import zipfile
 from pathlib import Path
 
 from core import Failure
+import layout
 
 DIR = "mods"
 OFF = ".off-"   # 关掉的 mod：文件夹改名为 mods/.off-<名字>（11-15 v0.5.0 收口「导入、关掉、删掉」）。服务层 RomFsMods.cs 跳过 . 开头的文件夹、
@@ -71,7 +72,8 @@ CODE_EXT = (".pchtxt", ".ips")   # exefs 里的代码补丁（11-15 维护者：
 
 
 def _code_files(d):
-    return sorted(f for f in Path(d).iterdir() if f.is_file() and not f.is_symlink() and f.suffix.lower() in CODE_EXT) if Path(d).is_dir() else []
+    # ._<名>.pchtxt / .ips（mod 放在 exFAT 上时的附属文件）不是补丁：当补丁编进程序会让出包解析失败
+    return [f for f in layout.entries(d) if f.is_file() and not f.is_symlink() and f.suffix.lower() in CODE_EXT]
 
 
 def _child(d, name):
@@ -130,7 +132,7 @@ def import_paths(c, game, paths):
             for label, rd, cd in found:
                 name = _safe_name(base if len(found) == 1 or not label else "%s - %s" % (base, label.replace("/", " - ")))
                 code = _code_files(cd) if cd else []
-                files = [f for f in rd.rglob("*") if f.is_file() and not f.is_symlink()] if rd else []
+                files = [f for f in layout.entries(rd, recursive=True) if f.is_file() and not f.is_symlink()] if rd else []
                 if not files and not code:
                     notes.append("「%s」是空的，没收" % name)
                     continue
@@ -170,7 +172,7 @@ def listing(c, game):
     """→ [{name, enabled, files, bytes}]（按叠加顺序：名字升序；关着的照列，enabled 为假）"""
     out = []
     for name, (d, on) in sorted(_folders(mods_dir(c, game["id"].upper(), create=False)).items()):
-        files = [f for f in (d / "romfs").rglob("*") if f.is_file()] if (d / "romfs").is_dir() else []
+        files = [f for f in layout.entries(d / "romfs", recursive=True) if f.is_file()]
         out.append(dict(name=name, enabled=on, files=len(files), bytes=sum(f.stat().st_size for f in files), code=len(_code_files(d / "exefs"))))
     return out
 
@@ -201,7 +203,7 @@ def fingerprint(d):
     """一份 mod 的内容记号（相对路径 + 大小 + 改动时间）：装机时只推变了的（install.push_mods）"""
     import hashlib
     h = hashlib.sha256()
-    for f in sorted(p for p in Path(d).rglob("*") if p.is_file()):
+    for f in (p for p in layout.entries(d, recursive=True) if p.is_file()):   # 附属文件随访达 / 系统生灭，不该让记号变、触发整份重推
         st = f.stat()
         h.update(f"{f.relative_to(d).as_posix()}\t{st.st_size}\t{int(st.st_mtime)}\n".encode())
     return h.hexdigest()[:16]
