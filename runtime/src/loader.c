@@ -522,6 +522,11 @@ static void relocate(module_t *m) {
 #if !defined(__ANDROID__)   // 安卓没有直连 GL 层（s2a_direct_lookup 在 android/native 自给）
                 if (!v && !s2a_nro_defer_lookup(nm)) v = s2a_direct_stub(nm);   // 都没定义（romfs NRO 也没有）的 gl* 核心名：安全空实现，放最后免得顶掉游戏模块自己的定义（#601）
 #endif
+                if (!v && (s->st_info >> 4) == 2) {   // D-WSFE：按名记下来（含槽位偏移），崩在「往全局指针写」时能对上是哪个；游戏自带 NRO 定义的另报红（起局置 0、nn::ro 装进来后不补）
+                    const char *wnro = s2a_nro_defer_lookup(nm);
+                    if (wnro) LOG("【红】%s: 无定义弱符号 %s 置 0（槽 %s+%#llx、%s），但 romfs/nro/%s 定义了它：装进来后这里仍是 0", m->name, nm, m->name, (unsigned long long)((uint8_t *)where - (uint8_t *)m->base), type == R_AARCH64_JUMP_SLOT ? "函数" : "数据", wnro);
+                    else LOG("%s: 无定义弱符号 %s 置 0（槽 %s+%#llx、%s）", m->name, nm, m->name, (unsigned long long)((uint8_t *)where - (uint8_t *)m->base), type == R_AARCH64_JUMP_SLOT ? "函数" : "数据");
+                }
                 if (!v && (s->st_info >> 4) == 2) { nweak0++; *where = type == R_AARCH64_JUMP_SLOT ? 0 : (uint64_t)r->r_addend; cnt[type == R_AARCH64_JUMP_SLOT ? 2 : 1]++; continue; }   // 无定义弱符号 = 0（ELF / rtld 语义）
                 if (!v) {   // 游戏自带 NRO（romfs/nro）的导出：Horizon 上要等 nn::ro 装进来才解析，记普通日志不计红；桩不变，真被调到照旧报红中止
                     const char *nro = s2a_nro_defer_lookup(nm);

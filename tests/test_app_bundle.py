@@ -182,6 +182,22 @@ class BundleTests(unittest.TestCase):
                 self.assertTrue((self.out / '空 目录').is_dir())
         self.assertEqual(inventory(self.app), before)
 
+    def test_widget_extension_follows_main_bundle_id_and_stays_executable(self):
+        # 主屏小组件扩展（11-16）：组装换主包名时扩展包名跟着成 <主包名>.widget，扩展程序保留可执行位（打 IPA 同一张表）
+        from pack import widget_ext
+        x = self.app / 'PlugIns/S2ArmWidget.appex'
+        x.mkdir(parents=True)
+        (x / 'S2ArmWidget').write_bytes(b'original synthetic widget')
+        (x / 'Info.plist').write_bytes(plistlib.dumps({'CFBundleExecutable': 'S2ArmWidget', 'CFBundleIdentifier': 'local.s2arm.app.widget'}))
+        out = self.assemble(bundle_id='org.s2arm.library')
+        got = plistlib.loads((out / 'PlugIns/S2ArmWidget.appex/Info.plist').read_bytes())
+        self.assertEqual(got['CFBundleIdentifier'], 'org.s2arm.library.widget')
+        self.assertTrue(os.access(out / 'PlugIns/S2ArmWidget.appex/S2ArmWidget', os.X_OK))
+        self.assertEqual(widget_ext.executables(out), ['PlugIns/S2ArmWidget.appex/S2ArmWidget'])
+        self.assertTrue(widget_ext.strip(out))
+        self.assertFalse((out / 'PlugIns').exists())
+        self.assertFalse(widget_ext.strip(out))
+
     def test_identity_cannot_be_overridden_by_optional_metadata(self):
         self.assemble(metadata={'CFBundleIdentifier': 'org.wrong.id', 'CFBundleDisplayName': 'wrong'})
         self.assertEqual(self.read_info(self.out)['CFBundleIdentifier'], 'org.s2arm.original')
