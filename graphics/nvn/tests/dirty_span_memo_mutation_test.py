@@ -8,7 +8,7 @@
   - 写者开工处那道 release 栅栏（table_write_begin 里的 atomic_thread_fence）与读者复查前的 acquire 栅栏（find_span 里）：只约束弱序机器上的可见顺序，
     去掉它们，x86 宿主上答案不变；由 t_dirty_span_index.c 的并发用例（每次登记 / 注销都把永远在的条目整体挪一位）做压力，不在这里声称能杀。
   - 索引条目的 relaxed 原子读写改成普通读写：宿主上结果不变（TSan 才看得出），不在这里声称能杀。
-  - 池备忘的区间上界 lim：池互不重叠时去掉它答案不变（只在池嵌套时才影响候选是谁）。
+  - 池备忘的区间上界 lim：池互不重叠时去掉它答案不变，池嵌套时会把内层地址答成外层的池；已由「快路不看区间上界」变异体覆盖。
 
 「红在哪条断言」的判法：期望可以给几条同义断言（元组），任一条出现就算拦在了对的性质上；同一条性质在用例里往往不止一处断言
 （例如「装不下就不算命中」有越过池尾、池间空隙两处），不把「必须是哪一条」钉死，用例加项、挪位置时才不会误红。
@@ -101,6 +101,8 @@ pool_mutations = [
       'pm_check(B + 0x1800, 0x10)')),  # P0 与 P1 之间的空隙：候选是 P0、装不下；两条都是「候选是它但装不下」
     ('池备忘给错长度', [('if (size) *size = m->n;', 'if (size) *size = m->n + 1;')], 'pm_check(B + 0x800, 0x100)'),
     ('池备忘关着也查', [('if (!on) return 0;', '/* 变异：关着也查 */')], 'pm_hits() == hz && pm_lookups() == lz'),
+    ('快路不看区间上界', [('if (addr >= lim) return 0;   // past a nested pool: the locked search decides', 'if (0 && addr >= lim) return 0;   // 变异：不看上界')],
+     'rp_pool_find(B + SMALL_OFF + 0x20, 0x40'),
 ]
 
 compile_flags = ['-O2', '-g', '-Wall', '-Wextra', '-Wno-unused-parameter']

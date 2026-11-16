@@ -5,6 +5,7 @@ import errno
 import os
 import re
 from pathlib import Path
+import stat
 
 
 RECOVERY = {
@@ -214,16 +215,32 @@ class Failure(Exception):
 
 
 def _under(path, roots):
-    # 两边都按真实路径比（macOS 的 /var 实为 /private/var、外接盘挂载点软链：请求里记的与报错带的写法可能不同；删掉的文件 realpath 照样解析父目录）
+    # 两边都安全解析后再比（macOS 的 /var 实为 /private/var、外接盘挂载点软链：请求里记的与报错带的写法可能不同）。
     try:
-        p = os.path.realpath(os.fspath(path))
-    except TypeError:
+        # core.resolve_path 已处理 Windows ERROR_UNRECOGNIZED_VOLUME：能安全解析时做真实路径比较；
+        # A 盘 / 网络卷不可识别时不让二次诊断覆盖原始 OSError。
+        from core import resolve_path
+        p = os.path.normcase(os.fspath(resolve_path(path)))
+    except (OSError, TypeError, ValueError):
         return False
     for r in roots:
-        r = os.path.realpath(os.fspath(r))
+        try:
+            r = os.path.normcase(os.fspath(resolve_path(r)))
+        except (OSError, TypeError, ValueError):
+            continue
         if p == r or p.startswith(r.rstrip(os.sep) + os.sep):
             return True
     return False
+
+
+def _is_directory(path):
+    """Return None when the volume cannot be checked; do not mistake I/O errors for a missing library."""
+    try:
+        return stat.S_ISDIR(os.stat(path).st_mode)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
 
 
 def explain(error, sources=(), library=None):
@@ -244,7 +261,8 @@ def explain(error, sources=(), library=None):
                 return Failure("文件或目录不可访问或不可写。", code="permission_denied", internal=internal)
             return Failure("本地任务失败：S2Arm 自己的文件读写不了，请导出诊断发给我们。", internal=internal)
         if error.errno == errno.ENOENT:
-            if any(_under(p, sources) for p in paths) or (library is not None and not os.path.isdir(library)):
+            library_is_dir = _is_directory(library) if library is not None else True
+            if any(_under(p, sources) for p in paths) or library_is_dir is False:
                 return Failure("任务所需的文件或目录不存在。", code="input_missing", internal=internal)
             return Failure("本地任务失败：S2Arm 自己的文件找不到了，请重试；还不行请导出诊断发给我们。", internal=internal)
         return Failure("本地任务失败，请检查日志和输入。", internal=internal)

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright 2026 S2Arm contributors
 """Cleanup must unlink entries without following them into player data."""
+import errno
 import os
 from pathlib import Path
 import subprocess
@@ -171,6 +172,39 @@ class SharingViolationRetryTests(unittest.TestCase):
         with self.assertRaises(PermissionError) as e:
             library._retry_shared(lambda path: None, "x", self.busy(5), sleep=slept.append)
         self.assertEqual((slept, e.exception.winerror), ([], 5))
+
+
+class MissingPathDuringCleanupTests(unittest.TestCase):
+    def run_rmtree_callback(self, error):
+        parent = Path(tempfile.mkdtemp(prefix="s2arm synthetic volume error "))
+        root = parent / "tree"
+        target = root / "extract"
+        target.mkdir(parents=True)
+        try:
+            from unittest.mock import patch
+            def emulate_windows_rmtree(path, *, onexc):
+                if isinstance(error, FileNotFoundError):
+                    target.rmdir()
+                def failed_scan(path):
+                    raise error
+                onexc(failed_scan, str(target), error)
+            with patch.object(library.shutil, "rmtree", side_effect=emulate_windows_rmtree), \
+                 patch.object(os.path, "lexists", return_value=False):
+                library._rmtree(root)
+        finally:
+            import shutil
+            shutil.rmtree(parent, ignore_errors=True)
+
+    def test_missing_scan_target_is_treated_as_already_removed(self):
+        error = FileNotFoundError(errno.ENOENT, "synthetic vanished directory")
+        self.run_rmtree_callback(error)
+
+    def test_unrecognized_volume_error_is_not_treated_as_missing(self):
+        error = OSError(errno.EIO, "synthetic volume failure")
+        error.winerror = 1005
+        with self.assertRaises(OSError) as caught:
+            self.run_rmtree_callback(error)
+        self.assertEqual(caught.exception.winerror, 1005)
 
 
 if __name__ == "__main__":
