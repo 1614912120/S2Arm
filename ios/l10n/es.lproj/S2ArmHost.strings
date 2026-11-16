@@ -540,6 +540,14 @@
 "sgrade.state.version.older" = "Solo hay parches para la versión anterior %1$@; para tu versión todavía no hay.";
 "sgrade.state.version.port_failed" = "Intentamos adaptarlo a tu versión, pero no funcionó.";
 "sgrade.state.none" = "La biblioteca de parches aún no tiene parche de %1$@ para este juego.";
+"sgrade.state.failed" = "No se pudo añadir el parche de %1$@ de este juego: %2$@";
+"sgrade.result.why.mismatch" = "no coincide con tu copia del juego";
+"sgrade.result.why.conflict" = "entra en conflicto con otro parche";
+"sgrade.result.why.translate" = "esta parte aún no se puede traducir";
+"sgrade.result.why.full" = "hay demasiados parches para este módulo";
+"sgrade.result.why.port" = "es para otra versión y no pudo adaptarse";
+"sgrade.result.why.version" = "este mod es para otra versión del juego";
+"sgrade.result.why.unsupported" = "el parche usa algo que S2Arm aún no admite";
 "sgrade.state.opted_out" = "No añadido: «Añadir al compilar» estaba desactivado al exportar. Actívalo y vuelve a exportar.";
 "sgrade.state.pending.ios" = "Hay parches nuevos: abre S2Arm en tu ordenador y elige «Mejora a grado S».";
 "sgrade.state.mac_only" = "Los parches de gráficos son solo para Mac.";

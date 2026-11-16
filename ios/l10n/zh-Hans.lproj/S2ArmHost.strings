@@ -546,6 +546,14 @@
 "sgrade.state.version.older" = "补丁只有旧版本 %1$@ 的，你这个版本暂时没有。";
 "sgrade.state.version.port_failed" = "已试过移植到你这份，没成功。";
 "sgrade.state.none" = "补丁库里还没有这款游戏的%1$@补丁。";
+"sgrade.state.failed" = "这款的%1$@补丁没能打入：%2$@";
+"sgrade.result.why.mismatch" = "和你这份游戏对不上";
+"sgrade.result.why.conflict" = "和另一份补丁改的是同一处";
+"sgrade.result.why.translate" = "这一处暂时转译不了";
+"sgrade.result.why.full" = "同一模块的补丁太多，放不下";
+"sgrade.result.why.port" = "补丁是别的版本的，移植不到你这份";
+"sgrade.result.why.version" = "这个 Mod 是给别的游戏版本做的，和你这份对不上";
+"sgrade.result.why.unsupported" = "补丁用了 S2Arm 还不支持的写法";
 "sgrade.state.opted_out" = "没打入：出包时取消了「出包时打入」。重新出包时勾上就有。";
 "sgrade.state.pending.ios" = "电脑上有可用的新补丁：在电脑的 S2Arm 点「S 级优化升级」装进来。";
 "sgrade.state.mac_only" = "画面补丁只在 Mac 版里。";

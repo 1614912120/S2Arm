@@ -540,6 +540,14 @@
 "sgrade.state.version.older" = "パッチは古いバージョン %1$@ 用しかなく、お使いのバージョン用はまだありません。";
 "sgrade.state.version.port_failed" = "お使いのバージョンへの移植を試しましたが、うまくいきませんでした。";
 "sgrade.state.none" = "パッチライブラリにこのゲームの%1$@パッチはまだありません。";
+"sgrade.state.failed" = "このゲームの%1$@パッチを組み込めませんでした：%2$@";
+"sgrade.result.why.mismatch" = "お使いのゲームと一致しません";
+"sgrade.result.why.conflict" = "別のパッチと同じ箇所を変更します";
+"sgrade.result.why.translate" = "この箇所はまだ変換できません";
+"sgrade.result.why.full" = "同じモジュールのパッチが多すぎます";
+"sgrade.result.why.port" = "別バージョン用で適応できませんでした";
+"sgrade.result.why.version" = "この Mod は別バージョンのゲーム用です";
+"sgrade.result.why.unsupported" = "パッチに S2Arm が未対応の書き方が含まれています";
 "sgrade.state.opted_out" = "未適用：書き出し時に「書き出し時に適用」をオフにしました。オンにして書き出し直すと入ります。";
 "sgrade.state.pending.ios" = "新しいパッチがあります：パソコンの S2Arm で「S 級最適化アップグレード」を選んでください。";
 "sgrade.state.mac_only" = "画面パッチは Mac 版のみです。";

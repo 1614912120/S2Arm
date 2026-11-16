@@ -210,7 +210,10 @@ def scan(index_dirs, exefs, log=None):
                 try:
                     w, rt = fpslocker.convert(miniyaml.load(open(full, encoding='utf-8', errors='replace').read()), (text_end, ro), (M, key))
                 except (fpslocker.Unsupported, ValueError) as e:
-                    skipped['FPSLocker：' + str(e)[:40]] = skipped.get('FPSLocker：' + str(e)[:40], 0) + 1; continue
+                    skipped['FPSLocker：' + str(e)[:40]] = skipped.get('FPSLocker：' + str(e)[:40], 0) + 1
+                    # 进补丁打入记录（11-15 #934：原先只打一行「跳过」，完成页、S 级页都看不出这款的帧率补丁没打进去、开关显示成开着）
+                    if log is not None: log.append(f'不收\t{uid}\tmain\tFPSLocker\tFPSLocker 配置不支持：{str(e)[:120]}')
+                    continue
                 meta = dict(meta, fps=60, ext=True, fpsl=rt)   # ext：代码段尾巴放声明代码、映像结尾放变量（同金手指规则）
                 out.append({'module': 'main', 'cat': 'fps', 'name': 'FPSLocker', 'writes': sorted(w.items()), 'license': r.get('license') or '', 'path': path, 'base': base, 'id': uid, 'meta': meta,
                             'origin': r.get('origin') or path})   # 上游原路径：fps_group 按它分组（审计 P1-193）
