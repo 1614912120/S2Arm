@@ -5460,7 +5460,7 @@ static void audit_probe_report(uint64_t frame);   // audit #1534 passive probes 
 //   （打包贴图副本 + 渲染目标等，正式游戏约 1.7 GB）标成可清除（MTLPurgeableStateVolatile）：可清除内存不计进 phys_footprint
 //   （11-13 Duo 实测 1024 MB 共享缓冲：实占 1089 → 65 MB，标回 1089 MB、内容还在），系统缺内存时直接清掉这些、不用杀我们。
 //   回前台、放开闸门之前（dm_gfx_suspend(0)）标回不可清除：没被清的原样接着用；被清的登记进 g_up_lost——打包贴图下次取用整张从客体内存重新上传（同上传被丢的
-//   处理），渲染目标内容丢了、游戏下一帧重画（跨帧保留的花一两帧，好过进度没了）。不碰：零拷贝池缓冲（就是客体内存）、视图、缓冲背着的贴图、MTLHeap 分出来的（可清除按整堆算）、
+//   处理）。只标打包贴图：纯 GPU 贴图（渲染目标、GPU 写进去的）内容只在 GPU 上，被清了找不回（11-16 起不标，见下面 bg 分支）。不碰：零拷贝池缓冲（就是客体内存）、视图、缓冲背着的贴图、MTLHeap 分出来的（可清除按整堆算）、
 //   各种缓冲（参数表、转换缓存等跨帧保留，被清了会错）。S2A_BG_PURGE=0 关
 static NSMutableArray<id<MTLTexture>> *g_bg_purged;   // 只在挂起 / 恢复的那一刻碰（闸门关着，提交线程停在闸门外）
 static uint64_t bg_fp_mb(void) { task_vm_info_data_t v; mach_msg_type_number_t n = TASK_VM_INFO_COUNT; return task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&v, &n) == KERN_SUCCESS ? v.phys_footprint >> 20 : 0; }
@@ -5476,18 +5476,32 @@ void nvn_be_background_purge(int bg) {
     @autoreleasepool {
         if (bg) {
             uint64_t f0 = bg_fp_mb(), bytes = 0;
+            // 只标能从客体内存重建的：打包贴图（CPU 写的内容，被清了下次取用整张重传，g_up_lost）。纯 GPU 贴图（渲染目标、游戏用 GPU 拷贝 / 计算写进去的）和
+            //   GPU 写过的打包贴图（pgpu）不标：它们的内容只在 GPU 上，被清了没处找回。11-16 D-CZCW（0100B8A026F14000 iPhone，「切出去回来很容易花屏」）：
+            //   两次回前台各清掉 853 / 909 张，只有 3 张走了重传、其余 850 / 906 张是纯 GPU 贴图，原设计假设「渲染目标下一帧重画」，
+            //   只画一次的（字图集、GPU 拷贝填的 ASTC 贴图被清成全零 = 品红）就一直花
+            NSHashTable *rebuildable = [[NSHashTable alloc] initWithOptions:NSPointerFunctionsStrongMemory | NSPointerFunctionsObjectPointerPersonality capacity:0];
+            pthread_mutex_lock(&g_smu);
+            nvn_hmap *tabs[] = {&g_by_serial, &g_ghost, &g_ghost_active};
+            for (int ti = 0; ti < 3; ti++) for (uint32_t i = 0; i < tabs[ti]->cap; i++) {
+                id o = (__bridge id)tabs[ti]->vals[i]; if (!o || ![o isKindOfClass:[NvPkg class]]) continue;
+                NvPkg *pk = o; if (pk->pgpu || pk->sparse || pk->stex) continue;
+                if (pk->tex) [rebuildable addObject:pk->tex];
+                if (pk->spare) [rebuildable addObject:pk->spare]; }
+            pthread_mutex_unlock(&g_smu);
             pthread_mutex_lock(&g_res_mu); NSArray *all = g_res_objects ? g_res_objects.allObjects : @[]; pthread_mutex_unlock(&g_res_mu);
-            NSMutableArray<id<MTLTexture>> *marked = [NSMutableArray array];
+            NSMutableArray<id<MTLTexture>> *marked = [NSMutableArray array]; uint64_t kept_n = 0, kept_b = 0;
             for (id o in all) {
                 if (![o conformsToProtocol:@protocol(MTLTexture)]) continue;
                 id<MTLTexture> t = o;
                 if (t.buffer || t.parentTexture || t.heap || t.storageMode != MTLStorageModePrivate) continue;
+                if (![rebuildable containsObject:t]) { kept_n++; kept_b += t.allocatedSize; continue; }   // 纯 GPU 内容：不标
                 if ([t setPurgeableState:MTLPurgeableStateVolatile] != MTLPurgeableStateNonVolatile) continue;   // 已经可清除 / 已被清：不是这次标的
                 [marked addObject:t]; bytes += t.allocatedSize;
             }
             g_bg_purged = marked;
-            LOG("[nvn] 切后台瘦身：%lu 张贴图 %llu MB 标成可清除（系统缺内存时直接清掉、不计实占），实占 %llu → %llu MB",
-                (unsigned long)marked.count, (unsigned long long)(bytes >> 20), (unsigned long long)f0, (unsigned long long)bg_fp_mb());
+            LOG("[nvn] 切后台瘦身：%lu 张打包贴图 %llu MB 标成可清除（系统缺内存时直接清掉、不计实占，回前台按需重传）；纯 GPU 内容的 %llu 张 %llu MB 不标（清了找不回）；实占 %llu → %llu MB",
+                (unsigned long)marked.count, (unsigned long long)(bytes >> 20), (unsigned long long)kept_n, (unsigned long long)(kept_b >> 20), (unsigned long long)f0, (unsigned long long)bg_fp_mb());
         } else if (g_bg_purged) {
             uint64_t f0 = bg_fp_mb(), lost = 0, lost_b = 0;
             NSMutableArray<id<MTLTexture>> *emptied = [NSMutableArray array];
