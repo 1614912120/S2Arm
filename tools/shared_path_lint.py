@@ -25,7 +25,6 @@ DOCS_ROOT_EXT = ('.c', '.h', '.m', '.mm', '.inc', '.cpp', '.cs', '.swift')
 DOCS_ROOT_OK = {   # 文件 → 理由（只放有理由的）
     'runtime/include/s2a_docs.h': '唯一取法本身',
     'runtime/src/launchctx.c': '启动上下文按传入的 HOME 推 iOS 容器布局（兼容 / 多款容器，单测直接喂 home），S2A_DOCS 的来源',
-    'shell/Sources/S2ArmShellHost/S2ArmContainer.swift': 'Swift 壳调不到 C 头：与 s2a_docs.h 的 S2A_CONTAINER_DOCS_REL 同值（iOS Documents / tvOS Library/Caches/S2Arm），壳侧唯一一份',
     'graphics/loop/ShaderPack.cs': 'C# 调不到 C 头：DocsRoot() 是本程序集同口径的唯一一份',
     'graphics/metal/gal_core.m': '渲染器自成一体不含原生头，且 graphics/metal 改动即冷（tools/coldcheck.py ③）；只在显式设诊断变量 NXGAL_PASS_LOG 为相对名时走，下一笔 graphics/metal 冷改动顺带归位',
     'graphics/metal/gal_present.m': '同 gal_core.m；只在显式设诊断变量 NXGAL_FRAME_CAP 时走',
