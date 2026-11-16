@@ -135,6 +135,13 @@ public final class S2ArmEngineProvider: EngineProvider {
             if let location = job.location { extra["location"] = location }
             let r = try await client.perform("ipa", extra: extra, events: events).result
             return BuildResult(gameId: job.gameId, target: .iPhone, outputPath: r["outputPath"] as? String, ipa: r["ipa"] as? String, raw: r)
+        case .appleTV:
+            // Apple TV：同一个 ipa 作业，platform = "tvos"（tvOS 壳与 image/tvos 由出包流程出）
+            var extra: [String: Any] = ["gameId": job.gameId, "platform": "tvos"]
+            if job.spaceOverride { extra["spaceOverride"] = true }
+            if let location = job.location { extra["location"] = location }
+            let r = try await client.perform("ipa", extra: extra, events: events).result
+            return BuildResult(gameId: job.gameId, target: .appleTV, outputPath: r["outputPath"] as? String, ipa: r["ipa"] as? String, raw: r)
         }
     }
 
@@ -219,6 +226,25 @@ public final class S2ArmEngineProvider: EngineProvider {
     /// 拉回连着的 iPhone 上各款的诊断（pullDiagnostics 作业）→ 结果（outputPath、apps）。
     public func pullDiagnostics(events: EventSink = .discard) async throws -> [String: Any] {
         try await client.perform("pullDiagnostics", events: events).result
+    }
+
+    // MARK: Apple TV（tvOS 版，pack/jobs/tvos.py）
+
+    /// 配对过的 Apple TV（tvDevices 作业）→ [{id, udid, name, model, os, kind, online}]；没有 / 读不到 = 空表。
+    public func appleTVDevices() async throws -> [[String: Any]] {
+        try await client.perform("tvDevices").result["devices"] as? [[String: Any]] ?? []
+    }
+
+    /// 装到 Apple TV（tvInstall 作业）：device = 选的那台（设备号 / UDID），nil = 只连着一台时用它。
+    public func installAppleTV(gameId: String, device: String?, events: EventSink = .discard) async throws -> [String: Any] {
+        var extra: [String: Any] = ["gameId": gameId]
+        if let device { extra["device"] = device }
+        return try await client.perform("tvInstall", extra: extra, events: events).result
+    }
+
+    /// 电视存档自动备份一轮（tvSaveBackup 作业）：没连电视不算错（state = unreachable）。
+    public func appleTVSaveBackup() async throws -> [String: Any] {
+        try await client.perform("tvSaveBackup").result
     }
 
     /// 打 iPhone 包的目标设备探测（targetDevice 作业）：connected / models / osChoices；quick 只给静态机型表、不读设备。

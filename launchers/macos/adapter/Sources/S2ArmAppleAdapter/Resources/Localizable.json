@@ -9754,5 +9754,73 @@
  {
   "source": "重试没用：先在游戏菜单「存档管理」里导出存档（存到 S2Arm 文件夹以外，比如 iCloud 云盘），再删除并重新安装 S2Arm，装好后导回存档。",
   "en": "Retrying won’t help: export your saves from the game menu (Manage saves) to a place outside the S2Arm folder, such as iCloud Drive, delete and reinstall S2Arm, then import the saves again."
+ },
+ {
+  "source": "Apple TV 版的两项权限（提高内存上限、扩展虚拟寻址）只有付费 Apple 开发者账号签得了：在 Xcode「设置 → 账户」登录付费开发者账号或选付费团队，再装到 Apple TV。",
+  "en": "The Apple TV version's two capabilities (Increased Memory Limit and Extended Virtual Addressing) can only be signed by a paid Apple Developer account: sign in to a paid developer account in Xcode Settings → Accounts or pick a paid team, then install on Apple TV again."
+ },
+ {
+  "source": "Apple TV 版要付费开发者账号",
+  "en": "Apple TV needs a paid developer account"
+ },
+ {
+  "source": "Apple TV 版要的两项权限只有付费 Apple 开发者账号签得了；具体原因见本任务的错误摘要。",
+  "en": "The two capabilities the Apple TV version needs can only be signed by a paid Apple Developer account. See this job’s error summary for the specific reason."
+ },
+ {
+  "source": "没看到 Apple TV：让 Apple TV 开着、和这台 Mac 连同一个网络，并在 Xcode 的「Devices and Simulators」窗口里和它配对过一次（Apple TV 上打开「设置 → 遥控器与设备 → 遥控器 App 与设备」会显示配对码），再试一次。",
+  "en": "No Apple TV found: keep the Apple TV on and on the same network as this Mac, and pair it once in Xcode's Devices and Simulators window (on the Apple TV, Settings → Remotes and Devices → Remote App and Devices shows the pairing code), then try again."
+ },
+ {
+  "source": "这台 Mac 看得到不止一台 Apple TV：{0}。在装机页选要装的那一台再装。",
+  "en": "This Mac can see more than one Apple TV: {0}. Pick the one to install on, then install."
+ },
+ {
+  "source": "{0}这次没放进 Apple TV 上的 S2Arm（要按新版重新出 Apple TV 包）；电视上它们的存档和资源都还在，重新出包再装就回来。",
+  "en": "{0} were left out of S2Arm on the Apple TV this time (they need a new Apple TV build); their saves and data are still on the TV and come back after you build and install them again."
+ },
+ {
+  "source": "Apple TV 版要付费的 Apple 开发者账号：tvOS 上「提高内存上限」和「扩展虚拟寻址」两项权限只有付费开发者账号签得了，免费账号签出来会被系统丢掉、大游戏开不了。在 Xcode 的「设置 → 账户」里登录付费开发者账号（或在团队里选付费团队），再装一次。",
+  "en": "The Apple TV version needs a paid Apple Developer account: on tvOS, the Increased Memory Limit and Extended Virtual Addressing capabilities can only be signed by a paid developer account; a free account's signature has them dropped by the system and large games won't open. Sign in to a paid developer account in Xcode Settings → Accounts (or pick a paid team), then install again."
+ },
+ {
+  "source": "申请 Apple TV 开发描述文件（第一次要几十秒）",
+  "en": "Requesting the Apple TV development provisioning profile (the first time takes tens of seconds)"
+ },
+ {
+  "source": "找签名账号与 Apple TV",
+  "en": "Finding the signing account and Apple TV"
+ },
+ {
+  "source": "把这款放进 Apple TV 上的 S2Arm",
+  "en": "Adding this game to S2Arm on the Apple TV"
+ },
+ {
+  "source": "把游戏推进 Apple TV（只推变了的文件；第一次大游戏要几分钟）",
+  "en": "Sending the game to the Apple TV (only changed files; a large game takes a few minutes the first time)"
+ },
+ {
+  "source": "这台电脑上还没有 Apple TV 版的预编壳：先给这款出一次 Apple TV 包，再装到 Apple TV。",
+  "en": "This computer doesn't have the prebuilt Apple TV shell yet: build this game for Apple TV once, then install on Apple TV."
+ },
+ {
+  "source": "这款的 Apple TV 版不是这一版 S2Arm 出的（或还没出）：先出 Apple TV 包，再装到 Apple TV。",
+  "en": "This game's Apple TV build wasn't made by this version of S2Arm (or hasn't been made yet): build it for Apple TV first, then install on Apple TV."
+ },
+ {
+  "source": "这个 S2Arm 安装包不完整（缺 Apple TV 签名权限文件），请重新下载 S2Arm。",
+  "en": "This S2Arm installation is incomplete (the Apple TV signing entitlements file is missing). Download S2Arm again."
+ },
+ {
+  "source": "这款游戏还没出 Apple TV 包：先在出包页勾上「Apple TV」出一次包。",
+  "en": "This game hasn't been built for Apple TV yet: tick Apple TV on the build page and build it once."
+ },
+ {
+  "source": "没找到这款的 Apple TV 资源包（{0}），没有装。请重新出 Apple TV 包后再装。",
+  "en": "Couldn't find this game's Apple TV resource pack ({0}), so nothing was installed. Build it for Apple TV again, then install."
+ },
+ {
+  "source": "装到 Apple TV",
+  "en": "Install on Apple TV"
  }
 ]

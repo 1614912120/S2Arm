@@ -9,6 +9,12 @@ dev_sign.py <NxIOS.app> <包名> <团队号> <基础权限 Gen/NxIOS.entitlement
 import glob, hashlib, os, plistlib, shutil, subprocess, sys, tempfile
 app, bid, team, base = sys.argv[1:5]
 NEED = ['com.apple.developer.kernel.increased-memory-limit']   # 10-19 维护者定案（docs/研究/免费账号.md）：只带这一项就有整块 64 GB 窗口 + 6144 MB 内存上限；扩展寻址多余且免费账号签不了
+# 平台（11-15 tvOS 版）：S2A_SIGN_PLATFORM=tvos（pack/jobs/tvos.py 传）或 App 的 CFBundleSupportedPlatforms 写着 AppleTVOS → 只挑 tvOS 的开发描述文件
+#   （同一包名可能还有 iOS 的那份），签名里两项都要有（pack/app_tvos.entitlements，照 TVPort build_ipa.sh；tvOS 上两项都只有付费开发者账号签得了）
+try: _plats = plistlib.load(open(os.path.join(app, 'Info.plist'), 'rb')).get('CFBundleSupportedPlatforms') or []
+except Exception: _plats = []
+TVOS = os.environ.get('S2A_SIGN_PLATFORM') == 'tvos' or 'AppleTVOS' in _plats
+if TVOS: NEED = NEED + ['com.apple.developer.kernel.extended-virtual-addressing']
 def cms(f):
     r = subprocess.run(['security', 'cms', '-D', '-i', f], capture_output=True)
     try: return plistlib.loads(r.stdout)
@@ -19,6 +25,7 @@ for f in glob.glob(os.path.join(glob.escape(os.path.expanduser('~/Library/Mobile
     if not p: unread.append(os.path.basename(f)); continue
     e = p.get('Entitlements', {})
     if e.get('application-identifier') != f'{team}.{bid}' or not p.get('ProvisionedDevices') or e.get('get-task-allow') is not True: continue
+    if TVOS and 'tvOS' not in (p.get('Platform') or []): continue
     if best is None or p['ExpirationDate'] > best[1]['ExpirationDate']: best = (f, p)
 # 解不出的描述文件不等于没有（10-30 出包线：凌晨内存耗尽、trustd 等安全服务被 Jetsam 杀，security cms 全解不出，这里报「没有」，
 #   调用方去申请新描述文件、原因空白，真因被盖住）：一个都没挑中且有解不出的 → 退出码 4、点名，调用方不申请、照原样报红
@@ -49,5 +56,6 @@ for p in nested: sign(p)
 sign(app, ('--entitlements', tf.name)); os.unlink(tf.name)
 got = subprocess.run(['codesign', '-d', '--entitlements', '-', '--xml', app], capture_output=True).stdout
 miss = [k for k in NEED if k.encode() not in got]
+if miss and TVOS: print(f'签名里没有 tvOS 版要的权限（{", ".join(miss)}）：这两项要付费开发者账号'); sys.exit(1)
 if miss: print(f'签名里没有「提高内存上限」权限（{", ".join(miss)}）'); sys.exit(1)   # 与 adhoc_sign.sh、iml_check.py 同一句
 print(f'开发签名：{os.path.basename(pf)}（{prof.get("Name")}，{len(prof["ProvisionedDevices"])} 台设备，到期 {prof["ExpirationDate"]:%Y-%m-%d}），身份 {ident[:8]}…，内嵌 {len(nested)} 个库')
