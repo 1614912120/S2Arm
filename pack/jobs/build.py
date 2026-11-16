@@ -468,7 +468,7 @@ def clone_tree(c, source, destination, *, materialize_romfs=False):
             raise Failure("输入目录包含符号链接。")
     if materialize_romfs and not (source / "romfs").is_dir():
         raise Failure("准备产物缺少 RomFS 游戏资源目录。")
-    # 空目录也要建：内置引擎的 Git 快照 gc 后 .git/refs/heads 等是空目录，少了它 Git 判仓库无效、往上找到外层仓库（10-23 走查：认到了用户主目录的仓库）
+    # 空目录也要建：拷出的目录与源一模一样（RomFS 里的空目录、宿主包结构；10-23 走查起因是当年快照 .git 的空 refs 目录）
     for d in (p for p in entries if p.is_dir() and not p.is_symlink()):
         (destination / d.relative_to(source)).mkdir(parents=True, exist_ok=True)
     files = [p for p in entries if p.is_file()]

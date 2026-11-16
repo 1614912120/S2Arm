@@ -57,7 +57,7 @@ with tempfile.TemporaryDirectory(prefix='img test ') as t:
     T = Path(t); (T / 'romfs/a/b c').mkdir(parents=True); (T / 'o').mkdir()
     files = {'a/b c/big.bin': os.urandom(100000), 'a/小.txt': b'hi', 'empty': b''}
     for k, v in files.items(): (T / 'romfs' / k).write_bytes(v)
-    others = {'exefs/main.npdm': os.urandom(5000), 'ctl/control.nacp': b'NACP'}
+    others = {'exefs/main.npdm': os.urandom(5000), 'ctl/control.nacp': b'NACP', 'systemdata/0100000000000823/ac_0_b1_nx': b'NGWORD'}   # 系统数据是多层目录下的文件（D-4VAX）
     src = []
     for k, v in others.items(): p = T / 'o' / k.replace('/', '_'); p.write_bytes(v); src.append((k, str(p)))
     cmd, why = romfs_index_cmd(t)
@@ -69,8 +69,12 @@ with tempfile.TemporaryDirectory(prefix='img test ') as t:
         off, size = img.find(out, k); b = open(out, 'rb'); b.seek(off)
         ck(off % img.PAGE == 0 and b.read(size) == v, f'② {k} 页对齐、字节相同（偏移 {off}）')
     ck(img.find(out, 'nope') is None, '② 查不在的路径 → None')
+    ck(not [p for p, _, _ in img.entries(out) if p.endswith('/')], '② 带系统数据目录的款：目录表里只有文件、没有「/」结尾的目录项')
     try: img.toc_bytes([('x', 0, 1), ('x', 1, 1)]); ck(False, '② 路径重复应报红')
     except img.Red: ck(True, '② 路径重复报红')
+    for bad_path in ('systemdata/0100000000000823/', '', '/abs'):   # D-4VAX：「/」结尾的目录项手机上解不开；空路径、绝对路径同样不收
+        try: img.toc_bytes([('systemdata/0100000000000823/ac_0_b1_nx', 0, 1), (bad_path, 1, 1)]); ck(False, f'② 目录表收了 {bad_path!r}')
+        except img.Red: ck(True, f'② 目录表不收 {bad_path!r}')
     if cmd:
         got = std_romfs(out, h['romfs'][0])
         ck(got == files, f'③ 标准 RomFS 段：独立解析 {len(got)} 个文件，集合与字节同夹具')

@@ -14,6 +14,7 @@ from .winlong import long_path   # Win32 路径入口（CreateFileW / CopyFile2 
 from .dirrename import DIR_RENAME_RETRIES, rename_dir   # noqa: F401（roots 内各处改名与外部调用方沿用 roots.rename_dir）
 from ctypes import wintypes as W
 import errno
+import json
 import os
 from pathlib import Path
 import shutil
@@ -408,6 +409,29 @@ def git(*args, repo=REPO, check=True):
     return result.stdout.decode('utf-8').strip() if check else result.returncode == 0
 
 
+def snapshot(key, repo=REPO):
+    """发布快照（App 内置引擎）不带 .git：出包要的 git 值在打包时算好写进 engine.json（launchers/macos/bundle_engine.py snapshot_fields，
+    打包自检核过与 git 算法逐项相等）。→ 该字段；开发树 / 旧快照没有 → None，调用方走 git（同 pack/stage_keyfiles.sh engine_snap）"""
+    try:
+        with open(Path(repo) / 'engine.json', encoding='utf-8') as f:
+            return json.load(f).get(key) or None
+    except FileNotFoundError:
+        return None
+
+
+def head(repo=REPO):
+    """本树提交号（.root_src）"""
+    return snapshot('commit', repo) or git('rev-parse', 'HEAD', repo=repo)
+
+
+def is_ancestor(a, b, repo=REPO):
+    """a 是 b 的祖先。快照只有打包时那一个提交：只在两者都是它时成立（与原先在快照库里跑 merge-base 结果相同）"""
+    h = snapshot('commit', repo)
+    if h:
+        return a == b == h
+    return git('merge-base', '--is-ancestor', a, b, repo=repo, check=False)
+
+
 def process_start(pid):
     if os.name == 'nt':
         from pack.jobs import winproc
@@ -655,7 +679,7 @@ class Roots:
             else:
                 dest.mkdir()
             text(dest / '.root_base', (self.version_name(current) if current else '无') + '\n')
-            text(dest / '.root_src', git('rev-parse', 'HEAD', repo=self.repo) + '\n')
+            text(dest / '.root_src', head(self.repo) + '\n')
             text(dest / '.root_pid', f'{os.getpid()} {process_start(os.getpid())}\n')
             stages = sorted(current.glob('.stage_*')) if current else ()
             text(dest / '.root_base_stages', ''.join(f'{p.name}\t{read(p)}\n' for p in stages if p.is_file()))
@@ -771,7 +795,7 @@ class Transaction:
                         else:
                             copy_file(p, dst)
             ms, ns = read(self.path / '.root_src'), read(current / '.root_src')
-            if not ns or (ms and git('merge-base', '--is-ancestor', ns, ms, repo=self.roots.repo, check=False)):
+            if not ns or (ms and is_ancestor(ns, ms, self.roots.repo)):
                 text(r / '.root_src', ms + '\n')
             text(r / '.root_base', self.roots.version_name(current) + '\n')
             self.roots._shards(r, 'replay·换完路径后', env=self.env)

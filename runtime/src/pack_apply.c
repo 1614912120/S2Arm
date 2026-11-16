@@ -26,14 +26,40 @@ static char g_untar_err[2400];
 static int g_untar_trunc;   // 本次解包碰到截短（读到的少于条目 / 包尾结束块）
 static int g_fail_errno;   // 最近一次失败的 errno（只用来判「空间满」给码，s2a_install_code）
 static void untar_err(const char *step, const char *path, int e) { g_fail_errno = e; snprintf(g_untar_err, sizeof g_untar_err, "%s %s：errno %d %s", step, path, e, strerror(e)); }
+#include <ftw.h>
 static int mkdirs(char *p) {   // 建 p 的各级父目录（p 是文件路径）；已存在但不是目录（同名文件挡路）也算失败
     for (char *s = p + 1; *s; s++) if (*s == '/') { *s = 0; int r = mkdir(p, 0755), e = errno; struct stat st;
         if (r && e == EEXIST && (stat(p, &st) || !S_ISDIR(st.st_mode))) { r = -1; e = ENOTDIR; }
         if (r && e != EEXIST) { untar_err("建目录", p, e); *s = '/'; return -1; } *s = '/'; }
     return 0;
 }
+// 资源包根 root 下解文件到 p 之前清掉旧布局挡路的东西（「0.3.10 → 0.4.3 重装装不上」：同一位置旧版是文件、新版要目录，或反过来，
+//   每次重解都在同一步 -4，点重试没用）：p 的上级里在 root 之下、同名却是文件 / 链接的 → 删掉；p 自己是目录（新版要放文件）→ 整棵删掉。
+//   只动 root 之下、只在解包时动：这些都是资源包的旧内容，新清单不要它们。删不掉照旧走后面的报错（errno 原文进 host.log）
+static int rm_tree_one(const char *f, const struct stat *st, int flag, struct FTW *w) { (void)st; (void)w; return flag == FTW_DP ? rmdir(f) : unlink(f); }
+static void clear_stale(const char *root, char *p) {
+    size_t rl = strlen(root); if (strncmp(p, root, rl) || p[rl] != '/') return;
+    struct stat st;
+    for (char *s = p + rl + 1; *s; s++) if (*s == '/') { *s = 0;
+        if (!lstat(p, &st) && !S_ISDIR(st.st_mode)) { int r = unlink(p); LOG("资源包：旧布局的文件 %s 挡着新目录，%s", p + rl + 1, r ? strerror(errno) : "已删"); }
+        *s = '/'; }
+    if (!lstat(p, &st) && S_ISDIR(st.st_mode)) { int r = nftw(p, rm_tree_one, 16, FTW_DEPTH | FTW_PHYS); LOG("资源包：旧布局的目录 %s 占着新文件的位置，%s", p + rl + 1, r ? strerror(errno) : "已整棵删掉"); }
+}
 static uint64_t oct(const char *s, int n) { uint64_t v = 0; for (int i = 0; i < n && s[i]; i++) if (s[i] >= '0' && s[i] <= '7') v = v * 8 + (uint64_t)(s[i] - '0'); return v; }
 static int safe(const char *p) { return *p && *p != '/' && !strstr(p, "../") && strcmp(p, "..") && !(strlen(p) >= 3 && !strcmp(p + strlen(p) - 3, "/..")); }
+// IMG 目录表的路径区自检（D-4VAX：玩家机上本体目录表里出现「823/ac_2_b1_nxsystemdata/0100000000000823/」——相邻两条路径首尾拼成的一截，路径区偏移错位，
+//   原先照解、每次同一处 -4）：路径非空、中间没有 NUL、不以「/」结尾、没有「//」、安全（不越出资源包根）；整表没有重复路径。任一不对 = 本体目录表被改坏，
+//   不硬解（后面的条目可能同样错位、解出来的内容是错的），按「IMG 坏」报，让玩家删掉重新导入 / 重推
+static int toc_path_ok(const uint8_t *p, uint32_t pl) {
+    if (!pl || memchr(p, 0, pl) || p[pl - 1] == '/') return 0;
+    char tmp[4200]; if (pl >= sizeof tmp) return 0; memcpy(tmp, p, pl); tmp[pl] = 0;
+    return !strstr(tmp, "//") && safe(tmp);
+}
+static int rel_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+static int toc_has_dup(char **rels, size_t n) {   // 有重复路径 → 1
+    if (n < 2) return 0; char **v = malloc(n * sizeof *v); if (!v) return 0; memcpy(v, rels, n * sizeof *v); qsort(v, n, sizeof *v, rel_cmp);
+    int dup = 0; for (size_t i = 1; i < n && !dup; i++) dup = !strcmp(v[i - 1], v[i]); free(v); return dup;
+}
 
 // 解一个 tar 到 root；返回 0 成功，负数 = 失败码（-1 读不了 -2 头坏 -3 路径不安全 -4 写失败；认不出的条目类型跳过、不算失败）；*nf / *nb 累计文件数与字节
 int s2a_untar(const char *tar, const char *root, unsigned *nf, uint64_t *nb) {
@@ -83,6 +109,7 @@ int s2a_untar(const char *tar, const char *root, unsigned *nf, uint64_t *nb) {
         }
         if (!safe(name)) { LOG("【红】解包：路径不安全 %s", name); untar_err("路径不安全", name, EINVAL); rc = -3; break; }
         char p[8192], tmp[8300]; snprintf(p, sizeof p, "%s/%s", root, name); snprintf(tmp, sizeof tmp, "%s.part", p);
+        clear_stale(root, p);
         if (mkdirs(p)) { rc = -4; break; }
         int of = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (of < 0) { untar_err("建临时文件", tmp, errno); rc = -4; break; }
         for (uint64_t left = size; left;) {
@@ -134,11 +161,17 @@ static int img_toc_file(const char *p, img_ent **out, size_t *n) {   // 同上�
     img_ent *e = calloc(slots ? slots : 1, sizeof *e); size_t k = 0;
     for (uint32_t i = 0; i < slots; i++) { const uint8_t *s = t + 8 + (size_t)i * 32; uint64_t hh; memcpy(&hh, s, 8); if (!hh) continue;
         uint32_t po, pl; memcpy(&e[k].off, s + 8, 8); memcpy(&e[k].len, s + 16, 8); memcpy(&po, s + 24, 4); memcpy(&pl, s + 28, 4);
-        if (pbase + po + pl > tl || e[k].off + e[k].len > total) { for (size_t j = 0; j < k; j++) free(e[j].rel); free(e); free(t); goto out; }
+        if (pbase + po + pl > tl || e[k].off + e[k].len > total || !toc_path_ok(t + pbase + po, pl)) {
+            if (pbase + po + pl <= tl) untar_err("IMG 目录表路径不对（本体被改坏）", (const char *)t + pbase + po, EINVAL);
+            for (size_t j = 0; j < k; j++) free(e[j].rel); free(e); free(t); goto out; }
         e[k].rel = strndup((const char *)t + pbase + po, pl);
         if (!strcmp(e[k].rel, "romfs.list")) { free(e[k].rel); continue; }
         k++; }
-    free(t); *out = e; *n = k; rc = 0;
+    free(t);
+    { char **rels = malloc((k ? k : 1) * sizeof *rels); if (rels) { for (size_t j = 0; j < k; j++) rels[j] = e[j].rel;
+        int dup = toc_has_dup(rels, k); free(rels);
+        if (dup) { untar_err("IMG 目录表有重复路径（本体被改坏）", p, EINVAL); for (size_t j = 0; j < k; j++) free(e[j].rel); free(e); goto out; } } }
+    *out = e; *n = k; rc = 0;
 out:
     close(fd); return rc;
 }
@@ -153,7 +186,8 @@ static int img_extract(const char *root, unsigned *nf, uint64_t *nb) {
     for (size_t i = 0; i < n && !rc; i++) {
         if (!safe(e[i].rel)) { untar_err("IMG 路径不安全", e[i].rel, EINVAL); rc = -3; break; }
         char p[2400], tmp[2500]; struct stat st; snprintf(p, sizeof p, "%s/%s", root, e[i].rel);
-        if (!stat(p, &st) && (uint64_t)st.st_size == e[i].len) { got += e[i].len; PHASE(2, got, all); continue; }
+        if (!stat(p, &st) && S_ISREG(st.st_mode) && (uint64_t)st.st_size == e[i].len) { got += e[i].len; PHASE(2, got, all); continue; }
+        clear_stale(root, p);
         if (mkdirs(p)) { rc = -4; break; }
         snprintf(tmp, sizeof tmp, "%s.img.tmp", p); int o = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (o < 0) { untar_err("建", tmp, errno); rc = -4; break; }
@@ -344,7 +378,7 @@ int s2a_pack_apply(const char *docs) {
     // 失败原因不依赖 unpack.log 打得开（#540：游戏目录 Documents/games/<游戏号>/ 不在时 unpack.log 也建不了，原先原因只在 lf 打开时才填，
     //   host.log 那一行「解开 … 没成：」后面是空的、又指去一个不存在的 unpack.log）：先填原因，日志打不开再把这一句接上
     g_apply_fail[0] = 0; snprintf(g_apply_code, sizeof g_apply_code, "%s", s2a_install_code(rc, g_fail_errno, g_untar_trunc, from_img));
-    if (rc) { int k = snprintf(g_apply_fail, sizeof g_apply_fail, "%s（返回 %d）", what, rc);
+    if (rc) { int k = snprintf(g_apply_fail, sizeof g_apply_fail, "%s（返回 %d）%s%s", what, rc, g_untar_err[0] ? "；现场：" : "", g_untar_err);   // 现场进 g_apply_fail：界面红行 / 诊断都带上 errno 原文（D-4VAX）
         if (!lf && k > 0 && (size_t)k < sizeof g_apply_fail) snprintf(g_apply_fail + k, sizeof g_apply_fail - (size_t)k, "；unpack.log 建不了：%s %s", logp, strerror(lerr)); }
     if (lf) {
         if (rc) fprintf(lf, "%s 解包失败：%s 返回 %d（已解 %u 个包 %u 个文件）%s%s\n", ts, what, rc, ntar, nf, g_untar_err[0] ? "；现场：" : "", g_untar_err);
@@ -352,7 +386,7 @@ int s2a_pack_apply(const char *docs) {
         else fprintf(lf, "%s 解开 %u 个包 %u 个文件 %llu MB，.applied = %s（%.1f 秒）\n", ts, ntar, nf, (unsigned long long)(nb >> 20), sha, (now_ns() - t0) / 1e9);
         fclose(lf);
     }
-    if (rc) LOG("资源包收推送：失败（%s）：%s", g_apply_code, g_apply_fail); else LOG("资源包收推送：完成");
+    if (rc) LOG("资源包收推送：失败（%s）：%s", g_apply_code, g_apply_fail); else LOG("资源包收推送：完成");   // g_apply_fail 已带现场（哪一步、哪个路径、errno 原文）
     return rc ? 1 : 0;
 }
 
@@ -670,7 +704,7 @@ static int upd_read_toc(int fd, uint64_t to, uint64_t tl, upd_ent **out, size_t 
     upd_ent *e = calloc(slots ? slots : 1, sizeof *e); size_t k = 0;
     for (uint32_t i = 0; i < slots; i++) { const uint8_t *q = t + 8 + (size_t)i * 32; uint64_t hh; memcpy(&hh, q, 8); if (!hh) continue;
         uint32_t po, pl; memcpy(&e[k].off, q + 8, 8); memcpy(&e[k].len, q + 16, 8); memcpy(&po, q + 24, 4); memcpy(&pl, q + 28, 4);
-        if (pb + po + pl > tl) { for (size_t j = 0; j < k; j++) free(e[j].rel); free(e); free(t); return -1; }
+        if (pb + po + pl > tl || !toc_path_ok(t + pb + po, pl)) { for (size_t j = 0; j < k; j++) free(e[j].rel); free(e); free(t); return -1; }   // 路径区自检同 img_toc_file：坏表不拿来重写
         e[k++].rel = strndup((const char *)t + pb + po, pl); }
     free(t); *out = e; *n = k; return 0;
 }
@@ -831,6 +865,15 @@ static int img_place(const char *proc_docs, const char *path, int pass) {   // 0
     if (!ok) return 1;
     uint64_t total; memcpy(&total, h + 128, 8); if (total != (uint64_t)st.st_size) return 1;   // 还在拷
     uint32_t fmt; memcpy(&fmt, h + 8, 4);
+    // 长度对上不等于拷完（D-4VAX 复现：拷贝方先把目标撑到全长、再从头往后填，App 扫到时头在、尾巴的目录表还是 0，原先照样认领挪走，
+    //   拷贝方经原句柄接着写进挪走后的文件，期间再解包 / 套更新包读到的是半截目录表）：目录表在文件末尾、最后才写到——
+    //   读得出、自检过（img_toc_file）、且列着程序描述 exefs/main.npdm 才算拷完；更新包要目录表读得出且非空。不然当「还在拷」，原样留着下次再看
+    if (fmt == 1) { img_ent *te; size_t tn; int has = 0;
+        if (img_toc_file(path, &te, &tn)) return 1;
+        for (size_t i = 0; i < tn && !has; i++) has = !strcmp(te[i].rel, "exefs/main.npdm");
+        img_free(te, tn); if (!has) return 1; }
+    if (fmt == 2) { int ufd = open(path, O_RDONLY); upd_ent *ue = NULL; size_t un = 0; uint64_t uto, utl; memcpy(&uto, h + 112, 8); memcpy(&utl, h + 120, 8);
+        int bad = ufd < 0 || upd_read_toc(ufd, uto, utl, &ue, &un) || !un; if (ufd >= 0) close(ufd); if (ue) upd_free(ue, un); if (bad) return 1; }
     if ((fmt == 2) != (pass == 1)) return 1;
     if (fmt == 2) return img_update(proc_docs, path, h, total);   // 着色器更新包
     if (fmt != 1) { snprintf(g_img_err, sizeof g_img_err, "%s 是格式号 %u 的资源包，这个 S2Arm 只认 1、2：请更新 S2Arm", path, fmt); return -11; }

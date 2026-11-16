@@ -137,13 +137,15 @@ STUBS = {
  save_diagnostics=116, save_diagnostics_done=117, save_diagnostics_failed=118,
  player_err_all_files=130, player_err_all_files_next=131, player_err_in_place=132, player_err_in_place_next=133,
  in_place_game=134, in_place_access_title=135, in_place_access_text=136, in_place_access_open=137, in_place_not_local=138,
- quality_high=139, quality_saver=140, quality_note=141; } }''',
+ last_session_dismiss=119, quality_high=139, quality_saver=140, quality_note=141; } }''',
 # These unrelated app boundaries must never be called in an import test.
 'org/s2arm/android/DiagnosticExport.java': '''package org.s2arm.android; import android.content.Context; import java.io.IOException; import java.nio.file.Path;
  public class DiagnosticExport { public static Path run(Context context) throws IOException {throw new AssertionError("diagnostic export unexpectedly called");} }''',
 'org/s2arm/android/DiagnosticShareProvider.java': '''package org.s2arm.android; import android.content.Context; import android.net.Uri; import java.nio.file.Path;
  public class DiagnosticShareProvider { public static Uri uri(Context context,Path path){throw new AssertionError("diagnostic share unexpectedly called");}
  public static Path directory(Context context){throw new AssertionError("diagnostic save unexpectedly called");} }''',
+'org/s2arm/android/LastSessionNotice.java': '''package org.s2arm.android; import android.content.Context;
+ public class LastSessionNotice { static String text(Context context,long markedAt){throw new AssertionError("last-session notice unexpectedly called");} }''',
 'org/s2arm/android/GameResume.java': '''package org.s2arm.android; import java.io.File; import java.io.IOException; public class GameResume { static String activeTitle(File c){return null;}
  public static final String EXTRA="resume"; public static String requireSame(File f,int p,String t,File g) throws IOException,BootContract.BadGame{return t;} }''',
 'org/s2arm/android/GameActivity.java': '''package org.s2arm.android; import android.content.*; public class GameActivity { static final String SWITCH_EXTRA="org.s2arm.android.SWITCH_GAME";
