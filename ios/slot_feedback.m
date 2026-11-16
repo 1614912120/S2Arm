@@ -10,6 +10,7 @@
 #include "native.h"
 #include "s2a_pad.h"
 #include "haptic_retry.h"
+#include "haptic_safe.h"
 #include "phone_axes.h"
 #include <math.h>
 #include <pthread.h>
@@ -61,13 +62,13 @@ static NSMapTable<GCController *, S2ASlotRumbler *> *g_rumblers;   // 手柄断�
 
 static void rumbler_stop(S2ASlotRumbler *r) {
     if (!r) return;
-    for (int k = 0; k < 2; k++) { if (r->player[k] && r->playing[k]) [r->player[k] stopAtTime:CHHapticTimeImmediate error:nil]; r->playing[k] = NO; }
+    for (int k = 0; k < 2; k++) { if (r->player[k] && r->playing[k]) s2a_hp_stop(r->player[k]); r->playing[k] = NO; }
     if (r->timer) dispatch_source_set_timer(r->timer, DISPATCH_TIME_FOREVER, DISPATCH_TIME_FOREVER, 0);
 }
 static void rumbler_reset(S2ASlotRumbler *r) {
     if (!r) return;
     rumbler_stop(r);
-    for (int k = 0; k < 2; k++) { [r->engine[k] stopWithCompletionHandler:nil]; r->player[k] = nil; r->engine[k] = nil; }
+    for (int k = 0; k < 2; k++) { s2a_hp_engine_stop(r->engine[k]); r->player[k] = nil; r->engine[k] = nil; }
 }
 static void rumbler_fail(S2ASlotRumbler *r, const char *what, NSError *error) {
     BOOL died = s2a_hp_on_fail(&r->retry, up_ns());
@@ -110,13 +111,13 @@ static BOOL rumbler_channel(S2ASlotRumbler *r, int k, GCHapticsLocality locality
         if (!r->player[k]) { rumbler_fail(r, "创建播放器失败", error); return NO; }
     }
     uint64_t now = up_ns();
-    if (r->playing[k] && !r->loops[k] && now - r->startedNs[k] > SLOT_RESTART_NS) { [r->player[k] stopAtTime:CHHapticTimeImmediate error:nil]; r->playing[k] = NO; }
-    if (!r->playing[k] && ![r->player[k] startAtTime:CHHapticTimeImmediate error:&error]) { rumbler_fail(r, "播放失败", error); return NO; }
+    if (r->playing[k] && !r->loops[k] && now - r->startedNs[k] > SLOT_RESTART_NS) { s2a_hp_stop(r->player[k]); r->playing[k] = NO; }
+    if (!r->playing[k] && !s2a_hp_start(r->player[k], &error)) { rumbler_fail(r, "播放失败", error); return NO; }
     if (!r->playing[k]) r->startedNs[k] = now;
     r->playing[k] = YES;
-    if (![r->player[k] sendParameters:@[
+    if (!s2a_hp_send(r->player[k], @[
         [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:amplitude relativeTime:0],
-        [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharp - 0.5f relativeTime:0]] atTime:CHHapticTimeImmediate error:&error]) {
+        [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharp - 0.5f relativeTime:0]], &error)) {
         rumbler_fail(r, "更新强度失败", error); return NO;
     }
     return YES;
