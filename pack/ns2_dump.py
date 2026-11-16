@@ -12,7 +12,7 @@ Switch 2 游戏现在拿到手的形态是主机上导出的松散目录（11-04
              解成段不压缩的 NSO（S2A_NX_UNPACK = nx_unpack 程序，一键出包会给；没给就报红）
     romfs/   最新更新的 romfs 里有与本体逐字节相同的文件 = 全量（导出工具挂的是打过补丁的文件系统），只用它；
              没有 = 差量，本体叠更新（更新覆盖），打黄字说明
-             镜像形态（S2A_ROMFS_IMAGE=1）：不出 romfs/ 散文件，选出的文件交 nx_unpack --romfs-image 直接建 romfs.std（标准 RomFS）；
+             镜像形态（缺省，S2A_ROMFS_IMAGE=0 回 romfs/ 散文件）：不出 romfs/ 散文件，选出的文件交 nx_unpack --romfs-image 直接建 romfs.std（标准 RomFS）；
              版本目录里是 romfs.nupmap（镜像形态的 pack/ns2_nup.py 展开）时，数据直接从 NUP 容器读
     aoc/<序号>/ + aoc.tsv   序号 = DLC 标题号 − 程序号 − 0x1000（同 nx_unpack）
     ctl/control.nacp       导出带了控制分区（版本目录里 romfs 之外的 control.nacp）就用原件 + icon.jpg；没带才合成（README.synth 标明非原件，
@@ -206,8 +206,8 @@ def fill_fixed(nacp, tid, saves=()):
     return bytes(n), True
 
 
-def image_mode():   # 镜像形态开关（同 nx_unpack / ns2_nup）：romfs 不落散文件、直接出 romfs.std；读取方全迁完之前只给对照 / 测试开
-    return os.environ.get('S2A_ROMFS_IMAGE') == '1'
+def image_mode():   # 镜像形态开关（同 nx_unpack / ns2_nup）：romfs 不落散文件、直接出 romfs.std；缺省开，S2A_ROMFS_IMAGE=0 回旧路径
+    return os.environ.get('S2A_ROMFS_IMAGE') != '0'
 
 
 def romfs_of(verdir):
@@ -232,7 +232,7 @@ def write_image(rom, out):
     """镜像形态：rom（相对路径 → 来源）交 nx_unpack --romfs-image 建 out（标准 RomFS，与先克隆成 romfs/ 再 services/romfs_index.sh --std 逐字节相同）"""
     nxu = os.environ.get('S2A_NX_UNPACK')
     if not nxu or not os.path.isfile(nxu):
-        red('镜像形态（S2A_ROMFS_IMAGE=1）由 nx_unpack 建 romfs.std：设 S2A_NX_UNPACK=<nx_unpack 程序>（一键出包会给）')
+        red('镜像形态（缺省，S2A_ROMFS_IMAGE=0 关）由 nx_unpack 建 romfs.std：设 S2A_NX_UNPACK=<nx_unpack 程序>（一键出包会给）')
     lst = out + '.list'
     with open(lst, 'w', encoding='utf-8', newline='\n') as f:
         for rel, a in rom.items():
@@ -366,7 +366,7 @@ def convert(dump, out, name=None):
     if image_mode():
         write_image(rom, os.path.join(tmp, 'romfs.std'))
     elif any(isinstance(a, tuple) for a in rom.values()):
-        red('这份 NUP 是按镜像形态展开的（只有 romfs.nupmap），整理也要镜像形态：设 S2A_ROMFS_IMAGE=1')
+        red('这份 NUP 是按镜像形态展开的（只有 romfs.nupmap），整理也要镜像形态：别设 S2A_ROMFS_IMAGE=0')
     else:
         for rel, a in rom.items():
             clone(a, os.path.join(tmp, 'romfs', rel))
