@@ -145,9 +145,9 @@ static void rec_exec(const rec_t *r) {
         if (r->op == RO_COMMIT) ubc_wait(a[2]);   // the uniform shadows this command buffer reads
         id<MTL4CommandBuffer> buffers[] = {r->op == RO_COMMIT ? g_rx_cb : rec_id(a[1])}; MTL4CommitOptions *o = rec_id(a[0]);
         if (gpu_go()) {   // GPU 安全停（nvn_mtl.m mtl_gpu_halt）后不交
-            pthread_mutex_lock(&g_res_mu);
+            pthread_mutex_lock(&g_res_commit_mu);   // apart from the residency set's commit (nvn_mtl.m res_commit)
             if (o) [g_q4 commit:buffers count:1 options:o]; else [g_q4 commit:buffers count:1];
-            pthread_mutex_unlock(&g_res_mu);
+            pthread_mutex_unlock(&g_res_commit_mu);
         }
         if (r->op == RO_COMMIT) g_rx_cb = nil;
         break; }
