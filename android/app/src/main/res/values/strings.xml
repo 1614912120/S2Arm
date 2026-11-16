@@ -123,5 +123,9 @@
     <string name="mods_note_exefs">Code patches inside (exefs pchtxt / IPS) are not imported here: only asset replacement (romfs)</string>
     <string name="mods_note_empty">The romfs of “%1$s” is empty; skipped</string>
     <string name="mods_note">Mods apply from the next launch, stacked by folder name (later ones win). Uncheck to turn one off. Change mods while the game is not running.</string>
+    <string name="touch_appearance_opacity">Control opacity</string>
+    <string name="touch_appearance_smaller">Smaller</string>
+    <string name="touch_appearance_larger">Larger</string>
+    <string name="touch_appearance_opacity_value">%1$d%%</string>
 </resources>
 

@@ -355,6 +355,15 @@ else()
                 --cc "${CMAKE_C_COMPILER}" --linker "${CMAKE_LINKER}"
                 --nm "${CMAKE_NM}" --readelf "${CMAKE_READELF}" --ar "${CMAKE_AR}")
     endif()
+    # #528 第 15 项：会话标记（原生优雅收尾走完才删 end）单独成一项。run_lifecycle.py 整组挂在 threaded_host_suites.sh 末尾，
+    #   macOS 跳过、Linux 上常被前面的 Runtime.Tests 挡住；组内又排在 hang 等断言后面。这里只跑标记那组（同一夹具、同一编译命令）。
+    #   只在 Linux：夹具要 GNU ld 的 --wrap。android/linux_ctest.sh（colima）与 Linux 上 android/test.sh 的原生段 ctest 都会跑到。
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME android_session_marker
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/native/runtime/platform/tests/run_lifecycle.py"
+                --session-marker-only --out "${CMAKE_CURRENT_BINARY_DIR}/session-marker")
+        set_tests_properties(android_session_marker PROPERTIES ENVIRONMENT "CC=${CMAKE_C_COMPILER}")
+    endif()
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(memory_test tests/memory_test.c)
         target_compile_definitions(memory_test PRIVATE _GNU_SOURCE)

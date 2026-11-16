@@ -69,6 +69,15 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual([(a["id"], a["cat"]) for a in r["applied"]], [("mod:aa", "mod")])
         self.assertEqual([(f["id"], f["cat"], f["name"], f["why"]) for f in r["failed"]], [("mod:bb", "mod", "Old/x.pchtxt", "result.why.version")])
 
+    def test_cheat_without_build_id_listed_per_file(self):
+        # #1321：没写构建号的金手指文件（pack/cpatch.py scan_cheats「不收 cheat:<文件名> … 没写构建号」）→ 完成页逐份列「没打上：金手指文件没写构建号」，
+        #   两份就两条；库里别的版本（版本不对）照旧不列。期望手写
+        self.write([], "不收\tcheat:a.txt\tmain\ta.txt\t没写构建号：文件名不是 16 位构建号、首行也没有 BID=，核不了版本\n"
+                       "不收\tcheat:b.txt\tmain\tb.txt\t没写构建号：文件名不是 16 位构建号、首行也没有 BID=，核不了版本\n"
+                       "不收\tcheat\tmain\t1111222233334444.txt\t版本不对：金手指是 1111222233334444，这份游戏的主程序是 AABBCCDD00112233\n")
+        self.assertEqual([(f["id"], f["cat"], f["name"], f["why"]) for f in patches.outcome(self.root)["failed"]],
+                         [("cheat:a.txt", "cheat", "a.txt", "result.why.nobid"), ("cheat:b.txt", "cheat", "b.txt", "result.why.nobid")])
+
     def test_fpslocker_unsupported_listed(self):
         # 11-15 #934：FPSLocker 配置里有 S2Arm 不支持的写法（pack/cpatch.py 记「不收 … FPSLocker 配置不支持」）→ 完成页列「没打上：补丁用了 S2Arm 还不支持的写法」
         self.write([], "不收\tfps:ab\tmain\tFPSLocker\tFPSLocker 配置不支持：调用 _fpsLock()：FPSLocker 自带的帮助函数，S2Arm 没有\n")

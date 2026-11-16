@@ -112,7 +112,7 @@ RECOVERY = {
     "aoc_missing": "本体已出好，照常安装即可；没解出的追加内容不在包里，游戏里用不到那部分内容。请导出诊断反馈，解码支持后重新打包即可带上。",
     "direct_offline_empty": "游戏照常能玩，只是开头几次进新场景会卡一下（着色器现编，编过的会记住）。请导出诊断反馈给我们，修好后重新出包就能提前编好。",
     "sibling_clone_failed": "已改从解包目录准备，本次照常完成，只是多花一些时间；游戏库放在 APFS 格式的磁盘上（Mac 内置盘或格式化为 APFS 的外接盘）时，各平台导出可以共用已准备好的游戏数据。",
-    "iml_missing": "用 Xcode（免费 Apple ID 即可）或 AltStore Classic v2.3 重新签名安装这款游戏；SideStore 0.7.0 免费账号重签会丢这项权限。已装的也可以用 GetMoreRam 给 App ID 补上权限后重装。",
+    "iml_missing": "在电脑上的 S2Arm 点「装到 iPhone」重新安装（免费 Apple ID 也会带上这项权限）；自己签名的话用 Xcode 或 AltStore Classic v2.3，SideStore 0.7.0 重签会丢；已经装好的也可以用 GetMoreRam 给 App ID 补上权限后重装。",
     "export_dir_busy": "用新文件夹里的 S2Arm.ipa 和 .img 自签安装；关掉占用旧文件夹的程序后，可以把旧的那个删掉。",
     "manual_unpack_required": "资源包已经在手机上，不用重推：在 iPhone 上打开 S2Arm，选这款游戏，保持在前台别锁屏，等它导入完就能玩。",
     "usb_slow": "换一根支持 USB 3 的 USB-C 数据线，直接插 Mac 上的 USB-C / 雷雳口（不经扩展坞、集线器、显示器上的口），再装下一款；iPhone 15 Pro 及更新的 Pro 机型才支持 USB 3，其它机型只能 USB 2.0。",
@@ -121,6 +121,7 @@ RECOVERY = {
     "devcert_mismatch": "在开发者网站重新生成描述文件并勾上这张证书，下载后和证书一起重新导入。",   # 开发者证书签名（pack/jobs/devcert.py，v0.2.4）
     "devcert_missing": "在出包页「我的开发者证书」里重新导入证书和描述文件，或切回「Apple ID 签名」。",   # 开发者证书签名（pack/jobs/devcert.py，v0.2.4）
     "devcert_keychain": "解锁登录钥匙串并允许 S2Arm 访问后，重新导入证书。",   # 开发者证书签名（pack/jobs/devcert.py，v0.2.4）
+    "widget_skipped": "App 已装好、游戏照常玩。想要主屏小组件：用 Apple ID 签名（不是自己的开发者证书）再装一次；免费 Apple ID 包名额度满了就等几天再装。",   # 主屏小组件（install.widget_skip，11-16）
     "shell_sdk_old": "装好的包能用；要在 iPhone Duo 等新机型上铺满全屏，把 Xcode 更新到不低于这台 iPhone 系统大版本的版本（如 iOS 27 用 Xcode 27），在启动器里选它后重新打 iPhone 包再装。",
     'configuration_failed': '检查当前阶段的配置推导错误，保留原始游戏输入；更新完整引擎后重新准备，仍失败时反馈错误摘要。',
     'shader_extract_failed': '检查着色器抽取的具体错误；确认游戏输入完整且版本一致，重新准备后仍失败时反馈摘要。',

@@ -105,8 +105,22 @@ def update_of(game):
     return max(ups, key=lambda p: p["version"]) if ups else None
 
 
-def eligibility(scheme, game, lang="zh"):
-    """(能选, 原因)。下游按某一版程序逐字节改写，别的版本做不出来：原因写清只支持哪一版、现在是哪一版、怎么办（lang = zh / en）"""
+HOST = "windows" if os.name == "nt" else "mac"
+
+
+def hosts(scheme):
+    """这个方案能在哪些电脑上出包：登记表 targets.ios.hosts（mac / windows）；没写 = 只有 mac（下游做包工具要在这台电脑上跑，
+    Windows 上能不能跑由下游包件决定，下游声明了才放开，#1272）"""
+    return (scheme["targets"].get("ios") or {}).get("hosts") or ["mac"]
+
+
+def eligibility(scheme, game, lang="zh", host=None):
+    """(能选, 原因)。① 这台电脑出不了这个方案的包（登记表 hosts 没有本机平台）；② 下游按某一版程序逐字节改写，别的版本做不出来：
+    原因写清只支持哪一版、现在是哪一版、怎么办（lang = zh / en）"""
+    if (host or HOST) not in hosts(scheme):
+        if lang == "en":
+            return False, f"{scheme['name']} can be built on a Mac only for now; use S2Arm on a Mac to choose it"
+        return False, f"{scheme['name']} 目前只能在 Mac 上出包：用 Mac 版 S2Arm 才能选它"  # 非玩家句
     need = scheme["needs"].get("updateVersion")
     if need is None:
         return True, ""

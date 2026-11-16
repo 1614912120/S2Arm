@@ -1837,6 +1837,7 @@
   "s2arm.controller.autoConnect": "Switch 2 コントローラーを自動接続",
   "s2arm.controller.disconnectOnClose": "ゲーム終了後にコントローラーを切断",
   "s2arm.controller.openBluetooth": "Bluetooth 設定を開く",
+  "s2arm.controller.thirdPartyMotion": "8BitDo や GameSir など Xbox 型のコントローラーは、Switch モードに切り替えるとモーション操作が使えます。",
   "s2arm.controller.assignPlayers": "プレイヤーを割り当て",
   "s2arm.controller.howPair": "2つをペア / フルパッド",
   "s2arm.controller.howPairKeys": "L + R を同時に押す",
@@ -1854,5 +1855,10 @@
   "s2arm.controller.gameController": "ゲームコントローラー",
   "s2arm.controller.bluetooth": "Bluetooth",
   "s2arm.controller.toolbar": "コントローラー",
-  "s2arm.punct.list": ", "
+  "s2arm.punct.list": ", ",
+  "s2arm.env.widget.group": "ホーム画面ウィジェット",
+  "s2arm.env.widget.title": "iPhone にホーム画面ウィジェットも入れる",
+  "s2arm.env.widget.detail": "iPhone のホーム画面にゲーム機の形のウィジェットを置き、最近遊んだゲームとよく遊ぶゲームを表示します。カバーをタップすると起動します。無料の Apple ID では、新しくインストールするたびに App ID を 1 つ多く使います（7 日間で 10 個まで）",
+  "home.card.daysLeft": "残り %d 日",
+  "home.card.expired": "期限切れ"
 }

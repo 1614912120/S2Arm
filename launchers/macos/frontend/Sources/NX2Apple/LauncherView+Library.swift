@@ -91,6 +91,9 @@ extension LauncherView {
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             Divider().opacity(0.3).padding(.vertical, 4)
+            if model.finishedExports[game.id] != nil, !(model.mainBusy && model.session?.gameID == game.id) {   // 这款上次出包 / 装机 / 导出的结果页（原首页圆钮）
+                moreRow(txt("library.hero.results"), "checkmark.seal") { model.viewingResult = model.finishedExports[game.id] }
+            }
             moreRow(loc.t("s2arm.export.action"), "shippingbox") { model.exportFor = game.id }
                 .controllerShortcut(.rightTrigger)
             moreRow(loc.t("s2arm.action.freeSpace"), "externaldrive") { spaceFor = game.id }
@@ -151,7 +154,7 @@ extension LauncherView {
 
     /// 卡片和大图上的状态：两端都算（原作者只看 Mac 版）。
     func statusLine(_ game: GameSummary) -> (text: String, color: Color) {
-        if model.busy && model.session?.gameID == game.id {
+        if model.mainBusy && model.session?.gameID == game.id {
             return (loc.t(model.session?.kind == .play ? "s2arm.library.running" : "s2arm.job.running"), LauncherPalette.building)
         }
         if model.exportQueue.contains(where: { $0.game.id == game.id }) { return (txt("export.status.queued"), LauncherPalette.building) }

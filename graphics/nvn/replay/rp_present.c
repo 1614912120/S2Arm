@@ -107,6 +107,10 @@ static void on_shown(void *user, const nvn_gpu_shown *s) {   // 持 g_pmu 的 pr
     __atomic_store(&g_shown[s->ticket % PT_RING], &at, __ATOMIC_RELEASE);
 }
 
+// This backend resolves initial storage synchronously in rp_present_view below;
+// there is no handoff to a separate presentation thread to prepare for.
+void nvn_be_present_prepare(const tex_t *t) { (void)t; }
+
 uint64_t nvn_be_present(const tex_t *t, double period_s, const int crop[4]) {
     (void)period_s;
     rp_tm_frame_end();   // 一帧结束：刚结束的是采样帧就记一帧，再定下一帧要不要逐步计时（分时抽样，#1103）

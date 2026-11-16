@@ -140,7 +140,8 @@ class Dependencies:
         self.env['PYTHONIOENCODING'] = 'utf-8'
         self.env['S2A_DEPS_OUT'] = str(self.raw)
         self.env['PYTHONPATH'] = str(REPO / 'tools/stage_deps_hook') + (os.pathsep + self.env['PYTHONPATH'] if self.env.get('PYTHONPATH') else '')
-        self.env.setdefault('S2A_DEPS_EXTERNAL', machine_cfg(self.env, 'S2A_COMMUNITY_DIR'))
+        if 'S2A_DEPS_EXTERNAL' not in self.env:   # 原先 setdefault 先求值：每个阶段的依赖记账都起一次 Git Bash 跑 machine.sh（11-16 极速出包定因）
+            self.env['S2A_DEPS_EXTERNAL'] = machine_cfg(self.env, 'S2A_COMMUNITY_DIR')
         self.py = self.env.get('S2A_PYTHON') or self.env.get('S2A_PY') or sys.executable
         self.inputs = set()
         # Retain the existing root-clone algorithm identity even on Windows,
@@ -209,17 +210,18 @@ def layout_source_identity(original):
 def rewrite_inputs(root):
     root = Path(root)
     paths = [p for p in (root / 'exefs').iterdir() if p.is_file()]
-    if (root / 'romfs').is_dir():
+    # RomFS 按路径读经 romfs_list（is_dir / open_file：romfs/ 不在、只有 romfs.std 镜像时从镜像盘点与读，键与目录形态相同）
+    walker = module('graphics/nvn/tools/romfs_list.py', '_orch_romfs_list')
+    if walker.is_dir(root / 'romfs'):
         def fail(error):
             raise error
-        walker = module('graphics/nvn/tools/romfs_list.py', '_orch_romfs_list')
         for directory, _, names in walker.walk(root / 'romfs', onerror=fail):
             paths.extend(Path(directory) / n for n in names if n.lower().endswith(('.nro', '.nrr')))
     h = hashlib.sha256(b'rewrite-inputs-v1\0')
     for path in sorted(paths, key=lambda p: os.fsencode(p.relative_to(root).as_posix())):
         rel = os.fsencode(path.relative_to(root).as_posix())
         content = hashlib.sha256()
-        with path.open('rb') as stream:
+        with walker.open_file(path) as stream:
             for block in iter(lambda: stream.read(1024 * 1024), b''):
                 content.update(block)
         h.update(len(rel).to_bytes(8, 'little') + rel + content.digest())
@@ -239,11 +241,21 @@ def selected_tables(game, bid, env):
             else: os.environ[k] = v
 
 
+_MACHINE_CFG = {}   # 进程内只读一次 machine.local（每次都起 Git Bash，一单的轻阶段里要问十来次；machine.local 在一单之内不变）
+
+
 def machine_cfg(env, name):
     """本机配置一项：env 里非空用它，否则 tools/machine.local 的值（tools/machine.sh get，S2A_MACHINE_NO_LOCAL=1 不读；玩家作业恒设），都没有 = ''。
-    不在代码里写死开发机路径（11-07 启动器零配置）：开发机的数据目录在 machine.local 声明"""
+    不在代码里写死开发机路径（11-07 启动器零配置）：开发机的数据目录在 machine.local 声明。同一进程同一项只问一次"""
     if env.get(name):
         return env[name]
+    cached = (name, env.get('S2A_MACHINE_NO_LOCAL', ''), env.get('S2A_BASH', ''))
+    if cached not in _MACHINE_CFG:
+        _MACHINE_CFG[cached] = _machine_cfg_read(env, name)
+    return _MACHINE_CFG[cached]
+
+
+def _machine_cfg_read(env, name):
     bash = find_bash(env)
     if not bash:
         return ''
@@ -307,6 +319,7 @@ def rewrite_plan(game, current, deps):
                      and len(line.split('\t')) >= 4 and line.split('\t')[0].upper() == pid
                      and line.split('\t')[1].lower() == bid and line.split('\t')[3].lower() == 'apple'), '')   # F7 #1574：苹果路线只取 apple 行
     fps = REPO / f'runtime/fps/{bid[:16]}.tsv'
+    fix = REPO / f'runtime/fix/{bid[:16]}.tsv'   # 游戏缺陷修补表（改写器 fix_rows）：仓库源表，改写器直接读，不进产物根
     dirs, selection, on = community_selection(env, pid, bid)
     if env.get('S2A_COMMUNITY_SELECT'):
         deps.record(env['S2A_COMMUNITY_SELECT'])
@@ -348,12 +361,13 @@ def rewrite_plan(game, current, deps):
         patch = None
     key = digest(f'{key} backend={rk.strip()}{ck}{code}' +
                  (f' fps={digest(fps.read_bytes())}' if fps.is_file() else '') +
+                 (f' fix={digest(fix.read_bytes())}' if fix.is_file() else '') +
                  (f' verified={digest(verified)}' if verified else ''), 10)
     key = digest(f'{key} inputs={rewrite_inputs(current)}', 10)
     tag = f'rw-{key}' + (f'-{target}' if target != 'apple' else '') + ('-spin' if spin else '')
     deps.record('graphics/nvn/tools/romfs_list.py')
     return dict(key=key, tag=tag, bid=bid, tables=tables, verified=verified,
-                fps=fps if fps.is_file() else None, patch=patch, addr=addr,
+                fps=fps if fps.is_file() else None, fix=fix if fix.is_file() else None, patch=patch, addr=addr,
                 addr_log=ad / 'log', community=bool(ck), dirs=dirs, selection=selection)
 
 
@@ -414,13 +428,16 @@ class Stages:
                 raise StageError(f'界面布局覆盖层有底下 RomFS 没有的文件（{extra[:3]}）：覆盖层只许替换')
             listing.write_text(''.join(f'{over.get(r.split(chr(9), 1)[1], r.split(chr(9), 1)[0])}\t{r.split(chr(9), 1)[1]}\n'
                                        for r in rows if '\t' in r), encoding='utf-8', newline='\n')
-        dotnet = os.environ.get('DOTNET') or shutil.which('dotnet')
-        if not dotnet:
-            raise StageError('winenv：缺 .NET 命令；不下载', 75)
         prebuilt = os.environ.get('S2A_PREBUILT_TOOLS')
-        if prebuilt:
-            dll = Path(prebuilt) / 'romfs/romfs_index.dll'
+        if prebuilt:   # 发版件：NativeAOT 单文件，直接执行（玩家机不带 .NET；launchers/windows/bundle_prepare_win.py）
+            exe = Path(prebuilt) / ('romfs/romfs_index.exe' if os.name == 'nt' else 'romfs/romfs_index')
+            if not exe.is_file():
+                raise StageError(f'winenv：缺预编 RomFS 索引 {exe}', 75)
+            cmd = [exe]
         else:
+            dotnet = os.environ.get('DOTNET') or shutil.which('dotnet')
+            if not dotnet:
+                raise StageError('winenv：缺 .NET 命令；不下载', 75)
             # --no-restore avoids implicit NuGet/network downloads; missing
             # restored inputs are an explicit environment failure.
             dll = REPO / 'services/romfs_index/bin/Release/net10.0/romfs_index.dll'
@@ -430,9 +447,10 @@ class Stages:
                      '-p:UseSharedCompilation=false'], env=deps.env, log=w / 'romfs_index_build.log', timeout=300)
             except StageError as error:
                 raise StageError('winenv：RomFS 索引构建/已还原依赖未就绪；未运行旧 DLL', 75) from error
-        if not dll.is_file():
-            raise StageError('winenv：缺本次指定的 romfs_index.dll', 75)
-        run([dotnet, dll, w, '--list', listing], env=deps.env, log=w / 'romfs_index_core.log')
+            if not dll.is_file():
+                raise StageError('winenv：缺本次指定的 romfs_index.dll', 75)
+            cmd = [dotnet, dll]
+        run([*cmd, w, '--list', listing], env=deps.env, log=w / 'romfs_index_core.log')
         if not target.is_file() or target.stat().st_size == 0:
             raise StageError('RomFS 索引为空，拒绝提交')
 
@@ -466,6 +484,10 @@ class Stages:
             env['S2A_FPS_TSV'] = str(w / 'fps.tsv')
         else:
             env.pop('S2A_FPS_TSV', None)
+        if plan.get('fix'):
+            env['S2A_FIX_TSV'] = str(plan['fix'])
+        else:
+            env.pop('S2A_FIX_TSV', None)
         if plan['patch']:
             env.update(S2A_CODE_PATCH=str(plan['patch']), S2A_CODE_BUILD=plan['bid'])
         else:
@@ -763,7 +785,11 @@ class Stages:
         if original is None or not original.is_dir() or (theirs and ours and theirs != ours):
             print(f'【黄】布局原版改用现行产物根的 RomFS（seed.txt 记的解包目录{"是另一款 " + theirs + " 的" if theirs and ours and theirs != ours else "不在或已失效"}）', file=sys.stderr)
             original = current / 'romfs'
-        plain_entries(original)
+        # 只校验生成器真正读的三处（graphics/widen/scan/ui_lyt.py 缺省子目录 Layout,UI,Pack；王国之泪的字典包 Pack/ZsDic 也在其内）：
+        #   原先对整份原版 RomFS 逐文件 lstat / stat，结果不用，大款每单十几到几十秒（11-16 极速出包定因）；整份 RomFS 播种时已校验过（refresh.py）
+        for name in ('Layout', 'UI', 'Pack'):
+            if (original / name).is_dir():
+                plain_entries(original / name)
         generator = REPO / 'graphics/widen/scan/ui_lyt.py'
         # Current repository import closure, including both on-demand C codecs.
         # Decoder fixes must invalidate overlays as well as the stage stamp.
@@ -1044,7 +1070,7 @@ class Stages:
         identity = hashlib.sha256(b''.join(p.read_bytes() for p in inputs)).hexdigest()[:12]
         dest = self._run_root() / 's2arm/bin' / ('nx_unpack_' + identity)
         name = 'nx_unpack.exe' if os.name == 'nt' else 'nx_unpack'
-        pre = os.environ.get('S2A_PREBUILT_TOOLS')   # 启动器随发版预编（同 oneclick_win.nx_unpack，身份相同才用）：玩家机只带 .NET 运行时、现编不了
+        pre = os.environ.get('S2A_PREBUILT_TOOLS')   # 启动器随发版预编（同 oneclick_win.nx_unpack，身份相同才用；NativeAOT 单文件）：玩家机没有 .NET、现编不了
         if pre:
             tool = Path(pre, 'nx_unpack', name)
             try:
