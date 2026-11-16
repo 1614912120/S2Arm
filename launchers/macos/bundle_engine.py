@@ -401,7 +401,10 @@ def precompile(root, python):
     python = Path(python)
     if not python.is_file():
         raise RuntimeError(f"预编 .pyc 要用 App 自带的 Python，没找到：{python}")
-    subprocess.run([str(python), "-I", "-m", "compileall", "-q", "-j", "0", "--invalidation-mode", "checked-hash", str(root)],
+    # -B：解释器起来时自己会导入 encodings / sitecustomize，不加 -B 就先把它们写成按时间戳失效的 .pyc，compileall 见已有就不重写；
+    #   装机改了源码时间后第一次起包里的 Python 就重写这 4 份（sitecustomize 关写字节码在它们之后才生效），签名封存坏（v0.4.4 候选验收⑦）。
+    #   -f：已有的一律按 checked-hash 重写。compileall 自己显式写 .pyc，不受 -B 影响
+    subprocess.run([str(python), "-I", "-B", "-m", "compileall", "-q", "-f", "-j", "0", "--invalidation-mode", "checked-hash", str(root)],
                    stdout=subprocess.DEVNULL, check=True)
 
 
