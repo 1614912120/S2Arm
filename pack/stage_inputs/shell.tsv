@@ -204,6 +204,7 @@
 入	tools/weak_link_decl.py
 外	.gitignore	出壳过程里 git 命令读的忽略规则，不影响壳内容
 外	nuget.config	根目录的 NuGet 源配置，包版本由各工程钉死，不影响壳内容
+外	pack/jobs/cache_retention.py	出壳取用镜像后回收别的树最久没用的壳镜像（pack/shell_build.sh 调 trim，只删缓存），不影响壳内容
 外	tools/gmake.sh	出壳挑 GNU Make 4 的路径（开发机工具），不影响壳内容
 
 # 「不」= 不编进壳（pack/shell/closure.py csiblings 用：表里逐文件登记的目录下，C 系文件要么入 / 外、要么在这里写明不编进壳）。
