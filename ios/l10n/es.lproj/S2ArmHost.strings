@@ -9,6 +9,11 @@
 "cheats.footer.buildId" = "Versión de este juego (primeros 16 dígitos del ID de compilación): %@. Los archivos de trucos suelen tener este nombre; archivos con otros nombres no funcionarán.";
 "cheats.footer.empty" = "Aún no hay archivos de trucos. Toca «Importar .txt» en la esquina superior derecha.";
 "cheats.import" = "Importar .txt";
+"cheats.share" = "Compartir con otros jugadores";
+"cheats.share.note" = "Si está activado, los trucos que importes a partir de ahora se compartirán públicamente con otros jugadores. Solo se suben el texto del truco y la versión del juego, nunca datos de tu dispositivo ni de tu cuenta.";
+"cheats.shared.warn.title" = "Truco compartido por otro jugador";
+"cheats.shared.warn.message" = "Este truco lo compartió otro jugador y S2Arm no lo ha comprobado. Podría hacer que el juego falle o dañar tu partida guardada. ¿Activarlo de todos modos?";
+"cheats.shared.warn.on" = "Activar de todos modos";
 "cheats.import.badItem" = "%@ (%@)";
 "cheats.import.failed" = "Algunos archivos no se importaron";
 "cheats.import.failed.message" = "%@";
