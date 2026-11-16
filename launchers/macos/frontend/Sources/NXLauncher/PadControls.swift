@@ -26,13 +26,14 @@ package struct PadControl {
 /// A operates the focused control; the right trigger submits the current page.
 /// Hints follow the primary player's controller family and face-button mapping.
 package enum PadShortcut: String, CaseIterable {
-    case primary, back, secondary, tertiary, rightTrigger
+    case primary, back, secondary, tertiary, leftTrigger, rightTrigger
     package var symbol: String {
         switch self {
         case .primary: return "a.circle"
         case .back: return "b.circle"
         case .secondary: return "x.circle"
         case .tertiary: return "y.circle"
+        case .leftTrigger: return "lt.rectangle.roundedtop"
         case .rightTrigger: return "rt.rectangle.roundedtop"
         }
     }
