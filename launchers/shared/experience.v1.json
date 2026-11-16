@@ -422,7 +422,7 @@
        "title": {"zh-Hans": "签名没成", "en": "Signing failed"},
        "detail": {"zh-Hans": "用你的 Apple ID 给这台 iPhone 签名没成功。", "en": "Signing for this iPhone with your Apple ID did not succeed."},
        "next_action": {"from": "pack/jobs/errors.py"}},
-      {"code": "ios_install_dir_unwritable", "severity": "error", "retryable": true, "recoverable": true,
+      {"code": "ios_install_dir_unwritable", "severity": "error", "retryable": false, "recoverable": true,
        "title": {"zh-Hans": "手机上的游戏文件夹 S2Arm 写不进", "en": "S2Arm can't write to the game folder on the iPhone"},
        "detail": {"zh-Hans": "这个文件夹的归属不对，S2Arm 在里面建不了文件。", "en": "The folder has the wrong owner, so S2Arm can't create files in it."},
        "next_action": {"from": "pack/jobs/errors.py"}},
