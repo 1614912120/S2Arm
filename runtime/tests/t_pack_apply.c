@@ -475,6 +475,21 @@ int main(void) {
       snprintf(c, sizeof c, "printf '\\011' | dd of='%s/game.img' bs=1 seek=8 conv=notrunc 2>/dev/null && rm -rf '%s/exefs' && printf '' > '%s/.applied'", G, G, G); sh(c);
       CHECK(s2a_pack_apply(D) != 0, "⑬e 格式号 9 → 解包失败");
       snprintf(c, sizeof c, "grep -q '格式号' '%s/unpack.log'", D); CHECK(sh(c) == 0, "⑬e 解包日志带「格式号」"); 
+      { // ⑬f D-4VAX（「文件」导入一款，每次解开都在同一处 -4：「改名 …/0100000000000823/：errno 21 Is a directory」）：目录表里有以「/」结尾的目录项（出包端把空目录写进了表），
+        //   原先当文件写 …/0100000000000823/.img.tmp 再改名到这个目录 → EISDIR。期望手写：解开成功（返回 0）；目录在、是目录；不残留 .img.tmp；index.tsv 也点名这个目录项时
+        //   核对认它（不报缺）、清旧文件不删它；再应用一次照样成功
+        char D8[1300], G8[1400]; snprintf(D8, sizeof D8, "%s/img_docs8", T); snprintf(G8, sizeof G8, "%s/资源包", D8);
+        snprintf(c, sizeof c, "mkdir -p '%s' && : > '%s/src/empty' && printf 'exefs/main.npdm\t%s/src/npdm\nctl/control.nacp\t%s/src/nacp\n823/ac_2_b1_nxsystemdata/0100000000000823/\t%s/src/empty\n' > '%s/src/others_dir.tsv'"
+                 " && python3 '%s/pack/img.py' build - '%s/src/others_dir.tsv' '%s/game.img' --gid 0100abcd0000000a --pack-id img8 > /dev/null"
+                 " && printf 'game.img\t%%s\tx\n823/ac_2_b1_nxsystemdata/0100000000000823/\t0\tx\n' $(stat -f %%z '%s/game.img' 2>/dev/null || stat -c %%s '%s/game.img') > '%s/index.tsv'"
+                 " && printf '{\"version\":3,\"format\":\"img\",\"imgFile\":\"game.img\",\"index_sha256\":\"img8\"}' > '%s/manifest.json'",
+                 G8, D, D, D, D, D, R, D, G8, G8, G8, G8, G8);
+        CHECK(sh(c) == 0, "⑬f 造带目录项的 IMG 夹具");
+        int r8 = s2a_pack_apply(D8);
+        snprintf(c, sizeof c, "test -d '%s/823/ac_2_b1_nxsystemdata/0100000000000823' && ! ls '%s/823/ac_2_b1_nxsystemdata/0100000000000823/'*.tmp >/dev/null 2>&1 && test \"$(cat '%s/.applied')\" = img8", G8, G8, G8);
+        if (r8) { snprintf(c + 4000, 1900, "tail -1 '%s/unpack.log'", D8); sh(c + 4000); }
+        CHECK(r8 == 0 && sh(c) == 0, "⑬f 目录项：解开成功（实际 %d）、目录在、不残留 .img.tmp、.applied = img8", r8);
+        CHECK(s2a_import_state(D8) == 0 && s2a_pack_apply(D8) == 0, "⑬f 应用后就绪（目录项核对通过、清旧文件没删它）、再应用一次照样成功"); }
       // ⑭ 玩家把 IMG 放进「文件」里 S2Arm 的「放这里导入」文件夹：s2a_img_scan 挪进 games/<头里的游戏号>/资源包/game.img、写 manifest（资源包号同头）与 index.tsv；
       //   拷到一半的（长度不等于头里的整个文件长）不动；导入文件夹以外的（Documents/下载）不扫、不动（v0.3.0）；挪好后应用成功
       char D3[1300]; snprintf(D3, sizeof D3, "%s/scan_docs", T);   // 小文件清单借 ⑬ 的夹具（exefs/main.npdm = 随机 5000 字节、ctl = NACP）
