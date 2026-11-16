@@ -639,15 +639,15 @@ id s2a_ios_ext_register(UIViewController *vc);   // extdisplay.m：登记外接�
 }
 - (void)viewSafeAreaInsetsDidChange {   // 方向与视图尺寸记进日志（真机验横屏用）
     [super viewSafeAreaInsetsDidChange]; UIEdgeInsets i = self.view.safeAreaInsets; CGSize z = self.view.bounds.size; UIScreen *sc = self.view.window.windowScene.screen ?: UIScreen.mainScreen; CGSize n = sc.nativeBounds.size;   // 当前窗口所在的屏（Duo 内屏亮着时 mainScreen 仍报外屏）
-#if TARGET_OS_TV
-    long o = 0; const char *on = "横屏（电视）";
+#if TARGET_OS_TV   // 电视只有横屏
+    LOG("iOS 壳：朝向 横屏（电视），视图 %.0fx%.0f 点，屏幕 %.0fx%.0f 像素，屏幕宽（1080 高对应）%d；安全区 上 %.1f 左 %.1f 下 %.1f 右 %.1f",
+        z.width, z.height, fmax(n.width, n.height), fmin(n.width, n.height), s2a_ios_screen_w(), i.top, i.left, i.bottom, i.right);
 #else
     UIInterfaceOrientation o = self.view.window.windowScene.interfaceOrientation;
-    const char *on = UIInterfaceOrientationIsLandscape(o) ? "横屏" : UIInterfaceOrientationIsPortrait(o) ? "竖屏" : "未知";
-#endif
     LOG("iOS 壳：朝向 %s（%ld），视图 %.0fx%.0f 点，屏幕 %.0fx%.0f 像素，屏幕宽（1080 高对应）%d；安全区 上 %.1f 左 %.1f 下 %.1f 右 %.1f",
-        on, (long)o, z.width, z.height, fmax(n.width, n.height), fmin(n.width, n.height),
+        UIInterfaceOrientationIsLandscape(o) ? "横屏" : UIInterfaceOrientationIsPortrait(o) ? "竖屏" : "未知", (long)o, z.width, z.height, fmax(n.width, n.height), fmin(n.width, n.height),
         s2a_ios_screen_w(), i.top, i.left, i.bottom, i.right);
+#endif
 
 }
 @end
