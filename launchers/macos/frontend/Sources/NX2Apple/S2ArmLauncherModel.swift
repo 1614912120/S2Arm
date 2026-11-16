@@ -112,6 +112,8 @@ struct PhoneOutcome: Equatable {
     /// 这次新写的 .img 与沿用的款数（#1132）：有沿用才在完成页点名「.img 只要拷这几个」
     var exportFresh: [String] = []
     var exportReused = 0
+    /// 只新写点的那款时，这次没写 .img 的别的款（游戏名）：完成页点名、说怎么办
+    var exportUnwritten: [String] = []
     /// 完成页「推到手机」（11-13）：推进手机上自签 S2Arm 的 .img 文件名（空 = 还没推）；推不成时作业给的一句「缺什么、怎么做」
     var pushed: [String] = []
     var pushNote = ""
@@ -1080,7 +1082,7 @@ public final class S2ArmLauncherModel: ObservableObject {
                 let r = try await self?.provider.install(gameId: game.id, teamId: teamId, device: device, accept: accept, mode: export ? "export" : nil, events: sink)
                 if let r, !r.exportFolder.isEmpty {   // 导出模式：没装手机，打开放好的文件夹
                     self?.phoneOutcome = PhoneOutcome(skipped: r.skipped, exportFolder: r.exportFolder, exportGames: r.exportGames, exportBytes: r.exportBytes,
-                                                     exportFresh: r.exportFresh, exportReused: r.exportReused)
+                                                     exportFresh: r.exportFresh, exportReused: r.exportReused, exportUnwritten: r.exportUnwritten)
                     NSWorkspace.shared.open(URL(fileURLWithPath: r.exportFolder))
                 } else if let r {
                     self?.installedTo = Self.deviceLabel(kind: r.deviceKind, name: r.deviceName)

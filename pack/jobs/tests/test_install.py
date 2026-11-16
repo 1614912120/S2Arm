@@ -1840,8 +1840,10 @@ class ExportPhoneTests(unittest.TestCase):
         self._library((A, "甲"), (B, "乙"), (C, "丙"), (self.D, "丁"))
         self._img(A, b"S2AIMG01-a"); self._img(B, b"S2AIMG01-b"); ios_fixture(self.c, C)
         r = self._export(dict(gameId=A))
+        self.assertEqual((r["games"], r["unwritten"]), ([A, B], ["乙"]), "点甲：乙的程序进容器，.img 只写甲")
+        r = self._export(dict(gameId=B))   # 再点乙：乙的 .img 写上、甲沿用，文件夹里两款齐
         out = self.c.library / install.EXPORT_DIRS["zh"]
-        self.assertEqual((r["exported"], r["outputPath"], r["games"], r["skipped"]), (True, str(out), [A, B], ["丙"]))
+        self.assertEqual((r["exported"], r["outputPath"], sorted(r["games"]), r["skipped"], r["unwritten"]), (True, str(out), sorted([A, B]), ["丙"], []))
         self.assertEqual(sorted(p.name for p in out.iterdir()), sorted(["S2Arm.ipa", "甲.img", "乙.img", "甲 着色器更新包.img", "乙 着色器更新包.img", install.EXPORT_READMES["zh"]]))
         # 着色器更新包（维护者 11-13）：格式号 2、头里游戏号 / 资源包号同本体 game.img、只含派生件（着色器库），没有本体的其余文件段
         for f, gid in (("甲 着色器更新包.img", A), ("乙 着色器更新包.img", B)):
@@ -1859,7 +1861,7 @@ class ExportPhoneTests(unittest.TestCase):
                 def rd(p): fh.seek(got[p][0]); return fh.read(got[p][1])
                 self.assertEqual((rd("exefs/main"), rd("shaders/direct/lib.bin"), img.header(str(out / f))["gid"]), (data, b"LIB" + gid.encode(), gid))
             self.assertNotIn("shaders/direct/lib.bin", {p for p, _, _ in img.entries(str(library_pack(self.c, gid) / "game.img"))})
-        self.assertEqual(install_ipa_games(out / "S2Arm.ipa"), ([A, B], "SID1"))
+        self.assertEqual((sorted(install_ipa_games(out / "S2Arm.ipa")[0]), install_ipa_games(out / "S2Arm.ipa")[1]), (sorted([A, B]), "SID1"))
         readme = (out / install.EXPORT_READMES["zh"]).read_text(encoding="utf-8-sig")
         self.assertIn("甲.img（甲）", readme); self.assertIn("乙.img（乙）", readme); self.assertIn("放这里导入", readme)
         self.assertEqual(r["exportBytes"], sum(p.stat().st_size for p in out.iterdir()))
@@ -1902,28 +1904,33 @@ class ExportPhoneTests(unittest.TestCase):
         return wrote
 
     def test_export_again_reuses_unchanged_imgs(self):
-        """#1132：加一款新游戏再导出，只写新的那款；没变的甲、乙沿用上次的（内容逐字节同）；乙的资源包变了就重写乙"""
+        """#1132 + 只写点的那款：.img 只新写这次点的那款；别的款上次导出的来源没变就沿用（逐字节同），没有或变了就这次不写、结果 unwritten 点名"""
         A, B, C = self.A, self.B, self.C
         self._library((A, "甲"), (B, "乙"))
         self._img(A, b"S2AIMG01-a"); self._img(B, b"S2AIMG01-b")
         out = self.c.library / install.EXPORT_DIRS["zh"]
         wrote = self._count_writes()
         r = self._export(dict(gameId=A))
-        self.assertEqual(sorted(wrote), sorted(["甲.img", "甲 着色器更新包.img", "乙.img", "乙 着色器更新包.img"]))
-        self.assertEqual((sorted(r["fresh"]), r["reused"]), (["乙.img", "甲.img"], 0), "第一次导出：全是新写的，完成页不点名")
+        self.assertEqual(sorted(wrote), sorted(["甲.img", "甲 着色器更新包.img"]), "第一次导出点甲：只写甲，乙没有上次的可沿用就不写")
+        self.assertEqual((r["fresh"], r["reused"], r["unwritten"]), (["甲.img"], 0, ["乙"]))
+        self.assertEqual(sorted(p.name for p in out.iterdir() if p.suffix == ".img"), sorted(["甲.img", "甲 着色器更新包.img"]))
         first = {p.name: p.read_bytes() for p in out.iterdir() if p.suffix == ".img"}
         self._library((A, "甲"), (B, "乙"), (C, "丙")); self._img(C, b"S2AIMG01-c")
         wrote.clear(); r = self._export(dict(gameId=C))
         self.assertEqual(sorted(wrote), sorted(["丙.img", "丙 着色器更新包.img"]))
-        self.assertEqual((r["fresh"], r["reused"]), (["丙.img"], 2), "完成页点名「.img 只要拷 丙.img」，其余 2 款沿用")
+        self.assertEqual((r["fresh"], r["reused"], r["unwritten"]), (["丙.img"], 1, ["乙"]), "甲沿用、乙仍没写、只写丙")
         for name, data in first.items():
             self.assertEqual((out / name).read_bytes(), data, name)
-        # 乙的资源包里有文件变了（重新打过 iPhone 包）：乙重写，甲照旧沿用
+        wrote.clear(); r = self._export(dict(gameId=B))
+        self.assertEqual(sorted(wrote), sorted(["乙.img", "乙 着色器更新包.img"]))
+        self.assertEqual((r["fresh"], r["reused"], r["unwritten"]), (["乙.img"], 2, []), "点乙才写乙，甲、丙沿用")
+        # 乙的资源包里有文件变了（重新打过 iPhone 包），这次点甲：乙不重写、点名没写；甲、丙沿用，一个都不写
         f = next(p for p in layout.ios_pack(self.c, B).rglob("*") if p.is_file())
         st = f.stat(); os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
         wrote.clear(); r = self._export(dict(gameId=A))
-        self.assertEqual(sorted(wrote), sorted(["乙.img", "乙 着色器更新包.img"]))
-        self.assertEqual((r["fresh"], r["reused"]), (["乙.img"], 2))
+        self.assertEqual(wrote, [])
+        self.assertEqual((r["fresh"], r["reused"], r["unwritten"]), ([], 2, ["乙"]))
+        self.assertFalse((out / "乙.img").exists(), "来源变了的旧 .img 不留在导出文件夹里冒充新的")
 
     def test_export_rewrites_when_link_fails(self):
         """建不了硬链接（exFAT 等）：照常重写，导出照样成功"""

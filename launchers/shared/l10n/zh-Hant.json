@@ -1004,7 +1004,8 @@
   "sgrade.upgrade.version.mine": "（你這份是 {0}）",
   "sgrade.upgrade.cat.cheatPlain": "金手指",
   "phone.done.export.fresh": ".img 只要拷這次新寫的：{0}。其餘 {1} 款和上次匯出的一樣，手機上已有就不用再拷。",
-  "phone.done.export.same": "各款 .img 都和上次匯出的一樣，手機上已有就不用再拷。"
+  "phone.done.export.same": "各款 .img 都和上次匯出的一樣，手機上已有就不用再拷。",
+  "phone.done.export.unwritten": "這次只寫了你點的這款的 .img。{0} 的 .img 沒寫：手機上已有就照常能玩，沒有的話在遊戲庫裡點那款再匯出。"
  },
  "text": {
   "直连": "直連",

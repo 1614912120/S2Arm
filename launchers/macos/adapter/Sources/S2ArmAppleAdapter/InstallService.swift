@@ -101,6 +101,8 @@ public struct InstallResult: Equatable {
     /// 这次新写的 .img 文件名与沿用上次导出的款数（#1132：沿用的和上次逐字节相同，手机上已有就不用再拷；作业结果 fresh / reused）
     public var exportFresh: [String] = []
     public var exportReused: Int = 0
+    /// 只新写点的那款时，别的款里这次没写 .img 的（游戏名，作业结果 unwritten）：手机上已有照常能玩，没有要点那款再导出
+    public var exportUnwritten: [String] = []
 }
 
 /// 从手机删一款的结果（installRemove 作业，pack/jobs/install.py remove_from_phone）。
@@ -158,7 +160,8 @@ public final class InstallService {
                              exportFolder: r["exported"] as? Bool == true ? r["outputPath"] as? String ?? "" : "",
                              exportGames: (r["games"] as? [Any])?.count ?? 0, exportBytes: (r["exportBytes"] as? NSNumber)?.int64Value,
                              skipped: r["skipped"] as? [String] ?? [],
-                             exportFresh: r["fresh"] as? [String] ?? [], exportReused: (r["reused"] as? NSNumber)?.intValue ?? 0)
+                             exportFresh: r["fresh"] as? [String] ?? [], exportReused: (r["reused"] as? NSNumber)?.intValue ?? 0,
+                             exportUnwritten: r["unwritten"] as? [String] ?? [])
     }
 
     /// 推到手机（exportPush，pack/jobs/install.py push_export_job）：把「S2Arm 自签导出」里的完整 .img 推进手机上自签 S2Arm 的「放这里导入」。
