@@ -414,13 +414,16 @@ class Stages:
                 raise StageError(f'界面布局覆盖层有底下 RomFS 没有的文件（{extra[:3]}）：覆盖层只许替换')
             listing.write_text(''.join(f'{over.get(r.split(chr(9), 1)[1], r.split(chr(9), 1)[0])}\t{r.split(chr(9), 1)[1]}\n'
                                        for r in rows if '\t' in r), encoding='utf-8', newline='\n')
-        dotnet = os.environ.get('DOTNET') or shutil.which('dotnet')
-        if not dotnet:
-            raise StageError('winenv：缺 .NET 命令；不下载', 75)
         prebuilt = os.environ.get('S2A_PREBUILT_TOOLS')
-        if prebuilt:
-            dll = Path(prebuilt) / 'romfs/romfs_index.dll'
+        if prebuilt:   # 发版件：NativeAOT 单文件，直接执行（玩家机不带 .NET；launchers/windows/bundle_prepare_win.py）
+            exe = Path(prebuilt) / ('romfs/romfs_index.exe' if os.name == 'nt' else 'romfs/romfs_index')
+            if not exe.is_file():
+                raise StageError(f'winenv：缺预编 RomFS 索引 {exe}', 75)
+            cmd = [exe]
         else:
+            dotnet = os.environ.get('DOTNET') or shutil.which('dotnet')
+            if not dotnet:
+                raise StageError('winenv：缺 .NET 命令；不下载', 75)
             # --no-restore avoids implicit NuGet/network downloads; missing
             # restored inputs are an explicit environment failure.
             dll = REPO / 'services/romfs_index/bin/Release/net10.0/romfs_index.dll'
@@ -430,9 +433,10 @@ class Stages:
                      '-p:UseSharedCompilation=false'], env=deps.env, log=w / 'romfs_index_build.log', timeout=300)
             except StageError as error:
                 raise StageError('winenv：RomFS 索引构建/已还原依赖未就绪；未运行旧 DLL', 75) from error
-        if not dll.is_file():
-            raise StageError('winenv：缺本次指定的 romfs_index.dll', 75)
-        run([dotnet, dll, w, '--list', listing], env=deps.env, log=w / 'romfs_index_core.log')
+            if not dll.is_file():
+                raise StageError('winenv：缺本次指定的 romfs_index.dll', 75)
+            cmd = [dotnet, dll]
+        run([*cmd, w, '--list', listing], env=deps.env, log=w / 'romfs_index_core.log')
         if not target.is_file() or target.stat().st_size == 0:
             raise StageError('RomFS 索引为空，拒绝提交')
 
@@ -1044,7 +1048,7 @@ class Stages:
         identity = hashlib.sha256(b''.join(p.read_bytes() for p in inputs)).hexdigest()[:12]
         dest = self._run_root() / 's2arm/bin' / ('nx_unpack_' + identity)
         name = 'nx_unpack.exe' if os.name == 'nt' else 'nx_unpack'
-        pre = os.environ.get('S2A_PREBUILT_TOOLS')   # 启动器随发版预编（同 oneclick_win.nx_unpack，身份相同才用）：玩家机只带 .NET 运行时、现编不了
+        pre = os.environ.get('S2A_PREBUILT_TOOLS')   # 启动器随发版预编（同 oneclick_win.nx_unpack，身份相同才用；NativeAOT 单文件）：玩家机没有 .NET、现编不了
         if pre:
             tool = Path(pre, 'nx_unpack', name)
             try:

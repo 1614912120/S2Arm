@@ -64,11 +64,12 @@ class RuntimeEnv(unittest.TestCase):
     def test_paths_are_bundled_only(self):
         env = core.win_runtime_env(r"D:\S2Arm\Runtime", r"D:\S2Arm\Engine", r"C:\Windows")
         self.assertEqual(env["PATH"].split(";"), [
-            r"D:\S2Arm\Runtime\python", r"D:\S2Arm\Runtime\python\Scripts", r"D:\S2Arm\Runtime\dotnet",
+            r"D:\S2Arm\Runtime\python", r"D:\S2Arm\Runtime\python\Scripts",
             r"D:\S2Arm\Runtime\git\usr\bin", r"D:\S2Arm\Runtime\zstd",
             r"C:\Windows\system32", r"C:\Windows", r"C:\Windows\System32\WindowsPowerShell\v1.0"])
-        self.assertEqual((env["DOTNET_ROOT"], env["S2A_BASH"], env["PYTHONHOME"], env["S2A_PREBUILT_TOOLS"]),
-                         (r"D:\S2Arm\Runtime\dotnet", r"D:\S2Arm\Runtime\git\usr\bin\bash.exe",
+        self.assertNotIn("DOTNET_ROOT", env, "v0.5.0 起不带 .NET：C# 件是 NativeAOT 单文件")
+        self.assertEqual((env["S2A_BASH"], env["PYTHONHOME"], env["S2A_PREBUILT_TOOLS"]),
+                         (r"D:\S2Arm\Runtime\git\usr\bin\bash.exe",
                           r"D:\S2Arm\Runtime\python", r"D:\S2Arm\Engine\Binaries\Prepare"))
         self.assertEqual(env["LC_ALL"], "C.UTF-8", "机器上 LANG=C / en_US 时 cygpath 在中文处截断路径（#85）")
 
@@ -159,16 +160,16 @@ class Reader(unittest.TestCase):
         self.mods.start(); self.addCleanup(self.mods.stop)
 
     def test_prebuilt_same_identity(self):
-        """给能直接执行的 nx_unpack.exe（调用方都直接执行它；Windows 直接执行 .dll 交给旧 .NET Framework，报找不到 System.Runtime 10.0）"""
-        (self.d / "nx_unpack.dll").write_bytes(b"x"); (self.d / "nx_unpack.exe").write_bytes(b"x"); (self.d / ".src_digest").write_text("abc123abc123\n")
+        """给 NativeAOT 单文件 nx_unpack.exe（调用方都直接执行它，不再有 .dll）"""
+        (self.d / "nx_unpack.exe").write_bytes(b"x"); (self.d / ".src_digest").write_text("abc123abc123\n")
         with as_windows(toolchain):
             self.assertEqual(toolchain.reader(self.c), self.d / "nx_unpack.exe")
 
     def test_stale_or_missing_is_named_failure(self):
-        (self.d / "nx_unpack.dll").write_bytes(b"x"); (self.d / ".src_digest").write_text("000000000000\n")
+        (self.d / "nx_unpack.exe").write_bytes(b"x"); (self.d / ".src_digest").write_text("000000000000\n")
         for case in ("stale", "missing"):
             with self.subTest(case=case), as_windows(toolchain):
-                if case == "missing": (self.d / "nx_unpack.dll").unlink()   # exe 本来就没放：只有 dll 也算缺
+                if case == "missing": (self.d / "nx_unpack.exe").unlink(); (self.d / ".src_digest").write_text("abc123abc123\n")   # 身份对、exe 不在
                 with self.assertRaises(core.Failure) as e:
                     toolchain.reader(self.c)
                 self.assertEqual(e.exception.code, "reader_unavailable")
