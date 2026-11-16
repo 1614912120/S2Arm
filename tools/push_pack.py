@@ -591,12 +591,12 @@ def resume_offset(dev, src, rel, size):
     return min(got[0] // IMG_PAGE * IMG_PAGE, size)
 
 
-# 压缩传输（v0.5.0）：game.img 按 ZCHUNK 原始字节切块，每块一个独立 zstd 帧（带内容校验），推成 <资源包根>/.incoming/game.img.<sha 前 16 位>.<块号 4 位>.zst；
+# 压缩传输（v0.5.0）：game.img 按 ZCHUNK 原始字节切块，每块一个独立 zstd 帧（带内容校验），推成 <资源包根>/.incoming/game.img.<资源包号前 16 位>.<块号 4 位>.zst（资源包号 = index.tsv 里 game.img 那行第三列，pack/img.py）；
 #   手机上的 App 解开时按块号顺序流式解进 game.img 的块号 × ZCHUNK 处、解完一块删一块（runtime/src/pack_apply.c img_unzst），机上仍存未压缩的 game.img，运行时零改动。
 #   机上峰值 ≤ 未压缩 game.img + 一块：推的时候压缩块总和 < 原大小，解的时候已解的部分 + 剩下的压缩块单调从压缩总量涨到原大小。
 #   只压 game.img：单一 IMG 形态里它占 99% 以上（11-16 丝之歌 6704 / 6728 MB），旁边的着色器库 / 覆盖层照旧按 tar 批推。
 #   按款判压不压：整份 game.img 按推送同一套参数（zstd 9 档多线程，同 pack/jobs/programs.py）逐块压一遍量出每块压缩后字节，省不到 ZSAVE 不压；
-#   量数按 game.img 的 sha256 记在资源包目录旁的 <资源包目录名>.zstd.json（不放进资源包目录：导出按目录里全部文件算来源戳），同一份包只量一次
+#   量数按资源包号记在资源包目录旁的 <资源包目录名>.zstd.json（不放进资源包目录：导出按目录里全部文件算来源戳），同一份包只量一次
 ZCHUNK = 1 << 30
 ZLEVEL = 9
 ZSAVE = 0.15   # 维护者定：按款实测省不到 15% 的款原样推

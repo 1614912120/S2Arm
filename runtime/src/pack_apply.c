@@ -204,17 +204,17 @@ static int img_extract(const char *root, unsigned *nf, uint64_t *nb) {
     free(buf); close(fd); img_free(e, n); return rc;
 }
 // ---- 压缩传输的 game.img（v0.5.0，tools/push_pack.py send_zst）：电脑把 game.img 按 S2A_ZCHUNK 原始字节切块、每块压成一个 zstd 帧（带内容校验），
-//   推成 .incoming/game.img.<sha 前 16 位>.<块号 4 位>.zst；块号 k 的原始字节在 game.img 的 k × S2A_ZCHUNK 处。机上仍存未压缩的 game.img，运行时零改动。
+//   推成 .incoming/game.img.<资源包号前 16 位>.<块号 4 位>.zst（资源包号 = index.tsv 里 game.img 那行第三列）；块号 k 的原始字节在 game.img 的 k × S2A_ZCHUNK 处。机上仍存未压缩的 game.img，运行时零改动。
 //   这里按块号顺序流式解（ZSTD_decompressStream，1 MB 读写缓冲，不先解出整块）、pwrite 到位、fsync 后删掉这一块：
 //   机上峰值 ≤ 未压缩 game.img + 一块（已解的部分 + 剩下的压缩块），不落整份压缩件再解。
-//   sha 前 16 位不是 index.tsv 里 game.img 那行的（别的版本留下的）、空文件（推送端盖掉的）→ 删掉不解。
+//   号不是 index.tsv 里 game.img 那行的（别的版本留下的）、空文件（推送端盖掉的）→ 删掉不解。
 //   第 0 块截断 game.img 从头写；第 k 块要 game.img 已有 ≥ k × S2A_ZCHUNK（前面的块解过了、只在解完后删），不然就是缺块；
 //   缺块 / 截短 / 帧校验不对 / 解出的字节数不是整块（最后一块 1..S2A_ZCHUNK）→ 按截短包处理：删掉这块与其后各块、推送记录 .pushed，
 //   电脑端下次不信推送记录、按已应用索引重推（tools/push_pack.py plan）。块大小是两端的契约，改要两边一起改（tests/push_pack_test.py 核两边同值）
 #ifndef S2A_ZCHUNK
 #define S2A_ZCHUNK (1ULL << 30)
 #endif
-static int img_sha16(const char *root, char out[17]) {   // index.tsv 里 game.img 那行 sha256 的前 16 位；没有这行 → -1
+static int img_sha16(const char *root, char out[17]) {   // index.tsv 里 game.img 那行第三列（资源包号）的前 16 位；没有这行 → -1
     char ip[2100], line[4600]; snprintf(ip, sizeof ip, "%s/index.tsv", root); FILE *f = fopen(ip, "r"); if (!f) return -1;
     int rc = -1;
     while (rc && fgets(line, sizeof line, f)) {
