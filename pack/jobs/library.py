@@ -1953,6 +1953,9 @@ def catalog(c):
         if choices:
             game["display"] = max(choices, key=lambda p: p["version"])["display"]
         game["sizes"] = sizes.for_catalog(c, game["id"], cat["games"])   # 每款各部分大小（sizes.py：作业收尾量好记在 game.json，这里不量）
+        played = read(layout.path(c, game["id"], "playtime.json", create=False), {})   # Mac 局游玩时间（运行时 playtime.c 写，S2A_PLAYTIME）；没玩过不给
+        if isinstance(played, dict) and isinstance(played.get("seconds"), int) and played["seconds"] > 0:
+            game["playtime"] = dict(seconds=played["seconds"], lastPlayed=played.get("lastPlayed") or 0)
     try:
         validate_keys(c.keys)
         status = read(c.private / "keys/status.json", {}) | dict(ready=True)

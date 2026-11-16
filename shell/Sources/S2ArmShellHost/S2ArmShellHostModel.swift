@@ -188,11 +188,22 @@ public final class S2ArmShellHostModel {
             noteDataSize(i, ready: [1, 4].contains(installState(id)))
             let fresh = want == .playable && isFresh(id)
             if allGames[i].game.isNew != fresh { allGames[i].game.isNew = fresh }
+            let played = playtimeLine(id)   // 游玩时间（11-15 维护者）：有就进「最近玩过」与这款的那一行，没玩过不显示
+            if allGames[i].game.recentlyPlayed != played { allGames[i].game.recentlyPlayed = played }
             if allGames[i].game.state != want {
                 if want.installPhase != allGames[i].game.state.installPhase { NSLog("S2Arm 游戏库：%@ → %@", id, String(describing: want)) }
                 allGames[i].game.state = want
             }
         }
+    }
+
+    /// 这款在这台设备上的游玩时间：运行时 runtime/src/playtime.c 写 <游戏根>/<游戏号>/playtime.json（{"seconds":N,"lastPlayed":<Unix 秒>}），
+    ///   这里只读；文件没有 / 读不出 / 0 秒都按没玩过
+    func playtimeLine(_ id: String, now: Date = Date()) -> String? {
+        guard let data = try? Data(contentsOf: gamesRoot.appendingPathComponent(id).appendingPathComponent("playtime.json")),
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let seconds = (j["seconds"] as? NSNumber)?.intValue else { return nil }
+        return ShellFormat.playtime(seconds: seconds, lastPlayed: Date(timeIntervalSince1970: (j["lastPlayed"] as? NSNumber)?.doubleValue ?? 0), now: now)
     }
 
     /// 游戏设置页「游戏数据」那一栏（11-11 宿主梳理：原先永远「未选择数据」、点「选择…」没反应）：资源已就绪的款显示
