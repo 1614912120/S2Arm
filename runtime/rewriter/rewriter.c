@@ -681,6 +681,53 @@ static int wconst(A at, int* reg, uint32_t* value) {
 static uint32_t movz_hi(int reg, uint32_t value) {
   return 0x52a00000 | ((value >> 16) << 5) | reg;
 }
+/* 游戏缺陷修补表（S2A_FIX_TSV = 仓库 runtime/fix/<main 构建号前 16 位>.tsv，11-16）：游戏自己代码里的缺陷、宿主调度挡不住的，按构建号精确改字。
+ * 改写器别处只认代码形状、不认具体游戏；这里是例外，所以只许最窄的一种：行格式同帧率表 c 行，只收 word 种类——
+ *   c <模块> <偏移> word <原字> <新字>    # 理由
+ * 原字不符（不是这一版）、点不在代码段 → 记缺口不改。分析前改（后面的分析看到的就是改好的代码）。与帧率表分开放：帧率表的存在本身有含义
+ * （「本款已有我方帧率表」→ 社区帧率补丁不收，pack/cpatch.py），修补表不该带上它。以后与按款旋钮表并成一套时按同一格式合并 */
+static void fix_rows(void) {
+  const char* path = g->r.fix_tsv;
+  if (!path || !*path)
+    return;
+  FILE* f = fopen(path, "rb");
+  if (!f) {
+    int error = errno;
+    if (error != ENOENT)
+      fail("无法打开游戏缺陷修补表：%s", strerror(error));
+    msg("[黄] %s 游戏缺陷修补表不存在，跳过\n", g->r.module);
+    return;
+  }
+  char line[512];
+  while (fgets(line, sizeof(line), f)) {
+    char* h = strchr(line, '#');
+    if (h)
+      *h = 0;
+    char *t0 = strtok(line, " \t\r\n"), *mod = strtok(NULL, " \t\r\n"), *offs = strtok(NULL, " \t\r\n"), *kind = strtok(NULL, " \t\r\n"),
+         *origs = strtok(NULL, " \t\r\n"), *news = strtok(NULL, " \t\r\n");
+    if (!t0 || !eq(t0, "c") || !mod || !eq(mod, g->r.module))
+      continue;
+    if (!offs || !kind || !eq(kind, "word") || !origs || !news) {
+      gap(0, "fix", "游戏缺陷修补表行不全或不是 word 种类");
+      continue;
+    }
+    A off = strtoll(offs, NULL, 16);
+    uint32_t orig = (uint32_t)strtoul(origs, NULL, 16), nw = (uint32_t)strtoul(news, NULL, 16), w = 0;
+    if (off < 0 || off % 4 || off + 4 > (A)g->text) {
+      gap(off, "fix", "修补点不在代码段");
+      continue;
+    }
+    memcpy(&w, g->img + off, 4);
+    if (w != orig) {
+      gap(off, "fix", "修补点原字 0x%x，表里写的是 0x%x（不是这一版）", w, orig);
+      continue;
+    }
+    memcpy(g->img + off, &nw, 4);
+    bump("game_fix");
+    msg("游戏缺陷修补：%s+%#llx %08x → %08x\n", g->r.module, (unsigned long long)off, w, nw);
+  }
+  fclose(f);
+}
 /* Recognize the SDK code shape, never a game identity or fixed address. Scan
  * and collect every constructor before changing any instruction, as Python does. */
 static void sdk_addr_cut(void) {
@@ -5356,6 +5403,7 @@ static int attempt(const s2a_rewrite_request* r, const s2a_rewrite_options* opti
     g->one = cs_malloc(g->cs);
     REQUIRE(g->one);
     load();
+    fix_rows();
     fps_rows(0);
     cpatch_rows(0);
     code_rows();

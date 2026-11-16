@@ -3369,6 +3369,7 @@
   "没有这条金手指：{0}。": "No existe ese truco: {0}.",
   "回答不对。": "Respuesta incorrecta.",
   "更新 iPhone 上的 S2Arm": "Actualizar S2Arm en el iPhone",
+  "准备更新 iPhone 上的 S2Arm": "Preparando la actualización de S2Arm para el iPhone",
   "这台 Mac 没装 Xcode 的设备组件（CoreDevice），读不到连着的设备：打开一次 Xcode、按提示装附加组件后再试；也可以在出包页直接选机型": "Este Mac no tiene los componentes de dispositivo de Xcode (CoreDevice), por lo que no se pueden leer los dispositivos conectados. Abre Xcode una vez e instala los componentes adicionales cuando se te indique, luego vuelve a intentarlo; o elige el modelo directamente en la página de compilación",
   "devicectl 等了 {0} 秒没有返回，已停止等待": "devicectl no respondió en {0} segundos; se dejó de esperar",
   "{0}：这台机上装的包签名丢了提高内存上限权限，大游戏容易被系统杀；用 Xcode / AltStore Classic v2.3 重签后重装": "{0}: la aplicación instalada en este dispositivo perdió el permiso de límite de memoria aumentado al firmar, por lo que los juegos grandes pueden ser cerrados por el sistema. Vuelve a firmar con Xcode / AltStore Classic v2.3 y reinstala",

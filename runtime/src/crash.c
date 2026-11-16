@@ -380,8 +380,10 @@ static void crash_where_note(uint64_t pc, uint64_t lr) {
     if (fd >= 0) { (void)!write(fd, w, strlen(w)); close(fd); }
 }
 __attribute__((weak)) void s2a_guest_run_mark_crash(void) {}   // runtime/src/vawin.c 强定义：「在跑」标记改写成 crash（闪退不算死于内存，#909）
+__attribute__((weak)) void s2a_pso_archive_crash_note(void);   // graphics/nvn pso_archive.h：崩溃线程正在写管线归档 → 记全机标记（#756）
 static void crash_reraise(int sig) {
     s2a_guest_run_mark_crash();
+    if (s2a_pso_archive_crash_note) s2a_pso_archive_crash_note();
     if (g_crash_quiet) _exit(128 + sig);   // 辅助运行 / 静默起局：现场已写进日志，不按信号死（不弹系统「意外退出」框）
     signal(sig, SIG_DFL);
     sigset_t m; sigemptyset(&m); sigaddset(&m, sig); pthread_sigmask(SIG_UNBLOCK, &m, NULL);
