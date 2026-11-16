@@ -12,6 +12,8 @@
 入	graphics/metal/fit_judge.h
 入	graphics/metal/gal_aa.m
 入	graphics/metal/gal_abi.h
+入	graphics/metal/gal_astc.h
+入	graphics/metal/gal_astc.m
 入	graphics/metal/gal_be.h
 入	graphics/metal/gal_border.m
 入	graphics/metal/gal_buf.m
