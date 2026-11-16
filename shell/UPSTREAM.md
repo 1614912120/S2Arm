@@ -40,6 +40,7 @@
    | `Package.swift`、`CoverFlowView.swift`、`PortraitLibrary.swift`、`LibraryView.swift`、`EdgeSwipeBack.swift`、`GameReordering.swift`、`TouchLayoutEditorView.swift`、`TouchLayoutEditorModel.swift`、`TouchControlsPreview.swift`（整文件 `#if !os(tvOS)`）；`SideBar.swift`（侧边条按钮）、`ButtonTestView.swift`（点按热区）、`GameDetailView.swift`（Slider）、`GameStateView.swift`（文字选取）、`SensorEdge.swift`、`ShellStyle.swift`（玻璃效果可用性加 tvOS 26、`ShellFonts.tvScale`、`tvFocusLift`）、`ShellFocus.swift`（tvOS 走系统焦点）、`ControllersView.swift`、`ShellSettingsView.swift`、`ChoicePicker.swift`、`PadMappingView.swift`、`DeleteGameView.swift`（局部 `#if os(tvOS)` / 宽度乘 `tvScale`）；新增 `TVLibraryView.swift`（S2Arm 自有，首页结构借 SwitchTV，MIT） | Apple TV 版：同一个包加 `.tvOS(.v17)`，电视上换成遥控器 / 手柄走系统焦点的 `TVLibraryView`，触屏专属的视图与设置项在 tvOS 上不编；iOS / macOS 编译结果与行为不变（`tvScale` 在 iOS 为 1） | — |
    | `Resources/Localizable.xcstrings` | 加 1 条（九种语言）：Connect a controller in Bluetooth settings.（tvOS 手柄页空态，取原句前半句的现成译文） | 同上 | — |
    | `Sources/ShellControllers/GamepadAdapter.swift` | `attach()` 里 `valueDidChangeHandler` 闭包 | 回调在手柄的 `handlerQueue` 上跑，游戏侧（`ios/controller.m` `prepare_pad`）把它设成输入队列后不在主线程，`MainActor.assumeIsolated` 直接陷阱（D-KDJX iPhone 信号 5，栈 `GamepadAdapter.attach` → `assumeIsolated`）。改成在投递队列上读快照、不在主线程就按序派回主线程 | `908e4e848fd232304381fc19d4d847fcc10fc4c2` |
+   | `Sources/ShellUI/ShellArtwork.swift` | `Artwork` 加只读 `public var cgImage` | 宿主层把封面交给主屏小组件（`S2ArmShellHost/WidgetExport.swift`，11-16）；上游的 `image` 是模块内可见 | — |
    门禁：`tests/shellui_ios_build_test.sh` 用门禁机上每个 Xcode 各编一遍 iOS Release（11-07 起）。
 
 ## catalogue（游戏目录清单 JSON）

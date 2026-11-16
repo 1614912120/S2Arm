@@ -161,6 +161,23 @@ ios-shellui:
 	  -derivedDataPath $(SHELLUI_DD) IPHONEOS_DEPLOYMENT_TARGET=$(IPHONEOS_DEPLOYMENT_TARGET) TVOS_DEPLOYMENT_TARGET=$(TVOS_DEPLOYMENT_TARGET) build > $(SHELLUI_DD)/xcodebuild.log 2>&1 || { tail -30 $(SHELLUI_DD)/xcodebuild.log; echo "🔴 游戏库界面（S2A_SHELLUI=1）编不过，日志 $(SHELLUI_DD)/xcodebuild.log"; exit 1; }
 ios: ios-shellui
 endif
+# 主屏小组件（中号 4×2，11-16 维护者进 0.5.0）：ios/widget/S2ArmWidget.swift + 与游戏库共用的数据格式 shell/Sources/S2ArmShellHost/WidgetFeed.swift，
+#   swiftc 直接编成 PlugIns/S2ArmWidget.appex（同 Xcode 的扩展编法：-application-extension、入口 _NSExtensionMain；Swift 运行时取系统 /usr/lib/swift，不随包）。
+#   包名 = 主包名 + .widget：出包 / 装机改主包名时由 pack/widget_ext.py 一并改（或整个去掉：证书模式、签不上、额度满）。只在带游戏库界面的壳里编（S2A_SHELLUI=1）
+IOS_WIDGET = $(IOS_APP)/PlugIns/S2ArmWidget.appex
+IOS_WIDGET_SRCS = ios/widget/S2ArmWidget.swift shell/Sources/S2ArmShellHost/WidgetFeed.swift
+.PHONY: ios-widget
+ios-widget:
+	@mkdir -p $(IOS_WIDGET) $(BUILD)/ios/widget
+	DEVELOPER_DIR=$(DEVELOPER_DIR) xcrun --sdk iphoneos swiftc -target arm64-apple-ios$(IPHONEOS_DEPLOYMENT_TARGET) -sdk $(IOS_SDK) -O -wmo -parse-as-library \
+	  -application-extension -module-name S2ArmWidget -module-cache-path $(abspath $(BUILD))/ios/widget/mc $(IOS_WIDGET_SRCS) \
+	  -Xlinker -e -Xlinker _NSExtensionMain -Xlinker -S -o $(IOS_WIDGET)/S2ArmWidget
+	@/usr/bin/plutil -create xml1 $(IOS_WIDGET)/Info.plist && for kv in CFBundleIdentifier=$(IOS_BUNDLE).widget CFBundleExecutable=S2ArmWidget CFBundleName=S2ArmWidget \
+	  CFBundleDisplayName=S2Arm CFBundlePackageType=XPC! CFBundleShortVersionString=0.1 CFBundleVersion=1 MinimumOSVersion=$(IPHONEOS_DEPLOYMENT_TARGET) CFBundleDevelopmentRegion=en; do \
+	  /usr/bin/plutil -insert $${kv%%=*} -string "$${kv#*=}" $(IOS_WIDGET)/Info.plist; done; \
+	  /usr/bin/plutil -insert CFBundleSupportedPlatforms -xml '<array><string>iPhoneOS</string></array>' $(IOS_WIDGET)/Info.plist; \
+	  /usr/bin/plutil -insert UIDeviceFamily -xml '<array><integer>1</integer><integer>2</integer></array>' $(IOS_WIDGET)/Info.plist; \
+	  /usr/bin/plutil -insert NSExtension -json '{"NSExtensionPointIdentifier":"com.apple.widgetkit-extension"}' $(IOS_WIDGET)/Info.plist
 .PHONY: ios ios-ns2pro ns2pro-test native-test-ns2pro native-test-touch_compat
 ios-ns2pro:
 	@mkdir -p $(NS2_FRAMEWORK)
@@ -216,6 +233,8 @@ ios: ios-ns2pro
 	@[ $(S2A_APPLE_OS) != ios ] || /usr/bin/plutil -insert UISupportedExternalAccessoryProtocols -json '["com.xiaoji.M2boot"]' $(IOS_APP)/Info.plist   # 配件协议白名单：没声明就开不了 EASession（ios/ea_rumble.h，#462）
 	@/usr/bin/plutil -insert NSBluetoothAlwaysUsageDescription -string "Connect a Switch 2 Pro Controller when enabled in Settings." $(IOS_APP)/Info.plist
 	@/usr/bin/plutil -insert UIApplicationSceneManifest -json '{"UIApplicationSupportsMultipleScenes":false,"UISceneConfigurations":{"UIWindowSceneSessionRoleApplication":[{"UISceneConfigurationName":"Default","UISceneDelegateClassName":"S2ASceneDelegate"}]}}' $(IOS_APP)/Info.plist   # iOS 27 场景生命周期（27.1 SDK 强制 UIScene adoption，否则启动即崩）：指向 app.m 的 S2ASceneDelegate
+	@[ "$(S2A_SHELLUI)" != 1 ] || /usr/bin/plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"s2arm","CFBundleURLSchemes":["s2arm"]}]' $(IOS_APP)/Info.plist   # 主屏小组件点封面：s2arm://play/<游戏号>（app.m 场景代理交给游戏库「开始」）
+	@[ "$(S2A_SHELLUI)" != 1 ] || $(MAKE) --no-print-directory ios-widget
 	@echo "iOS App：$(IOS_APP)（$$(du -sh $(IOS_APP) | cut -f1)，包名 $(IOS_BUNDLE)，未签名）"
 
 # NVN 查询测试共用完整生产 bootstrap / swnvn / NVN 跳板；保留签名检查，不提供测试替身。

@@ -9874,5 +9874,29 @@
  {
   "source": "准备更新 iPhone 上的 S2Arm",
   "en": "Preparing the S2Arm update for iPhone"
+ },
+ {
+  "source": "App 已装好、游戏照常玩。想要主屏小组件：用 Apple ID 签名（不是自己的开发者证书）再装一次；免费 Apple ID 包名额度满了就等几天再装。",
+  "en": "The app is installed and games play as usual. For the Home Screen widget, install again with Apple ID signing (not your own developer certificate); if a free Apple ID has used up its app ID quota, wait a few days and install again."
+ },
+ {
+  "source": "这次没装主屏小组件",
+  "en": "Home Screen widget not installed this time"
+ },
+ {
+  "source": "S2Arm 已照常装好，只是这次没带主屏小组件，原因见上。",
+  "en": "S2Arm is installed as usual; only the Home Screen widget was left out this time. The reason is shown above."
+ },
+ {
+  "source": "这个免费 Apple ID 7 天内注册的包名已满 10 个，小组件要多注册一个（App 照常装上，额度恢复后再装一次就带上）",
+  "en": "This free Apple ID has registered 10 app IDs in the last 7 days; the widget needs one more (the app is installed as usual; install again after the quota recovers to get the widget)"
+ },
+ {
+  "source": "这次没装小组件：{0}",
+  "en": "Home Screen widget not installed this time: {0}"
+ },
+ {
+  "source": "用你自己的开发者证书签名只有主程序一份描述文件，签不了小组件",
+  "en": "Signing with your own developer certificate has a provisioning profile for the main app only, so the widget can't be signed"
  }
 ]

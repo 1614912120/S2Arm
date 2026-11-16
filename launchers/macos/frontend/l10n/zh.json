@@ -1891,5 +1891,8 @@
   "s2arm.controller.settings": "设置",
   "s2arm.controller.gameController": "游戏手柄",
   "s2arm.controller.bluetooth": "蓝牙",
-  "s2arm.controller.thirdPartyMotion": "八位堂、盖世小鸡这类 Xbox 外形的手柄，切到 Switch 模式才有体感。"
+  "s2arm.controller.thirdPartyMotion": "八位堂、盖世小鸡这类 Xbox 外形的手柄，切到 Switch 模式才有体感。",
+  "s2arm.env.widget.group": "主屏小组件",
+  "s2arm.env.widget.title": "装到 iPhone 时带主屏小组件",
+  "s2arm.env.widget.detail": "iPhone 桌面上的游戏机样子小组件：显示最近玩的游戏和玩得最多的游戏，点封面直接开。用免费 Apple ID 时，每次新装会多用一个 App ID 名额（7 天 10 个）"
 }

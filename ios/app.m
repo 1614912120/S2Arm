@@ -1164,7 +1164,25 @@ static void cloud_sync_done(void *ctx) {
     // App 正在后台：不起宿主，等系统下次真激活时调 sceneDidBecomeActive
     if (sd.window.windowScene.activationState == UISceneActivationStateForegroundActive) [sd sceneDidBecomeActive:sd.window.windowScene];
 }
+// 主屏小组件点封面（s2arm://play/<游戏号>，11-16 维护者：小组件进 0.5.0；Info.plist 的 CFBundleURLTypes 见 runtime/build.mk）：
+//   游戏库还开着 → 同玩家点「开始」（library_play：崩溃恢复 → 起局前检查 → 起宿主；资源不在手机上的款照常说明为什么开不了）；
+//   这一进程已经在玩（一进程一款）→ 只把 App 拉到前台，不弹「再开一款」的提示
+static void widget_open(NSURL *url, void *ctx) {
+    if (!url || ![url.scheme isEqualToString:@"s2arm"] || ![url.host isEqualToString:@"play"]) return;
+    NSString *gid = url.lastPathComponent.uppercaseString;
+    if (gid.length != 16 || [gid rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789ABCDEF"].invertedSet].location != NSNotFound) {
+        LOG("主屏小组件：链接里的游戏号不对（%s），不处理", url.absoluteString.UTF8String); return;
+    }
+    if (!s2a_launch_ctx_container() || atomic_load(&g_game_picked) || !s2a_shell_set_play_handler) {
+        LOG("主屏小组件：点了 %s，这一进程已在游戏里（或不是多款容器），只回到前台", gid.UTF8String); return;
+    }
+    LOG("主屏小组件：点了 %s，同游戏库「开始」", gid.UTF8String);
+    library_play(gid.UTF8String, ctx);
+}
 @implementation S2ASceneDelegate
+- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)contexts {
+    (void)scene; widget_open(contexts.anyObject.URL, (__bridge void *)self);
+}
 // 多款容器：根控制器先是游戏库；壳没链库界面（缺省 make ios）时给提示页，不起游戏
 - (void)showLibrary {
     if (!s2a_shell_library_vc || !s2a_shell_set_play_handler) {
@@ -1213,6 +1231,8 @@ static void cloud_sync_done(void *ctx) {
     if (s2a_launch_ctx_container() && !atomic_load(&g_game_picked)) {   // 多款容器：先出游戏库，不建游戏界面、不挂加载页
         [self showLibrary];
         { const char *e = getenv("S2A_NO_KEY_WINDOW"); if (e && !strcmp(e, "0")) [self.window makeKeyAndVisible]; else self.window.hidden = NO; }
+        { NSURL *u = options.URLContexts.anyObject.URL; S2ASceneDelegate *sd = self;   // 冷启动是点主屏小组件来的：库界面挂上后再开（同点「开始」）
+          if (u) dispatch_async(dispatch_get_main_queue(), ^{ widget_open(u, (__bridge void *)sd); }); }
         LOG("iOS 壳：窗口已建 %.0fx%.0f（场景，多款容器游戏库）", self.window.bounds.size.width, self.window.bounds.size.height);
         return;
     }

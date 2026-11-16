@@ -524,6 +524,7 @@ namespace Ryujinx.Audio.Backends.Apple
             // S2Arm (11-14 设备缓冲): 设备 IO 缓冲是出声延迟的地板——建队（起会话与自愈重建共用）先请求它，
             //   再挂布局 / 分配缓冲。失败按原样继续（见 S2AApplyDeviceBufferFrames）
             S2AApplyDeviceBufferFrames();
+            S2ALogOutputDevice();
 
             // S2Arm（#189）：6 声道队列声明 5.1 布局（起会话与重建共用这条路径）：不声明时系统隐式 6→2 只复制
             //   FL/FR，中置（对白）与环绕整段丢失；真 5.1 设备声明后按布局直通。设置失败按无布局继续（打出【红】，
@@ -623,6 +624,51 @@ namespace Ryujinx.Audio.Backends.Apple
             }
 
             Console.Error.WriteLine($"[声] 输出 #{_diag.Index}：设备缓冲请求 {frames} 帧，设备实给 {granted} 帧 ≈ {granted * 1000.0 / RequestedSampleRate:F1} ms（只作用于本进程，其他 App 不受影响）");
+        }
+
+        // S2Arm (11-16 声音诊断)：建队时记一行系统默认输出设备的传输方式、IO 周期、标称采样率、静音与音量（#1308 爆音 / #1245、诊断#a51362 无声：
+        //   交设备的声音非零，判不了是设备静音、走了蓝牙 / 虚拟设备，还是内容本身）。只读，不改设备；仅 macOS（iOS 没有 HAL 设备属性）
+        private void S2ALogOutputDevice()
+        {
+            if (!OperatingSystem.IsMacOS())   // 平台例外：HAL 设备属性只有 macOS
+            {
+                return;
+            }
+
+            AudioObjectPropertyAddress a = new() { Selector = kAudioHardwarePropertyDefaultOutputDevice, Scope = kAudioObjectPropertyScopeGlobal, Element = kAudioObjectPropertyElementMain };
+            uint device = 0, size = sizeof(uint);
+
+            if (AudioObjectGetPropertyData(kAudioObjectSystemObject, ref a, 0, nint.Zero, ref size, ref device) != 0 || device == 0)
+            {
+                Console.Error.WriteLine($"[声] 【红】输出 #{_diag.Index}：读不到系统默认输出设备");
+                return;
+            }
+
+            string U32(uint selector, uint scope)
+            {
+                AudioObjectPropertyAddress q = new() { Selector = selector, Scope = scope, Element = kAudioObjectPropertyElementMain };
+                uint v = 0, n = sizeof(uint);
+                return AudioObjectGetPropertyData(device, ref q, 0, nint.Zero, ref n, ref v) == 0 ? v.ToString() : null;
+            }
+
+            AudioObjectPropertyAddress t = new() { Selector = kAudioDevicePropertyTransportType, Scope = kAudioObjectPropertyScopeGlobal, Element = kAudioObjectPropertyElementMain };
+            uint tran = 0, ts = sizeof(uint);
+            string transport = AudioObjectGetPropertyData(device, ref t, 0, nint.Zero, ref ts, ref tran) == 0
+                ? (tran switch
+                {
+                    0x626C746E => "内置", 0x626C7565 => "蓝牙", 0x626C6561 => "蓝牙低功耗", 0x75736220 => "USB", 0x68646D69 => "HDMI", 0x64707274 => "DisplayPort",
+                    0x61697270 => "AirPlay", 0x67727570 => "聚合", 0x76697274 => "虚拟", 0x7468756E => "雷雳", 0x70636920 => "PCI", _ => $"其他 0x{tran:x8}",
+                })
+                : "读不到";
+            AudioObjectPropertyAddress r = new() { Selector = kAudioDevicePropertyNominalSampleRate, Scope = kAudioObjectPropertyScopeGlobal, Element = kAudioObjectPropertyElementMain };
+            double rate = 0; uint rs = sizeof(double);
+            string rateText = AudioObjectGetPropertyDataDouble(device, ref r, 0, nint.Zero, ref rs, ref rate) == 0 ? $"{rate:F0} Hz" : "读不到";
+            AudioObjectPropertyAddress vq = new() { Selector = kAudioDevicePropertyVolumeScalar, Scope = kAudioDevicePropertyScopeOutput, Element = kAudioObjectPropertyElementMain };
+            float vol = 0; uint vs = sizeof(float);
+            string volText = AudioObjectGetPropertyDataFloat(device, ref vq, 0, nint.Zero, ref vs, ref vol) == 0 ? $"{vol:F2}" : "主元素读不到（多为按声道调音量的设备）";
+            string frames = U32(kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal);
+            string mute = U32(kAudioDevicePropertyMute, kAudioDevicePropertyScopeOutput);
+            Console.Error.WriteLine($"[声] 输出 #{_diag.Index}：系统默认输出设备 {device}，传输方式 {transport}、IO 周期 {frames ?? "读不到"} 帧、标称采样率 {rateText}（本会话 {RequestedSampleRate} Hz）、静音 {mute ?? "读不到"}、音量 {volText}");
         }
 
         // S2Arm: the device side of DeviceBufferPump: pool buffer i is _audioQueueBuffers[i]
