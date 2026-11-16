@@ -278,7 +278,7 @@ int main(void) {
         printf("S3 tiles with one memory behind them share a heap page\n"); s3();
         printf("S4 GPU-written sparse textures\n"); s4();
         printf("S5 lost-content count of GPU-written sparse textures\n"); s5();
-        printf("%s: %d/%d checks passed\n", fails ? "RED" : "all passed", checks - fails, checks);
+        printf("%s t_nvn_stex: %d/%d checks passed\n", fails ? "✗" : "✓", checks - fails, checks);
         return fails ? 1 : 0;
     }
 }
