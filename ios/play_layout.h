@@ -34,6 +34,7 @@ int s2a_ios_screen_w(void);
 int s2a_ios_screen_h(void);
 int s2a_ios_screen_max_fps(void);   // 屏幕最高刷新率（Hz），帧率补丁档位默认值用
 UIInterfaceOrientationMask s2a_ios_play_orientations(void);
+int s2a_ios_play_resizable(void);   // 游戏窗口可自由缩放（Duo 内屏 / iPad）：方向交给系统，设置里的横 / 竖不起作用
 CGRect S2APlayDivision(UIView *view);
 // 游戏壳和无商业资源的输入工作台共用铰链、方向和区域生命周期。
 @interface S2APlayViewController : UIViewController
