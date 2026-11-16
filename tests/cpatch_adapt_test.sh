@@ -184,6 +184,14 @@ log10b = [l for l in open(r10b + '/cpatch_plan.log', encoding='utf-8').read().sp
 sh10b = [f for f in os.listdir(r10b) if f.startswith('cheat-src.')]
 ck(f'⑩b 没写构建号的金手指：不随包、日志单列「没写构建号」（实得 {log10b}、随包 {sh10b}）',
    len(log10b) == 1 and log10b[0].startswith('不收\tcheat:mine.txt\tmain\tmine.txt\t没写构建号') and sh10b == [])
+# ⑩c 读不了的金手指文件（原先 except OSError: continue，静默少一份）：金手指目录里一个叫 AABBCCDD00112233.txt 的目录（打开即抛 OSError，各平台都读不了）
+#    → 不随包、计划日志单独一行「不收 cheat:<文件名> … 读不了：」（结果页逐份列出，同 ⑩b）。期望按构造手写
+r10c = T + '/root10c'; shutil.copytree(root, r10c, ignore=shutil.ignore_patterns('cpatch*', 'cheat-src*')); cd10c = T + '/cheats10c'; os.makedirs(cd10c + '/AABBCCDD00112233.txt')
+os.environ['S2A_CHEATS_DIRS'] = cd10c; cpatch.plan(r10c, '', []); del os.environ['S2A_CHEATS_DIRS']
+log10c = [l for l in open(r10c + '/cpatch_plan.log', encoding='utf-8').read().splitlines() if 'AABBCCDD00112233.txt' in l]
+sh10c = [f for f in os.listdir(r10c) if f.startswith('cheat-src.')]
+ck(f'⑩c 读不了的金手指文件：不随包、日志单列「读不了」（实得 {log10c}、随包 {sh10c}）',
+   len(log10c) == 1 and log10c[0].startswith('不收\tcheat:AABBCCDD00112233.txt\tmain\tAABBCCDD00112233.txt\t读不了：') and sh10c == [])
 # ⑪ 跨版本移植（11-13，只做画幅）：主程序构建号 AABB…，补丁库里只有别的版本（1111…）的一份 21:9：0x100 fmov s0,#2.375（= 0x1E207000，imm8 0x03）、数据 0x5100 = 2.3333。
 #    新版程序里那条挪到 0x140、原值 fmov s0,#1.75（16:9 那档，imm8 0x7C → 0x1E2F9000）；数据挪到 0x5180、原值 1.7778。
 #    期望（手算）：移植成 0x140 / 0x5180（log「移植」），再单份参数化（宽侧 21:9，窄侧外推）→ p 140 1e2f9000 → ldr s0,[x16,#1016×8] = bd5fc200「@k」，数据 5180:<1.7778 原字节>:@a4 k1016::@a4

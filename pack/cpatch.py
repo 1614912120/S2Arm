@@ -1056,7 +1056,8 @@ def scan_cheats(dirs, exefs, log, ship=None):
             if not f.lower().endswith('.txt') or f in ('enabled.txt', 'status.txt'): continue
             fp = os.path.join(d, f)
             try: raw = open(fp, 'rb').read()
-            except OSError: continue
+            except OSError as e:   # 读不了：整份不收、写原因（结果页逐份列出，同「没写构建号」）；原先静默跳过，金手指悄悄少一份
+                log.append(f'不收\tcheat:{f[:40]}\tmain\t{f[:40]}\t读不了：{type(e).__name__}：{" ".join(str(e).split())[:200]}'); continue
             if len(raw) > 4 << 20: log.append(f'不收\tcheat\tmain\t{f[:40]}\t文件超过 4 MB'); continue
             fbid, entries = parse_cheats(raw.decode('utf-8', 'replace'))
             stem = os.path.splitext(f)[0]
