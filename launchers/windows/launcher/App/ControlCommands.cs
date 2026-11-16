@@ -199,6 +199,29 @@ public sealed partial class EnvironmentWindow
                 _ = CustomizeAsync(customized, r.Text("name"), r.Text("coverPath"));
                 return ControlReply.Ok();
             }
+            case ("POST", "/mods"):   // 资源替换 mod（同游戏库「Mod…」页 ModsPage.cs、同 Mac 控制口）：import [路径] / enable {名字: 真/假} / remove [名字]；都不给只列
+            {
+                if (ControlBusy) return Busy();
+                if (ControlGame(r) is not { } modded) return NoGame;
+                var extra = new Dictionary<string, object?>();
+                if (r.Strings("import") is { Length: > 0 } imp) extra["modsImport"] = imp.Cast<object?>().ToList();
+                if (r.Strings("remove") is { Length: > 0 } rem) extra["modsRemove"] = rem.Cast<object?>().ToList();
+                if (r.Body.ValueKind == System.Text.Json.JsonValueKind.Object && r.Body.TryGetProperty("enable", out var en) && en.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    var want = new Dictionary<string, object?>();
+                    foreach (var kv in en.EnumerateObject()) if (kv.Value.ValueKind is System.Text.Json.JsonValueKind.True or System.Text.Json.JsonValueKind.False) want[kv.Name] = kv.Value.GetBoolean();
+                    if (want.Count > 0) extra["modsEnable"] = want;
+                }
+                var job = await PackJobClient.RunAsync(PackRequest(extra.Count == 0 ? "community" : "communitySave", modded.Id, extra.Count == 0 ? null : extra), null, CancellationToken.None);
+                if (!job.Report.Succeeded) return ControlReply.Bad(job.Report.Message.Length > 0 ? job.Report.Message : job.Report.State);
+                var res = job.Report.Result;
+                if (modsFor?.Id == modded.Id) { modsList = null; Dispatcher.UIThread.Post(Render); }   // 「Mod…」页开着就重读
+                return ControlReply.Json(new Dictionary<string, object?>
+                {
+                    ["mods"] = res.TryGetProperty("mods", out var m) ? m.Clone() : null,
+                    ["modsImported"] = res.TryGetProperty("modsImported", out var d) ? d.Clone() : null
+                });
+            }
             case ("POST", "/delete"):   // 同界面「删除这款游戏」（delete 作业）；控制口不弹确认，由 AI 先问过玩家
             {
                 if (ControlBusy) return Busy();
@@ -324,6 +347,7 @@ public sealed partial class EnvironmentWindow
     [
         ("GET /state", "当前界面状态：环境检查（checks）、密钥、游戏列表、作业记录（tasks）"),
         ("GET /snapshot", "主窗口截图（PNG）"),
+        ("POST /mods {gameId, import?:[路径], enable?:{名字: 真/假}, remove?:[名字]}", "资源替换 mod（同游戏库「Mod…」页）：导入 zip / 文件夹、开关、删除；都不给只列；下次装到 iPhone 时推过去"),
         ("POST /keys {path}", "导入 prod.keys"),
         ("POST /games {paths:[…]}", "放入游戏（NSP / XCI 文件、游戏文件夹或解包好的游戏文件夹）"),
         ("POST /build {gameId, target, spaceOverride?}", "出包：spaceOverride = true 同界面「仍然继续」；target = ios（iPhone / iPad，缺省）；android / harmony 回 409「即将上线」"),

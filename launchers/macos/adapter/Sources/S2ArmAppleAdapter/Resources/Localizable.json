@@ -7072,10 +7072,6 @@
   "en": "The chosen device ({0}) hasn't been paired with this computer yet: plug it in, unlock it and tap Trust on the device (after that it can also install over the same Wi-Fi)."
  },
  {
-  "source": "重新打开 S2Arm（会自动修好），再从电脑推送一次。",
-  "en": "Reopen S2Arm (it fixes this automatically), then push from the computer again."
- },
- {
   "source": "清出空间后点「重试」。",
   "en": "Free up some space, then tap Retry."
  },
@@ -9716,10 +9712,6 @@
   "en": "Sending mod \"{0}\" to iPhone ({0} files)"
  },
  {
-  "source": "里面的代码补丁（exefs 的 pchtxt / IPS）这里不收：只导入资源替换（romfs）",
-  "en": "Code patches inside (exefs pchtxt / IPS) aren't imported here: only asset replacements (romfs)"
- },
- {
   "source": "mod 要选 zip 压缩包或文件夹（7z / rar 先解压成文件夹再导入）：{0}",
   "en": "Choose a zip file or a folder for mods (extract 7z / rar into a folder first): {0}"
  },
@@ -9740,15 +9732,27 @@
   "en": "This archive is larger than 16 GB when extracted: {0}"
  },
  {
-  "source": "「{0}」里没找到 romfs 文件夹：资源替换 mod 要带 romfs/（如 atmosphere/contents/{0}/romfs）。",
-  "en": "No romfs folder found in \"{0}\": asset mods need a romfs/ folder (for example atmosphere/contents/{0}/romfs)."
+  "source": "「{0}」里没找到 mod：资源替换要带 romfs/（如 atmosphere/contents/{0}/romfs），代码补丁要带 exefs/ 里的 pchtxt / IPS（或 atmosphere/exefs_patches/<名字>/）。",
+  "en": "No mod found in \"{0}\": asset mods need a romfs/ folder (for example atmosphere/contents/{0}/romfs); code mods need pchtxt / IPS files in exefs/ (or atmosphere/exefs_patches/<name>/)."
  },
  {
-  "source": "「{0}」的 romfs 是空的，没收",
-  "en": "The romfs in \"{0}\" is empty, skipped"
+  "source": "「{0}」是空的，没收",
+  "en": "\"{0}\" is empty, skipped"
+ },
+ {
+  "source": "「{0}」带 {0} 份代码补丁：重新打包这款（或 S 级优化升级）后生效",
+  "en": "\"{0}\" includes {0} code patch(es): they take effect after you re-pack this game (or run the S-grade upgrade)"
  },
  {
   "source": "NUP 程序号 {0} 与游戏库 {0} 不一致",
   "en": "The NUP's title ID {0} doesn't match the library's {0}"
+ },
+ {
+  "source": "mod 开关格式不对。",
+  "en": "Invalid mod switch request."
+ },
+ {
+  "source": "重试没用：先在游戏菜单「存档管理」里导出存档（存到 S2Arm 文件夹以外，比如 iCloud 云盘），再删除并重新安装 S2Arm，装好后导回存档。",
+  "en": "Retrying won’t help: export your saves from the game menu (Manage saves) to a place outside the S2Arm folder, such as iCloud Drive, delete and reinstall S2Arm, then import the saves again."
  }
 ]

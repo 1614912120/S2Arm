@@ -48,6 +48,16 @@
     <string name="save_diagnostics">保存诊断包到文件…</string>
     <string name="save_diagnostics_done">诊断包已保存：%1$s</string>
     <string name="save_diagnostics_failed">诊断包保存失败：%1$s</string>
+    <!-- #528 第 15 项：上一局死在前台（LastSession），库页状态区提示一次 -->
+    <string name="last_session_abnormal">上一局异常结束。导出诊断包能帮我们查原因。</string>
+    <string name="last_session_abnormal_reason">上一局异常结束（%1$s）。导出诊断包能帮我们查原因。</string>
+    <string name="last_session_crash">应用崩溃</string>
+    <string name="last_session_native_crash">原生崩溃，信号 %1$d</string>
+    <string name="last_session_not_responding">无响应</string>
+    <string name="last_session_low_memory">内存不足，被系统结束</string>
+    <string name="last_session_signaled">被系统结束，信号 %1$d</string>
+    <string name="last_session_excessive">资源占用过高，被系统结束</string>
+    <string name="last_session_dismiss">不用了</string>
     <string name="touch_menu_import">导入布局…</string>
     <string name="touch_menu_export">导出布局…</string>
     <string name="touch_layout_imported">布局已导入</string>
@@ -86,4 +96,25 @@
     <string name="library_position">第 %1$d 个，共 %2$d</string>
     <string name="library_empty">还没有游戏</string>
     <string name="library_empty_hint">用电脑上的 S2Arm 安装游戏。</string>
+    <string name="mods_title">Mod（资源替换）</string>
+    <string name="mods_for_game">当前游戏：%1$s</string>
+    <string name="mods_no_game">先安装游戏：mod 按游戏存放。</string>
+    <string name="mods_import_zip">导入 mod（zip）…</string>
+    <string name="mods_import_folder">导入 mod 文件夹…</string>
+    <string name="mods_none">这款还没有 mod。</string>
+    <string name="mods_item">%1$s · %2$d 个文件 · %3$s</string>
+    <string name="mods_remove">删除</string>
+    <string name="mods_working">正在处理 mod…</string>
+    <string name="mods_imported">已导入 mod：%1$s</string>
+    <string name="mods_failed">mod 操作没成：%1$s</string>
+    <string name="mods_err_not_archive">mod 要选 zip 压缩包或文件夹（7z / rar 先解压成文件夹再导入）：%1$s</string>
+    <string name="mods_err_too_many">这个压缩包文件太多（超过 %1$d 个）：%2$s</string>
+    <string name="mods_err_too_large">这个压缩包解开超过 16 GB：%1$s</string>
+    <string name="mods_err_no_romfs">「%1$s」里没找到 romfs 文件夹：资源替换 mod 要带 romfs/（如 atmosphere/contents/%2$s/romfs）。</string>
+    <string name="mods_err_missing">没有这个 mod：%1$s。</string>
+    <string name="mods_err_name_taken">已有同名的 mod：%1$s。</string>
+    <string name="mods_note_other_game">「%1$s」是给另一款游戏（%2$s）的，没收</string>
+    <string name="mods_note_exefs">里面的代码补丁（exefs 的 pchtxt / IPS）这里不收：只导入资源替换（romfs）</string>
+    <string name="mods_note_empty">「%1$s」的 romfs 是空的，没收</string>
+    <string name="mods_note">mod 下次起局生效，按文件夹名顺序叠，后面的覆盖前面的；取消勾选即关闭。改 mod 前先结束游戏。</string>
 </resources>

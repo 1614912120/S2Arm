@@ -155,7 +155,8 @@ def scan(index_dirs, exefs, log=None):
         if not os.path.exists(idx): continue
         seen = set(); rd = csv.DictReader(open(idx, encoding='utf-8', errors='replace'), delimiter='\t')
         # 编号（同启动器 pack/jobs/community.py：表头有 aspect 的是 widescreen、有 target_fps 的是 fps、其余 gfx；补丁内容 sha256 前 16 位，没有就用包内路径散列）
-        kind_id = 'widescreen' if 'aspect' in (rd.fieldnames or []) else 'fps' if 'target_fps' in (rd.fieldnames or []) else 'gfx'
+        kind_id = 'widescreen' if 'aspect' in (rd.fieldnames or []) else 'fps' if 'target_fps' in (rd.fieldnames or []) \
+            else 'mod' if 'mod' in (rd.fieldnames or []) else 'gfx'   # mod：玩家导入的 mod 带的代码补丁（pack/jobs/mods.py code_index），运行时跟 mod 开关走（runtime/src/cpatch.c）
         rows = list(rd)
         romfs_roots = {(r.get('path') or '').split('/romfs/')[0] for r in rows if (r.get('title_id') or '').upper()[:13] == pid and '/romfs/' in (r.get('path') or '')}
         for r in rows:
@@ -182,8 +183,13 @@ def scan(index_dirs, exefs, log=None):
                 if m0['romfs'] == 1: m0['romfs'] = meta['romfs']
                 continue
             taken[uid] = meta
+            def mod_miss(bids):   # 玩家导入的 mod（mod:）构建号对不上：记「不收」，完成页列「没打上（Mod 是别的版本的）」（社区补丁版本不对是常态、不列）
+                if kind_id == 'mod' and log is not None:
+                    log.append(f"不收\t{uid}\t-\t{path[:60]}\tmod 构建号对不上：mod 是 {'、'.join(sorted({b[:16] for b in bids if b})) or '（没写构建号）'}，"
+                               f"这份游戏的主程序是 {mods.get('main', '')[:16]}")
             if kind == 'pchtxt' or path.endswith('.pchtxt'):
                 _, secs = parse_pchtxt(open(full, encoding='utf-8', errors='replace').read())
+                if not any(m for s in secs for m, b in mods.items() if s['bid'] and bid_match(b, s['bid'])): mod_miss([s['bid'] for s in secs])
                 for s in secs:
                     ms = [m for m, b in mods.items() if s['bid'] and bid_match(b, s['bid'])]
                     if not ms:
@@ -211,7 +217,7 @@ def scan(index_dirs, exefs, log=None):
             elif kind == 'ips' or path.lower().endswith('.ips'):
                 bid = os.path.splitext(os.path.basename(path))[0]
                 ms = [m for m, b in mods.items() if re.fullmatch(r'[0-9A-Fa-f]{16,64}', bid) and bid_match(b, bid)]
-                if not ms: continue
+                if not ms: mod_miss([bid]); continue
                 w = parse_ips(open(full, 'rb').read())
                 if w is None: skipped['IPS 格式不对'] = skipped.get('IPS 格式不对', 0) + 1; continue
                 if w: out.append({'module': ms[0], 'cat': cat, 'name': os.path.basename(os.path.dirname(path)), 'writes': w, 'license': r.get('license') or '', 'path': path, 'base': base, 'id': uid, 'meta': meta})
@@ -1485,7 +1491,8 @@ def plan(root, default_on, index_dirs):
     def rank(key):
         uid, mod = key; u = units[key]; m = u['meta']; rf = m['romfs'] if m['romfs'] != 1 else known.get((mod, flat(u)), 1)
         # ⓪ 自适应满屏（wsauto:，adapt_families 合成，任何画幅都铺满）先占位：同模块定画幅的宽屏变体（别家按单一画幅出的）与它改同一处就让它
-        return (0 if uid.startswith('wsauto:') else 1, 0 if not uid.startswith('fps:') or m['fps'] == 60 else 1 if m['fps'] is None else 2, rf, order.index(key))
+        #   玩家自己导入的 mod 代码补丁（mod:，11-15）比所有社区补丁先占位：玩家自己选的优先（关掉那份 mod 不会让被它挤掉的社区补丁回来，重出包才回来）
+        return (0 if uid.startswith('mod:') else 1 if uid.startswith('wsauto:') else 2, 0 if not uid.startswith('fps:') or m['fps'] == 60 else 1 if m['fps'] is None else 2, rf, order.index(key))
     ranked = sorted(units, key=rank)
     if ranked != order:
         print('社区补丁按目标排序（帧率 60 优先、不缺 romfs 参数表优先）：' + ' '.join(f"{k[0]}/{k[1]}({units[k]['meta']['fps'] or '?'} 帧，参数表{('不缺', '判不了', '缺')[rank(k)[2]]})" for k in ranked), file=sys.stderr)

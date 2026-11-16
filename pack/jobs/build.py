@@ -147,7 +147,9 @@ def runtime_env(c, game, runtime, input_ok=True):
         p.mkdir(parents=True, exist_ok=True)
     # S2A_SAVE_DIR is a test/import seed that clears saves at boot; launch() sets it
     # only for a save the player just imported, never for normal play. Persist the Ryujinx data root instead.
+    # 游玩时间（runtime/src/playtime.c）写进这款的游戏文件夹：S2A_DOCS 在 temp/（总览里算可清的临时件），清了不能把累计时长一起清掉
     env.update(S2A_GAME_DATA=str(runtime), S2A_RYU_DATA=str(save), S2A_DOCS=str(docs), S2A_SAVE_FOLDER=str(save_folder),
+               S2A_PLAYTIME=str(layout.path(c, game["id"], "playtime.json")),
                NXGAL_SHADER_CACHE_DIR=str(cache / "shaders"), NXGAL_PSO_DEV_DIR=str(cache / "pso"),
                S2A_MACRO_DUMP=str(cache / "macros"),
                S2A_DOCKED="0" if c.r.get("docked") is False else "1",   # Mac 缺省主机模式（维护者 11-07）；只有请求明说 false 才掌机
@@ -468,7 +470,7 @@ def clone_tree(c, source, destination, *, materialize_romfs=False):
             raise Failure("输入目录包含符号链接。")
     if materialize_romfs and not (source / "romfs").is_dir():
         raise Failure("准备产物缺少 RomFS 游戏资源目录。")
-    # 空目录也要建：内置引擎的 Git 快照 gc 后 .git/refs/heads 等是空目录，少了它 Git 判仓库无效、往上找到外层仓库（10-23 走查：认到了用户主目录的仓库）
+    # 空目录也要建：拷出的目录与源一模一样（RomFS 里的空目录、宿主包结构；10-23 走查起因是当年快照 .git 的空 refs 目录）
     for d in (p for p in entries if p.is_dir() and not p.is_symlink()):
         (destination / d.relative_to(source)).mkdir(parents=True, exist_ok=True)
     files = [p for p in entries if p.is_file()]

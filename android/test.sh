@@ -339,9 +339,11 @@ s2a_gate_step "$PY" "$repo_dir/graphics/nvn/tests/gs_replay_mutation_test.py"
 s2a_gate_step "$PY" "$repo_dir/graphics/nvn/tests/dirty_span_memo_mutation_test.py"
 # 原创 Maxwell 经生产请求、真实编译器与生产结果解析；GPU 像素由 Vulkan 门禁另验。
 s2a_gate_step "$PY" "$android_dir/tests/gs_compiler_chain_test.py"
-# BUFFER texture: real producer, Maxwell compiler, SPIR-V parser and replay rejection.
+# BUFFER texture: real producer, Maxwell compiler and SPIR-V parser.
 s2a_gate_step "$PY" "$android_dir/tests/tbuf_compiler_chain_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/libpack_tbuf_withdraw_test.py"
+# Pool-backed TBUF replay: both stages, synchronization and three mutations.
+s2a_gate_step "$PY" "$android_dir/tests/tbuf_replay_core_test.py" --withdraw
 # W2 compute: real C components with synthetic input / Vulkan mocks, never GPU or device evidence.
 s2a_gate_step "$PY" "$android_dir/tests/direct_compute_identity_test.py"
 # P0-3：constantBufferUse 宽掩码的 S2AI1 v3/v4 分叉现由计算与图形共用——正例 + 两处撤改必红（纯宿主 C 编译，秒级）。
@@ -422,8 +424,12 @@ s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" \
     "$android_dir/app/src/main/java/org/s2arm/android/GameStorage.java" \
     "$android_dir/app/src/main/java/org/s2arm/android/GameResume.java" \
     "$android_dir/app/src/main/java/org/s2arm/android/GameSession.java" \
-    "$android_dir/tests/GameSessionTest.java"
+    "$android_dir/app/src/main/java/org/s2arm/android/GameMods.java" \
+    "$android_dir/tests/GameSessionTest.java" \
+    "$android_dir/tests/GameModsTest.java"
 s2a_gate_step java -cp "$out/java" org.s2arm.android.GameSessionTest
+# 资源替换类 mod 导入（口径同 pack/jobs/mods.py）：发布结构 / 别的程序号 / 逃逸与符号链接 / 上限 / 开关 / 删除 / zip64
+s2a_gate_step java -ea -cp "$out/java" org.s2arm.android.GameModsTest
 # The shell's BootSpec against boot-spec.v1.schema.json (with and without a region).
 s2a_gate_step "$PY" - "$android_dir/contracts" "$out/boot-spec" <<'PY'
 import importlib.util, os, sys
@@ -614,6 +620,8 @@ echo "Android package C/Python backend matrix: running real rewrites and Java co
 
 # Offline codec build/packaging regression (source preparation is explicit).
 s2a_gate_step python3 "$android_dir/tests/game_library_import_test.py"
+# #528 第 15 项：库页「上一局异常结束」提示（真 LibraryActivity + 导入用例的替身；3 个负对照）
+s2a_gate_step python3 "$android_dir/tests/last_session_notice_test.py"
 s2a_gate_step python3 "$android_dir/codecs/tests/build_test.py"
 s2a_gate_step "$PY" "$android_dir/codecs/tests/managed_test.py"
 # #1131：宿主原生构建契约——后端路由 / NativeAOT 静态归档校验 / docker↔host 产物等价核对。

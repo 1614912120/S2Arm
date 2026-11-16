@@ -16,41 +16,72 @@ struct InstallModeCard: View {
     @EnvironmentObject var loc: Localizer
     @AppStorage(S2ArmLauncherModel.teamCodeKey) private var enteredTeamCode = ""
     @State private var showTeam = false
+    @State private var openingGuide = false
+    @State private var guideFailure: String?
 
     var body: some View {
         CardGroup(ix(loc, "install.mode.device"), footnote: ix(loc, "install.mode.device_note")) {
-            identity.padding(14)
+            identity.padding(LauncherTheme.Metrics.cardInset)
         }
-        .onAppear { model.refreshInstallMode(); model.refreshDevCert() }
+        .onAppear { showTeam = !enteredTeamCode.isEmpty; model.refreshInstallMode(); model.refreshDevCert() }
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("env.installMode")
     }
 
     /// 一键装时的签名身份：开发者证书一栏照用出包页原来那套（导入 / 换 / 删、体检）；不用证书时 Xcode 团队号与引导项目在这里
     @ViewBuilder private var identity: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            DevCertRow(model: model, title: ix(loc, "install.mode.identity"), appleIdTitle: ix(loc, "install.mode.identity_xcode"))
+        VStack(alignment: .leading, spacing: LauncherTheme.Space.large) {
+            DevCertRow(model: model, title: ix(loc, "install.mode.identity"), appleIdTitle: ix(loc, "install.mode.identity_xcode"), embedded: true)
             if model.devCert?.active != true {
                 // Xcode 里还没有团队 / 签不成时的解决办法（引导项目 + 手填团队号）：平时收起，签名身份一栏保持紧凑；手填过团队号的展开着
                 Button { showTeam.toggle() } label: {
                     HStack(spacing: 6) {
                         Text(loc.t("s2arm.install.teamManual")).font(.manrope(12.5, .semibold))
-                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).rotationEffect(.degrees(showTeam || !enteredTeamCode.isEmpty ? 90 : 0))
+                        Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).rotationEffect(.degrees(showTeam ? 90 : 0))
                     }
                     .foregroundStyle(LauncherPalette.cream.opacity(0.85))
                 }
-                .buttonStyle(.plain).padding(.horizontal, 14).accessibilityIdentifier("env.teamManual")
-                if showTeam || !enteredTeamCode.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(loc.t("s2arm.install.teamGuide")).font(.manrope(12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 8) {
-                        Button(loc.t("s2arm.install.teamGuideOpen")) { model.openSigningProject() }
-                            .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("env.teamGuideOpen")
-                        TextField(loc.t("s2arm.install.teamManualField"), text: $enteredTeamCode).textFieldStyle(.roundedBorder).font(.mono(12)).frame(width: 180)
-                            .accessibilityIdentifier("env.teamId")
+                .controllerButtonStyle(.plain).controllerID("env.teamManual")
+                if showTeam {
+                VStack(alignment: .leading, spacing: LauncherTheme.Space.large) {
+                    VStack(alignment: .leading, spacing: LauncherTheme.Space.medium) {
+                        Text(loc.t("s2arm.install.teamGuide.intro")).font(LauncherTheme.TypeStyle.detail)
+                        ForEach(1...3, id: \.self) { step in
+                            LauncherGuideStep(step, loc.t("s2arm.install.teamGuide.step\(step)"))
+                        }
+                        Button {
+                            openingGuide = true; guideFailure = nil
+                            model.openSigningProject { error in
+                                openingGuide = false
+                                guideFailure = error.map { loc.backend($0.localizedDescription) }
+                            }
+                        } label: {
+                            HStack(spacing: LauncherTheme.Space.small) {
+                                if openingGuide { ProgressView().controlSize(.small).frame(width: LauncherTheme.Metrics.icon) }
+                                Text(loc.t("s2arm.install.teamGuideOpen"))
+                            }
+                        }
+                            .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("env.teamGuideOpen")
+                            .disabled(openingGuide)
+                            .padding(.leading, 22 + LauncherTheme.Space.medium)
+                        if let guideFailure {
+                            Text(loc.t("s2arm.install.teamGuide.failed").replacingOccurrences(of: "{0}", with: guideFailure))
+                                .font(LauncherTheme.TypeStyle.caption).foregroundStyle(LauncherPalette.danger)
+                                .fixedSize(horizontal: false, vertical: true).accessibilityIdentifier("env.teamGuide.failure")
+                        }
                     }
-                    Text(loc.t("s2arm.install.teamManualHelp")).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    CardDivider()
+                    VStack(alignment: .leading, spacing: LauncherTheme.Space.small) {
+                        Text("Team ID").font(LauncherTheme.TypeStyle.section)
+                        Text(loc.t("s2arm.install.teamManualHelp")).font(LauncherTheme.TypeStyle.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        TextField(loc.t("s2arm.install.teamManualField"), text: $enteredTeamCode,
+                                  prompt: Text(loc.t("s2arm.install.teamManualField")).foregroundColor(LauncherTheme.Colors.secondary))
+                            .textFieldStyle(LauncherTextFieldStyle()).font(.mono(13)).frame(maxWidth: 300)
+                            .accessibilityLabel("Team ID").accessibilityIdentifier("env.teamId")
+                    }
                 }
-                .padding(.horizontal, 14)
+                .padding(LauncherTheme.Space.large).launcherPanel()
                 }
             }
         }
@@ -65,10 +96,10 @@ struct InstallModeLine: View {
     var body: some View {
         HStack(spacing: 12) {
             LauncherRowIcon("signature")
-            Text(ix(loc, "install.mode.summary").replacingOccurrences(of: "{0}", with: summary)).font(.manrope(13)).foregroundStyle(.secondary)
+            Text(ix(loc, "install.mode.summary").replacingOccurrences(of: "{0}", with: summary)).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary)
             Spacer(minLength: 12)
             Button(ix(loc, "install.mode.change")) { model.showEnvironment = true }
-                .buttonStyle(.plain).font(.manrope(12.5, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.85))
+                .controllerButtonStyle(.plain).font(.manrope(12.5, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.85))
                 .accessibilityIdentifier("export.installMode.change")
         }
         .padding(.horizontal, 14).padding(.vertical, 12)
@@ -97,8 +128,8 @@ struct PhoneUpdateButton: View {
                     Text(t("update.button.device")).font(.manrope(12.5, .semibold)).lineLimit(1)
                 }
             }
-            .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
-            .accessibilityIdentifier("top.phoneUpdate")
+            .controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
+            .controllerID("top.phoneUpdate").controllerShortcut(.rightTrigger, focused: true)
             .alert(t("update.confirm.title"), isPresented: Binding(get: { model.updateConfirm != nil }, set: { if !$0 { model.updateConfirm = nil } }),
                    presenting: model.updateConfirm) { u in
                 Button(t("update.confirm.repack")) { model.updatePhone(acceptStale: true, repack: u.stale.map(\.id), language: language) }

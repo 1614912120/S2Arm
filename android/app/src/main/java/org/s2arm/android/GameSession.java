@@ -434,6 +434,15 @@ final class GameSession implements AutoCloseable {
         return apkSha256(installedApk, timing).equals(expectedSha256);
     }
 
+    /** 一款游戏的用户根 / 存档根（BootSpecSource 起局时填 BootSpec 用的同一对路径）。 */
+    static File userRoot(File privateRoot) { return new File(privateRoot, "user/0"); }
+    static File saveRoot(File privateRoot, String titleId) { return new File(userRoot(privateRoot), "saves/" + titleId); }
+
+    /** 这款起局时交给原生层的 state 目录（安卓的 S2A_DOCS，runtime.c 绑定）：起局与库页导入 mod（GameMods）共用这一处算法。 */
+    static File stateDir(File privateRoot, String titleId) throws IOException {
+        return prepareState(privateRoot, userRoot(privateRoot), saveRoot(privateRoot, titleId));
+    }
+
     /** Ryujinx 使用自己的持久目录；不把用户 saveRoot 当作导入种子，也不迁移或覆盖旧布局。 */
     static File prepareState(File privateRoot, File userRoot, File saveRoot) throws IOException {
         Path app = privateRoot.toPath().toAbsolutePath().normalize();

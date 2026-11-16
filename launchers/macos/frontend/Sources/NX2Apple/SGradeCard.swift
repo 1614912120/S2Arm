@@ -34,18 +34,37 @@ struct SGradeCard: View {
     @ObservedObject var model: S2ArmLauncherModel
     @EnvironmentObject var loc: Localizer
     let gameID: String
-    /// 作业层答「这个版本没命中、别的版本也没有」：上层整张不出
-    var nothing: () -> Void = {}
     @State private var match: PatchMatch?
     @State private var failed = false
+    @State private var modNotes: [String] = []
 
     var body: some View {
-        SGradeCardView(match: match, failed: failed, zh: loc.cjkPunctuation, on: Binding(get: { model.sgradeOn(gameID) }, set: { model.setSgrade(gameID, $0) })) {
+        SGradeCardView(match: match, failed: failed, zh: loc.cjkPunctuation, on: Binding(get: { model.sgradeOn(gameID) }, set: { model.setSgrade(gameID, $0) }),
+                       importMod: importMod, modNotes: modNotes) {
             BackendText.launcherText("export.sgrade." + $0, language: loc.lang.sharedCode) }
-            .task(id: gameID) {
-                match = nil; failed = false
-                if let r = try? await model.saveJob("patchMatch", gameID: gameID) { let m = PatchMatch(r); match = m; if m.total == 0, !m.port, !m.ownWiden, m.others.isEmpty, !m.build.isEmpty { nothing() } } else { failed = true }
-            }
+            .task(id: gameID) { modNotes = []; await refresh() }
+    }
+
+    private func refresh() async {
+        match = nil; failed = false
+        if let r = try? await model.saveJob("patchMatch", gameID: gameID) { match = PatchMatch(r) } else { failed = true }
+    }
+
+    /// 导入 Mod（11-15 维护者「打包页增加 mod 导入，S 级优化又升级了」）：同启动设置「资源 Mod」那一栏（作业层 communitySave modsImport → pack/jobs/mods.py）。
+    ///   资源替换（romfs）起局叠上；带代码补丁（exefs 的 pchtxt / IPS）的这次出包编进程序，跟 Mod 开关走。导入完重算卡片（mod 一类的份数）
+    private func importMod() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true; panel.canChooseDirectories = true; panel.canChooseFiles = true
+        panel.allowedContentTypes = [.zip, .folder]
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        Task {
+            do {
+                let mods = try await model.launchSettingsFull(gameID, modsImport: panel.urls.map(\.path)).5
+                modNotes = (mods.imported.isEmpty ? [] : [BackendText.launcherText("display.mods.imported", language: loc.lang.sharedCode).replacingOccurrences(of: "{0}", with: mods.imported.joined(separator: loc.t("s2arm.punct.list")))])
+                    + mods.notes.map { loc.backend($0) }
+            } catch { modNotes = [error.localizedDescription] }
+            await refresh()
+        }
     }
 }
 
@@ -56,6 +75,9 @@ struct SGradeCardView: View {
     let zh: Bool
     /// 「出包时打入」勾选（v0.4.0 维护者：作为 Beta 功能出包页默认勾上，玩家可取消；取消 = 这次出包不带社区补丁与金手指）；nil = 不出勾选（单测旧图）
     var on: Binding<Bool>? = nil
+    /// 打包页「导入 Mod」按钮（nil = 不出，单测旧图）与刚导入的说明（导入了哪几份、哪些没收、代码补丁几份）
+    var importMod: (() -> Void)? = nil
+    var modNotes: [String] = []
     /// export.sgrade.<键> → 当前语言的文字
     let x: (String) -> String
     /// 金色 S（缺省读 App 资源 s-gold.png；单测传仓库里的原图）
@@ -83,6 +105,7 @@ struct SGradeCardView: View {
                     if let on {
                         Spacer(minLength: 12)
                         Toggle(x("toggle"), isOn: on).toggleStyle(.checkbox).font(.manrope(12.5, .medium)).tint(Self.gold)
+                            .controllerControl(id: "export.sgrade.toggle", activate: { on.wrappedValue.toggle() })
                             .accessibilityIdentifier("export.sgrade.toggle")
                     }
                 }
@@ -104,7 +127,7 @@ struct SGradeCardView: View {
         .accessibilityIdentifier("export.sgrade")
     }
 
-    private static let catSymbol = ["widescreen": "arrow.up.left.and.arrow.down.right", "fps": "speedometer", "gfx": "wand.and.stars", "cheat": "gamecontroller.fill"]
+    private static let catSymbol = ["widescreen": "arrow.up.left.and.arrow.down.right", "fps": "speedometer", "gfx": "wand.and.stars", "cheat": "gamecontroller.fill", "mod": "puzzlepiece.extension.fill"]
 
     /// 玩家这份游戏的版本：显示版本号优先，没有就用构建号前 16 位
     private func mine(_ m: PatchMatch) -> String { m.version.isEmpty ? m.build.prefix(16).uppercased() : m.version }
@@ -115,7 +138,7 @@ struct SGradeCardView: View {
         } else if let m = match {
             if m.total > 0 || m.port || m.ownWiden {
                 VStack(alignment: .leading, spacing: 9) {
-                    ForEach(["widescreen", "fps", "gfx", "cheat"], id: \.self) { c in
+                    ForEach(["widescreen", "fps", "gfx", "cheat", "mod"], id: \.self) { c in
                         if let n = m.exact[c], n > 0 { hitRow(x("hit." + c).replacingOccurrences(of: "{0}", with: String(n)), symbol: Self.catSymbol[c] ?? "checkmark") }
                         if c == "widescreen", (m.exact[c] ?? 0) == 0, !m.port, m.ownWiden { hitRow(x("ownWiden"), symbol: Self.catSymbol[c] ?? "checkmark") }
                         if c == "widescreen", m.port { hitRow(x("port").replacingOccurrences(of: "{0}", with: m.portVersions.isEmpty ? x("port.any") : m.portVersions.prefix(3).joined(separator: zh ? "、" : ", ")), symbol: Self.catSymbol[c] ?? "checkmark") }
@@ -129,6 +152,14 @@ struct SGradeCardView: View {
             if m.total == 0, !m.others.isEmpty {   // 补丁按版本生效（11-14 维护者）：列出的版本和玩家这份不同（或还不知道玩家是哪版）就不会打入，说清楚
                 note(x(m.build.isEmpty ? "listed" : "others") + m.others.prefix(6).map { "\($0.version)\(zh ? "（" : " (")\($0.cats.map(catName).joined(separator: zh ? "、" : ", "))\(zh ? "）" : ")")" }
                     .joined(separator: zh ? "；" : "; "))
+            }
+            if let importMod {   // 导入 Mod（11-15）：带代码补丁的 mod 这次出包编进程序；资源替换照常起局叠上
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    note(x("mod.note"))
+                    Spacer(minLength: 8)
+                    Button(x("mod.import"), action: importMod).buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("export.sgrade.mod.import")
+                }
+                ForEach(modNotes, id: \.self) { note($0) }
             }
         } else {
             HStack(spacing: 8) { ProgressView().controlSize(.small).tint(Self.gold); Text(x("loading")).font(.manrope(12.5)).foregroundStyle(.secondary) }
@@ -203,7 +234,7 @@ struct SGradeGroupCard<Content: View>: View {
                                                                                          startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1))
                 .shadow(color: G.gold.opacity(0.10), radius: 16, y: 4)
         }
-        .accessibilityIdentifier("launch.sgrade")
+        .accessibilityElement(children: .contain).accessibilityIdentifier("launch.sgrade")
     }
 }
 
@@ -244,8 +275,7 @@ struct SGradeToggle: Identifiable {
     var enabled = true
 }
 
-/// S 级优化组的内容：「社区补丁」「金手指」两个小节，每节一个金色小标题（文字与下面各行的文字同一条起始线：行左边留 7 点圆点位 + 12 点间距，
-///   小标题照留）+ 逐条开关行（CardRow，开关靠右）；金手指小标题右边是「导入」。启动设置与离屏单测共用
+/// S 级优化组的内容：小节与设置行共用卡片内边距，金手指小标题右边是「导入」
 struct SGradeSettingsRows: View {
     let patchesTitle: String, patchesNote: String, patches: [SGradeToggle]
     let cheatsTitle: String, cheatsNote: String, cheats: [SGradeToggle]
@@ -267,6 +297,7 @@ struct SGradeSettingsRows: View {
     static let listMaxHeight: CGFloat = 300
     var summary: (Int, Int) -> String = { on, all in "已开 \(on) 条 · 共 \(all) 条" }
     var searchPrompt = "搜索金手指"
+    var clearSearchTitle = "清除搜索"
     var patchesSummary: (Int, Int) -> String = { on, all in "已开 \(on) · 共 \(all)" }
     /// 金手指小标题前的金色 S（与金卡最上面两行同一个标志）；nil = 不画（老样式 / 单测）
     var cheatsIcon: NSImage? = nil
@@ -274,18 +305,18 @@ struct SGradeSettingsRows: View {
     var body: some View {
         VStack(spacing: 0) {
             subhead(cheatsTitle, note: cheatsNote, icon: cheatsIcon) {
-                Button(importTitle) { onImport() }.buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("launch.cheats.import").disabled(busy)
+                Button(importTitle) { onImport() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("launch.cheats.import").disabled(busy)
             }
             if !cheats.isEmpty {
                 // 汇总行：点一下展开 / 收起
                 Button { withAnimation(.easeOut(duration: 0.2)) { cheatsOpen = !open } } label: {
                     CardRow(summary(cheats.filter(\.on).count, cheats.count), open: open) { EmptyView() }.contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).accessibilityIdentifier("launch.cheats.toggleList")
+                .controllerButtonStyle(.plain).accessibilityIdentifier("launch.cheats.toggleList")
                 if open {
                     if cheats.count > 10 {
-                        TextField(searchPrompt, text: $query).textFieldStyle(.roundedBorder).font(.manrope(12.5))
-                            .padding(.leading, 18 + 7 + 12).padding(.trailing, 18).padding(.bottom, 6)   // 与各行文字同一条起始线（CardRow 左边 18 + 圆点位 7 + 间距 12）
+                        LauncherSearchField(searchPrompt, text: $query, clearTitle: clearSearchTitle)
+                            .padding(.horizontal, LauncherTheme.Metrics.cardInset).padding(.bottom, LauncherTheme.Space.small)
                             .accessibilityIdentifier("launch.cheats.search")
                     }
                     let shown = query.isEmpty ? cheats : cheats.filter { $0.label.localizedCaseInsensitiveContains(query) || $0.detail.localizedCaseInsensitiveContains(query) }
@@ -299,7 +330,7 @@ struct SGradeSettingsRows: View {
                 Button { withAnimation(.easeOut(duration: 0.2)) { patchesOpen.toggle() } } label: {
                     CardRow(patchesTitle, detail: patchesSummary(patches.filter(\.on).count, patches.count), open: patchesOpen) { EmptyView() }.contentShape(Rectangle())
                 }
-                .buttonStyle(.plain).accessibilityIdentifier("launch.patches.toggleList")
+                .controllerButtonStyle(.plain).accessibilityIdentifier("launch.patches.toggleList")
                 if patchesOpen {
                     if !patchesNote.isEmpty { Text(patchesNote).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         .padding(.leading, 18 + 7 + 12).padding(.trailing, 18).padding(.bottom, 4).frame(maxWidth: .infinity, alignment: .leading) }
@@ -310,18 +341,18 @@ struct SGradeSettingsRows: View {
     }
 
     private func subhead<T: View>(_ title: String, note: String, icon: NSImage? = nil, @ViewBuilder trailing: () -> T) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: LauncherTheme.Space.section) {
             if let icon { Image(nsImage: icon).resizable().interpolation(.high).aspectRatio(contentMode: .fit).frame(width: 20, height: 20) }
             else { Color.clear.frame(width: 7, height: 7) }
-            VStack(alignment: .leading, spacing: 3) {
+            VStack(alignment: .leading, spacing: LauncherTheme.Space.xSmall) {
                 Text(title).font(.manrope(icon == nil ? 13 : 14, .bold)).tracking(icon == nil ? 0.4 : 0)
                     .foregroundStyle(LinearGradient(colors: [G.goldHi, G.gold], startPoint: .leading, endPoint: .trailing))
-                if !note.isEmpty { Text(note).font(.manrope(12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
+                if !note.isEmpty { Text(note).font(LauncherTheme.TypeStyle.detail).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
             }
-            Spacer(minLength: 12)
-            trailing()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            trailing().launcherRowControls()
         }
-        .padding(.horizontal, 18).padding(.top, 14).padding(.bottom, 6)
+        .padding(.horizontal, LauncherTheme.Metrics.cardInset).padding(.top, LauncherTheme.Space.large).padding(.bottom, LauncherTheme.Space.small)
     }
 
     @ViewBuilder private func rows(_ list: [SGradeToggle], prefix: String, _ set: @escaping (String, Bool) -> Void) -> some View {

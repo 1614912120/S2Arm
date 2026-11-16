@@ -303,10 +303,8 @@
 "img.scanFailed.title" = "無法匯入遊戲檔案";
 "img.noShaders.title" = "這個遊戲檔案不完整";
 "img.noShaders.body" = "「%@」不完整。請換成電腦上「S2Arm 自簽匯出」資料夾裡的「<遊戲名>.img」，或者在電腦的 S2Arm 裡連著手機點「推到手機」。";
-"games.repair.done.title" = "遊戲資料夾已修復";
-"games.repair.done.body" = "遊戲資料夾先前屬於系統帳號，S2Arm 無法寫入，安裝一直無法開始。已自動移到 S2Arm 自己的新資料夾（%u 個檔案，與原檔案共用資料，不會多佔空間），可以繼續安裝。S2Arm 無法刪除舊資料夾，下次連接電腦時會清除。";
-"games.repair.failed.title" = "遊戲資料夾無法修復";
-"games.repair.failed.body" = "遊戲資料夾屬於系統帳號，S2Arm 無法寫入，自動移到新資料夾也沒有成功。遊戲資料沒有變動，可以從電腦重新安裝這款遊戲；如果還是不行，請匯出診斷包傳給我們。";
+"container.locked.title" = "S2Arm 的部分檔案被系統鎖住了";
+"container.locked.body" = "這台裝置上有 %@ GB 的 S2Arm 舊檔案被系統鎖住，S2Arm 改不了也刪不掉，只能刪除 App 時一起清掉。\n\n要騰出這些空間：\n1. 在每款遊戲裡打開選單 →「存檔管理」→「匯出目前存檔…」，存到「檔案」裡 S2Arm 資料夾以外（例如 iCloud 雲碟；刪除 App 時 S2Arm 資料夾會一起被刪）\n2. 刪除並重新安裝 S2Arm\n3. 用「存檔管理」→「選擇備份並檢查…」匯回存檔";
 "diag.fileWord" = "診斷";
 "diag.error.bundleName" = "診斷包名稱去識別化失敗，未匯出診斷包";
 "diag.error.redact" = "診斷資料去識別化或寫入失敗，未匯出診斷包";

@@ -18,7 +18,9 @@ static NSString *const ManageKey = @"S2ASaveManageOnOpen";
 // 「下次打开先进存档管理」分两级：ManageKey 是 App 级（iOS 设置开关、主屏快捷操作冷启动置，下次开哪款都进）；
 //   游戏内「退出并管理存档」只记这一款：多款容器按游戏号另起一个键，开别的游戏不弹；单款包一个进程只一款，就是 ManageKey 本身
 static NSString *game_manage_key(void) {
-    const s2a_launch_ctx *c = s2a_launch_ctx_container() ? s2a_launch_ctx_get() : NULL;
+    // 启动上下文里有本款模块目录就用它（多款容器选了游戏；或直接按 S2A_LAUNCH_CTX 起的那一款——那时 s2a_launch_ctx_container() 判「不是容器」，
+    //   原先就去包根找 save-identity.json，多款容器包根没有，存档页 / iCloud 同步 / 测试开关都取不到本款身份）
+    const s2a_launch_ctx *c = s2a_launch_ctx_get();
     return c && c->game_id[0] ? [ManageKey stringByAppendingFormat:@".%s", c->game_id] : ManageKey;
 }
 
@@ -71,9 +73,12 @@ static NSString *work_root(void) {
 // 这款的存档身份：多款容器在本款随行目录 games/<游戏号>/save-identity.json（pack/ship_ext.py 放的），单款包在 App 包根。
 //   原先一律读包根：容器里读不到，存档管理页报「缺少游戏身份」，容器玩家没有存档入口（审计 P2-170 壳那一半）
 static NSDictionary *game_identity(void) {
-    const s2a_launch_ctx *c = s2a_launch_ctx_container() ? s2a_launch_ctx_get() : NULL;
-    NSURL *url = c && c->module_dir[0] ? [NSURL fileURLWithPath:[@(c->module_dir) stringByAppendingPathComponent:@"save-identity.json"]]
-                                       : [NSBundle.mainBundle URLForResource:@"save-identity" withExtension:@"json"];
+    // 启动上下文里有本款模块目录、且目录里有 save-identity.json 就用它：多款容器选了游戏，或直接按 S2A_LAUNCH_CTX 起的那一款（那时 s2a_launch_ctx_container()
+    //   判「不是容器」，原先就去包根找、多款容器包根没有，存档页 / iCloud 同步 / 测试开关都取不到本款身份）；单款包模块目录里没有它，照旧取包根那份
+    const s2a_launch_ctx *c = s2a_launch_ctx_get();
+    NSString *mod = c && c->module_dir[0] ? [@(c->module_dir) stringByAppendingPathComponent:@"save-identity.json"] : nil;
+    NSURL *url = mod && [NSFileManager.defaultManager fileExistsAtPath:mod] ? [NSURL fileURLWithPath:mod]
+                                                                         : [NSBundle.mainBundle URLForResource:@"save-identity" withExtension:@"json"];
     NSData *data = url ? [NSData dataWithContentsOfURL:url] : nil;
     id game = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     return [game isKindOfClass:NSDictionary.class] ? game : nil;
@@ -95,6 +100,37 @@ char *s2a_shell_save_request(const char *json) {
     char *copy = raw ? strdup(raw) : NULL;
     if (raw) S2A_SaveTransferFree(raw);
     return copy;
+}
+// 测试开关 S2A_TEST_SAVE_OP（真机验收「导出存档 → 删除重装 S2Arm → 导回存档」，维护者 11-15 定的 #569 处理要求这条路真能走通；无人点存档页）：
+//   export:<路径> = 把本款当前存档导出成 .s2asave；restore:<路径>（相对路径按 App 容器根） = 先 inspect 再按它给的指纹 restore（同界面「检查 → 确认」两步）。
+//   起局前（ios/app.m startHost 开头：游戏已选定、宿主还没起）跑一次，走与存档页同一个服务层入口；结果一行进日志。只认环境变量，玩家从图标打开不带
+static NSString *test_save_call(NSDictionary *extra) {
+    char *ctx = s2a_shell_save_context();
+    if (!ctx) return [NSString stringWithFormat:@"no save context: dataRoot=%@ game=%@ S2A_SaveTransfer=%s", data_root() ?: @"nil", game_identity() ? @"ok" : @"nil",
+                      S2A_SaveTransfer && S2A_SaveTransferFree ? "linked" : "missing"];
+    NSMutableDictionary *req = [[NSJSONSerialization JSONObjectWithData:[NSData dataWithBytes:ctx length:strlen(ctx)] options:NSJSONReadingMutableContainers error:nil] mutableCopy]; free(ctx);
+    [req addEntriesFromDictionary:extra];
+    NSData *json = [NSJSONSerialization dataWithJSONObject:req options:0 error:nil]; NSString *js = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+    char *raw = s2a_shell_save_request(js.UTF8String); NSString *r = raw ? @(raw) : @"(no response)"; free(raw); return r;
+}
+void s2a_ios_test_save_op(void) {
+    const char *e = getenv("S2A_TEST_SAVE_OP"); if (!e || !*e) return;
+    @autoreleasepool {
+        NSString *op = @(e); NSRange c = [op rangeOfString:@":"]; if (c.location == NSNotFound) { fprintf(stderr, "[S2A 测试存档] 开关格式不对：%s\n", e); return; }
+        NSString *kind = [op substringToIndex:c.location], *path = [op substringFromIndex:c.location + 1];
+        if (![path hasPrefix:@"/"]) {   // 相对路径按 App 容器根（电脑端经 devicectl 推拉用的就是容器内相对路径）；容器根取 realpath：/var 是指向 /private/var 的链接，服务层拒收含链接的路径
+            char *home = realpath(NSHomeDirectory().fileSystemRepresentation, NULL);
+            path = [(home ? @(home) : NSHomeDirectory()) stringByAppendingPathComponent:path]; free(home);
+        }
+        if ([kind isEqualToString:@"export"]) { fprintf(stderr, "[S2A 测试存档] 导出 → %s：%s\n", path.UTF8String, test_save_call(@{@"operation": @"export", @"path": path}).UTF8String); return; }
+        if (![kind isEqualToString:@"restore"]) { fprintf(stderr, "[S2A 测试存档] 不认识的操作：%s\n", e); return; }
+        NSString *ins = test_save_call(@{@"operation": @"inspect", @"path": path});
+        NSDictionary *r = [NSJSONSerialization JSONObjectWithData:[ins dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+        NSDictionary *res = [r isKindOfClass:NSDictionary.class] && [r[@"ok"] boolValue] ? r[@"result"] : nil;
+        if (!res) { fprintf(stderr, "[S2A 测试存档] 导回 %s：检查没过：%s\n", path.UTF8String, ins.UTF8String); return; }
+        fprintf(stderr, "[S2A 测试存档] 导回 %s：%s\n", path.UTF8String,
+                test_save_call(@{@"operation": @"restore", @"path": path, @"archiveSha256": res[@"archiveSha256"] ?: @"", @"targetFingerprint": res[@"targetFingerprint"] ?: @""}).UTF8String);
+    }
 }
 // 列不出事务目录时记下原因（审计 P2-9：原先读不到也当「有未完成事务」，恢复再失败时提示说的是事务，玩家无从下手）。
 //   仍进存档页、仍先试恢复（服务层能读到就照常恢复）；恢复失败时提示写明是「读不到操作记录目录」及系统原因

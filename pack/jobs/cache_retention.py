@@ -302,7 +302,9 @@ def engine_installed_at(engine):
 #   原先各自只按「同款留最新一份」清，全机不设总量：一台出包机的一个运行根里 aoc 就到 82 GB（11-15，玩家机器一样会被吃满）。
 #   总量上限按盘算比例、不写死：上限 = BUILD_CACHE_SHARE ×（盘剩余 + 这些缓存现有总量），也就是这些缓存最多占「这块盘上能给它们用的空间」的这一份；
 #   超了按最久没用（条目目录的修改时刻，命中时 touch）先删。正在用的不删：1 小时内动过的、这次出包这款的。
-BUILD_CACHES = ('cache/aoc', 'cache/unpack', 'cache/bake', 'cache/srcver')
+# 11-16 起连同 NativeAOT 整机缓存（services/nxaot.sh，键随引擎源码变，每次改服务层多一份）与出壳按树镜像（pack/shell_build.sh shell_src/<树号>，
+#   工作树越开越多）一起算总量：两处原来都没有上限（11-16 一台开发机上一次清出 122 份 49.6 GB）。取用时两个脚本都 touch 条目目录，最久没用的先删
+BUILD_CACHES = ('cache/aoc', 'cache/unpack', 'cache/bake', 'cache/srcver', 'cache/nxaot', 'shell_src')
 BUILD_CACHE_SHARE = 0.25
 
 
@@ -319,8 +321,9 @@ def _tree_bytes(path):
     return total
 
 
-def trim_build_caches(run_s2arm, *, current_gid=None, share=None, now=None, free_bytes=None):
-    """run_s2arm = <运行根>/s2arm。→ 结果字典（上限、清前 / 清后总量、删了几份、释放字节）。只删完整条目（不带 .tmp 的目录），不跟随链接"""
+def trim_build_caches(run_s2arm, *, current_gid=None, share=None, now=None, free_bytes=None, roots=None):
+    """run_s2arm = <运行根>/s2arm。→ 结果字典（上限、清前 / 清后总量、删了几份、释放字节）。只删完整条目（不带 .tmp、不以 . 开头的目录：.lock-* 是取用锁），不跟随链接。
+    roots = 要算的缓存目录（缺省 run_s2arm 下 BUILD_CACHES 各项；起局方另指的缓存，如门禁共用的 S2A_CS_CACHE，传它自己）"""
     run_s2arm = Path(run_s2arm)
     share = BUILD_CACHE_SHARE if share is None else share
     env = os.environ.get('S2A_BUILD_CACHE_SHARE')
@@ -328,8 +331,7 @@ def trim_build_caches(run_s2arm, *, current_gid=None, share=None, now=None, free
         share = float(env)
     now = time.time() if now is None else now
     entries = []
-    for rel in BUILD_CACHES:
-        root = run_s2arm / rel
+    for root in ([Path(r) for r in roots] if roots is not None else [run_s2arm / rel for rel in BUILD_CACHES]):
         try:
             if not stat.S_ISDIR(root.lstat().st_mode):
                 continue
@@ -341,7 +343,7 @@ def trim_build_caches(run_s2arm, *, current_gid=None, share=None, now=None, free
                 st = d.lstat()
             except OSError:
                 continue
-            if not stat.S_ISDIR(st.st_mode) or '.tmp' in d.name:
+            if not stat.S_ISDIR(st.st_mode) or '.tmp' in d.name or d.name.startswith('.'):
                 continue
             entries.append([st.st_mtime, d, _tree_bytes(d)])
     total = sum(e[2] for e in entries)
@@ -362,3 +364,9 @@ def trim_build_caches(run_s2arm, *, current_gid=None, share=None, now=None, free
             total -= size; freed += size; removed += 1
     return dict(capBytes=cap, totalBytes=total, removedEntries=removed, freedBytes=freed)
 
+
+if __name__ == '__main__':   # 出壳 / NativeAOT 脚本写完缓存调：cache_retention.py trim <运行根/s2arm> [<另指的缓存目录>]（给了目录就只算它）
+    import json, sys
+    if len(sys.argv) not in (3, 4) or sys.argv[1] != 'trim':
+        sys.exit('用法：cache_retention.py trim <运行根/s2arm> [<缓存目录>]')  # 非玩家句（开发脚本用法）
+    print(json.dumps(trim_build_caches(sys.argv[2], roots=sys.argv[3:] or None), ensure_ascii=False))

@@ -43,6 +43,40 @@ int main(void) { @autoreleasepool {
         uint64_t *ph3 = NULL; uint32_t n3 = 0; id<MTLTexture> m3 = pkg_upload(&t, &stamp, nil, &ph3, &n3, 0);
         VERIFY(m3 && ph3 && n3 && atomic_load(ph_state(ph3, n3)) == PH_BAD, "③ 重传时逐页哈希：不崩、哈希判作废（状态 %d）", ph3 && n3 ? (int)atomic_load(ph_state(ph3, n3)) : -1);
         free(ph3); }
+    {   // 诊断#f83b30（v0.4.3 仍崩，tex_mtl → tp_fp_u → memmove）：存储页写过（在内存里）、之后改成不可访问——驻留不等于可读。
+        //   期望（手写）：④ tp_fp_u 不崩、这块按 0 记「没读」；⑤ GPU 写回账的 GOB 哈希不崩、按全 0 GOB；⑥ 整段读入口 tex_src 不崩、给出全 0 的副本。
+        //   反证：改前 tp_fp_u 用 mincore 驻留判「能读」直接 memcpy → Bus error: 10（同玩家现场），走不到汇总行
+        uint8_t *r2 = mmap(NULL, 2 * pg, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0); REQUIRE(r2 != MAP_FAILED);
+        memset(r2, 0x5A, 2 * pg); REQUIRE(!mprotect(r2, pg, PROT_NONE));
+        unsigned char inc = 0; REQUIRE(!mincore(r2, pg, (char *)&inc));
+        static pool_t p2; p2.mem = r2; p2.size = 2 * pg;
+        static tex_t t2; memset(&t2, 0, sizeof t2);
+        t2.d.target = 1; t2.d.format = 0x25; t2.d.width = 16; t2.d.height = 16; t2.d.depth = 1; t2.d.levels = 1;
+        nvn_tex_layout(&t2.d, &t2.L); t2.mem = r2; t2.pool = &p2; t2.serial = 2;
+        int ut = 0; (void)tp_fp_u(&t2, &ut);
+        VERIFY(ut == 1, "④ tp_fp_u：存储页驻留（mincore %s）但不可读 → 不崩、记「没读」（untouched=%d）", inc & MINCORE_INCORE ? "在内存" : "不在内存", ut);
+        gob_win w = gob_win_new(); uint64_t g = (uint64_t)(uintptr_t)r2 >> 9;
+        VERIFY(gob_hash_w(&w, g, g + 1) == gob_zero_hash(), "⑤ GOB 哈希：不可读的页按全 0 GOB、不读");
+        uint8_t *pp = NULL; const uint8_t *ss = tex_src(&t2, t2.L.size, &pp); int zero = 1; for (uint64_t i = 0; i < t2.L.size; i++) zero &= ss[i] == 0;
+        VERIFY(ss != t2.mem && pp && zero, "⑥ 整段读入口 tex_src：给出副本、全 0（%llu 字节）", (unsigned long long)t2.L.size);
+        free(pp);
+        // ⑦ 对照：同一页恢复可读后 tp_fp_u 照读；tex_src 给出的内容 = 原存储（不在登记池里的存储一律安全拷，内容一字不差）
+        REQUIRE(!mprotect(r2, pg, PROT_READ | PROT_WRITE)); ut = 0; (void)tp_fp_u(&t2, &ut); ss = tex_src(&t2, t2.L.size, &pp);
+        VERIFY(ut == 0 && ss && !memcmp(ss, t2.mem, t2.L.size), "⑦ 对照：可读时 tp_fp_u 照读（untouched=%d）、tex_src 内容与原存储一致", ut);
+        free(pp);
+        munmap(r2, 2 * pg); }
+    {   // ⑧ 常驻冒烟一台测试设备上稳定复现的那款（v0.4.3，move ← pkg_upload，崩前没有「只映射了 N 字节」红行 = 按权限判整段可读）：页权限可读、背后的存储已不在 →
+        //   读就 SIGBUS。造法：文件 MAP_SHARED 映射两页后把文件截成 0。期望（手写）：tex_src 不崩、给出全 0 副本；改前（按权限判可读就直接读原存储）→ Bus error
+        char fp[] = "/tmp/t_nvn_pkg_trunc_XXXXXX"; int fd = mkstemp(fp); REQUIRE(fd >= 0); unlink(fp); REQUIRE(!ftruncate(fd, (off_t)(2 * pg)));
+        uint8_t *r3 = mmap(NULL, 2 * pg, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0); REQUIRE(r3 != MAP_FAILED); memset(r3, 0x77, 2 * pg); REQUIRE(!ftruncate(fd, 0));
+        static pool_t p3; p3.mem = r3; p3.size = 2 * pg;
+        static tex_t t3; memset(&t3, 0, sizeof t3);
+        t3.d.target = 1; t3.d.format = 0x25; t3.d.width = 16; t3.d.height = 16; t3.d.depth = 1; t3.d.levels = 1;
+        nvn_tex_layout(&t3.d, &t3.L); t3.mem = r3; t3.pool = &p3; t3.serial = 3;
+        uint64_t rd3 = mem_readable(r3, t3.L.size);
+        uint8_t *pp3 = NULL; const uint8_t *s3 = tex_src(&t3, t3.L.size, &pp3); int z3 = 1; for (uint64_t i = 0; i < t3.L.size; i++) z3 &= s3[i] == 0;
+        VERIFY(s3 != t3.mem && z3, "⑧ 权限可读（按权限判可读 %llu / %llu 字节）但背后文件已截短：tex_src 不崩、给出全 0 副本", (unsigned long long)rd3, (unsigned long long)t3.L.size);
+        free(pp3); munmap(r3, 2 * pg); close(fd); }
     printf("%s t_nvn_pkg_unreadable：%u 项，%u 项失败\n", fails ? "✗" : "✓", checks, fails);
     return fails ? 1 : 0;
 } }

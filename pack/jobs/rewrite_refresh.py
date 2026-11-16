@@ -241,7 +241,9 @@ def sgrade_key(c, gid, rid, main_bid):
     """补丁记号：改写器指纹 + 出表代码指纹 + 这款在补丁库里的包版本（pack/jobs/patches.py version_key）+ 这款金手指文件夹的内容
     （11-14：玩家在电脑上导入 / 删了金手指，下次升级要重编——要改游戏代码的条目只能编进程序，记号不变就会被当成「不用补」跳过）"""
     import patches
-    return f"{rid}:{plan_code_id(c)}:{patches.version_key(c, gid, main_bid)}:{cheats_digest(c, gid)}"
+    import mods   # 玩家导入的 mod 代码补丁（11-15）：导入 / 删了要重编；只开关不算（运行时开关）。没有 mod 代码补丁时记号与原来一字不差（不让所有老游戏白白重补）
+    md = mods.code_digest(c, gid)
+    return f"{rid}:{plan_code_id(c)}:{patches.version_key(c, gid, main_bid)}:{cheats_digest(c, gid)}" + (f":{md}" if md != "-" else "")
 
 
 def cheats_digest(c, gid):
