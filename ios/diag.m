@@ -630,6 +630,8 @@ static S2ADiagMK *g_mk;
 // 崩溃恢复关掉了什么（金手指 / 补丁 / 60 帧的名字，app.m 游戏库容器或本文件单款壳记）：上次死在前台时和诊断询问并成一个提示说，不另弹横幅（11-13 维护者：两个弹层叠在一起）
 static NSString *g_crash_off;
 void s2a_dprompt_notice(NSString *title, NSString *body, double delay, double seconds);   // dprompt.m
+// 弱链接[lab]：s2a_iml_lost
+int s2a_iml_lost(void) __attribute__((weak_import));   // iml_probe.m：这次安装确定丢了「提高内存上限」权限
 void s2a_diag_note_crash_off(NSString *names) { g_crash_off = [names copy]; }
 // 不弹询问时（已问过 / 自动化局 / 正在导出），关掉了什么仍要告诉玩家：退回只有「知道了」的提示条
 static void crash_off_notice_only(void) {
@@ -735,8 +737,8 @@ void s2a_diag_attach(UIViewController *vc) {
         { void s2a_ios_crash_session_begin_single(int); s2a_ios_crash_session_begin_single(prev != S2A_SESMARK_FG); }   // 单款壳：关完再记这局开着的（v0.4.1，game_options.m）
         // 这次安装丢了「提高内存上限」权限（iml_probe.m，确定丢了才算）：上次异常退出多半是内存不够，原因那句直接说清、给出怎么重装（11-16 维护者「要，做提示」）
         if (prev == S2A_SESMARK_FG && !getenv("S2A_OPEN_SETTINGS")) {
-            int s2a_iml_lost(void);
-            s2a_diag_prompt(s2a_iml_lost() ? S2AL(@"diag.prompt.imlLost") : S2AL(@"diag.prompt.abnormalExit"));
+            // iml_probe.m 不在输入工作台工程里（ios/lab/project.yml）：弱引用，没链进来就按普通「没有正常退出」问
+            s2a_diag_prompt(s2a_iml_lost && s2a_iml_lost() ? S2AL(@"diag.prompt.imlLost") : S2AL(@"diag.prompt.abnormalExit"));
         }
       }); }
 }
