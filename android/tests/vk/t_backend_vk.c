@@ -8701,6 +8701,23 @@ done:
     if (sf) CHECK(OK(nvn_gpu_surface_detach(sf, 5000000000ull, &e)), "C207 detach：%s", e.why);
     nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm);
 }
+// C208：close 不该等满时限。缓冲先 release、它的缓冲视图还活着：close 销毁视图 → 缓冲进退休队列 → worker 退休它。
+// 退休完 worker 要唤醒 close；漏了唤醒时 close 睡到截止时间才醒（给 5 秒就白等 5 秒，整套 vk 用例每次关会话都这样）。
+static void c208_close_wakeup(void) {
+    nvn_gpu_err e = {0};
+    if (!open_backend()) { CHECK(0, "C208 open"); return; }
+    nvn_gpu_buf b = make_buf(64, NVN_GPU_MEM_SHARED, NULL);
+    nvn_gpu_view v = NULL;
+    nvn_gpu_rc r = b ? nvn_gpu_view_create_buf(b, 0, 64, NVN_FORMAT_R32UI, &v, &e) : (nvn_gpu_rc){0};
+    CHECK(b && OK(r) && v, "C208 缓冲视图：%d %s", r.code, e.why);
+    if (b) nvn_gpu_buf_release(b, NULL, NULL);   // 视图还拿着引用：缓冲要等 close 销毁视图之后才退休
+    const double t0 = c89_now_ms();
+    r = nvn_gpu_close(5000000000ull, &e);
+    const double ms = c89_now_ms() - t0;
+    CHECK(OK(r), "C208 close：%d %s", r.code, e.why);
+    CHECK(ms < 2000.0, "C208 close 等满了时限：%.0f ms（时限 5000 ms；退休队列清空后 worker 没唤醒 close）", ms);
+    printf("C208 close 不等满时限：带着引用已释放缓冲的视图关会话 %.0f ms，已核对\n", ms);
+}
 static void c207_all(const char *dir) {
     nvn_gpu_err e = {0};
     if (!open_backend()) { CHECK(0, "C207 open"); return; }
@@ -9466,6 +9483,7 @@ int main(int argc, char **argv) {
 
     c205_all(argv[1]);   // C205 图形管线散列表：每个臂自己一个会话
     c207_all(argv[1]);   // C207 诊断读数互不清零：自己一个会话（计时开关、逐笔读数周期都在用例里开 / 还原）
+    c208_close_wakeup();   // C208 close 不等满时限：自己一个会话
 
     for (int sw = 0; sw < 2; sw++) {
         if (!open_backend()) return 1;
