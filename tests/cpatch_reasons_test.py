@@ -207,6 +207,22 @@ class ReasonsTest(unittest.TestCase):
                     dict(code=code, message_zh=message, raw=raw),
                 )
 
+    def test_real_plan_rejects_nop_over_adrp(self):
+        # 11-16 奥德赛「Graphics Quality Mode 3」：把原版 adrp（取地址）改成 nop，后面寄存器是残值、被当名字指针读 → 进拍照模式读 0x8 崩。期望手写：
+        #   ① 原字是 adrp x8（0x90000008）、补丁写 nop → 不收，原因点名模块与偏移；② 原字是 mov w0,#1（0x100 处）、补丁写 nop → 照收
+        with tempfile.TemporaryDirectory() as temporary:
+            root, index = fixture(Path(temporary))
+            main = bytearray((root / "exefs/main").read_bytes())
+            struct.pack_into("<I", main, 0x100 + 0x200, 0x90000008)   # 文件偏移 = 头 0x100 + 段内 0x200
+            (root / "exefs/main").write_bytes(bytes(main))
+            ids = write_patches(index, [(0x200, "1F2003D5"), (0x100, "1F2003D5")])
+            result = subprocess.run([sys.executable, str(ROOT / "pack/cpatch.py"), "plan", str(root), "", str(index)],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rejected = [line.split("\t") for line in (root / "cpatch_plan.log").read_text().splitlines() if line.startswith("不收\t")]
+            self.assertEqual([(r[1], r[4]) for r in rejected],
+                             [(f"gfx:{ids[0]}", "把 main+0x200 的取地址指令（adrp）改成了空指令：后面用到的寄存器是残值，可能被当指针读而崩")])
+
     def test_real_plan_does_not_assume_module_or_hash_whitelist(self):
         with tempfile.TemporaryDirectory() as temporary:
             root, index = fixture(Path(temporary))

@@ -1608,6 +1608,9 @@ def plan(root, default_on, index_dirs):
             if r: log.append(f'改值\t{uid}\t{mod}\t渲染尺寸按手机口径：{r}')
         if not why and uid.startswith(('widescreen:', 'wsauto:')) and (wh := _upres([int.from_bytes(bytes(nb), 'little') for nb in words.values()])):   # tools/patch_index.py upres：索引不收，这里再挡一道（玩家机上的旧快照 / 本地补丁）
             why = f'改了内部渲染分辨率（{wh[0]}x{wh[1]}），不进满屏：渲染目标放大、游戏堆放不下会崩（#b824d1 / D-Q3QJ）'
+        if not why and not cheat:   # 把原版的 adrp（取地址）改成 nop：后面用到的寄存器成了前面调用留下的残值，真机上碰巧可读、我们这边不一定（11-16 奥德赛「Graphics Quality Mode 3」main+0x5edb3c：残值当名字指针，进拍照模式读 0x8 崩）
+            na = sorted(w0 for w0, nb in words.items() if int.from_bytes(bytes(nb), 'little') == 0xD503201F and int.from_bytes(im[w0:w0 + 4], 'little') & 0x9F000000 == 0x90000000)
+            if na: why = f'把 {mod}+{na[0]:#x} 的取地址指令（adrp）改成了空指令：后面用到的寄存器是残值，可能被当指针读而崩'
         if not why and any(fill(im, o) for o, k in marks.items() if k == 'kv'): why = f'取值点 {mod}+{min(o for o, k in marks.items() if k == "kv" and fill(im, o)):#x} 落在填充区（填充区常写，没有原路可分）'
         if not why:
             for o, n, k in adata:
