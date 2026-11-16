@@ -8,7 +8,7 @@
 每行：repo / commit / path / size / sha256 / kind（pchtxt | ips）/ cat（fps | widescreen | gfx）/ target_fps / aspect /
   gids（路径里出现的程序号）/ bids（pchtxt 的 @nsobid、ips 的文件名构建号）/ license（仓库 LICENSE 首行，没有写空）。
 romfs 下的文件（游戏数据）、大于 2 MB 的文件不收。
-带 romfs 配套的 mod（同一个 mod 根下既有 exefs 补丁又有 romfs/，散文件或包内都算）连它的 exefs 补丁也不收（11-16 D-Q3QJ：王国之泪 1800p 只收了改分辨率的
+配套里有显存 / 堆 / 内存配置的 mod（同一个 mod 根下既有 exefs 补丁又有 romfs/ 里的 HeapSize 一类，散文件或包内都算）连它的 exefs 补丁也不收（11-16 D-Q3QJ：王国之泪 1800p 只收了改分辨率的
   exefs、漏了 romfs 里调大显存堆的 HeapDef，按 1800p 建缓冲分配失败崩溃）；同一份内容在别的库里单独出现也不收。要整份交付走 mod 通道（0.5.0 之后）。
 压缩包（.zip / .rar，11-13：超宽屏 / 老牌补丁库把每款打成一个包）：包里的 exefs 补丁与 cheats/<构建号>.txt 金手指逐个成行，path 是包本身，
   另记 member（包内路径）、archive_sha256 / archive_size（整包，下载时先核它）；sha256 / size 是包内这一份。rar 用系统 bsdtar（libarchive）读。
@@ -161,13 +161,18 @@ def mod_root(path):
     return None
 
 
+# 配套数据里会让「只打 exefs 半边」崩的：显存 / 堆 / 内存配置（11-16 D-Q3QJ：1800p 改分辨率要配 HeapSize/…HeapDef 调大显存堆，缺了按 1800p 建缓冲分配失败）。
+#   界面布局（LayoutArchive、Bootup pack 等）缺了只是界面没跟着拉宽、不崩，照收（维护者定：超宽屏是满屏重点功能，不一刀切）
+CRASH_COMPANION = re.compile(r'heap|memorysystem|memory(?:size|def|config)', re.I)
+
+
 def romfs_roots(names):
-    """带 romfs 文件的 mod 根（小写）"""
-    return {mod_root(n) for n in names if '/romfs/' in '/' + n.replace('\\', '/').lower()}
+    """配套里有显存 / 堆 / 内存配置（CRASH_COMPANION）的 mod 根（小写）"""
+    return {mod_root(n) for n in names if '/romfs/' in '/' + n.replace('\\', '/').lower() and CRASH_COMPANION.search(n.replace('\\', '/').split('/romfs/', 1)[-1])}
 
 
 def half(path, roots):
-    """exefs 补丁且它的 mod 带 romfs 配套：只收这半边会出错（缺配套数据），整份不收"""
+    """exefs 补丁且它的 mod 配套里有显存 / 堆 / 内存配置（romfs_roots / companion 记下的根）：只收这半边会崩，整份不收"""
     low = '/' + path.replace('\\', '/').lower()
     return '/exefs/' in low and path.lower().endswith(('.pchtxt', '.ips')) and mod_root(path) in roots
 
@@ -234,10 +239,13 @@ def keep_dir(name):
 
 
 def companion(base, dirpath, dirs, roots):
-    """散文件：这一级带游戏数据目录（mod 的 romfs 配套，keep_dir 不进）→ 记下它是带配套的 mod 根，它的 exefs 补丁不收（half）。
-    只看子目录名、不进目录"""
-    if any(not keep_dir(x) and x != '.git' for x in dirs):
-        roots.add(mod_root(os.path.relpath(os.path.join(dirpath, 'romfs'), base).replace(os.sep, '/')))
+    """散文件：这一级带游戏数据目录（mod 的 romfs 配套，keep_dir 不进）且里面有显存 / 堆 / 内存配置（CRASH_COMPANION）→ 记下这个 mod 根，
+    它的 exefs 补丁不收（half）。只按文件名判，不读内容"""
+    for x in dirs:
+        if not keep_dir(x) and x != '.git':
+            names = [os.path.relpath(os.path.join(d, f), dirpath).replace(os.sep, '/') for d, _, fs in os.walk(os.path.join(dirpath, x)) for f in fs]
+            if romfs_roots(names):
+                roots.add(mod_root(os.path.relpath(os.path.join(dirpath, x, 'x'), base).replace(os.sep, '/')))
 
 
 HAMLET = re.compile(r'^cheats/(01[0-9A-Fa-f]{14})\.json$')   # 金手指汇总库：每款一份 JSON，键 = 构建号前 16 位，值 = {条目名: 整段代码}
@@ -337,7 +345,7 @@ def scan(mirror, keep_local=False, cheat_libs=False):
                     row(rel, rel, data)
     gone = {h for _, _, h in HALVES}
     kept = [r for r in rows if r['kind'] == 'cheat' or r['sha256'] not in gone]
-    print(f'带游戏数据配套、只能收到 exefs 半边的补丁不收：{len(HALVES)} 份（去掉 {len(rows) - len(kept)} 行，含别的库里同一份内容）', file=sys.stderr)
+    print(f'配套是显存 / 堆配置、只能收到 exefs 半边的补丁不收：{len(HALVES)} 份（去掉 {len(rows) - len(kept)} 行，含别的库里同一份内容）', file=sys.stderr)
     return kept
 
 
