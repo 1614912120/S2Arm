@@ -355,6 +355,9 @@ static NSString *button_label(NSString *identifier) {
     const char *gd = getenv("S2A_DOCS"); NSURL *gameDocs = gd && *gd ? [NSURL fileURLWithPath:@(gd) isDirectory:YES] : docs;
     _layoutDirectory=[gameDocs URLByAppendingPathComponent:@"VPadLayouts" isDirectory:YES];
     _settingsDirectory=[docs URLByAppendingPathComponent:@"VPadLayouts" isDirectory:YES];
+    // 旧版 App 级「我的布局」接进这款（11-15 维护者：每款记自己的布局）：只复制进这款的布局列表、不替玩家选上，每款从默认布局开始（vpad_layout.h）
+    NSUInteger adopted = [S2AVPadLayoutStore adoptLegacyLayoutsFrom:_settingsDirectory into:_layoutDirectory];
+    if (adopted) LOG("触屏布局：旧版 App 级布局 %lu 份复制进这款的布局列表（不自动选上）", (unsigned long)adopted);
     _layoutStore = [[S2AVPadLayoutStore alloc] initWithDirectory:_layoutDirectory settingsDirectory:_settingsDirectory split:_split];
     [self reloadLayout];
     _gear = [UIButton buttonWithType:UIButtonTypeSystem]; _gear.accessibilityIdentifier = @"vpad.settings"; _gear.accessibilityLabel = S2AL(@"common.settings");
