@@ -30,7 +30,8 @@ class AtomicReplace(unittest.TestCase):
                 left[0] -= 1
                 raise PermissionError(13, "拒绝访问。")
             return real(a, b)
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(core, "os", OsView(name, replace=replace)), mock.patch.object(core.time, "sleep", sleeps.append):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(core, "os", OsView(name, replace=replace)), mock.patch.object(core.time, "sleep", sleeps.append), \
+                mock.patch.object(core.winproc, "replace_file", replace):   # Windows 分支走 winproc.replace_file（POSIX 语义替换）；这里只测外层退避
             target = Path(d, "job.json"); target.write_text("old")
             try:
                 core.replace_retrying(self.tmp(d), target); error = None
