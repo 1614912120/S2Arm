@@ -6692,10 +6692,6 @@
   "en": "No 60 FPS option is available for this game."
  },
  {
-  "source": "这款游戏没有走直连渲染，用不了 MetalFX 放大。",
-  "en": "This game doesn't use direct rendering, so MetalFX upscaling isn't available."
- },
- {
   "source": "没有可以装回的上一版手机 S2Arm。",
   "en": "There's no previous S2Arm to restore on iPhone."
  },
@@ -9694,5 +9690,21 @@
  {
   "source": "重开哪一项没说清楚。",
   "en": "It wasn't clear which item to turn back on."
+ },
+ {
+  "source": "补片上读取着色器 {0}/{1}：{2}",
+  "en": "Adding on-chip read shaders {0}/{1}: {2}"
+ },
+ {
+  "source": "【红】{0}：片上读取着色器没补上，先用原来的着色器库：{1}",
+  "en": "【红】{0}: on-chip read shaders weren't added; keeping the original shader library: {1}"
+ },
+ {
+  "source": "正在给这款重出着色器库（补上片上读取用的着色器，资源不动；首次要几分钟到几十分钟）",
+  "en": "Rebuilding this game's shader library to add on-chip read shaders (game assets unchanged; the first time takes a few to tens of minutes)"
+ },
+ {
+  "source": "这款游戏没有走直连渲染，用不了锐利放大（MetalFX）。",
+  "en": "This game doesn't use direct rendering, so sharp upscaling (MetalFX) isn't available."
  }
 ]

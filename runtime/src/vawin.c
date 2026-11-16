@@ -82,7 +82,11 @@ int s2a_guest_file_wanted6(const char *e, uint64_t pool, uint64_t room, uint64_t
     *low = 0;
     if (e && *e) return strcmp(e, "0") != 0;
     if (!room) return 0;
-    if (died || seen == UINT64_MAX) return 1;
+    if (seen == UINT64_MAX) return 1;
+    // 安全阀收窄（#2f79dd，11-15）：上局前台死掉本为兜「判了不开、实际超单进程上限被杀」——心跳 10 秒一次，最后那段涨幅可能没记进实测。
+    //   本款有实测、且实测 + 两份余量（多一份给漏记的涨幅）仍不超剩余：那次死掉不是超上限（切换游戏 _exit 漏删标记、别的原因），不强制开，按实测判关。
+    //   D-C73M 6 GB iPhone：实测 2372 + 1024 ≤ 4093 却被强制开，开局写盘 2.6 GB 后卡死在缺页
+    if (died && !(seen && seen + 2 * margin <= room)) return 1;
     if (seen) return seen + margin > room;
     if (pool <= room) return 0;
     if (phys && phys >= pool + host) return 1;
@@ -91,7 +95,7 @@ int s2a_guest_file_wanted6(const char *e, uint64_t pool, uint64_t room, uint64_t
 static uint64_t phys_mem(void) { uint64_t ph = 0; size_t n = sizeof ph; return sysctlbyname("hw.memsize", &ph, &n, NULL, 0) ? 0 : ph; }
 // 三档判定的一句理由（日志用）
 static const char *tier_why(int on, int low, uint64_t seen, int died) {
-    return died ? "上一局在前台时死掉，这一局开" : seen == UINT64_MAX ? "实测记录读不出（坏记录），保守开"
+    return died && on ? "上一局在前台时死掉，这一局开" : died ? "上一局在前台时死掉，但本款实测峰值 + 两份余量远不到上限（那次不是超上限），保持匿名内存" : seen == UINT64_MAX ? "实测记录读不出（坏记录），保守开"
          : seen ? (on ? "实测峰值 + 余量大于剩余，装不下" : "实测峰值 + 余量不大于剩余，装得下、保持匿名内存")
          : low ? "池大于剩余、物理内存也装不下池 + 宿主估计：照样开（能玩下去优先），提示玩家内存可能不够"
          : on ? "池大于剩余、物理内存装得下：开" : "池不大于剩余：装得下、保持匿名内存";
@@ -332,7 +336,7 @@ static void guest_file_attach_(void) {
     char pp[1024]; int late = !on && !(e && *e) && room && !mem_peak_path(pp, sizeof pp);   // 多款容器还没选游戏：装游戏前按本款再判
     const char *why = e && *e ? "按 S2A_GUEST_FILE 显式设定" : !room ? "自动：不知道单进程上限（Mac 会换页），缺省关"
                     : late ? "自动：还没选游戏（多款容器），先用匿名内存，装游戏前按本款实测再判"
-                    : died ? "自动：上一局在前台时死掉（「在跑」标记还在：被内存上限杀 / 崩溃 / 测试局在前台被 devicectl 结束），这一局开"
+                    : died && on ? "自动：上一局在前台时死掉（「在跑」标记还在：被内存上限杀 / 崩溃 / 测试局在前台被 devicectl 结束），这一局开"
                     : seen == UINT64_MAX ? "自动：本款实测峰值记录读不出（坏记录），保守开"
                     : tier_why(on, low, seen, died);
     LOG("客体内存文件后备：%s——%s；本款应用内存池 %llu MB、离单进程内存上限还剩 %llu MB%s、物理内存 %llu MB、宿主估计 %llu MB、本机本款实测峰值 %llu MB（0 = 没有）%s", on ? "开" : "关", why,
@@ -524,20 +528,26 @@ int s2a_guest_zero(uint64_t a, uint64_t n) {
 int s2a_guest_in_file(uint64_t a, uint64_t n) { return g_gfd >= 0 && n && a >= g_base && a + n <= g_base + g_size && !in_anon(a, n); }
 int s2a_window_ok(void) { return g_ok; }
 void s2a_window_get(uint64_t *base, uint64_t *size) { *base = g_base; *size = g_size; }
+static int reserve_hole(uint64_t lo, uint64_t hi) {   // [lo, hi) 是没映射的空洞：放回不可访问的匿名占位；不成返回非 0
+    return mmap((void *)(uintptr_t)lo, hi - lo, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0) != (void *)(uintptr_t)lo;
+}
 int s2a_window_session_reset(void) {
     if (!g_ok || !g_size) return -1;
     // 只换客体区；尾部分配器中仍可能有宿主/运行时拥有的映射，不能清空。
-    if (s2a_guest_zero(g_base, g_size)) return 0;   // 文件后备：整段打洞并重新映射成不可访问
-    void *p = mmap((void *)g_base, g_size, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (p == (void *)g_base) return 0;
-    // iOS 上整段盖回 EACCES（11-02 测试设备2 塞尔达设置页切 60 帧「立刻重启」，诊断 251febb68 读数：盖不掉的 6 段全是权限 r-x / 最大 r-x、私有）：
-    //   那是装载器从 App 签名 __TEXT 共享进窗口的客体代码页（loader.c iOS map_image，vm_remap copy=FALSE），系统不许覆盖或解除；外置镜像包的文件代码页同样（11-03 实测）。逐段盖：
-    //   代码页（当前权限含执行，或最大权限有执行没写）原样留着——重启后同一款同一落点的代码页内容不变，装载器认出来直接复用（loader.c code_same，同 nn::ro 重装 remap_writable）；
-    //   其余段盖成不可访问，盖不掉才算失败
-    int e0 = errno; uint64_t end = g_base + g_size; vm_address_t a = g_base; int bad = 0, kept = 0; uint64_t kept_b = 0;
+    // 一律逐段盖，代码页先绕开（诊断#9f16d7 / #c85aa3，#1026）：原先先拿一次 MAP_FIXED 整段覆盖（文件后备是整段打洞重映射），覆盖范围含上一局装进窗口的签名代码页。
+    //   iOS 27 上整段覆盖报 EACCES、代码页原样（11-02 读数 r-x / 最大 r-x）；iOS 26.3（D-RXF2）/ iPadOS 18.3.2（D-4N4F）上的读数是这些段成了「权限 0 / 最大 0」（推断是整段覆盖失败时被系统剥掉了权限）
+    //   （与 11-03 munmap 外置代码页后留下的占位同形，见 loader.c span_has_signed_code 上的注），逐段那一轮认不出是代码、盖也盖不掉（errno=12），进程内重启失败，
+    //   之后 Metal 回调线程 SIGBUS 闪退。先看段、再只盖非代码段，代码页从头到尾没被覆盖过，留给新局复用
+    //   代码页判据：当前权限含执行，或最大权限有执行没写（imgpack.h s2a_prot_is_code）；那是装载器从 App 签名 __TEXT / 外置镜像包映射进窗口的客体代码，
+    //   重启后同一款同一落点内容不变，装载器认出来直接复用（loader.c code_same）。段与段之间没映射的空洞也补回不可访问的占位（原先整段覆盖顺带补上）
+    uint64_t end = g_base + g_size; vm_address_t a = g_base; int bad = 0, kept = 0; uint64_t kept_b = 0;
     while (a < end) {
         vm_address_t r = a; vm_size_t sz = 0; natural_t depth = 0; vm_region_submap_info_data_64_t info; mach_msg_type_number_t cnt = VM_REGION_SUBMAP_INFO_COUNT_64;
-        if (vm_region_recurse_64(mach_task_self(), &r, &sz, &depth, (vm_region_recurse_info_t)&info, &cnt) != KERN_SUCCESS || r >= end) break;
+        int got = vm_region_recurse_64(mach_task_self(), &r, &sz, &depth, (vm_region_recurse_info_t)&info, &cnt) == KERN_SUCCESS;
+        if (!got || r > end) r = end;
+        if (r > a && reserve_hole(a, r) && bad++ < 32) LOG("【红】重建客体窗口：空洞 %#llx +%#llx 补不上占位（errno=%d）", (unsigned long long)a, (unsigned long long)(r - a), errno);
+        if (r >= end) break;
+        if (r < a) { sz -= a - r; r = a; }   // 段从窗口起点前开始：只管窗口里的那部分
         uint64_t n = r + sz > end ? end - r : sz;
         if (s2a_prot_is_code(info.protection, info.max_protection)) { kept++; kept_b += n; a = r + sz; continue; }   // 代码页判据见 imgpack.h（外置镜像包的文件页最大权限原是 rwx，映射时压回 r-x）
         void *q = s2a_guest_zero(r, n) ? (void *)r : mmap((void *)r, n, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -546,7 +556,7 @@ int s2a_window_session_reset(void) {
                 info.protection, info.max_protection, info.user_tag, info.share_mode, depth);
         a = r + sz;
     }
-    LOG("%s重建客体窗口：整段覆盖 errno=%d，逐段盖完；签名代码页 %d 段 %llu KB 原样留着给新局复用，盖不掉 %d 段", bad ? "【红】" : "", e0, kept, (unsigned long long)(kept_b >> 10), bad);
+    LOG("%s重建客体窗口：逐段盖完；签名代码页 %d 段 %llu KB 原样留着给新局复用，盖不掉 %d 段", bad ? "【红】" : "", kept, (unsigned long long)(kept_b >> 10), bad);
     return bad ? -1 : 0;
 }
 // 窗口之外还能给宿主大映射（Metal 大缓冲等）的地址：收尾还回的那段 + 窗口所在空洞其余部分（到 2^39 的空洞）。低区账按它判设不设限（lowva.c）

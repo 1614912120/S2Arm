@@ -226,11 +226,16 @@ static UILabel *textLabel(UIFontTextStyle style) {
     static BOOL once; const char *e = getenv("S2A_SETTINGS_DEV");
     if (e) LOG("设置页：测试开关 S2A_SETTINGS_DEV=%s（once=%d）", e, once);
     if (!once && e && !strcmp(e, "1")) { once = YES; [self openDeveloper]; }
-    // 同理 S2A_SETTINGS_SCROLL=language：一打开就把「语言」组滚到顶（截图核游戏语言那一行和说明）
+    // 同理 S2A_SETTINGS_SCROLL=language：一打开就把「语言」组滚到顶（截图核游戏语言那一行和说明）；=filter：把画面组的「画质提升」那一行滚到中间
     const char *sc = getenv("S2A_SETTINGS_SCROLL"); NSUInteger sec = [_left.groups indexOfObject:@7];
     if (sc && !strcmp(sc, "language") && sec != NSNotFound) {
         LOG("设置页：测试开关 S2A_SETTINGS_SCROLL=language");
         [_left.tableView scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:0 inSection:sec] atScrollPosition:UITableViewScrollPositionTop animated:NO];
+    }
+    NSUInteger gfx = [_left.groups indexOfObject:@0], row = [[self graphicsRows] indexOfObject:@2];
+    if (sc && !strcmp(sc, "filter") && gfx != NSNotFound && row != NSNotFound) {
+        LOG("设置页：测试开关 S2A_SETTINGS_SCROLL=filter");
+        [_left.tableView scrollToRowAtIndexPath:[NSIndexPath indexPathForRow:row inSection:gfx] atScrollPosition:UITableViewScrollPositionMiddle animated:NO];
     }
 }
 - (void)refresh {
@@ -258,7 +263,18 @@ static UILabel *textLabel(UIFontTextStyle style) {
     return cell;
 }
 - (UITableViewCell *)dropdown:(NSString *)title labels:(NSArray *)labels selected:(NSInteger)selected enabled:(BOOL (^)(NSInteger))enabled choose:(void (^)(NSInteger))choose identifier:(NSString *)identifier {
+    return [self dropdown:title note:nil labels:labels selected:selected enabled:enabled choose:choose identifier:identifier];
+}
+// note：标题下一行小字（同主机模式那行的写法）；nil = 不写
+- (UITableViewCell *)dropdown:(NSString *)title note:(NSString *)note labels:(NSArray *)labels selected:(NSInteger)selected enabled:(BOOL (^)(NSInteger))enabled choose:(void (^)(NSInteger))choose identifier:(NSString *)identifier {
     UITableViewCell *cell = [self baseCell:title]; cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    if (note.length) {
+        UITableViewCell *sub = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+        sub.textLabel.text = title; sub.textLabel.font = cell.textLabel.font; sub.textLabel.adjustsFontForContentSizeCategory = YES; sub.textLabel.numberOfLines = 0;
+        sub.detailTextLabel.text = note; sub.detailTextLabel.numberOfLines = 0; sub.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+        sub.detailTextLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote]; sub.detailTextLabel.adjustsFontForContentSizeCategory = YES;
+        sub.backgroundColor = cell.backgroundColor; sub.selectionStyle = UITableViewCellSelectionStyleNone; cell = sub;
+    }
     UIButtonConfiguration *config = UIButtonConfiguration.plainButtonConfiguration;
     config.title = selected >= 0 ? labels[selected] : S2AL(@"settings.notStarted");
     config.image = [UIImage systemImageNamed:@"chevron.down"]; config.imagePlacement = NSDirectionalRectEdgeTrailing; config.imagePadding = 6;
@@ -500,7 +516,11 @@ static UILabel *textLabel(UIFontTextStyle style) {
         if (row != 2) return [self sliderCell:option];
         NSArray *values = option[@"values"];
         NSInteger selected = [values indexOfObject:s2a_ios_graphics_snapshot(s2a_ios_settings_defaults())[option[@"key"]]];
-        return [self dropdown:option[@"title"] labels:option[@"labels"] selected:selected enabled:^BOOL(NSInteger index) { return YES; } choose:^(NSInteger index) {
+        // 画质提升（11-15 维护者：标准 / 2D 游戏专用 / 锐利放大）：选了锐利放大（MetalFX）才在标题下写一行代价，另两档不写；
+        //   这款没走直连（锐利放大用不了）：锐利放大置灰，标题下写为什么
+        BOOL blocked = s2a_ios_metalfx_blocked(nil);
+        NSString *note = blocked ? S2AL(@"gfx.filter.metalfx.noDirect") : [values[MAX(selected, 0)] isEqual:@"MetalFX"] ? S2AL(@"gfx.filter.metalfx.note") : nil;
+        return [self dropdown:option[@"title"] note:note labels:option[@"labels"] selected:selected enabled:^BOOL(NSInteger index) { return !(blocked && [values[index] isEqual:@"MetalFX"]); } choose:^(NSInteger index) {
             [s2a_ios_settings_defaults() setObject:values[index] forKey:option[@"key"]]; [weakSelf refresh];
         } identifier:@"settings.filter"];
     }

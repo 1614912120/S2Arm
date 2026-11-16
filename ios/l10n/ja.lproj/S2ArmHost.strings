@@ -358,9 +358,12 @@
 "gfx.antiAliasing.high" = "SMAA 高";
 "gfx.antiAliasing.medium" = "SMAA 中";
 "gfx.antiAliasing.off" = "オフ";
-"gfx.filter" = "スケーリングフィルター";
-"gfx.filter.bilinear" = "バイリニア（滑らか）";
-"gfx.filter.nearest" = "ニアレストネイバー（ピクセル鮮明）";
+"gfx.filter" = "画質向上";
+"gfx.filter.bilinear" = "標準";
+"gfx.filter.metalfx" = "シャープ拡大（MetalFX）";
+"gfx.filter.metalfx.noDirect" = "このゲームは直接レンダリングを使用していないため、シャープ拡大（MetalFX）は利用できません。";
+"gfx.filter.metalfx.note" = "シャープ拡大（MetalFX）は毎フレーム GPU の処理が少し増えるため、フレームレートと消費電力にわずかに影響します。";
+"gfx.filter.nearest" = "2D ゲーム向け";
 "gfx.fpsLimit" = "フレームレート上限";
 "gfx.fpsLimit.none" = "無制限";
 "gfx.resolution" = "レンダリング解像度";

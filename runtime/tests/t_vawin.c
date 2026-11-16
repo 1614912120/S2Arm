@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 __attribute__((constructor(100))) static void need(void) { setenv("S2A_WIN_NEED_MB", "63488", 1); }   // 先于 vawin.c 的构造函数（101）
 int main(void) {
     int bad = 0;
@@ -88,6 +89,27 @@ int main(void) {
       else { char tg[768]; s2a_low_tags(tg, sizeof tg);
         if (!strstr(tg, "远端影子区（标签 249）")) { printf("✗ 按标签合计应按名字列出远端影子区：%s\n", tg); bad++; }
         munmap(fm, N); } }
+    { // 进程内重启复位窗口（诊断#9f16d7 / #c85aa3）：窗口里一段代码页（只读可执行、最大权限 r-x，同装载器映射的客体代码）、一段写过的可写页、一个空洞。
+      //   期望手写：复位返回 0；代码页原样（权限 r-x、内容还在）；可写页变不可访问；空洞补回占位（再往空洞建议映射拿不到窗口里的地址）。
+      //   反证：先整段 MAP_FIXED 覆盖（修前）在 macOS 上会把代码页一并换掉 → 「代码页原样」不符
+      int s2a_window_session_reset(void);
+      const uint64_t P = 1ull << 20; uint8_t *cp = (uint8_t *)(b + 0x200000000ull), *wp = cp + P, *hp = cp + 2 * P;
+      int ok = mmap(cp, P, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0) == cp && mmap(wp, P, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0) == wp;
+      if (ok) { memset(cp, 0x5A, P); memset(wp, 0x33, P); ok = !mprotect(cp, P, PROT_READ | PROT_EXEC) && vm_protect(mach_task_self(), (vm_address_t)cp, P, TRUE, VM_PROT_READ | VM_PROT_EXECUTE) == KERN_SUCCESS && !munmap(hp, P); }
+      if (!ok) { printf("✗ 复位用例：造现场失败 errno=%d\n", errno); bad++; }
+      else {
+          int rc = s2a_window_session_reset();
+          vm_address_t r = (vm_address_t)cp; vm_size_t sz = 0; natural_t d = 0; vm_region_submap_info_data_64_t ci; mach_msg_type_number_t cnt = VM_REGION_SUBMAP_INFO_COUNT_64;
+          int cg = vm_region_recurse_64(mach_task_self(), &r, &sz, &d, (vm_region_recurse_info_t)&ci, &cnt) == KERN_SUCCESS && r == (vm_address_t)cp;
+          int code_kept = cg && ci.protection == (VM_PROT_READ | VM_PROT_EXECUTE) && cp[0] == 0x5A && cp[P - 1] == 0x5A;
+          r = (vm_address_t)wp; sz = 0; d = 0; cnt = VM_REGION_SUBMAP_INFO_COUNT_64; vm_region_submap_info_data_64_t wi;
+          int wnone = vm_region_recurse_64(mach_task_self(), &r, &sz, &d, (vm_region_recurse_info_t)&wi, &cnt) == KERN_SUCCESS && r <= (vm_address_t)wp && wi.protection == VM_PROT_NONE;
+          void *h = mmap(hp, P, PROT_READ, MAP_PRIVATE | MAP_ANON, -1, 0); int hole_filled = h != (void *)hp; if (h != MAP_FAILED && h != (void *)hp) munmap(h, P);
+          printf("· 复位窗口：返回 %d（期望 0）、代码页原样 %s、可写页不可访问 %s、空洞补上 %s\n", rc, code_kept ? "是" : "否", wnone ? "是" : "否", hole_filled ? "是" : "否");
+          if (rc || !code_kept || !wnone || !hole_filled) { printf("✗ 复位窗口不符\n"); bad++; }
+      }
+      // 收拾：代码页最大权限已压成 r-x，macOS 上照样能整段换回占位（不影响后面）
+      mmap(cp, 3 * P, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_FIXED, -1, 0); }
     printf("%s t_vawin：%d 处不符\n", bad ? "✗" : "✓", bad);
     return bad != 0;
 }

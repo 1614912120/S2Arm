@@ -417,18 +417,27 @@ static char g_repair_why[1600], g_repair_skip1[1200]; static unsigned g_repair_u
 const char *s2a_games_repair_detail(void) { return g_repair_why; }
 unsigned s2a_games_repair_owner(void) { return g_repair_uid; }
 unsigned s2a_games_repair_files(void) { return g_repair_files; }
-// 第一个写不进的目录（games 往下三层：games、每款目录、资源包、.incoming）；都写得进返回 0
+// 第一个写不进的目录（games、每款目录、每款目录下的每个子目录、资源包/.incoming）；都写得进返回 0
+//   D-QCTB：只查固定几层时漏了每款下的 cheats/（玩家机上归 root），金手指写 status.txt 被拒、整局崩；每款下的子目录（cheats、S2A 存档、wire……）一律查
+static int unwritable_dir(const char *p, char *bad, size_t n, struct stat *bs) {
+    struct stat st; if (stat(p, &st) || !S_ISDIR(st.st_mode) || !access(p, W_OK)) return 0;
+    snprintf(bad, n, "%s", p); *bs = st; return 1;
+}
 static int games_unwritable(const char *games, char *bad, size_t n, struct stat *bs) {
     struct stat st; if (stat(games, &st) || !S_ISDIR(st.st_mode)) return 0;
-    if (access(games, W_OK)) { snprintf(bad, n, "%s", games); *bs = st; return 1; }
+    if (unwritable_dir(games, bad, n, bs)) return 1;
     DIR *d = opendir(games); if (!d) return 0; struct dirent *e; int hit = 0;
     while (!hit && (e = readdir(d))) {
         if (e->d_name[0] == '.') continue;
-        const char *sub[] = {"", "/资源包", "/资源包/.incoming"};
-        for (int i = 0; i < 3 && !hit; i++) {
-            char p[2400]; snprintf(p, sizeof p, "%s/%s%s", games, e->d_name, sub[i]);
-            if (!stat(p, &st) && S_ISDIR(st.st_mode) && access(p, W_OK)) { snprintf(bad, n, "%s", p); *bs = st; hit = 1; }
+        char g[2400]; snprintf(g, sizeof g, "%s/%s", games, e->d_name);
+        if ((hit = unwritable_dir(g, bad, n, bs))) break;
+        DIR *gd = opendir(g); if (!gd) continue; struct dirent *f;
+        while (!hit && (f = readdir(gd))) {
+            if (f->d_name[0] == '.') continue;
+            char p[2700]; snprintf(p, sizeof p, "%s/%s", g, f->d_name); hit = unwritable_dir(p, bad, n, bs);
         }
+        closedir(gd);
+        if (!hit) { char p[2700]; snprintf(p, sizeof p, "%s/资源包/.incoming", g); hit = unwritable_dir(p, bad, n, bs); }
     }
     closedir(d); return hit;
 }

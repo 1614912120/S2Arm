@@ -2657,7 +2657,7 @@
   "「{0}」已从游戏库删除，新版 S2Arm 里不再包含它们；手机上的存档还在。": "«{0}» se eliminó de la biblioteca, por lo que el nuevo S2Arm ya no lo incluye. Sus partidas guardadas permanecen en el teléfono.",
   "这款游戏在这台电脑上还没玩过：存档会在下次启动游戏时放进去。": "Aún no has jugado este juego en este Mac. La partida guardada se añadirá la próxima vez que inicies el juego.",
   "这款游戏没有可用的 60 帧方案。": "No hay opción de 60 FPS disponible para este juego.",
-  "这款游戏没有走直连渲染，用不了 MetalFX 放大。": "Este juego no usa renderizado directo, así que la mejora de escala MetalFX no está disponible.",
+  "这款游戏没有走直连渲染，用不了锐利放大（MetalFX）。": "Este juego no usa renderizado directo, así que el escalado nítido (MetalFX) no está disponible.",
   "没有可以装回的上一版手机 S2Arm。": "No hay una versión anterior de S2Arm que restaurar en el iPhone.",
   "装回上一版 S2Arm": "Restaurando el S2Arm anterior",
   "记下手机上现在的版本": "Registrando la versión actual en el iPhone",

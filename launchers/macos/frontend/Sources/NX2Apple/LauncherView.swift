@@ -98,6 +98,7 @@ struct LauncherView: View {
             InstallView(model: model, gameID: target.id).environmentObject(loc)
         }
         .onChange(of: model.spaceRequest) { id in if let id { spaceFor = id; model.spaceRequest = nil } }   // 设置页「磁盘空间」
+        .onChange(of: model.displayRequest) { id in if let id { displayFor = id; model.displayRequest = nil } }   // 控制口打开启动设置
         .sheet(item: Binding(get: { spaceFor.map(OptionsTarget.init) }, set: { spaceFor = $0?.id })) { target in
             FreeSpaceView(model: model, gameID: target.id).environmentObject(loc)
         }

@@ -54,7 +54,7 @@ USAGE = """s2armctl —— 让 AI 助手操作 S2Arm（每条命令 = 玩家点�
   library <目录> [--move]            换游戏库位置（外接盘也行）；--move 把现有游戏、成品、缓存和存档一起搬到这个空文件夹
   cloud-folder [<iCloud 云盘里的文件夹>]   开 iCloud 存档同步（不给路径 = 关闭）；iPhone / iPad 上选同一个文件夹
   cloud-sync <游戏号>   这款立即同步一次（开局前 / 退出后会自动做）
-  display <游戏号> [--<设置项> on|off|default|<选项>]…   看 / 改这款的启动设置（设置项见 game_settings.v1.json，如 --enhance on --docked handheld），下次启动生效
+  display <游戏号> [--<设置项> on|off|default|<选项>]…   看 / 改这款的启动设置（设置项见 game_settings.v1.json，如 --quality MetalFX --docked handheld），下次启动生效
   errors [游戏号]                    最近失败任务的错误码、原因、建议、日志位置和日志末尾
   retry <任务号> | cancel <任务号>    重试 / 取消任务
   launch <游戏号>                    在 Mac 上启动游戏
