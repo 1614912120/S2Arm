@@ -430,6 +430,11 @@ s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" \
 s2a_gate_step java -cp "$out/java" org.s2arm.android.GameSessionTest
 # 资源替换类 mod 导入（口径同 pack/jobs/mods.py）：发布结构 / 别的程序号 / 逃逸与符号链接 / 上限 / 开关 / 删除 / zip64
 s2a_gate_step java -ea -cp "$out/java" org.s2arm.android.GameModsTest
+# 库页游玩时间一行（口径同 Playtime.swift summary，期望照抄 PlaytimeTests.swift）：分钟 / 小时取整、今天昨天 N 天前、读文件、只算路径的 statePath
+s2a_gate_step javac -encoding UTF-8 -d "$out/java" -cp "$out/java" \
+    "$android_dir/app/src/main/java/org/s2arm/android/Playtime.java" \
+    "$android_dir/tests/PlaytimeTest.java"
+s2a_gate_step java -cp "$out/java" org.s2arm.android.PlaytimeTest "$android_dir/app/src/main/res"
 # The shell's BootSpec against boot-spec.v1.schema.json (with and without a region).
 s2a_gate_step "$PY" - "$android_dir/contracts" "$out/boot-spec" <<'PY'
 import importlib.util, os, sys

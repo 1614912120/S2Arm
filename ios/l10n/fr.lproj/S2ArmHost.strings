@@ -366,9 +366,9 @@
 "dprompt.ns2pro.body" = "Maintenez quatre doigts sur l'écran pendant 1,5 seconde pour ouvrir Réglages, activez « Activer la manette Switch 2 Pro », puis appuyez sur le bouton d'appairage de la manette.";
 "dprompt.ns2pro.title" = "Vous utilisez une manette Switch 2 Pro ?";
 "dprompt.motion.title" = "Commandes de mouvement";
-"dprompt.motion.padNone.phone" = "Cette manette n’a pas de capteurs de mouvement (par exemple les Joy-Con de première génération ou les manettes Xbox) : les commandes de mouvement du jeu passent par le gyroscope du téléphone. Il suffit de tourner le téléphone.";
-"dprompt.motion.padNone.off" = "Cette manette n’a pas de capteurs de mouvement (par exemple les Joy-Con de première génération ou les manettes Xbox) et Gyro du téléphone est désactivé : les commandes de mouvement ne marchent pas pour l’instant. Pour les utiliser : engrenage en haut à gauche → Manettes & Mouvement → activez Gyro du téléphone.";
-"dprompt.motion.phoneOff" = "Ce jeu utilise les commandes de mouvement, mais Gyro du téléphone est désactivé : elles ne réagissent pas. Pour les utiliser : engrenage en haut à gauche → Manettes & Mouvement → activez Gyro du téléphone.";
+"dprompt.motion.padNone.phone" = "Impossible de lire les mouvements de cette manette (par exemple les Joy-Con de première génération ou les manettes Xbox) : les commandes de mouvement du jeu passent par le gyroscope du téléphone. Il suffit de tourner le téléphone.";
+"dprompt.motion.padNone.off" = "Impossible de lire les mouvements de cette manette (par exemple les Joy-Con de première génération ou les manettes Xbox) et « Gyro du téléphone » est désactivé : les commandes de mouvement ne marchent pas pour l’instant. Pour les utiliser : engrenage en haut à gauche → « Manettes & Mouvement » → activez « Gyro du téléphone ».";
+"dprompt.motion.phoneOff" = "Ce jeu utilise les commandes de mouvement, mais « Gyro du téléphone » est désactivé : elles ne réagissent pas. Pour les utiliser : engrenage en haut à gauche → « Manettes & Mouvement » → activez « Gyro du téléphone ».";
 "gfx.antiAliasing" = "Anticrénelage";
 "gfx.antiAliasing.high" = "SMAA élevé";
 "gfx.antiAliasing.medium" = "SMAA moyen";
@@ -540,6 +540,14 @@
 "sgrade.state.version.older" = "Il n’existe des patchs que pour l’ancienne version %1$@ ; rien encore pour votre version.";
 "sgrade.state.version.port_failed" = "Nous avons essayé de l’adapter à votre version, sans succès.";
 "sgrade.state.none" = "La bibliothèque de patchs n’a pas encore de patch %1$@ pour ce jeu.";
+"sgrade.state.failed" = "Le correctif %1$@ de ce jeu n'a pas pu être ajouté : %2$@";
+"sgrade.result.why.mismatch" = "il ne correspond pas à votre copie du jeu";
+"sgrade.result.why.conflict" = "il entre en conflit avec un autre correctif";
+"sgrade.result.why.translate" = "cette partie ne peut pas encore être traduite";
+"sgrade.result.why.full" = "trop de correctifs pour ce module";
+"sgrade.result.why.port" = "il est destiné à une autre version et n'a pas pu être adapté";
+"sgrade.result.why.version" = "ce mod est destiné à une autre version du jeu";
+"sgrade.result.why.unsupported" = "le correctif utilise quelque chose que S2Arm ne prend pas encore en charge";
 "sgrade.state.opted_out" = "Non ajouté : « Ajouter à la compilation » était désactivé lors de l’export. Activez-le et exportez à nouveau.";
 "sgrade.state.pending.ios" = "De nouveaux patchs sont disponibles : ouvrez S2Arm sur votre ordinateur et choisissez « Mise à niveau classe S ».";
 "sgrade.state.mac_only" = "Les patchs graphiques sont réservés à la version Mac.";

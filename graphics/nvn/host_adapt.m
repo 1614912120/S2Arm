@@ -539,10 +539,13 @@ void s2a_gpu_safe_stop(const char *why) {
     LOG("【红】GPU 挂死安全停：iOS 壳没有错误页入口，改为收局");
 #endif
     char *w = strdup(why ? why : "-");
+    // 退出码 86（同 gal_core.m 命令缓冲出错）：作业层（pack/jobs/build.py）按它告诉玩家这局是被安全停下的，不显示「操作完成」（#1257）
+    void (*code)(int) = (void (*)(int))dlsym(RTLD_DEFAULT, "s2a_host_exit_code");
+    if (code) code(86);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
         void (*down)(const char *) = (void (*)(const char *))dlsym(RTLD_DEFAULT, "s2a_host_shutdown");
         char m[300]; snprintf(m, sizeof m, "GPU 挂死安全停（%.200s）", w);
-        if (down) down(m); else _exit(70);
+        if (down) down(m); else _exit(86);
     });
 }
 // GPU 卡住暂停的宿主一侧（11-13；判据在 nvn_mtl.m gpu_frame_stuck：连续 3 帧各过 3 秒）：iOS 盖「继续玩 / 退出」页（app.m s2a_ios_gpu_stuck），

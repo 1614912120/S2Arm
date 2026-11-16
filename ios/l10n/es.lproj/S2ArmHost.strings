@@ -366,9 +366,9 @@
 "dprompt.ns2pro.body" = "Mantén cuatro dedos en la pantalla durante 1,5 segundos para abrir Ajustes, activa «Habilitar mando Switch 2 Pro» y luego pulsa el botón de emparejamiento del mando.";
 "dprompt.ns2pro.title" = "¿Usas un mando Switch 2 Pro?";
 "dprompt.motion.title" = "Controles de movimiento";
-"dprompt.motion.padNone.phone" = "Este mando no tiene sensores de movimiento (por ejemplo, Joy-Con de primera generación o mandos de Xbox), así que los controles de movimiento del juego usan el giroscopio del teléfono: solo tienes que girar el teléfono.";
-"dprompt.motion.padNone.off" = "Este mando no tiene sensores de movimiento (por ejemplo, Joy-Con de primera generación o mandos de Xbox) y el Giroscopio del teléfono está desactivado, así que por ahora los controles de movimiento no funcionan. Para usarlos: engranaje arriba a la izquierda → Mandos y movimiento → activa Giroscopio del teléfono.";
-"dprompt.motion.phoneOff" = "Este juego usa controles de movimiento, pero el Giroscopio del teléfono está desactivado, así que no responden. Para usarlos: engranaje arriba a la izquierda → Mandos y movimiento → activa Giroscopio del teléfono.";
+"dprompt.motion.padNone.phone" = "No se puede leer el movimiento de este mando (por ejemplo, Joy-Con de primera generación o mandos de Xbox), así que los controles de movimiento del juego usan el giroscopio del teléfono: solo tienes que girar el teléfono.";
+"dprompt.motion.padNone.off" = "No se puede leer el movimiento de este mando (por ejemplo, Joy-Con de primera generación o mandos de Xbox) y «Giroscopio del teléfono» está desactivado, así que por ahora los controles de movimiento no funcionan. Para usarlos: engranaje arriba a la izquierda → «Mandos y movimiento» → activa «Giroscopio del teléfono».";
+"dprompt.motion.phoneOff" = "Este juego usa controles de movimiento, pero «Giroscopio del teléfono» está desactivado, así que no responden. Para usarlos: engranaje arriba a la izquierda → «Mandos y movimiento» → activa «Giroscopio del teléfono».";
 "gfx.antiAliasing" = "Suavizado de bordes";
 "gfx.antiAliasing.high" = "SMAA Alto";
 "gfx.antiAliasing.medium" = "SMAA Medio";
@@ -540,6 +540,14 @@
 "sgrade.state.version.older" = "Solo hay parches para la versión anterior %1$@; para tu versión todavía no hay.";
 "sgrade.state.version.port_failed" = "Intentamos adaptarlo a tu versión, pero no funcionó.";
 "sgrade.state.none" = "La biblioteca de parches aún no tiene parche de %1$@ para este juego.";
+"sgrade.state.failed" = "No se pudo añadir el parche de %1$@ de este juego: %2$@";
+"sgrade.result.why.mismatch" = "no coincide con tu copia del juego";
+"sgrade.result.why.conflict" = "entra en conflicto con otro parche";
+"sgrade.result.why.translate" = "esta parte aún no se puede traducir";
+"sgrade.result.why.full" = "hay demasiados parches para este módulo";
+"sgrade.result.why.port" = "es para otra versión y no pudo adaptarse";
+"sgrade.result.why.version" = "este mod es para otra versión del juego";
+"sgrade.result.why.unsupported" = "el parche usa algo que S2Arm aún no admite";
 "sgrade.state.opted_out" = "No añadido: «Añadir al compilar» estaba desactivado al exportar. Actívalo y vuelve a exportar.";
 "sgrade.state.pending.ios" = "Hay parches nuevos: abre S2Arm en tu ordenador y elige «Mejora a grado S».";
 "sgrade.state.mac_only" = "Los parches de gráficos son solo para Mac.";

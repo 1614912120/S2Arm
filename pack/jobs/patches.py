@@ -27,7 +27,7 @@ BASE = "https://dl.s2arm.com/patches/v2"
 TIMEOUT = 10
 MAX_BYTES = 4 << 20
 UA = "S2Arm-patches"
-FIELDS = {"fps": "target_fps", "widescreen": "aspect", "gfx": None}
+FIELDS = {"fps": "target_fps", "widescreen": "aspect", "gfx": None, "other": None}   # other：认不出是画面的（声音 / 玩法等，tools/patch_index.py）
 
 
 def module_bids(exefs):
@@ -208,10 +208,10 @@ def fetch(c, game, exefs, target="mac"):
     seeds = [x for x in rows if x[0].get("kind") == "pso"]; rows = [x for x in rows if x[0].get("kind") != "pso"]
     pso_write(cache / "games" / gid / "pso", seeds)
     if target == "ios":
-        rows = [x for x in rows if (x[0].get("cat") if x[0].get("cat") in FIELDS else "gfx") != "gfx"]
+        rows = [x for x in rows if (x[0].get("cat") if x[0].get("cat") in FIELDS else "other") not in ("gfx", "other")]   # iPhone 不打画面类与其它类
     out = {}
     for it, data in rows:
-        cat = it.get("cat") if it.get("cat") in FIELDS else "gfx"
+        cat = it.get("cat") if it.get("cat") in FIELDS else "other"   # 认不出的类别按其它（不默认开），不当画面
         # 在索引目录之内（pack/cpatch.py 拒收逃出索引目录的路径）；按内容哈希分目录、只留原文件名（IPS / FPSLocker 靠文件名认构建号）——
         #   照上游原路径摆会撞 Windows 260 字符路径上限（11-12 Windows 出包机实测：上游路径带游戏名与长目录名）
         name = os.path.basename(it.get("name") or "") or "patch"
@@ -300,6 +300,7 @@ def prepare(c, game, extraction, env, target="mac"):
 #   读产物根里编译器自己的记录（pack/cpatch.py plan / prune）：cpatch.tsv = 最终打进去的；cpatch_plan.log 的「收 / 不收 / 移植不了」行与
 #   cpatch_excluded.tsv（改写器缺口剔掉的）= 没打上的及原因。原因翻成玩家看得懂的话；本来就不该打的（版本不对、同画幅已收另一份、本款有我方帧率表）不算失败、不列
 _WHY = (   # (原因里出现的字样, 给玩家的话)；None = 不算失败
+    (("FPSLocker 配置不支持",), "result.why.unsupported"),  # 非玩家句（pack/cpatch.py：FPSLocker 配置里有 S2Arm 还不支持的写法，#934）
     (("mod 构建号对不上",), "result.why.version"),  # 非玩家句（玩家自己导入的 mod 是别的版本的：要告诉玩家，pack/cpatch.py scan mod_miss）
     (("版本不对", "同画幅", "我方帧率表"), None),  # 非玩家句
     (("与 ", "改同一处"), "result.why.conflict"),  # 非玩家句
@@ -323,7 +324,7 @@ def _why(text):
 
 def _cat_of(uid, cat=""):
     k = uid.split(":", 1)[0]
-    return {"wsauto": "widescreen", "widescreen": "widescreen", "fps": "fps", "gfx": "gfx", "cheat": "cheat", "mod": "mod"}.get(k) or (cat if cat in CATS else "gfx")
+    return {"wsauto": "widescreen", "widescreen": "widescreen", "fps": "fps", "gfx": "gfx", "cheat": "cheat", "mod": "mod", "other": "other"}.get(k) or (cat if cat in CATS else "gfx")
 
 
 def outcome(root):

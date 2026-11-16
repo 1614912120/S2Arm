@@ -69,6 +69,11 @@ class OutcomeTests(unittest.TestCase):
         self.assertEqual([(a["id"], a["cat"]) for a in r["applied"]], [("mod:aa", "mod")])
         self.assertEqual([(f["id"], f["cat"], f["name"], f["why"]) for f in r["failed"]], [("mod:bb", "mod", "Old/x.pchtxt", "result.why.version")])
 
+    def test_fpslocker_unsupported_listed(self):
+        # 11-15 #934：FPSLocker 配置里有 S2Arm 不支持的写法（pack/cpatch.py 记「不收 … FPSLocker 配置不支持」）→ 完成页列「没打上：补丁用了 S2Arm 还不支持的写法」
+        self.write([], "不收\tfps:ab\tmain\tFPSLocker\tFPSLocker 配置不支持：调用 _fpsLock()：FPSLocker 自带的帮助函数，S2Arm 没有\n")
+        self.assertEqual([(f["id"], f["cat"], f["why"]) for f in patches.outcome(self.root)["failed"]], [("fps:ab", "fps", "result.why.unsupported")])
+
     def test_no_records_is_empty(self):
         self.assertEqual(patches.outcome(self.root), dict(applied=[], failed=[], cheats=0))
 

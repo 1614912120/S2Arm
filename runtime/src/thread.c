@@ -2055,7 +2055,15 @@ static uint32_t thr_pause(thr_t *t) {
             return R_BAD_STATE;
         }
         pthread_mutex_lock(&g_susp_mu); thread_resume(t->mport); pthread_mutex_unlock(&g_susp_mu);
-        if (now_ns() - t0 > 2000000000ull) die("【红】SetThreadActivity：线程 %#x 2 秒内没停到游戏代码或系统调用里（重试 %d 次）", t->handle, k);
+        if (now_ns() - t0 > 2000000000ull) {
+            // 取证（D-QJTH）：目标这 2 秒一直在宿主代码里（不在游戏代码、不在系统调用）——记下最后一次挂住时的 pc / lr 落在哪个宿主函数，
+            //   定它是在哪种宿主调用里长时间不回（图形 API 等 GPU？），再判该等它回游戏代码还是直接致命
+            uint64_t pc = __darwin_arm_thread_state64_get_pc(st), lr = __darwin_arm_thread_state64_get_lr(st); Dl_info di = {0}, dl = {0};
+            int okp = n == ARM_THREAD_STATE64_COUNT && dladdr((void *)pc, &di), okl = n == ARM_THREAD_STATE64_COUNT && dladdr((void *)lr, &dl);
+            die("【红】SetThreadActivity：线程 %#x 2 秒内没停到游戏代码或系统调用里（重试 %d 次）；最后一次挂住时 pc %#llx（%s+%#llx）lr %#llx（%s+%#llx）", t->handle, k,
+                (unsigned long long)pc, okp && di.dli_sname ? di.dli_sname : "?", (unsigned long long)(okp && di.dli_saddr ? pc - (uint64_t)di.dli_saddr : 0),
+                (unsigned long long)lr, okl && dl.dli_sname ? dl.dli_sname : "?", (unsigned long long)(okl && dl.dli_saddr ? lr - (uint64_t)dl.dli_saddr : 0));
+        }
         usleep(20);
     }
 }

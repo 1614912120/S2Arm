@@ -39,3 +39,10 @@ struct ConsolePlayButtonStyle: ButtonStyle {
             .onHover { hovered = $0 }
     }
 }
+
+// 圆钮 / 胶囊：焦点框跟着画成圆 / 胶囊
+extension ConsoleIconButtonStyle: PadRingShaped { var padRingRadius: CGFloat { .infinity } }
+extension ConsolePlayButtonStyle: PadRingShaped {   // 白底胶囊：贴边的奶油框看不见，改外扩 3 pt
+    var padRingRadius: CGFloat { .infinity }
+    var padRingOutset: CGFloat { 3 }
+}

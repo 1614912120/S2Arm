@@ -366,8 +366,8 @@
 "dprompt.ns2pro.body" = "画面を 4 本指で 1.5 秒長押しして設定を開き、「Switch 2 Pro コントローラーを有効にする」をオンにしてから、コントローラーのペアリングボタンを押してください。";
 "dprompt.ns2pro.title" = "Switch 2 Pro コントローラーを使用しますか？";
 "dprompt.motion.title" = "モーション操作";
-"dprompt.motion.padNone.phone" = "このコントローラーにはモーションセンサーがありません（初代 Joy-Con、Xbox コントローラーなど）。ゲームのモーション操作はスマホのジャイロで行います。スマホを傾けてください。";
-"dprompt.motion.padNone.off" = "このコントローラーにはモーションセンサーがなく（初代 Joy-Con、Xbox コントローラーなど）、スマホジャイロもオフのため、いまはモーション操作が使えません。使うには：左上の歯車 →「コントローラーとモーション」→「スマホジャイロ」をオン。";
+"dprompt.motion.padNone.phone" = "このコントローラーのモーションは読み取れません（初代 Joy-Con、Xbox コントローラーなど）。ゲームのモーション操作はスマホのジャイロで行います。スマホを傾けてください。";
+"dprompt.motion.padNone.off" = "このコントローラーのモーションは読み取れず（初代 Joy-Con、Xbox コントローラーなど）、スマホジャイロもオフのため、いまはモーション操作が使えません。使うには：左上の歯車 →「コントローラーとモーション」→「スマホジャイロ」をオン。";
 "dprompt.motion.phoneOff" = "このゲームはモーション操作を使いますが、「スマホジャイロ」がオフのため反応しません。使うには：左上の歯車 →「コントローラーとモーション」→「スマホジャイロ」をオン。";
 "gfx.antiAliasing" = "アンチエイリアス";
 "gfx.antiAliasing.high" = "SMAA 高";
@@ -540,6 +540,14 @@
 "sgrade.state.version.older" = "パッチは古いバージョン %1$@ 用しかなく、お使いのバージョン用はまだありません。";
 "sgrade.state.version.port_failed" = "お使いのバージョンへの移植を試しましたが、うまくいきませんでした。";
 "sgrade.state.none" = "パッチライブラリにこのゲームの%1$@パッチはまだありません。";
+"sgrade.state.failed" = "このゲームの%1$@パッチを組み込めませんでした：%2$@";
+"sgrade.result.why.mismatch" = "お使いのゲームと一致しません";
+"sgrade.result.why.conflict" = "別のパッチと同じ箇所を変更します";
+"sgrade.result.why.translate" = "この箇所はまだ変換できません";
+"sgrade.result.why.full" = "同じモジュールのパッチが多すぎます";
+"sgrade.result.why.port" = "別バージョン用で適応できませんでした";
+"sgrade.result.why.version" = "この Mod は別バージョンのゲーム用です";
+"sgrade.result.why.unsupported" = "パッチに S2Arm が未対応の書き方が含まれています";
 "sgrade.state.opted_out" = "未適用：書き出し時に「書き出し時に適用」をオフにしました。オンにして書き出し直すと入ります。";
 "sgrade.state.pending.ios" = "新しいパッチがあります：パソコンの S2Arm で「S 級最適化アップグレード」を選んでください。";
 "sgrade.state.mac_only" = "画面パッチは Mac 版のみです。";

@@ -342,8 +342,8 @@
 "dprompt.ns2pro.body" = "四指長按螢幕 1.5 秒開啟設定，開啟「啟用 Switch 2 Pro 手把」，再按手把上的配對鍵。";
 "dprompt.ns2pro.title" = "要使用 Switch 2 Pro 手把嗎？";
 "dprompt.motion.title" = "體感操作";
-"dprompt.motion.padNone.phone" = "這個手把不支援體感（例如 Joy-Con 一代、Xbox 手把），遊戲裡的體感改由手機陀螺儀完成：轉動手機就行。";
-"dprompt.motion.padNone.off" = "這個手把不支援體感（例如 Joy-Con 一代、Xbox 手把），手機陀螺儀也關著，所以體感暫時用不了。要用的話：左上角齒輪 →「手把與體感」→ 開啟「手機陀螺儀」。";
+"dprompt.motion.padNone.phone" = "讀不到這個手把的體感（例如 Joy-Con 一代、Xbox 手把），遊戲裡的體感改由手機陀螺儀完成：轉動手機就行。";
+"dprompt.motion.padNone.off" = "讀不到這個手把的體感（例如 Joy-Con 一代、Xbox 手把），手機陀螺儀也關著，所以體感暫時用不了。要用的話：左上角齒輪 →「手把與體感」→ 開啟「手機陀螺儀」。";
 "dprompt.motion.phoneOff" = "這款遊戲用到了體感，但「手機陀螺儀」關著，體感沒有反應。要用的話：左上角齒輪 →「手把與體感」→ 開啟「手機陀螺儀」。";
 "gfx.antiAliasing" = "反鋸齒";
 "gfx.antiAliasing.high" = "SMAA 高";
@@ -546,6 +546,14 @@
 "sgrade.state.version.older" = "補丁只有舊版本 %1$@ 的，你這個版本暫時沒有。";
 "sgrade.state.version.port_failed" = "已試過移植到你這份，沒成功。";
 "sgrade.state.none" = "補丁庫裡還沒有這款遊戲的%1$@補丁。";
+"sgrade.state.failed" = "這款的%1$@補丁沒能打入：%2$@";
+"sgrade.result.why.mismatch" = "和你這份遊戲對不上";
+"sgrade.result.why.conflict" = "和另一份補丁改的是同一處";
+"sgrade.result.why.translate" = "這一處暫時轉譯不了";
+"sgrade.result.why.full" = "同一模組的補丁太多，放不下";
+"sgrade.result.why.port" = "補丁是別的版本的，移植不到你這份";
+"sgrade.result.why.version" = "這個 Mod 是給別的遊戲版本做的，和你這份對不上";
+"sgrade.result.why.unsupported" = "補丁用了 S2Arm 還不支援的寫法";
 "sgrade.state.opted_out" = "沒打入：出包時取消了「出包時打入」。重新出包時勾上就有。";
 "sgrade.state.pending.ios" = "電腦上有可用的新補丁：在電腦的 S2Arm 點「S 級優化升級」裝進來。";
 "sgrade.state.mac_only" = "畫面補丁只在 Mac 版裡。";

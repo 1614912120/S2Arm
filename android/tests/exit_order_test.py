@@ -100,6 +100,7 @@ public class ExitOrderFixture extends ParentActivity {
     Object gameBackCallback;
     Surface surface=new Surface(), panel=new Surface();
     Probe lifecycleProbe=new Probe(); Runnable lifecycleSample=() -> {};
+    Runnable playtimeTick=() -> {};   // 游玩时间 10 秒落盘（stopGame 先停它再落盘）
     FrameRate frameRate=new FrameRate(); Keyboard hostKeyboard=new Keyboard(); Keyboard legacyTextInput=new Keyboard();   // #1611 onPause 新加 legacyTextInput.pause()（11-06 main 安卓钩子红，合入运维线补桩）
     GameAudioFocus gameAudioFocus=null;   // #1658 onPause/onResume 新加 gameAudioFocus.pause()/resume()（11-07 main 安卓钩子红，合入运维线补桩）
     android.os.Handler saveAtomicProbe=new android.os.Handler(android.os.Looper.getMainLooper());
@@ -159,6 +160,7 @@ public class ExitOrderFixture extends ParentActivity {
             check(!current.finishing, "native teardown must start before task finish");
             ++stops; events.add("native_stop_admitted");
         }
+        static void flushPlaytime() { check(stops==0, "playtime must flush before native teardown starts"); }   // 游玩时间收局前落盘：原生收尾以 _exit 结束进程
         static void destroy(long host) { ++destroys; }
         static void clearStopListener(Object listener) { }
         static void setReleaseStall(long host,int ms) { }
