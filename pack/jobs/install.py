@@ -1339,7 +1339,11 @@ def export_phone(c, gid=None):
         ipa, games, _ = packer.assemble(c, gid, others, dest=work / "assemble")
         out = work / "out"
         out.mkdir()
-        os.replace(ipa, out / "S2Arm.ipa")
+        # 玩家在设置里关了主屏小组件（widget: false）：导出的 ipa 去掉扩展再交（侧载工具按壳里有什么签什么）；没关照原样
+        if c.r.get("widget") is False and ipa_strip_widget(ipa, out / "S2Arm.ipa"):
+            Path(ipa).unlink()
+        else:
+            os.replace(ipa, out / "S2Arm.ipa")
         shutil.rmtree(work / "assemble", ignore_errors=True)
         c.begin("写各款游戏的 .img（含着色器库）与着色器更新包", 3, 4)
         used, listed, fresh, unwritten = set(), [], [], []
@@ -1502,13 +1506,16 @@ def sign_and_install(c, ipa, team, dev, udid, bid, games, steps=True):
             pl["CFBundleDisplayName"] = shown
         info.write_bytes(plistlib.dumps(pl))
         check_shell_sdk(c, app, dev)
+        # 主屏小组件扩展（PlugIns/S2ArmWidget.appex，11-16）：扩展包名跟着主包名（<主包名>.widget）。玩家在设置里关了（widget: false）→ 去掉；
+        #   玩家自己的证书只有主程序一份描述文件 → 去掉并提示；Apple ID 签名带上（sign_with_apple_id 申请两份描述文件，哪步不成就去掉重签，绝不因小组件装不上）
+        widget = widget_prepare(c, app, bid, devcert=devcert.active(c))
         if devcert.active(c):   # 玩家自己的开发者证书（v0.2.4）：rcodesign 直接读 p12 签，不申请描述文件、不要 Xcode 账号
             if steps: c.begin("用你的开发者证书签名", 4, 6)
             devcert.sign_app(c, app, log)
             devcert.export_ipa(c, stage / "Payload")
         else:
             from diag import is_vision
-            sign_with_apple_id(c, app, team, bid, ents, udid, log, steps, vision=is_vision(dev))
+            sign_with_apple_id(c, app, team, bid, ents, udid, log, steps, vision=is_vision(dev), widget=widget)
         if steps: c.begin("装到 iPhone", 5, 6)
         from diag import devicectl
         for g in games:
@@ -1524,10 +1531,74 @@ def sign_and_install(c, ipa, team, dev, udid, bid, games, steps=True):
         shutil.rmtree(stage, ignore_errors=True)
 
 
-def sign_with_apple_id(c, app, team, bid, ents, udid, log, steps, vision=False):
+WIDGET_QUOTA = "这个免费 Apple ID 7 天内注册的包名已满 10 个，小组件要多注册一个（App 照常装上，额度恢复后再装一次就带上）"
+
+
+def ipa_strip_widget(src, dst):
+    """另存一份去掉小组件扩展（Payload/*.app/PlugIns/）的 ipa → 原包里有没有扩展。没有就不写 dst"""
+    import zipfile
+    with zipfile.ZipFile(src) as z:
+        names = z.infolist()
+        drop = [i for i in names if re.match(r"Payload/[^/]+\.app/PlugIns/", i.filename)]
+        if not drop:
+            return False
+        with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as o:
+            for i in names:
+                if i not in drop:
+                    o.writestr(i, z.read(i), compress_type=i.compress_type)
+    return True
+
+
+def widget_mod(c):
+    """pack/widget_ext.py（出壳 / 组装 / 装机同一份包名与去扩展规则）：按作业层自己所在的引擎树导入（同 core 取 tools 的做法）"""
+    root = str(Path(__file__).resolve().parents[2])
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from pack import widget_ext
+    return widget_ext
+
+
+def widget_group(team_id):
+    """小组件与主程序共用的 App Group：全苹果唯一，按团队号区分（壳里写的 group.s2arm.widget 是给侧载工具改名用的占位；运行时按前缀认）"""
+    return f"group.s2arm.widget.{team_id}"
+
+
+def widget_prepare(c, app, bid, devcert=False):
+    """装机前处理小组件扩展 → 还带不带（True = 交给签名带上）。没有扩展（单款包 / 旧壳）→ False"""
+    if not (Path(app) / "PlugIns").is_dir():
+        return False
+    W = widget_mod(c)
+    if not W.appexes(app):
+        return False
+    W.retarget(app, bid)
+    if c.r.get("widget") is False:   # 玩家在设置里关了「装到 iPhone 时带主屏小组件」：不提示
+        W.strip(app)
+        return False
+    if devcert:
+        widget_skip(c, app, "用你自己的开发者证书签名只有主程序一份描述文件，签不了小组件")
+        return False
+    return True
+
+
+def widget_skip(c, app, why):
+    """去掉小组件扩展、照常装 App，黄字说明这次为什么没带（玩家决定要不要换签名方式 / 等额度）"""
+    widget_mod(c).strip(app)
+    c.diagnostic(f"这次没装小组件：{why}", code="widget_skipped", severity="warning")
+
+
+def sign_with_apple_id(c, app, team, bid, ents, udid, log, steps, vision=False, widget=False):
     """Apple ID 模式：按玩家 Xcode 账号申请开发描述文件（ensure_profile.sh）再用钥匙串身份签（dev_sign.py）。
     vision：目标是 Apple Vision Pro（按 iPad 兼容装）——申请描述文件的目标写 id=<UDID>，让 Xcode 自己认平台与「Designed for iPad」变体、登记这台设备
-    （原样写 platform=iOS 会找不到这台；理论支持、未真机验证）"""
+    （原样写 platform=iOS 会找不到这台；理论支持、未真机验证）。
+    widget：带主屏小组件扩展——主程序与扩展各申请一份描述文件（扩展包名 <主包名>.widget，两边都带共享组 group.s2arm.widget.<团队号>），
+    先签扩展再签主程序；其中任何一步不成（免费账号包名额度 9120、个人团队不给共享组等）→ 去掉扩展、按原来的权限重签，黄字说原因"""
+    if widget:
+        try:
+            return sign_with_widget(c, app, team, bid, ents, udid, log, steps, vision)
+        except Failure as e:
+            if e.code in ("keychain_prompt",):   # 钥匙串框没人点：去掉扩展也一样要签，照原样报
+                raise
+            widget_skip(c, app, WIDGET_QUOTA if e.code == "free_appid_limit" else str(e).removeprefix("签名没成：") or e.code)  # 非玩家句（去前缀用）
     if steps: c.begin("申请开发描述文件（第一次要几十秒）", 3, 6, keychain=True)   # 用 Xcode 账号申请：可能弹钥匙串授权
     try:
         env = dict(c.env(), S2A_PROFILE_DEST=f"id={udid}") if vision and udid else None
@@ -1541,6 +1612,34 @@ def sign_with_apple_id(c, app, team, bid, ents, udid, log, steps, vision=False):
         text = log.read_text(errors="replace")[-8000:] if log.is_file() else ""
         code = classify(text)
         raise Failure("签名没成：" + tool_reason(log) + "；" + recovery(code, packaged=bool(c.r.get("engineBundle"))), code=code) from e  # 非玩家句
+
+
+def sign_with_widget(c, app, team, bid, ents, udid, log, steps, vision):
+    """sign_with_apple_id 带小组件的那一支：权限文件临时写（主程序 = 原权限 + 共享组；扩展 = 只有共享组），扩展先签（dev_sign --extension 不核内存上限）"""
+    W = widget_mod(c)
+    group = widget_group(team["id"])
+    wbid = W.bundle_id(bid)
+    with tempfile.TemporaryDirectory(dir=c.private) as t:
+        main_ents = Path(t) / "app.entitlements"
+        pl = plistlib.loads(Path(ents).read_bytes()); pl["com.apple.security.application-groups"] = [group]
+        main_ents.write_bytes(plistlib.dumps(pl))
+        ext_ents = Path(t) / "widget.entitlements"
+        ext_ents.write_bytes(plistlib.dumps({"com.apple.security.application-groups": [group]}))
+        if steps: c.begin("申请开发描述文件（第一次要几十秒）", 3, 6, keychain=True)
+        try:
+            env = dict(c.env(), S2A_PROFILE_DEST=f"id={udid}") if vision and udid else None
+            for b, e in ((bid, main_ents), (wbid, ext_ents)):
+                c.run(["bash", c.engine / "pack/ensure_profile.sh", b, team["id"], e] + ([udid] if udid else []), log, env)
+            if steps: c.begin("用你的 Apple ID 签名", 4, 6, keychain=True)
+            for x in W.appexes(app):
+                c.run([sys.executable, c.engine / "pack/dev_sign.py", x, wbid, team["id"], ext_ents, "--extension"], log)
+            c.run([sys.executable, c.engine / "pack/dev_sign.py", app, bid, team["id"], main_ents], log)
+        except Failure as e:
+            if e.code != "tool_exit":
+                raise
+            from errors import tool_reason
+            text = log.read_text(errors="replace")[-8000:] if log.is_file() else ""
+            raise Failure("签名没成：" + tool_reason(log), code=classify(text)) from e  # 非玩家句
 
 
 def win_install_mod(c):   # Windows 签名装机 + 推包（pack/orch/install_win.py：玩家自装的 Impactor 同版 plumesign + s2a-devpush）
@@ -1805,11 +1904,27 @@ class WinPhone:
         if steps: self.c.begin("签名并装到 iPhone（Impactor 官方命令行 plumesign）", 3, 6)
         log = self.c.logs / (self.c.task + "-install.log")
         self.c.last_log = log
-        ns = argparse.Namespace(ipa=str(ipa), udid=self.udid, name=None, plumesign=b.get("plumesign"), log=str(log), bundle=self.bundle_for_signing())
-        try:
-            self.bid = self.W.install_app(ns, say=lambda m: self.c.emit("message", m))
-        except self.W.Fail as e:
-            raise win_install_failure(e) from e
+        # 主屏小组件扩展（11-16）：plumesign 自己给扩展注册包名与共享组。玩家关了 → 去掉再交；带着签不成（免费账号包名额度 9120 等）→ 去掉重来一次，黄字说原因
+        with tempfile.TemporaryDirectory(dir=self.c.private) as t:
+            plain = Path(t) / "S2Arm.ipa"
+            had = ipa_strip_widget(ipa, plain)
+            if had and self.c.r.get("widget") is False:
+                ipa, had = plain, False
+            ns = argparse.Namespace(ipa=str(ipa), udid=self.udid, name=None, plumesign=b.get("plumesign"), log=str(log), bundle=self.bundle_for_signing())
+            try:
+                self.bid = self.W.install_app(ns, say=lambda m: self.c.emit("message", m))
+            except self.W.Fail as e:
+                if not had:
+                    raise win_install_failure(e) from e
+                first = win_install_failure(e)
+                print(f"[装机] 带小组件签名装机没成（{e.err or ''}：{e}），去掉小组件重来", file=sys.stderr, flush=True)  # 非玩家句
+                ns.ipa = str(plain)
+                try:
+                    self.bid = self.W.install_app(ns, say=lambda m: self.c.emit("message", m))
+                except self.W.Fail as e2:
+                    raise win_install_failure(e2) from e2
+                why = WIDGET_QUOTA if e.err == "free_appid_limit" else str(first)
+                self.c.diagnostic(f"这次没装小组件：{why}", code="widget_skipped", severity="warning")
         rec = layout.load_device(self.c, self.key)
         layout.save_device(self.c, self.key, dict(rec, bundleId=self.bid))
 
@@ -1826,6 +1941,7 @@ class WinPhone:
             app = next((stage / "Payload").glob("*.app"), None)
             if not app:
                 raise Failure("解不开 iPhone 包：" + str(ipa), code="job_failed")  # 非玩家句
+            widget_prepare(c, app, devcert.state(c)["bundleId"], devcert=True)   # 自己的证书只有主程序一份描述文件：去掉小组件扩展（玩家关了不提示）
             if steps: c.begin("用你的开发者证书签名", 3, 6)
             bid, _ = devcert.sign_app(c, app, log)
             devcert.export_ipa(c, stage / "Payload")
@@ -2234,6 +2350,28 @@ def other_device_current(c, want):
         return None
     return (f"要更新的是另一台设备（编号末尾 {want[-6:]}），它现在不在线；现在连着的这台（编号末尾 {fresh[0][-6:]}）已经是新版 S2Arm，不用更新。"
             f"那台以后要用时连上它再点更新；不再用了的话，删掉游戏库文件夹 devices 里名字以 {want[-6:]} 结尾的那个文件，这个更新提醒就不再出现。")
+
+
+def update_prepare(c):
+    """「更新 iPhone 上的 S2Arm」的电脑侧准备，不连手机（新版启动器首次启动时后台调，接着手机连上再走 installUpdate 装机）：
+    各台手机记录里、游戏库里还在的款，按本引擎核一遍 iPhone 程序（改写产物）、补可读瓦片版着色器（rewrite_refresh.refresh_ios，结果记进各款 game.json）。
+    之后装机时 refresh_ios 认出已是本版、直接跳过，装机只剩组容器、签名、装。
+    和出包并发安全：每款单独拿这款的程序件锁（ipa.program_locks），做完就放，不长时间挡住那款的出包交付；本进程降优先级（子进程跟着），让出包和游戏先跑。
+    → {prepared: 准备了哪几款, updated: 其中实际改了的}"""
+    import ipa as packer
+    from rewrite_refresh import refresh_ios
+    try:
+        os.nice(10)   # Windows 没有 os.nice：照常优先级
+    except (AttributeError, OSError):
+        pass
+    have = {g["id"].upper() for g in c.catalog()["games"]}
+    games = sorted({str(g).upper() for _, rec in layout.devices(c) if isinstance(rec, dict) for g in (rec.get("games") or {}) if str(g).upper() in have})
+    c.begin("准备更新 iPhone 上的 S2Arm", 1, 1)
+    updated = []
+    for g in games:
+        with packer.program_locks(c, [g]):
+            updated += refresh_ios(c, [g])
+    return dict(prepared=games, updated=sorted(set(updated)))
 
 
 def update_phone(c):

@@ -577,7 +577,7 @@ def record_sources(sources):
 PROBES = ("catalog", "installCheck", "targetDevice", "locations", "patchMatch")
 JOURNAL_PROGRESS_S = 5.0   # 进度事件最多隔这么久重写一次任务记录（剃刀 H5：原先每条事件都原子重写 + fsync）；阶段、诊断、终态每次都写并 fsync
 LOCK_WAIT_S = 30   # 短作业排队等游戏库锁的上限（秒）：出包这类长任务占着时，过了上限就如实报「在等谁」，不无限挂着
-OPERATION_NAMES = {"build": "出包", "ipa": "打 iPhone 包", "import": "导入游戏", "install": "装到 iPhone", "installUpdate": "更新 iPhone 上的 S2Arm",
+OPERATION_NAMES = {"build": "出包", "ipa": "打 iPhone 包", "import": "导入游戏", "install": "装到 iPhone", "installUpdate": "更新 iPhone 上的 S2Arm", "installUpdatePrepare": "准备更新 iPhone 上的 S2Arm",
                    "installRemove": "从 iPhone 删除", "installRestore": "恢复 iPhone 上的上一版", "catalog": "刷新游戏库", "customize": "改游戏名或封面",
                    "remove": "移出游戏库", "delete": "删除游戏", "clean": "清理空间", "spaceFree": "释放空间", "launch": "开始游戏",
                    "moveGame": "移动游戏", "relinkGame": "重新关联原件", "forgetGame": "忘掉游戏", "setup": "设置游戏库", "keys": "导入密钥",
@@ -1421,7 +1421,7 @@ def pid_start(pid):
     return result.stdout.strip()
 
 
-WIN_RUNTIME_PATH = ["python", r"python\Scripts", "dotnet", r"git\usr\bin", "zstd"]   # 同 bundle_runtime_win.env_cmd 的 PATH（tests 核两处一致）
+WIN_RUNTIME_PATH = ["python", r"python\Scripts", r"git\usr\bin", "zstd"]   # 同 bundle_runtime_win.env_cmd 的 PATH（tests 核两处一致）
 
 
 def win_metal_dir(environ):
@@ -1434,12 +1434,12 @@ def win_metal_dir(environ):
 
 
 def win_runtime_env(runtime, engine, system_root):
-    """Windows 出包作业的环境（同随包 s2arm_env.cmd）：只用随包 Python / .NET 运行时 / bash / zstd + 系统目录，预编件在引擎 Binaries/Prepare（同 Mac）"""
+    """Windows 出包作业的环境（同随包 s2arm_env.cmd）：只用随包 Python / bash / zstd + 系统目录（不带 .NET：C# 件是 NativeAOT 单文件），预编件在引擎 Binaries/Prepare（同 Mac）"""
     import ntpath
     rt = str(runtime)
     paths = [ntpath.join(rt, d) for d in WIN_RUNTIME_PATH] + [ntpath.join(system_root, "system32"), system_root,
                                                                ntpath.join(system_root, r"System32\WindowsPowerShell\v1.0")]
-    return dict(PATH=";".join(paths), DOTNET_ROOT=ntpath.join(rt, "dotnet"), DOTNET_MULTILEVEL_LOOKUP="0",
+    return dict(PATH=";".join(paths),
                 S2A_BASH=ntpath.join(rt, r"git\usr\bin\bash.exe"), PYTHONHOME=ntpath.join(rt, "python"), PYTHONUTF8="1",
                 LC_ALL="C.UTF-8",   # 机器上设了 LANG=C / en_US 时 cygpath -m 在第一个中文字符处截断路径（#85：D:/浏览器下载/… → D:/）；与 MSYS 无语言变量时的缺省相同
                 S2A_PREBUILT_TOOLS=ntpath.join(str(engine), r"Binaries\Prepare"),

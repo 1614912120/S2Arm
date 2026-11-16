@@ -1897,6 +1897,24 @@ class ExportPhoneTests(unittest.TestCase):
             r = self._push(dict(device="U2"))
         self.assertEqual((r["pushDevice"], len(calls)), ("U2", 1))
 
+    def test_export_drops_widget_only_when_player_turned_it_off(self):
+        """小组件开关（11-16）：请求带 widget: false → 导出的 S2Arm.ipa 去掉 PlugIns/；不带 → 原样留着（侧载工具按壳里有的签）"""
+        A = self.A
+        self._library((A, "甲")); self._img(A, b"S2AIMG01-a")
+        base = self._ipa
+        def with_widget(path, sid, games):
+            base(path, sid, games)
+            with zipfile.ZipFile(path, "a") as z: z.writestr("Payload/S2Arm.app/PlugIns/S2ArmWidget.appex/Info.plist", b"p")
+            return path
+        self._ipa = with_widget
+        names = lambda: zipfile.ZipFile(self.c.library / install.EXPORT_DIRS["zh"] / "S2Arm.ipa").namelist()
+        self._export(dict(gameId=A))
+        self.assertTrue(any("/PlugIns/" in n for n in names()), "没关：带着")
+        self._export(dict(gameId=A, widget=False))
+        got = names()
+        self.assertFalse(any("/PlugIns/" in n for n in got), "关了：去掉")
+        self.assertIn("Payload/S2Arm.app/s2a_catalogue.json", got, "其余照旧")
+
     def test_export_folder_has_ipa_imgs_and_readme(self):
         """装法 export：点甲 → 甲、乙（单一 IMG）进容器和文件夹；丙旧格式点名跳过；丁没出过 iPhone 版不提；文件夹里只有 ipa、两份 .img（内容同库里）、说明"""
         A, B, C = self.A, self.B, self.C
@@ -2453,3 +2471,164 @@ class PhoneGamesTruthTests(unittest.TestCase):
         with um.patch.object(install, "devpush_client", self.client([self.A, self.B], {self.A})):
             self.assertEqual(install.container_others(self.c, self.ph(), rec, leave=self.D), [self.A, self.B])
 
+
+
+class WidgetSignTests(unittest.TestCase):
+    """主屏小组件扩展（11-16 小组件 B 半）：Mac 装机按签名方式带 / 去扩展；带不成去掉重签、照常装，黄字说原因"""
+    ENGINE = Path(__file__).resolve().parents[3]
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="s2a-widget-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.app = self.tmp / "S2Arm.app"
+        x = self.app / "PlugIns/S2ArmWidget.appex"; x.mkdir(parents=True)
+        (x / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "io.s2arm.shell.widget", "CFBundleExecutable": "S2ArmWidget"}))
+        (x / "S2ArmWidget").write_bytes(b"bin")
+        self.ents = self.tmp / "app.entitlements"
+        self.ents.write_bytes(plistlib.dumps({"com.apple.developer.kernel.increased-memory-limit": True}))
+        self.log = self.tmp / "install.log"
+        self.runs, self.fail_on = [], None
+        def run(args, log=None, env=None, cwd=None, on_line=None):
+            a = [str(v) for v in args]
+            seen = dict(args=a)
+            ent = next((v for v in a if v.endswith(".entitlements")), None)
+            if ent: seen["ents"] = plistlib.loads(Path(ent).read_bytes())
+            self.runs.append(seen)
+            if self.fail_on and self.fail_on(a):
+                self.log.write_text("error: Developer API error 9120: maximum number of App IDs\n", encoding="utf-8")
+                raise Failure("tool", code="tool_exit")
+        self.c = types.SimpleNamespace(engine=self.ENGINE, private=self.tmp, r={}, run=run, diagnostic=um.MagicMock(),
+                                       begin=lambda *a, **k: None, env=lambda: {})
+
+    def plain(self):
+        return [(r["args"][1].rsplit("/", 1)[-1] if r["args"][0] == "bash" else r["args"][1].rsplit("/", 1)[-1], r["args"][2] if r["args"][0] == "bash" else r["args"][3]) for r in self.runs]
+
+    def test_apple_id_signs_extension_first_with_shared_group(self):
+        self.assertTrue(install.widget_prepare(self.c, self.app, "io.s2arm.games.abc"))
+        self.assertEqual(plistlib.loads((self.app / "PlugIns/S2ArmWidget.appex/Info.plist").read_bytes())["CFBundleIdentifier"], "io.s2arm.games.abc.widget")
+        install.sign_with_apple_id(self.c, self.app, {"id": "TEAM1"}, "io.s2arm.games.abc", self.ents, "UDID", self.log, False, widget=True)
+        self.assertEqual(self.plain(), [("ensure_profile.sh", "io.s2arm.games.abc"), ("ensure_profile.sh", "io.s2arm.games.abc.widget"),
+                                        ("dev_sign.py", "io.s2arm.games.abc.widget"), ("dev_sign.py", "io.s2arm.games.abc")])
+        group = ["group.s2arm.widget.TEAM1"]
+        self.assertEqual(self.runs[0]["ents"], {"com.apple.developer.kernel.increased-memory-limit": True, "com.apple.security.application-groups": group})
+        self.assertEqual(self.runs[1]["ents"], {"com.apple.security.application-groups": group}, "扩展只带共享组，不带内存上限")
+        self.assertIn("--extension", self.runs[2]["args"]); self.assertNotIn("--extension", self.runs[3]["args"])
+        self.c.diagnostic.assert_not_called()
+        self.assertTrue((self.app / "PlugIns").is_dir())
+
+    def test_quota_full_strips_widget_and_signs_app_as_before(self):
+        install.widget_prepare(self.c, self.app, "io.s2arm.games.abc")
+        self.fail_on = lambda a: a[0] == "bash" and a[2].endswith(".widget")   # 扩展包名注册被拒（Apple 9120）
+        install.sign_with_apple_id(self.c, self.app, {"id": "TEAM1"}, "io.s2arm.games.abc", self.ents, "UDID", self.log, False, widget=True)
+        self.assertFalse((self.app / "PlugIns").exists(), "带不成：去掉扩展")
+        self.assertEqual(self.plain()[-2:], [("ensure_profile.sh", "io.s2arm.games.abc"), ("dev_sign.py", "io.s2arm.games.abc")])
+        self.assertEqual(self.runs[-1]["args"][5], str(self.ents), "重签用原来的权限（不带共享组）")
+        msg = self.c.diagnostic.call_args.args[0]
+        self.assertEqual(self.c.diagnostic.call_args.kwargs, dict(code="widget_skipped", severity="warning"))
+        self.assertTrue(msg.startswith("这次没装小组件：") and "10 个" in msg, msg)
+
+    def test_main_app_failure_after_widget_fallback_still_raises(self):
+        install.widget_prepare(self.c, self.app, "io.s2arm.games.abc")
+        self.fail_on = lambda a: a[0] == "bash"   # 主包名也申请不到：去掉扩展重来一次还是不成 → 照原样报错，不吞
+        with self.assertRaises(Failure) as e:
+            install.sign_with_apple_id(self.c, self.app, {"id": "TEAM1"}, "io.s2arm.games.abc", self.ents, "UDID", self.log, False, widget=True)
+        self.assertEqual(e.exception.code, "free_appid_limit")
+
+    def test_player_off_and_devcert_strip(self):
+        self.c.r["widget"] = False
+        self.assertFalse(install.widget_prepare(self.c, self.app, "io.s2arm.games.abc"))
+        self.assertFalse((self.app / "PlugIns").exists()); self.c.diagnostic.assert_not_called()
+        self.setUp()
+        self.assertFalse(install.widget_prepare(self.c, self.app, "io.s2arm.games.abc", devcert=True))
+        self.assertFalse((self.app / "PlugIns").exists())
+        self.assertEqual(self.c.diagnostic.call_args.kwargs["code"], "widget_skipped")
+        self.setUp(); shutil.rmtree(self.app / "PlugIns")
+        self.assertFalse(install.widget_prepare(self.c, self.app, "io.s2arm.games.abc"), "没有扩展的包：不带")
+
+
+class WinWidgetInstallTests(unittest.TestCase):
+    """Windows plumesign 装机带小组件（11-16）：带着签不成 → 去掉扩展重装一次、黄字；玩家关了 → 交去掉扩展的包；没扩展的包 → 原样交"""
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="s2a-wwidget-")); self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.ipa = self.tmp / "S2Arm.ipa"
+        with zipfile.ZipFile(self.ipa, "w") as z:
+            i = zipfile.ZipInfo("Payload/S2Arm.app/S2Arm"); i.external_attr = 0o755 << 16; z.writestr(i, b"bin")
+            z.writestr("Payload/S2Arm.app/PlugIns/S2ArmWidget.appex/Info.plist", b"plist")
+            z.writestr("Payload/S2Arm.app/PlugIns/S2ArmWidget.appex/S2ArmWidget", b"ext")
+        (self.tmp / "logs").mkdir()
+
+    def run_install(self, fails=(), widget=None):
+        given = []
+        class Fail(Exception):
+            def __init__(self, msg, err=None): super().__init__(msg); self.err = err
+        def install_app(ns, say=None):
+            with zipfile.ZipFile(ns.ipa) as z: given.append(sorted(z.namelist()))
+            if len(given) <= len(fails): raise Fail("plumesign 退 1", fails[len(given) - 1])
+            return "io.s2arm.games.abcde12345"
+        W = types.SimpleNamespace(Fail=Fail, install_app=install_app, plumesign_path=lambda x=None: "C:/plumesign.exe",
+                                  impactor=types.SimpleNamespace(bundled=lambda r: {}, select_only_account=lambda exe: None))
+        r = {} if widget is None else {"widget": widget}
+        c = types.SimpleNamespace(r=r, private=self.tmp, logs=self.tmp / "logs", task="t", emit=lambda *a, **k: None, begin=lambda *a, **k: None,
+                                  last_log=None, diagnostic=um.MagicMock())
+        me = types.SimpleNamespace(W=W, c=c, udid="U", key="dev1", bid=None, backup=lambda g: None, bundle_for_signing=lambda: None)
+        with um.patch.object(install.devcert, "active", return_value=False), um.patch.object(install.layout, "load_device", return_value={}), \
+             um.patch.object(install.layout, "save_device"):
+            install.WinPhone.install(me, self.ipa, [], steps=False)
+        return given, c.diagnostic
+
+    def test_quota_retry_without_widget(self):
+        given, diag = self.run_install(fails=("free_appid_limit",))
+        self.assertEqual(len(given), 2)
+        self.assertIn("Payload/S2Arm.app/PlugIns/S2ArmWidget.appex/S2ArmWidget", given[0], "第一次带着扩展交")
+        self.assertEqual(given[1], ["Payload/S2Arm.app/S2Arm"], "重来那次去掉扩展")
+        self.assertEqual(diag.call_args.kwargs, dict(code="widget_skipped", severity="warning"))
+        self.assertIn("10 个", diag.call_args.args[0])
+
+    def test_second_failure_raises(self):
+        with self.assertRaises(Failure):
+            self.run_install(fails=("free_appid_limit", "device_not_connected"))
+
+    def test_player_off_and_plain_success(self):
+        given, diag = self.run_install(widget=False)
+        self.assertEqual(given, [["Payload/S2Arm.app/S2Arm"]]); diag.assert_not_called()
+        given, diag = self.run_install()
+        self.assertEqual(len(given), 1); self.assertEqual(len(given[0]), 3); diag.assert_not_called()
+
+    def test_strip_keeps_exec_bit(self):
+        out = self.tmp / "o.ipa"
+        self.assertTrue(install.ipa_strip_widget(self.ipa, out))
+        with zipfile.ZipFile(out) as z: self.assertEqual(z.getinfo("Payload/S2Arm.app/S2Arm").external_attr >> 16, 0o755)
+        plain = self.tmp / "plain.ipa"; shutil.copy(out, plain)
+        self.assertFalse(install.ipa_strip_widget(plain, self.tmp / "x.ipa")); self.assertFalse((self.tmp / "x.ipa").exists())
+
+
+class UpdatePrepareTests(unittest.TestCase):
+    """「更新 iPhone」电脑侧准备（installUpdatePrepare，update_prepare）：不连手机；各台手机记录里、游戏库里还在的款逐款补（refresh_ios），
+    每款在自己的程序件锁里补；游戏库里已删的款不补。期望按规则手写"""
+    A, B, C = "0100000000010000", "0100000000020000", "0100000000030000"
+
+    def test_prepares_recorded_games_one_lock_each_without_phone(self):
+        import contextlib, ipa as packer, rewrite_refresh
+        with tempfile.TemporaryDirectory() as t:
+            lib = Path(t); (lib / "devices").mkdir()
+            (lib / "devices/UDID1.json").write_text(json.dumps({"games": {self.B: {}, self.C: {}}}))   # C 已从游戏库删掉
+            (lib / "devices/UDID2.json").write_text(json.dumps({"games": {self.A.lower(): {}}}))
+            held, calls = [], []
+            @contextlib.contextmanager
+            def lock(name, wait=None):
+                held.append(name); yield; held.remove(name)
+            c = types.SimpleNamespace(library=lib, catalog=lambda: {"games": [{"id": self.A}, {"id": self.B}]}, begin=lambda *a: None, lock=lock)
+            def refresh(cc, games):
+                calls.append((list(games), list(held))); return [g for g in games if g == self.B]
+            def no_phone(cc):
+                raise AssertionError("准备段不该找手机")
+            with um.patch.object(rewrite_refresh, "refresh_ios", refresh), um.patch.object(install, "phone_for", no_phone):
+                r = install.update_prepare(c)
+        self.assertEqual(calls, [([self.A], ["program-" + self.A]), ([self.B], ["program-" + self.B])])
+        self.assertEqual(r, {"prepared": [self.A, self.B], "updated": [self.B]})
+
+    def test_operation_registered(self):
+        import core
+        src = (Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8")
+        self.assertIn('"installUpdatePrepare": install.update_prepare', src)
+        self.assertEqual(core.OPERATION_NAMES["installUpdatePrepare"], "准备更新 iPhone 上的 S2Arm")

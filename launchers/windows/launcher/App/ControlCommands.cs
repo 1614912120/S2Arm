@@ -19,6 +19,21 @@ public sealed partial class EnvironmentWindow
     private static readonly bool ControlForced = Environment.GetCommandLineArgs().Contains("--control") ||
         Environment.GetEnvironmentVariable("S2ARM_CONTROL") == "1";
     private string ControlSwitchFile => Path.Combine(privateRoot, "ai-control.on");
+    // 「装到 iPhone 时带主屏小组件」（11-16，缺省开）：私有目录里有 home-widget.off 即关；关掉时装机 / 更新 / 导出请求带 widget: false
+    private string HomeWidgetOffFile => Path.Combine(privateRoot, "home-widget.off");
+    private bool HomeWidget => !File.Exists(HomeWidgetOffFile);
+    private string homeWidgetError = "";
+    private void SetHomeWidget(bool on)
+    {
+        homeWidgetError = "";
+        try
+        {
+            PrivateJobRequest.EnsurePrivateRoot(privateRoot);
+            if (on) File.Delete(HomeWidgetOffFile); else File.WriteAllBytes(HomeWidgetOffFile, []);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { homeWidgetError = error.Message; }
+        Render();
+    }
 
     /// <summary>崩溃日志用（LauncherCrash）：同 ResolvePrivateRoot，算不出（参数坏了）退回系统临时目录。</summary>
     internal static string PrivateRootForLogs()
