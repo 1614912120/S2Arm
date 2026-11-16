@@ -37,7 +37,6 @@ from pack.orch import oneclick_win   # noqa: E402
 from pack import rewriter   # noqa: E402
 
 LOGS = ROOT / "build/windows/prepare-logs"
-NOPDB = shutil.ignore_patterns("*.pdb")
 
 
 def run(args, log, env=None):
@@ -56,8 +55,11 @@ def dotnet_publish(project, out, log, aot=True):
          *(["-p:PublishAot=true"] if aot else []), "-o", out], log)
 
 
-def copy_dir(src, dst):
-    shutil.copytree(src, dst, ignore=NOPDB)
+def copy_exe(stage_dir, dst, name):
+    # AOT 发布目录里只收这一个 exe（同 Mac bundle_engine.py）：NuGet 包顺带放进来的原生库没人加载（romfs / gamedec 目录里的
+    #   libSkiaSharp.dll 11 MB、误带的 libarmeilleure-jitsupport.dylib，11-16 Windows 实机实测；dumpbin /dependents 只有系统 DLL 与 UCRT）
+    dst.mkdir(parents=True)
+    shutil.copy2(stage_dir / name, dst / name)
 
 
 def stamp(directory, ident):
@@ -78,10 +80,10 @@ def bundle(target):
     tools.mkdir(parents=True)
 
     dotnet_publish("services/romfs_index/romfs_index.csproj", stage / "romfs", "romfs.log", aot=False)
-    copy_dir(stage / "romfs", tools / "romfs")
+    copy_exe(stage / "romfs", tools / "romfs", "romfs_index.exe")
 
     dotnet_publish("graphics/tools/direct/dsh/batch/dsh_batch.csproj", stage / "dsh_batch", "dsh_batch.log")
-    copy_dir(stage / "dsh_batch", tools / "dsh_batch")
+    copy_exe(stage / "dsh_batch", tools / "dsh_batch", "dsh_batch.exe")
     import dsh_batch
     stamp(tools / "dsh_batch", dsh_batch.src_digest(os.path.join(dsh_batch.DSH, "batch", "dsh_batch.csproj")))
     # 同一份源码的翻译器指纹（同 Mac bundle_engine.py）：玩家机没有 .NET、展不开 DshXfpInput 清单，direct_lib.sh 出库后核库印章取这份当「本树」值
@@ -94,11 +96,11 @@ def bundle(target):
     (tools / "dsh_batch/.xfp").write_text(xfp + "\n", encoding="utf-8")
 
     dotnet_publish("pack/nx_unpack/nx_unpack.csproj", stage / "nx_unpack", "nx_unpack.log")
-    copy_dir(stage / "nx_unpack", tools / "nx_unpack")
+    copy_exe(stage / "nx_unpack", tools / "nx_unpack", "nx_unpack.exe")
     stamp(tools / "nx_unpack", oneclick_win.nx_unpack_id())
 
     dotnet_publish("pack/gamedec/gamedec.csproj", stage / "gamedec", "gamedec.log")
-    copy_dir(stage / "gamedec", tools / "gamedec")
+    copy_exe(stage / "gamedec", tools / "gamedec", "gamedec.exe")
     stamp(tools / "gamedec", oneclick_win.gamedec_id())
 
     # --locked：按仓库里的 Cargo.lock 取依赖（同 Mac）
