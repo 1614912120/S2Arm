@@ -159,6 +159,9 @@ static int mem_peak_path(char *out, size_t n) {
     uint64_t (*pidf)(void) = (uint64_t (*)(void))dlsym(RTLD_DEFAULT, "s2a_npdm_program_id"); const char *ov = getenv("S2A_GUEST_MEM_PEAK");
     if (ov && *ov) { snprintf(out, n, "%s", ov); return 1; }   // 单测 / 诊断指定
     uint64_t pid = g_attach_phase ? g_ctor_pid : pidf ? pidf() : 0;   // 构造期只认 npdm 直读的；局中（心跳记峰值）照旧按当前程序号
+    // 局中当前程序号还取不到（iOS 图形模式没放行时恒 0）→ 退回构造期从本款 main.npdm 读到的号（多款容器构造期没选游戏，那个号也是 0，不变）。
+    //   开发乙 11-15 Duo 读数：启动上下文直接起容器里的一款，App 到前台写「在跑」标记时这里取不到号、整局没写标记，真被内存上限杀了下一局也认不出
+    if (!pid) pid = g_ctor_pid;
     if (!pid) return 0;
     s2a_docs_path(out, n, "wire/%016llX/mem_peak_anon", (unsigned long long)pid); return 1;
 }
