@@ -3628,13 +3628,27 @@ static void pages_mask_readable(uintptr_t p, uint64_t n, uintptr_t pg, unsigned 
 }
 // 宿主 CPU 整段读贴图存储的唯一入口（pkg 上传、初始内容掩码、局部重传、ReadTexels、诊断转储都走它）：整段可读 → 直接用 t->mem；
 //   否则拷可读的前缀、其余按 0（同稀疏池的未映射页），*part 交调用方 free，记一次红。#b5a081 / #a4a895 / #f83b30 都是某一处整段读没先问
+// 逐页安全拷（vm_read_overwrite：读不了只回错、不会触发缺页信号）：读不了的页按 0，返回读到的字节数
+static uint64_t safe_copy(uint8_t *dst, const uint8_t *src, uint64_t n) {
+    uintptr_t pg = (uintptr_t)getpagesize(); uint64_t got = 0;
+    for (uint64_t o = 0; o < n;) {
+        uintptr_t a = (uintptr_t)src + o; size_t m = (size_t)MIN((uint64_t)(((a & ~(pg - 1)) + pg) - a), n - o); vm_size_t r = 0;
+        if (vm_read_overwrite(mach_task_self(), (vm_address_t)host_rd((const uint8_t *)a), m, (vm_address_t)(dst + o), &r) == KERN_SUCCESS && r == m) got += m; else memset(dst + o, 0, m);
+        o += m;
+    }
+    return got;
+}
+// 宿主 CPU 整段读贴图存储的唯一入口（pkg 上传、初始内容掩码、局部重传、ReadTexels、诊断转储都走它）：
+//   存储在已登记内存池里且按权限整段可读 → 直接用 t->mem；否则（不在池里的 CPU 回退路，或有不可读的页）→ 逐页安全拷进副本，读不了的按 0，*part 交调用方 free，记一次红。
+//   诊断#f83b30 / 测试机1 丝之歌（v0.4.3，move ← pkg_upload）：不在池里的存储按权限判「可读」、读的时候照样 SIGBUS（背后的存储已不在），所以这条路不靠判、一律安全拷。
+//   副本多给 64 字节：去混排按 16 字节宽读，末尾不越出分配
 static const uint8_t *tex_src(const tex_t *t, uint64_t n, uint8_t **part) {
     *part = NULL;
-    uint64_t rd = mem_readable(t->mem, n);
-    if (rd >= n) return t->mem;
-    if (!(*part = calloc(1, n ? n : 1))) MDIE("texture copy of %llu bytes failed", (unsigned long long)n);
-    memcpy(*part, t->mem, rd);
-    RED_ONCE(193, "texture ser=%llu %ux%u format %#x not readable from a memory pool buffer: only %llu of its %llu storage bytes are mapped; the rest is read as 0", (unsigned long long)t->serial,
+    void *mb; uint64_t mo;
+    if (mem_readable(t->mem, n) >= n && nvn_be_addr((uint64_t)(uintptr_t)t->mem, n, &mb, &mo)) return t->mem;
+    if (!(*part = calloc(1, n + 64))) MDIE("texture copy of %llu bytes failed", (unsigned long long)n);
+    uint64_t rd = safe_copy(*part, t->mem, n);
+    if (rd < n) RED_ONCE(193, "texture ser=%llu %ux%u format %#x not readable from a memory pool buffer: only %llu of its %llu storage bytes are mapped; the rest is read as 0", (unsigned long long)t->serial,
              t->d.width, t->d.height, t->d.format, (unsigned long long)rd, (unsigned long long)n);
     return *part;
 }
@@ -3687,8 +3701,7 @@ static uint64_t tp_fp_u(const tex_t *t, int *untouched) {
             const uint8_t *g = t->mem + a; uintptr_t pe = ((uintptr_t)g & ~(pg - 1)) + pg; size_t m = (size_t)MIN((uint64_t)(pe - (uintptr_t)g), e - a);
             const uint8_t *hp = host_rd(g); unsigned char v = 0;
             if (!file && !mincore((void *)((uintptr_t)hp & ~(pg - 1)), 1, (char *)&v) && !(v & (MINCORE_INCORE | MINCORE_PAGED_OUT))) { memset(buf + o, 0, m); if (untouched) *untouched = 1; }
-            else if (!span_readable(hp, m)) { memset(buf + o, 0, m); if (untouched) *untouched = 1; }   // 驻留但当前不可读（诊断#f83b30）：按 0、不读
-            else memcpy(buf + o, hp, m);
+            else if (safe_copy(buf + o, g, m) < m && untouched) *untouched = 1;   // 诊断#f83b30：驻留不等于可读、权限可读也不等于读得到（背后存储可能已不在）——安全拷，读不了按 0
             o += m; a += m;
         }
     return span_hash(buf, o) ^ len;
