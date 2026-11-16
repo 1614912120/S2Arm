@@ -221,6 +221,15 @@ public final class S2ArmLauncherModel: ObservableObject {
     var installAfterQueue: [String] = []
     /// 「导出自签包」点在没出过包的款上：这几款出完 iPhone 包接着导出（不是装机）
     var selfSignAfterPack: Set<String> = []
+    /// 出包页选了「出完装到 iPhone」的款：iPhone 包出好就接着装（同 selfSignAfterPack 走 installAfterQueue）
+    var installAfterPack: Set<String> = []
+    /// 出包页「出完之后」玩家选的那条路（11-16 维护者：一个出包入口，装机 / 自签导出两条分叉各自一步走完）：install / export，记住到下次；
+    ///   「更新 iPhone 上的 S2Arm」也按它走（选了自签 = 不连手机、直接导出更新后的自签包）
+    @Published var iosAfterPack: String = UserDefaults.standard.string(forKey: "S2AIosAfterPack") ?? "install" {
+        didSet { UserDefaults.standard.set(iosAfterPack, forKey: "S2AIosAfterPack") }
+    }
+    /// 玩家选了「出完导出自签 IPA」：自动装到手机（连上就更新、新版首启横幅）一律跳过，玩家自己签名安装
+    var selfSignChosen: Bool { iosAfterPack == "export" }
     /// 这次装机会话是导出自签包（进度 / 结局页照导出写；完成后看结局里的导出文件夹）
     @Published var selfSigning = false
     /// 添加游戏 / 放密钥弹窗（ImportSheet）：这两个作业的进度和失败原因都留在弹窗里，不换页。
@@ -876,8 +885,8 @@ public final class S2ArmLauncherModel: ObservableObject {
                                                              sgrade: SGradeOutcome(o["boost"] as? [String: Any] ?? [:])))
                 // 「导出自签包」点在没出过包的款上：iPhone 包出好就接着导出（D-9ZF9：原先出完包停在完成页，导出要再点一次）。
                 //   导出不连手机、不签名，没有副作用；排进 installAfterQueue，这次出包会话结束后由 pumpQueue 接着跑（installNextQueued 按 selfSignAfterPack 走导出）
-                if platform == .ios, state == .completed, let gid = self.session?.gameID, self.selfSignAfterPack.contains(gid), !self.batchRunning,
-                   !self.installAfterQueue.contains(gid) { self.installAfterQueue.append(gid) }
+                if platform == .ios, state == .completed, let gid = self.session?.gameID, self.selfSignAfterPack.contains(gid) || self.installAfterPack.contains(gid),
+                   !self.batchRunning, !self.installAfterQueue.contains(gid) { self.installAfterQueue.append(gid) }   // 选了「装到 iPhone」的同样接着装
                 if self.batchRunning { self.batchStepEnded() }
             default:
                 sink.emit(event)
@@ -1629,7 +1638,7 @@ public final class S2ArmLauncherModel: ObservableObject {
         if session.kind == .installUpdate { phoneUpdateEnded(completed: state == .completed) }
         // 「导出自签包」点在没出过包的款上：出包没成（起不来 / 失败 / 取消）就没排进 installAfterQueue，标记清掉——
         //   否则这款以后正常出包会被画成导出、批量「更新并重新出」排进来的装机会误走导出
-        if session.kind == .export, let gid = session.gameID, !installAfterQueue.contains(gid) { selfSignAfterPack.remove(gid) }
+        if session.kind == .export, let gid = session.gameID, !installAfterQueue.contains(gid) { selfSignAfterPack.remove(gid); installAfterPack.remove(gid) }
         if session.isPhoneJob || (session.kind == .export && !installAfterQueue.isEmpty) { Task { pumpQueue() } }   // 手机作业结束：排着的装机 / 等它的出包接上   // 导出模式出完包排了导出（runExport / exportSink）
         if [.delete, .clearCache].contains(session.kind), let n = libraryNotice, n.kind == .running {   // 删除 / 清缓存的结果写进游戏库页顶部那条提示
             libraryNotice = LibraryNotice(kind: state == .completed ? .done : .failed, key: n.key, name: n.name,
