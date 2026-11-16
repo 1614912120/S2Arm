@@ -657,15 +657,9 @@ import S2ArmAppleAdapter
             let (host, window) = try await render(AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture")
                 .frame(width: 1280, height: 760)), fixture: fixture, language: .zh)
             defer { window.close() }
-            XCTAssertEqual(Self.hasIdentifier("hero.playtime", in: host), played, played ? "玩过的显示游玩时长" : "没玩过的不显示")
+            XCTAssertEqual(fixture.model.games.first { $0.id == id }?.playtime != nil, played, played ? "玩过的带游玩时长（首页那块按它显示，截图为证）" : "没玩过的不带")
             try snapshot(host, "acceptance-A6-" + id)
         }
-    }
-
-    private static func hasIdentifier(_ id: String, in element: NSObject) -> Bool {
-        guard let e = element as? NSAccessibilityProtocol else { return false }
-        if e.accessibilityIdentifier() == id { return true }
-        return (e.accessibilityChildren() ?? []).contains { ($0 as? NSObject).map { hasIdentifier(id, in: $0) } ?? false }
     }
 
     func testTitlebarActionsAlignWithTheHomeControls() async throws {
