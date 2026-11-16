@@ -344,5 +344,28 @@ class ExportTest(unittest.TestCase):
             self.assertEqual(e.exception.code, "downstream_export_unsupported")
 
 
+class HostTest(unittest.TestCase):
+    """方案能在哪些电脑上出包（登记表 targets.ios.hosts，#1272）：本机平台不在里面 → 不能选、原因说只能在 Mac 上出"""
+    def test_mac_only_scheme_on_windows(self):
+        s = scheme(targets=dict(ios=dict(tool="t.py", hosts=["mac"])))
+        ok, why = ds.eligibility(s, game(), host="windows")
+        self.assertFalse(ok); self.assertIn("Mac", why)
+        self.assertFalse(ds.eligibility(s, game(), "en", host="windows")[0])
+        self.assertEqual(ds.eligibility(s, game(), host="mac"), (True, ""))
+
+    def test_hosts_default_is_mac_only(self):
+        s = scheme(targets=dict(ios=dict(tool="t.py")))
+        self.assertFalse(ds.eligibility(s, game(), host="windows")[0])
+        self.assertTrue(ds.eligibility(s, game(), host="mac")[0])
+
+    def test_windows_listed_opens_it(self):
+        s = scheme(targets=dict(ios=dict(tool="t.py", hosts=["mac", "windows"])))
+        self.assertEqual(ds.eligibility(s, game(), host="windows"), (True, ""))
+
+    def test_real_registry_is_mac_only_for_now(self):
+        real = ds.load()
+        self.assertEqual(ds.hosts(real["d2r-mobile"]), ["mac"])
+
+
 if __name__ == "__main__":
     unittest.main()
