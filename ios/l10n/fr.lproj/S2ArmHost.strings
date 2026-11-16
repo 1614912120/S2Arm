@@ -229,6 +229,7 @@
 "vpad.menu.face.xbox" = "Boutons : disposition Xbox";
 "vpad.menu.face.xbox.note" = "Positions des boutons Xbox ; le bouton du bas confirme";
 "vpad.menu.gyro" = "Gyro du téléphone";
+"vpad.menu.gyro.note" = "Les manettes au format Xbox, comme celles de 8BitDo ou GameSir, n'ont les commandes de mouvement qu'en mode Switch.";
 "vpad.menu.haptic.note" = "Un léger coup quand vous appuyez sur un bouton";
 "vpad.menu.holdLock.note" = "Maintenir 2 s pour verrouiller ; ce jeu uniquement";
 "vpad.menu.hud" = "Superposition de performances";
@@ -336,6 +337,7 @@
 "diag.error.zip" = "Impossible de créer le paquet (échec d'écriture du zip ; le téléphone manque peut-être d'espace)";
 "diag.export" = "Exporter le diagnostic";
 "diag.prompt.abnormalExit" = "S2Arm ne s'est pas fermé normalement la dernière fois (crash, blocage ou fermeture par le système)";
+"diag.prompt.imlLost" = "S2Arm ne s'est pas fermé normalement la dernière fois. Cette installation a perdu la permission « Limite de mémoire accrue » : si un jeu volumineux s'est fermé, c'est très probablement un manque de mémoire. Réinstallez avec « Installer sur l'iPhone » dans S2Arm sur votre ordinateur (un identifiant Apple gratuit conserve aussi ce droit). Si vous signez vous-même, utilisez Xcode ou AltStore Classic v2.3 ; une nouvelle signature avec SideStore 0.7.0 le supprime. Pour une installation existante, vous pouvez aussi ajouter le droit à l'App ID avec GetMoreRam puis réinstaller";
 "diag.prompt.crash" = "Le système a signalé que S2Arm a crashé ou s'est bloqué la dernière fois";
 "diag.prompt.message" = "%@. Cela envoie les journaux d'exécution, les rapports de crash et la liste des pipelines graphiques utilisés par les jeux (ID de shaders uniquement) — pas de sauvegardes, clés ou fichiers de jeu — et vous donne un code court.";
 "diag.prompt.no" = "Non merci";
@@ -382,7 +384,7 @@
 "gfx.fpsLimit" = "Limite de fréquence d'images";
 "gfx.fpsLimit.none" = "Illimitée";
 "gfx.resolution" = "Résolution de rendu";
-"iml.lost.body" = "Les jeux volumineux peuvent manquer de mémoire ou ralentir. Re-signez avec Xcode ou AltStore Classic v2.3 et réinstallez, ou utilisez GetMoreRam pour ajouter la permission à l'App ID et réinstallez.";
+"iml.lost.body" = "Les jeux volumineux peuvent manquer de mémoire et se fermer ou ralentir. Réinstallez avec « Installer sur l'iPhone » dans S2Arm sur votre ordinateur (un identifiant Apple gratuit conserve aussi ce droit). Si vous signez vous-même, utilisez Xcode ou AltStore Classic v2.3 ; une nouvelle signature avec SideStore 0.7.0 le supprime. Pour une installation existante, vous pouvez aussi ajouter le droit à l'App ID avec GetMoreRam puis réinstaller.";
 "iml.lost.title" = "Cette installation a perdu la permission « Limite de mémoire accrue »";
 "lan.denied.later" = "Pas maintenant";
 "lan.denied.message" = "Le système n'a pas autorisé « %@ » à trouver des appareils sur votre réseau local, donc le multijoueur ne peut pas trouver d'autres joueurs.\n\nAllez dans Réglages › Confidentialité et sécurité › Réseau local, activez « %@ », puis revenez et rejoignez à nouveau le multijoueur.";
@@ -540,6 +542,14 @@
 "sgrade.state.version.older" = "Il n’existe des patchs que pour l’ancienne version %1$@ ; rien encore pour votre version.";
 "sgrade.state.version.port_failed" = "Nous avons essayé de l’adapter à votre version, sans succès.";
 "sgrade.state.none" = "La bibliothèque de patchs n’a pas encore de patch %1$@ pour ce jeu.";
+"sgrade.state.failed" = "Le correctif %1$@ de ce jeu n'a pas pu être ajouté : %2$@";
+"sgrade.result.why.mismatch" = "il ne correspond pas à votre copie du jeu";
+"sgrade.result.why.conflict" = "il entre en conflit avec un autre correctif";
+"sgrade.result.why.translate" = "cette partie ne peut pas encore être traduite";
+"sgrade.result.why.full" = "trop de correctifs pour ce module";
+"sgrade.result.why.port" = "il est destiné à une autre version et n'a pas pu être adapté";
+"sgrade.result.why.version" = "ce mod est destiné à une autre version du jeu";
+"sgrade.result.why.unsupported" = "le correctif utilise quelque chose que S2Arm ne prend pas encore en charge";
 "sgrade.state.opted_out" = "Non ajouté : « Ajouter à la compilation » était désactivé lors de l’export. Activez-le et exportez à nouveau.";
 "sgrade.state.pending.ios" = "De nouveaux patchs sont disponibles : ouvrez S2Arm sur votre ordinateur et choisissez « Mise à niveau classe S ».";
 "sgrade.state.mac_only" = "Les patchs graphiques sont réservés à la version Mac.";

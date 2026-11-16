@@ -329,3 +329,10 @@ package struct LauncherGuideStep: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
+
+// 手柄焦点框画在控件自己的边框上：各样式报自己的圆角
+extension LauncherPrimaryButtonStyle: PadRingShaped {   // 奶油底：贴边的奶油框看不见，改外扩 3 pt、同心圆角
+    package var padRingRadius: CGFloat { LauncherTheme.Metrics.controlRadius }
+    package var padRingOutset: CGFloat { 3 }
+}
+extension LauncherIconButtonStyle: PadRingShaped { package var padRingRadius: CGFloat { LauncherTheme.Metrics.controlRadius } }

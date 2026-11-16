@@ -55,11 +55,11 @@ struct JobSessionView: View {
         VStack(alignment: .leading, spacing: 26) {
             ScrollView { PhoneJobPanel(model: model, session: session).frame(maxWidth: .infinity, alignment: .leading) }
             HStack(spacing: 14) {
-                if finished == nil {
-                    Button { model.stop() } label: { LauncherHeroActionLabel(title: loc.t("s2arm.job.cancel"), symbol: "stop.fill") }
+                if finished == nil {   // 手机作业在手机槽（出包等主槽作业可同时跑）：取消 / 返回只动手机槽
+                    Button { model.stopPhone() } label: { LauncherHeroActionLabel(title: loc.t("s2arm.job.cancel"), symbol: "stop.fill") }
                         .controllerButtonStyle(.plain).disabled(session.phase == .stopping).keyboardShortcut(".", modifiers: .command)
                 } else {
-                    Button { model.backToLibrary() } label: { LauncherHeroActionLabel(title: loc.t("s2arm.play.back"), symbol: "chevron.left") }
+                    Button { model.backFromPhone() } label: { LauncherHeroActionLabel(title: loc.t("s2arm.play.back"), symbol: "chevron.left") }
                         .controllerButtonStyle(.plain).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger, .back)
                 }
                 Spacer()

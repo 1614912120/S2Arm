@@ -32,7 +32,7 @@ extension S2ArmLauncherModel {
 
     /// 点「更新 iPhone 上的 S2Arm」：没有要重新出包的款直接更新；有就先弹三选一
     func requestPhoneUpdate(language: String) {
-        guard let u = phoneUpdate, !busy else { return }
+        guard let u = phoneUpdate else { return }   // 手机槽忙也能点：更新排到手机槽空出来（updatePhone）
         if u.stale.isEmpty { updatePhone(acceptStale: false, repack: [], language: language) } else { updateConfirm = u }
     }
 
@@ -42,7 +42,10 @@ extension S2ArmLauncherModel {
     func updatePhone(acceptStale: Bool, repack: [String], language: String, device: String? = nil, acceptDropped: Bool = false, accept: Set<String> = [], ask: Bool = true,
                      mode: String? = nil, sgradeUpgrade: Bool = false) {
         let accept = acceptDropped ? accept.union(["acceptDropped"]) : accept
-        guard !busy else { return }
+        guard !phoneBusy else {   // 出包等主槽作业照跑也能更新（手机槽）；手机槽忙 → 排队
+            phoneQueue.append((nil, { [weak self] in self?.updatePhone(acceptStale: acceptStale, repack: repack, language: language, device: device, accept: accept, ask: ask,
+                                                                       mode: mode, sgradeUpgrade: sgradeUpgrade) })); return
+        }
         updateConfirm = nil; updateRepack = repack
         // 更新哪台：壳旧了的那台（phoneUpdates 的设备记录键）；没有就是玩家选的那台。一律带上，作业层不自己挑（v0.3.0 验收测出连着两台报错；11-11 设备号贯穿所有装机入口）
         let device = mode == "export" ? nil : device ?? phoneUpdate?.device ?? installDeviceID
@@ -60,6 +63,7 @@ extension S2ArmLauncherModel {
                                                   exportFolder: r["exported"] as? Bool == true ? r["outputPath"] as? String ?? "" : "",
                                                   exportGames: (r["games"] as? [Any])?.count ?? 0, exportBytes: (r["exportBytes"] as? NSNumber)?.int64Value,
                                                   exportFresh: r["fresh"] as? [String] ?? [], exportReused: (r["reused"] as? NSNumber)?.intValue ?? 0,
+                                                  exportUnwritten: r["unwritten"] as? [String] ?? [],
                                                   sgrade: (r["sgrade"] as? [String: Any] ?? [:]).sorted { $0.key < $1.key }
                                                       .map { SGradeGameResult(name: names[$0.key.uppercased()] ?? $0.key, outcome: SGradeOutcome($0.value as? [String: Any] ?? [:])) })
                 if r["exported"] as? Bool == true, let folder = r["outputPath"] as? String { NSWorkspace.shared.open(URL(fileURLWithPath: folder)) }
@@ -101,7 +105,7 @@ extension S2ArmLauncherModel {
     }
 
     func installNextQueued() {
-        guard !busy, !installAfterQueue.isEmpty else { return }
+        guard !phoneBusy, !installAfterQueue.isEmpty else { return }   // 手机槽空就装（主槽在出别的款也装）
         let id = installAfterQueue.removeFirst()
         if let game = games.first(where: { $0.id == id }) { install(game, export: selfSignAfterPack.remove(id) != nil) } else { installNextQueued() }
     }

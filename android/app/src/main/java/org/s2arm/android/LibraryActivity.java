@@ -332,7 +332,7 @@ public final class LibraryActivity extends Activity {
 
     private void show(String text) { status.setText(text); status.setVisibility(android.view.View.VISIBLE); }
 
-    // #528 item 15: the last game session died in the foreground (LastSession, the marker the :game process keeps).
+    // #528 item 15: the last game session died in the foreground or its shutdown never finished ("fg" / "end" in LastSession, the marker the :game process keeps).
     //   Asked once: the marker is cleared before the notice shows. Not while a game process lives (split screen can
     //   keep the game in front next to the library); "bg" or no marker never asks.
     private void checkLastSession() {
@@ -469,6 +469,7 @@ public final class LibraryActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         fpsOverlay.setChecked(getSharedPreferences("display", MODE_PRIVATE).getBoolean("fps", false));
+        if (shelf != null) shelf.refreshPlaytime();   // 刚玩完回来：重读游玩时间
         if (library != null) {
             boolean receive = getIntent().hasExtra(EXTRA_IMPORT_RECEIVE);
             getIntent().removeExtra(EXTRA_IMPORT_RECEIVE);

@@ -91,6 +91,79 @@ static void boundary_cases(const char *T) {
 }
 
 unsigned s2a_foreign_scan(const char *home, uint64_t *bytes, char *line, size_t n); unsigned s2a_foreign_scan_as(const char *home, unsigned self_uid, uint64_t *bytes, char *line, size_t n);
+// 压缩传输的 game.img 块（v0.5.0，runtime/src/pack_apply.c img_unzst；块大小本单测编成 64 KB，见 runtime/tests/mk/pack_apply.mk）。
+//   夹具：合成单一 IMG（头 + 规律字节 + 文件尾 40 字节空目录表，长 2 × 64 KB + 5000），按 64 KB 切 3 块，每块用 zstd 命令行（没有就 Python zstd 模块）
+//   各压成一帧，放进 .incoming。期望手写：解完 game.img 与源逐字节相同、块全删、.applied = 清单号；缺块 / 坏帧 / 截短 → 截短包码、块与 .pushed 都删
+#define ZC 65536
+static char g_zcmd[64];   // 压缩命令：zstd 命令行或 python3
+static int zstd_pick(void) {
+    if (!g_zcmd[0]) { if (sh("command -v zstd >/dev/null 2>&1") == 0) snprintf(g_zcmd, sizeof g_zcmd, "zstd");
+        else if (sh("python3 -c 'from compression import zstd' 2>/dev/null || python3 -c 'import zstandard' 2>/dev/null") == 0) snprintf(g_zcmd, sizeof g_zcmd, "python3"); else snprintf(g_zcmd, sizeof g_zcmd, "-"); }
+    return g_zcmd[0] != '-';
+}
+static int zcomp(const char *in, const char *out) {   // 一个文件压成一个带校验的 zstd 帧
+    char c[3000];
+    if (!strcmp(g_zcmd, "zstd")) snprintf(c, sizeof c, "zstd -q -f --check -o '%s' '%s'", out, in);
+    else snprintf(c, sizeof c, "python3 -c \"import sys\ntry:\n from compression import zstd; z=lambda b: zstd.compress(b, options={zstd.CompressionParameter.checksum_flag: 1})\n"
+                  "except ImportError:\n import zstandard; z=zstandard.ZstdCompressor(write_checksum=True).compress\nopen(sys.argv[2],'wb').write(z(open(sys.argv[1],'rb').read()))\" '%s' '%s'", in, out);
+    return sh(c);
+}
+static void wfile(const char *p, const void *b, size_t n) { FILE *f = fopen(p, "wb"); CHECK(f && fwrite(b, 1, n, f) == n, "写 %s", p); if (f) fclose(f); }
+static const char ZSHA[] = "0123456789abcdef";
+// 布置一份待解的资源包：src = 期望的 game.img；chunks 位掩码 = 放哪几块（第 i 位 = 第 i 块）；old = 机上已有的 game.img 前缀长度（-1 = 放一份更长的旧内容）
+static void zsetup(const char *docs, const uint8_t *src, size_t L, unsigned chunks, long old) {
+    char root[1300], p[1600], c[3000]; s2a_pack_root(root, sizeof root, docs);
+    snprintf(c, sizeof c, "rm -rf '%s' && mkdir -p '%s/.incoming' '%s/exefs' '%s/zparts' && printf npdm > '%s/exefs/main.npdm' && printf '{\"index_sha256\": \"zz1\"}' > '%s/manifest.json'"
+             " && printf 'game.img\\t%zu\\t%s000000000000000000000000000000000000000000000000\\n" NPDM_ROW "' > '%s/index.tsv' && printf x > '%s/.pushed'",
+             docs, root, root, docs, root, root, L, ZSHA, root, root);
+    CHECK(sh(c) == 0, "布置 %s", docs);
+    if (old == -1) { size_t n = L + 5000; uint8_t *b = malloc(n); memset(b, 'o', n); snprintf(p, sizeof p, "%s/game.img", root); wfile(p, b, n); free(b); }
+    else if (old > 0) { snprintf(p, sizeof p, "%s/game.img", root); wfile(p, src, (size_t)old); }
+    for (unsigned k = 0; k * ZC < L; k++) { if (!(chunks >> k & 1)) continue;
+        char part[1600], out[1600]; snprintf(part, sizeof part, "%s/zparts/p%u", docs, k); size_t n = L - k * ZC < ZC ? L - k * ZC : ZC; wfile(part, src + k * ZC, n);
+        snprintf(out, sizeof out, "%s/.incoming/game.img.%s.%04u.zst", root, ZSHA, k); CHECK(zcomp(part, out) == 0, "压第 %u 块", k); }
+}
+static int zleft(const char *root) { char c[1600]; snprintf(c, sizeof c, "ls '%s/.incoming' | grep -c 'zst$' | grep -qx 0", root); return sh(c) != 0; }   // 还有 .zst → 1
+static void zst_cases(const char *T) {
+    if (!zstd_pick()) { printf("⚠ t_pack_apply：没有 zstd 命令行也没有 Python zstd 模块，压缩块用例没跑\n"); return; }
+    size_t L = 2 * ZC + 5000; uint8_t *src = calloc(1, L);
+    memcpy(src, "S2AIMG01", 8); uint32_t fmt = 1; memcpy(src + 8, &fmt, 4);
+    uint64_t to = L - 40, tl = 40, tot = L; memcpy(src + 112, &to, 8); memcpy(src + 120, &tl, 8); memcpy(src + 128, &tot, 8);
+    for (size_t i = 16384; i < L - 40; i++) src[i] = (uint8_t)(i / 7 * 13);
+    uint32_t slots = 1; memcpy(src + L - 40, &slots, 4);   // 空目录表：1 个空槽、0 条
+    char D[1300], R[1400], p[1600], c[3000], sp[1400]; struct stat st;
+    snprintf(sp, sizeof sp, "%s/zsrc.img", T); wfile(sp, src, L);
+    // Ⓐ 三块齐、机上有一份更长的旧 game.img、另有别的版本的块和一个空的本版块名：待导入 → 解开后逐字节相同、块全删、.applied = zz1、日志 3 行进度
+    snprintf(D, sizeof D, "%s/zA", T); s2a_pack_root(R, sizeof R, D); zsetup(D, src, L, 7, -1);
+    snprintf(p, sizeof p, "%s/.incoming/game.img.eeeeeeeeeeeeeeee.0000.zst", R); wfile(p, "old", 3);
+    snprintf(p, sizeof p, "%s/.incoming/game.img.%s.0009.zst", R, ZSHA); wfile(p, "", 0);
+    CHECK(s2a_import_state(D) == 1, "Ⓐ 有压缩块 → 待导入（实际 %d）", s2a_import_state(D));
+    int rc = s2a_pack_apply(D); snprintf(p, sizeof p, "%s/game.img", R);
+    CHECK(rc == 0, "Ⓐ 解压缩块应成功：%s", s2a_pack_apply_failure());
+    CHECK(same(p, sp), "Ⓐ 解出的 game.img 应与源逐字节相同");
+    CHECK(!zleft(R), "Ⓐ 解完 .incoming 里不留 .zst（含别的版本、空块）");
+    snprintf(c, sizeof c, "test \"$(cat '%s/.applied')\" = zz1 && test \"$(grep -c '进度：解开 game.img.%s.000' '%s/unpack.log')\" = 3", R, ZSHA, D);
+    CHECK(sh(c) == 0, "Ⓐ .applied = zz1、解包日志 3 行块进度");
+    // Ⓑ 第 0 块上次已解进去（game.img 有前 64 KB、块已删），只剩第 1、2 块 → 接着解，逐字节相同
+    snprintf(D, sizeof D, "%s/zB", T); s2a_pack_root(R, sizeof R, D); zsetup(D, src, L, 6, ZC);
+    rc = s2a_pack_apply(D); snprintf(p, sizeof p, "%s/game.img", R);
+    CHECK(rc == 0 && same(p, sp), "Ⓑ 接着解剩下的块应成功且逐字节相同（rc %d：%s）", rc, s2a_pack_apply_failure());
+    // Ⓒ 缺中间一块（只有第 0、2 块）→ 失败、截短包码、块与 .pushed 都删
+    // Ⓓ 第 1 块中间改一个字节（帧坏 / 校验不对）→ 同上
+    // Ⓔ 第 2 块去掉最后一个字节（截短）→ 同上
+    for (int v = 0; v < 3; v++) {
+        snprintf(D, sizeof D, "%s/z%c", T, 'C' + v); s2a_pack_root(R, sizeof R, D); zsetup(D, src, L, v == 0 ? 5 : 7, 0);
+        if (v) { snprintf(p, sizeof p, "%s/.incoming/game.img.%s.%04d.zst", R, ZSHA, v); CHECK(stat(p, &st) == 0, "Ⓓ/Ⓔ 块在");
+            if (v == 1) { FILE *f = fopen(p, "r+b"); fseek(f, st.st_size / 2, SEEK_SET); int ch = fgetc(f); fseek(f, st.st_size / 2, SEEK_SET); fputc(ch ^ 0x5a, f); fclose(f); }
+            else CHECK(truncate(p, st.st_size - 1) == 0, "Ⓔ 截掉一个字节"); }
+        rc = s2a_pack_apply(D);
+        snprintf(p, sizeof p, "%s/.pushed", R);
+        CHECK(rc != 0 && !strcmp(s2a_pack_apply_code(), "ios_install_pack_truncated"), "%s 应失败且给截短包码（rc %d 码 %s：%s）", v == 0 ? "Ⓒ 缺块" : v == 1 ? "Ⓓ 坏帧" : "Ⓔ 截短", rc, s2a_pack_apply_code(), s2a_pack_apply_failure());
+        CHECK(!zleft(R) && stat(p, &st) != 0, "%s 失败后块与 .pushed 都应删掉（下次电脑端整份重推）", v == 0 ? "Ⓒ" : v == 1 ? "Ⓓ" : "Ⓔ");
+        CHECK(strstr(s2a_pack_apply_failure(), v == 0 ? "缺压缩块" : v == 1 ? "压缩块" : "截短"), "%s 失败原因应说清（%s）", v == 0 ? "Ⓒ" : v == 1 ? "Ⓓ" : "Ⓔ", s2a_pack_apply_failure());
+    }
+    free(src);
+}
 int main(void) {
     char T[] = "/tmp/s2a_t_pack_XXXXXX"; if (!mkdtemp(T)) return 1;
     boundary_cases(T);
@@ -495,6 +568,12 @@ int main(void) {
             int r8 = built ? s2a_pack_apply(D8) : 99;
             CHECK(built && r8 != 0 && !strcmp(s2a_pack_apply_code(), "ios_install_img_corrupt") && strstr(s2a_pack_apply_failure(), expect8[v]),
                   "⑬f 坏表 %d：不硬解、判 IMG 坏、现场写「%s」（造 %d、返回 %d、码 %s「%s」）", v, expect8[v], built, r8, s2a_pack_apply_code(), s2a_pack_apply_failure());
+            if (built && v == 1) {   // ⑬g 同一份坏 IMG 是从「放这里导入」认领来的（.imported 与清单同号）→ 码换导入那条；号对不上（之后电脑推送重写过清单）→ 照旧推送那条
+                snprintf(c, sizeof c, "cp '%s/manifest.json' '%s/.imported'", G8, G8); sh(c); s2a_pack_apply(D8);
+                CHECK(!strcmp(s2a_pack_apply_code(), "ios_import_img_corrupt"), "⑬g 导入来的坏 IMG → ios_import_img_corrupt（码 %s）", s2a_pack_apply_code());
+                snprintf(c, sizeof c, "printf '{\"index_sha256\": \"old\"}' > '%s/.imported'", G8); sh(c); s2a_pack_apply(D8);
+                CHECK(!strcmp(s2a_pack_apply_code(), "ios_install_img_corrupt"), "⑬g 导入号与清单不同（电脑推送过）→ ios_install_img_corrupt（码 %s）", s2a_pack_apply_code());
+            }
         }
       }
       // ⑭ 玩家把 IMG 放进「文件」里 S2Arm 的「放这里导入」文件夹：s2a_img_scan 挪进 games/<头里的游戏号>/资源包/game.img、写 manifest（资源包号同头）与 index.tsv；
@@ -508,8 +587,8 @@ int main(void) {
                " && python3 '%s/pack/img.py' build - '%s/src/others_sh.tsv' '%s/下载/别处.img' --gid 0100abcd00000003 --pack-id img790 > /dev/null", D3, D3, R, D, D3, D3, D3, R, D, D3);
       CHECK(sh(c) == 0, "⑭ 造夹具（导入文件夹第二层一个完整 IMG、导入文件夹下一个拷到一半的、导入文件夹外一个完整 IMG）");
       CHECK(s2a_img_scan(D3) == 1, "⑭ 扫到并挪好 1 个");
-      snprintf(c, sizeof c, "g='%s/games/0100ABCD00000002/资源包'; test -s \"$g/game.img\" && test ! -e '%s/放这里导入/x/某游戏.img' && test -e '%s/放这里导入/半个.img' && test -e '%s/下载/别处.img' && test ! -e '%s/games/0100ABCD00000003' && grep -q '\"index_sha256\": \"img789\"' \"$g/manifest.json\" && test \"$(cut -f1 \"$g/index.tsv\")\" = game.img", D3, D3, D3, D3, D3);
-      CHECK(sh(c) == 0, "⑭ 落到 games/<游戏号>/资源包/game.img、manifest 资源包号 = 头里的、index.tsv 只有 game.img、拷一半的没动");
+      snprintf(c, sizeof c, "g='%s/games/0100ABCD00000002/资源包'; test -s \"$g/game.img\" && test ! -e '%s/放这里导入/x/某游戏.img' && test -e '%s/放这里导入/半个.img' && test -e '%s/下载/别处.img' && test ! -e '%s/games/0100ABCD00000003' && grep -q '\"index_sha256\": \"img789\"' \"$g/manifest.json\" && cmp -s \"$g/manifest.json\" \"$g/.imported\" && test \"$(cut -f1 \"$g/index.tsv\")\" = game.img", D3, D3, D3, D3, D3);
+      CHECK(sh(c) == 0, "⑭ 落到 games/<游戏号>/资源包/game.img、manifest 资源包号 = 头里的、.imported 同清单、index.tsv 只有 game.img、拷一半的没动");
       { char g3[1500]; snprintf(g3, sizeof g3, "%s/games/0100ABCD00000002", D3);
         CHECK(s2a_import_state(g3) == 1, "⑭ 挪好后 → 待导入（状态 %d）", s2a_import_state(g3));
         s2a_pack_apply_phase = phase; memset(g_ph, 0, sizeof g_ph); memset(g_phn, 0, sizeof g_phn);
@@ -827,5 +906,6 @@ int main(void) {
       char want[64]; snprintf(want, sizeof want, "属主 uid %u", (unsigned)getuid());
       CHECK(n0 == 0 && b0 == 0, "清点：全是自己的 → 0 个、0 字节（实际 %u、%llu）", n0, (unsigned long long)b0);
       CHECK(n1 == 4 && b1 >= 4096 && strstr(l1, want) && strstr(l1, "4 个"), "清点：把自己当外人 → 4 个、≥4096 字节、读数行带属主（实际 %u、%llu「%s」）", n1, (unsigned long long)b1, l1); }
+zst_cases(T);
 printf("%s t_pack_apply：%d 处不符\n", bad ? "✗" : "✓", bad); return bad != 0;
 }

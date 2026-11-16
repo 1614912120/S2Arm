@@ -79,6 +79,15 @@ def validate_files(c, root, files, full=False):
 QUICK_FILES = ("main", "main.npdm")   # 游戏库列表快判也核的几个文件（主程序与程序描述）：在、是普通文件、大小同清单
 
 
+def has_runtime_romfs(root):
+    """运行版本里的 RomFS 两种形态（约定同 graphics/nvn/tools/romfs_list.py）：romfs/ 真目录，或目录不在、只有标准 RomFS 镜像 romfs.std（普通文件，
+    宿主 services/S2A.Services/RomFsIndex.cs OpenStd 整个交给游戏）。软链都不算：运行版本要独立于构建缓存"""
+    romfs, std = root / "romfs", root / "romfs.std"
+    if romfs.is_symlink() or romfs.exists():
+        return romfs.is_dir() and not romfs.is_symlink()
+    return std.is_file() and not std.is_symlink()
+
+
 def validate_runtime(c, runtime, full=False, files=True):
     """files=False：只看清单和入口（游戏库列表用），不逐文件读状态，只核主程序 / main.npdm 在且大小对（QUICK_FILES，审计 P2-212：
     原先清单没变、主程序被删也报就绪，点开始才报错）。起局也用它（v0.3.1：原先每次起局逐个核约 6 万个文件，又慢、任何一个不对就不让玩）；
@@ -88,7 +97,7 @@ def validate_runtime(c, runtime, full=False, files=True):
     manifest = read(root / "manifest.json", {})
     if manifest.get("schema") != 1 or manifest.get("engine") != "S2Arm" or manifest.get("target") != "macos-arm64":
         raise Failure("当前游戏没有完整的 S2Arm Mac 运行版本。", code="runtime_invalid")
-    if not (root / "romfs").is_dir() or (root / "romfs").is_symlink():
+    if not has_runtime_romfs(root):
         raise Failure("运行包缺少独立的 RomFS 游戏资源目录，请重新准备。", code="runtime_invalid")
     if files:
         validate_files(c, root, manifest.get("files"), full)
@@ -334,6 +343,8 @@ def launch(c):
                     if broken:   # 起局前没逐个核（v0.3.1）：退出后再核，运行文件缺 / 坏了就直说，别让玩家以为是游戏崩了
                         raise Failure(f"这款游戏的 Mac 运行文件缺了或坏了（例：{broken}），游戏读到它时退出了。重新出一次 Mac 版就能修好；存档不受影响。",
                                       code="runtime_invalid", internal=str(f)) from None
+                    if getattr(c, "last_rc", None) == 86:   # 显卡挂死，运行时安全停下这局（graphics/nvn/host_adapt.m s2a_gpu_safe_stop、gal_core.m 命令缓冲出错），不是玩完（#1257）
+                        raise Failure("显卡卡住了，S2Arm 把这局安全停下了。", code="game_gpu_stopped", internal=str(f)) from None
                     raise Failure(f"游戏运行中意外退出了（退出码 {getattr(c, 'last_rc', '?')}）。", code="game_crashed", internal=str(f)) from None
                 raise
             if trial:
@@ -468,7 +479,8 @@ def clone_tree(c, source, destination, *, materialize_romfs=False):
             romfs = expected
         else:
             raise Failure("输入目录包含符号链接。")
-    if materialize_romfs and not (source / "romfs").is_dir():
+    # 镜像形态（romfs/ 不在、只有 romfs.std）：镜像是一个普通文件，下面按普通文件克隆进运行版本（APFS 同卷一次克隆，不再逐个克隆几万个文件）
+    if materialize_romfs and not ((source / "romfs").is_dir() or has_runtime_romfs(source)):
         raise Failure("准备产物缺少 RomFS 游戏资源目录。")
     # 空目录也要建：拷出的目录与源一模一样（RomFS 里的空目录、宿主包结构；10-23 走查起因是当年快照 .git 的空 refs 目录）
     for d in (p for p in entries if p.is_dir() and not p.is_symlink()):

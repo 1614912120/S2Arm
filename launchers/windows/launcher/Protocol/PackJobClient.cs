@@ -100,7 +100,7 @@ public static class PackJobClient
         // The bundled iPhone shell is a launcher path setting (Settings → Shell); ipa.bundled_shell reads shellDir.
         // export 的每一步子作业沿用这份请求（pack/jobs/export_plan.py），iPhone 那步要的壳与随包资源一并带上
         if (request.Operation is "ipa" or "install" or "installUpdate" or "export") payload["shellDir"] = Path.GetFullPath(request.Paths.Shell);
-        // Bundled resources next to S2Arm.exe (bundle_win.py layout): sgradeScan reads CommunityPatches/patches-v2.tar;
+        // Bundled resources next to S2Arm.exe (bundle_win.py layout): sgradeScan reads CommunityPatches/patches-v3.tar (v2 on older installs);
         // ipa reads the shared fonts from resources/Fonts (core.fonts_dir; without it
         // "shared fonts missing", tianyan 11-07); installCheck / install use the Impactor + plumesign shipped in resources/ThirdParty/Impactor
         // (pack/jobs/impactor.py bundled, 11-07 维护者: no download detour for players).
@@ -126,7 +126,7 @@ public static class PackJobClient
         cancellationToken.ThrowIfCancellationRequested();
         jobId ??= "win-" + Guid.NewGuid().ToString("N");   // 前端作业登记先取好的任务号（控制口 /cancel 按它核对）；不给就现取
         var privateRoot = Path.GetFullPath(request.PrivateRoot);
-        using var file = PrivateJobRequest.Create(privateRoot, JsonSerializer.Serialize(Payload(request, jobId)));
+        using var file = PrivateJobRequest.Create(privateRoot, JsonOut.Serialize(Payload(request, jobId)));
         var info = EnvironmentProbe.StartInfo(request.Paths, file.FilePath);
         info.Arguments = "/d /v:off /s /c \"\"%S2A_UI_RUNTIME%\\s2arm_env.cmd\" && cd /d \"%S2A_UI_ENGINE%\" && python -X utf8 pack/jobs/main.py run --request \"%S2A_UI_REQUEST%\"\"";
         foreach (var (key, value) in request.Secrets ?? new Dictionary<string, string>()) info.Environment[key] = value;

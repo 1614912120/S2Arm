@@ -229,6 +229,7 @@
 "vpad.menu.face.xbox" = "ボタン：Xboxレイアウト";
 "vpad.menu.face.xbox.note" = "Xboxのボタン配置。下ボタンが決定です。";
 "vpad.menu.gyro" = "スマホジャイロ";
+"vpad.menu.gyro.note" = "8BitDo や GameSir など Xbox 型のコントローラーは、Switch モードに切り替えるとモーション操作が使えます。";
 "vpad.menu.haptic.note" = "ボタンを押したときに軽く振動します";
 "vpad.menu.holdLock.note" = "2秒長押しでロック。このゲームのみ有効。";
 "vpad.menu.hud" = "パフォーマンスオーバーレイ";
@@ -336,6 +337,7 @@
 "diag.error.zip" = "バンドルを作成できませんでした(zip の書き込みに失敗しました。iPhone の空き容量が不足している可能性があります)";
 "diag.export" = "診断パッケージをエクスポート";
 "diag.prompt.abnormalExit" = "前回 S2Arm が正常に終了しませんでした(クラッシュ、フリーズ、またはシステムによる終了)";
+"diag.prompt.imlLost" = "前回 S2Arm が正常に終了しませんでした。このインストールは「メモリ上限の引き上げ」権限を失っているため、大容量ゲームでの終了はメモリ不足の可能性が高いです。コンピュータの S2Arm で「iPhone にインストール」から再インストールしてください（無料の Apple ID でもこの権限は付きます）。自分で署名する場合は Xcode か AltStore Classic v2.3 を使ってください。SideStore 0.7.0 で再署名すると失われます。インストール済みなら GetMoreRam で App ID に権限を追加してから再インストールすることもできます";
 "diag.prompt.crash" = "システムは前回 S2Arm がクラッシュまたはフリーズしたと報告しています";
 "diag.prompt.message" = "%@。実行ログ、クラッシュレポート、ゲームが使用したグラフィックスパイプラインのリスト(シェーダー ID のみ)をアップロードします(セーブデータ、キー、ゲームファイルは含まれません)。短いコードが発行されます。";
 "diag.prompt.no" = "結構です";
@@ -382,7 +384,7 @@
 "gfx.fpsLimit" = "フレームレート上限";
 "gfx.fpsLimit.none" = "無制限";
 "gfx.resolution" = "レンダリング解像度";
-"iml.lost.body" = "大容量ゲームはメモリ不足になったり遅くなる可能性があります。Xcode または AltStore Classic v2.3 で再署名して再インストールするか、GetMoreRam で App ID に権限を追加して再インストールしてください。";
+"iml.lost.body" = "大容量ゲームはメモリ不足で終了したり遅くなったりする可能性があります。コンピュータの S2Arm で「iPhone にインストール」から再インストールしてください（無料の Apple ID でもこの権限は付きます）。自分で署名する場合は Xcode か AltStore Classic v2.3 を使ってください。SideStore 0.7.0 で再署名すると失われます。インストール済みなら GetMoreRam で App ID に権限を追加してから再インストールすることもできます。";
 "iml.lost.title" = "このインストールは「メモリ上限の引き上げ」権限を失いました";
 "lan.denied.later" = "後で";
 "lan.denied.message" = "システムが「%@」にローカルネットワーク上のデバイスの検索を許可していないため、マルチプレイヤーで他のプレイヤーを見つけられません。\n\n設定 › プライバシーとセキュリティ › ローカルネットワーク に移動し、「%@」をオンにしてから、戻ってマルチプレイヤーに再参加してください。";
@@ -540,6 +542,14 @@
 "sgrade.state.version.older" = "パッチは古いバージョン %1$@ 用しかなく、お使いのバージョン用はまだありません。";
 "sgrade.state.version.port_failed" = "お使いのバージョンへの移植を試しましたが、うまくいきませんでした。";
 "sgrade.state.none" = "パッチライブラリにこのゲームの%1$@パッチはまだありません。";
+"sgrade.state.failed" = "このゲームの%1$@パッチを組み込めませんでした：%2$@";
+"sgrade.result.why.mismatch" = "お使いのゲームと一致しません";
+"sgrade.result.why.conflict" = "別のパッチと同じ箇所を変更します";
+"sgrade.result.why.translate" = "この箇所はまだ変換できません";
+"sgrade.result.why.full" = "同じモジュールのパッチが多すぎます";
+"sgrade.result.why.port" = "別バージョン用で適応できませんでした";
+"sgrade.result.why.version" = "この Mod は別バージョンのゲーム用です";
+"sgrade.result.why.unsupported" = "パッチに S2Arm が未対応の書き方が含まれています";
 "sgrade.state.opted_out" = "未適用：書き出し時に「書き出し時に適用」をオフにしました。オンにして書き出し直すと入ります。";
 "sgrade.state.pending.ios" = "新しいパッチがあります：パソコンの S2Arm で「S 級最適化アップグレード」を選んでください。";
 "sgrade.state.mac_only" = "画面パッチは Mac 版のみです。";

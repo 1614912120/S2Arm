@@ -174,9 +174,8 @@ def reader(c):
             same = (d / ".src_digest").read_text(encoding="utf-8").strip() == oneclick_win.nx_unpack_id()
         except OSError:
             same = False
-        # 给 nx_unpack.exe（.NET 启动器，按作业环境的 DOTNET_ROOT 用随包运行时），不给 .dll：调用方都是直接执行它（11-15 起 library.inspect 不再前缀 dotnet），
-        #   Windows 直接执行 .dll 会交给旧版 .NET Framework 加载，报找不到 System.Runtime 10.0（v0.4.4 候选 Windows 导入全挂）
-        if same and (d / "nx_unpack.dll").is_file() and (d / "nx_unpack.exe").is_file():
+        # nx_unpack.exe 是 NativeAOT 单文件（v0.5.0 Windows 去 .NET，bundle_prepare_win.py），调用方直接执行，作业环境不带 .NET
+        if same and (d / "nx_unpack.exe").is_file():
             return d / "nx_unpack.exe"
         raise Failure("S2Arm 读取工具缺失或与引擎版本不符，请重新安装完整的 S2Arm。", code="reader_unavailable")
     from embedded import artifact

@@ -1079,12 +1079,13 @@ class AssembleTests(unittest.TestCase):
         self.c.catalog = lambda: {"games": [{"id": g, "name": n} for g, n in games]}
 
     def _run(self, runs):
-        """ship_ext container / app_bundle write_ipa 的替身：按 --game 容器件所在游戏文件夹的 game.json 认出各款，出真 zip ipa（带 s2a_catalogue.json）"""
+        """ship_ext container / app_bundle write_ipa 的替身：按 --game 容器件所在的程序专用文件夹认出各款，出真 zip ipa（带 s2a_catalogue.json）"""
         def run(args, log=None, env=None, cwd=None, on_line=None):
             args = [str(a) for a in args]; runs.append(args)
             if any(a.endswith("ship_ext.py") for a in args) and "container" in args:
                 o = Path(args[args.index("--out") + 1]); o.mkdir(parents=True, exist_ok=True)
-                gs = [json.loads((Path(args[i + 1]).parents[2] / "game.json").read_text())["id"] for i, x in enumerate(args) if x == "--game"]
+                # 容器件在游戏程序专用文件夹 .programs/<程序号>/kit：上一级目录名就是游戏号
+                gs = [Path(args[i + 1]).resolve().parent.name for i, x in enumerate(args) if x == "--game"]
                 (o / "s2a_catalogue.json").write_text(json.dumps({"schema": 1, "shell_id": self.sid, "games": [{"title_id": g} for g in gs]}))
             if "write_ipa" in args:
                 cat = json.loads((Path(args[-2]) / "s2a_catalogue.json").read_text())
@@ -1112,7 +1113,7 @@ class AssembleTests(unittest.TestCase):
     @staticmethod
     def _games_arg(runs):
         cmd = next(a for a in runs if any(x.endswith("ship_ext.py") for x in a))
-        return [json.loads((Path(cmd[i + 1]).parents[2] / "game.json").read_text())["id"] for i, x in enumerate(cmd) if x == "--game"], cmd
+        return [Path(cmd[i + 1]).resolve().parent.name for i, x in enumerate(cmd) if x == "--game"], cmd   # 容器件在 .programs/<游戏号>/kit
 
     def test_assemble_this_game_only(self):
         """第一次装：只组这一款，不带 --base；→ (ipa, [这款], 本壳号)"""
@@ -1134,6 +1135,43 @@ class AssembleTests(unittest.TestCase):
         self._assemble(self.A, others=(self.B,), runs=runs)
         _, cmd = self._games_arg(runs)
         self.assertEqual([cmd[i + 1] for i, x in enumerate(cmd) if x == "--banner"], [f"{self.A}={banner}"])
+
+    def test_locks_program_parts_during_assembly_and_one_phone_job_at_a_time(self):
+        # 出包时并行装机（11-16）：装机组壳期间要带的各款程序锁都被占着（出包交付换件拿不到，要等）；装机类作业的手机锁互斥。
+        #   期望手写：put_game 里的组装（替身）中，用另一个任务同库拿各款程序锁、等 0 秒 → library_busy；装完立刻拿得到；手机锁同理
+        import core
+        import ipa as packer, host_update
+        A, B = self.A, self.B
+        self._library((A, "甲"), (B, "乙"))
+        ios_fixture(self.c, A, pack="pa"); ios_fixture(self.c, B, pack="pb")
+        layout.save_device(self.c, "dev1", dict(games={A: dict(pack="pa"), B: dict(pack="pb")}, shellId="SID1"))
+        ph, _, _ = self._phone()
+        other = core.Context(dict(self.c.r, taskId="peer-" + self.c.task))
+        seen = {}
+        real = packer.assemble
+        def probe(c, gid, others, **kw):
+            for g in (A, B):
+                try:
+                    with other.lock("program-" + g, wait=0):
+                        seen[g] = "free"
+                except Failure as e:
+                    seen[g] = e.code
+            return real(c, gid, others, **kw)
+        self.sid = "SID1"
+        shell = self.c.private / "shell"; shell.mkdir(exist_ok=True); (shell / "manifest.json").write_text("{}")
+        with um.patch.object(packer, "current_shell_id", return_value="SID1"), um.patch.object(packer, "container_shell", return_value=shell), \
+             um.patch.object(host_update, "engine_compat", return_value=dict(self.COMPAT)), um.patch.object(self.c, "run", self._run([])), \
+             um.patch.object(packer, "assemble", probe):
+            install.put_game(self.c, A, ph)
+        self.assertEqual(seen, {A: "library_busy", B: "library_busy"})
+        for g in (A, B):
+            with other.lock("program-" + g, wait=0):   # 组完就放
+                pass
+        with packer.phone_lock(self.c):
+            with self.assertRaises(Failure) as e:
+                with other.lock("phone", wait=0):
+                    pass
+            self.assertEqual(e.exception.code, "library_busy")
 
     def test_assemble_carries_phone_games_of_same_shell(self):
         """这台手机已有的款（同壳出的）现组时一起带上，容器件取各自的 image/ios/kit"""
@@ -1511,6 +1549,7 @@ class AssembleTests(unittest.TestCase):
             ph, pushed, signed = self._phone(); ph.udid = "UDID1"
             seen = {}
             class Cl:
+                def get(self_, *a, **k): return False   # 手机账本 Documents/.s2a-games.json：这些替身里没有（旧 App）
                 def call(self_, *a):
                     seen["args"] = a; return 0, (seen["want"] if phone_same else "aaaaaaaaaaaaaaaaaaaaaaaa") + "\n"
             orig_digest = packer.ipa_digest
@@ -1548,6 +1587,7 @@ class AssembleTests(unittest.TestCase):
     def _app_gone(self, ph):
         """玩家在手机上删了整个 S2Arm：进不了容器、平台确认这个包名没装（走真的 install.phone_games，不用夹具里的替身）"""
         class Cl:
+            def get(self_, *a, **k): return False   # 手机账本 Documents/.s2a-games.json：这些替身里没有（旧 App）
             def call(self, op, rel): return 1, "取不到 x 的容器（App 没装或不是开发签名）：device socket io failed"
         ph.udid = "U1"; ph.app_missing.return_value = True
         for p in (um.patch.object(install, "phone_games", _phone_games), um.patch.object(install, "devpush_client", lambda c, udid, bid, work: Cl())):
@@ -1840,8 +1880,10 @@ class ExportPhoneTests(unittest.TestCase):
         self._library((A, "甲"), (B, "乙"), (C, "丙"), (self.D, "丁"))
         self._img(A, b"S2AIMG01-a"); self._img(B, b"S2AIMG01-b"); ios_fixture(self.c, C)
         r = self._export(dict(gameId=A))
+        self.assertEqual((r["games"], r["unwritten"]), ([A, B], ["乙"]), "点甲：乙的程序进容器，.img 只写甲")
+        r = self._export(dict(gameId=B))   # 再点乙：乙的 .img 写上、甲沿用，文件夹里两款齐
         out = self.c.library / install.EXPORT_DIRS["zh"]
-        self.assertEqual((r["exported"], r["outputPath"], r["games"], r["skipped"]), (True, str(out), [A, B], ["丙"]))
+        self.assertEqual((r["exported"], r["outputPath"], sorted(r["games"]), r["skipped"], r["unwritten"]), (True, str(out), sorted([A, B]), ["丙"], []))
         self.assertEqual(sorted(p.name for p in out.iterdir()), sorted(["S2Arm.ipa", "甲.img", "乙.img", "甲 着色器更新包.img", "乙 着色器更新包.img", install.EXPORT_READMES["zh"]]))
         # 着色器更新包（维护者 11-13）：格式号 2、头里游戏号 / 资源包号同本体 game.img、只含派生件（着色器库），没有本体的其余文件段
         for f, gid in (("甲 着色器更新包.img", A), ("乙 着色器更新包.img", B)):
@@ -1859,7 +1901,7 @@ class ExportPhoneTests(unittest.TestCase):
                 def rd(p): fh.seek(got[p][0]); return fh.read(got[p][1])
                 self.assertEqual((rd("exefs/main"), rd("shaders/direct/lib.bin"), img.header(str(out / f))["gid"]), (data, b"LIB" + gid.encode(), gid))
             self.assertNotIn("shaders/direct/lib.bin", {p for p, _, _ in img.entries(str(library_pack(self.c, gid) / "game.img"))})
-        self.assertEqual(install_ipa_games(out / "S2Arm.ipa"), ([A, B], "SID1"))
+        self.assertEqual((sorted(install_ipa_games(out / "S2Arm.ipa")[0]), install_ipa_games(out / "S2Arm.ipa")[1]), (sorted([A, B]), "SID1"))
         readme = (out / install.EXPORT_READMES["zh"]).read_text(encoding="utf-8-sig")
         self.assertIn("甲.img（甲）", readme); self.assertIn("乙.img（乙）", readme); self.assertIn("放这里导入", readme)
         self.assertEqual(r["exportBytes"], sum(p.stat().st_size for p in out.iterdir()))
@@ -1902,28 +1944,33 @@ class ExportPhoneTests(unittest.TestCase):
         return wrote
 
     def test_export_again_reuses_unchanged_imgs(self):
-        """#1132：加一款新游戏再导出，只写新的那款；没变的甲、乙沿用上次的（内容逐字节同）；乙的资源包变了就重写乙"""
+        """#1132 + 只写点的那款：.img 只新写这次点的那款；别的款上次导出的来源没变就沿用（逐字节同），没有或变了就这次不写、结果 unwritten 点名"""
         A, B, C = self.A, self.B, self.C
         self._library((A, "甲"), (B, "乙"))
         self._img(A, b"S2AIMG01-a"); self._img(B, b"S2AIMG01-b")
         out = self.c.library / install.EXPORT_DIRS["zh"]
         wrote = self._count_writes()
         r = self._export(dict(gameId=A))
-        self.assertEqual(sorted(wrote), sorted(["甲.img", "甲 着色器更新包.img", "乙.img", "乙 着色器更新包.img"]))
-        self.assertEqual((sorted(r["fresh"]), r["reused"]), (["乙.img", "甲.img"], 0), "第一次导出：全是新写的，完成页不点名")
+        self.assertEqual(sorted(wrote), sorted(["甲.img", "甲 着色器更新包.img"]), "第一次导出点甲：只写甲，乙没有上次的可沿用就不写")
+        self.assertEqual((r["fresh"], r["reused"], r["unwritten"]), (["甲.img"], 0, ["乙"]))
+        self.assertEqual(sorted(p.name for p in out.iterdir() if p.suffix == ".img"), sorted(["甲.img", "甲 着色器更新包.img"]))
         first = {p.name: p.read_bytes() for p in out.iterdir() if p.suffix == ".img"}
         self._library((A, "甲"), (B, "乙"), (C, "丙")); self._img(C, b"S2AIMG01-c")
         wrote.clear(); r = self._export(dict(gameId=C))
         self.assertEqual(sorted(wrote), sorted(["丙.img", "丙 着色器更新包.img"]))
-        self.assertEqual((r["fresh"], r["reused"]), (["丙.img"], 2), "完成页点名「.img 只要拷 丙.img」，其余 2 款沿用")
+        self.assertEqual((r["fresh"], r["reused"], r["unwritten"]), (["丙.img"], 1, ["乙"]), "甲沿用、乙仍没写、只写丙")
         for name, data in first.items():
             self.assertEqual((out / name).read_bytes(), data, name)
-        # 乙的资源包里有文件变了（重新打过 iPhone 包）：乙重写，甲照旧沿用
+        wrote.clear(); r = self._export(dict(gameId=B))
+        self.assertEqual(sorted(wrote), sorted(["乙.img", "乙 着色器更新包.img"]))
+        self.assertEqual((r["fresh"], r["reused"], r["unwritten"]), (["乙.img"], 2, []), "点乙才写乙，甲、丙沿用")
+        # 乙的资源包里有文件变了（重新打过 iPhone 包），这次点甲：乙不重写、点名没写；甲、丙沿用，一个都不写
         f = next(p for p in layout.ios_pack(self.c, B).rglob("*") if p.is_file())
         st = f.stat(); os.utime(f, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
         wrote.clear(); r = self._export(dict(gameId=A))
-        self.assertEqual(sorted(wrote), sorted(["乙.img", "乙 着色器更新包.img"]))
-        self.assertEqual((r["fresh"], r["reused"]), (["乙.img"], 2))
+        self.assertEqual(wrote, [])
+        self.assertEqual((r["fresh"], r["reused"], r["unwritten"]), ([], 2, ["乙"]))
+        self.assertFalse((out / "乙.img").exists(), "来源变了的旧 .img 不留在导出文件夹里冒充新的")
 
     def test_export_rewrites_when_link_fails(self):
         """建不了硬链接（exFAT 等）：照常重写，导出照样成功"""
@@ -2156,6 +2203,7 @@ class PhoneGamesTruthTests(unittest.TestCase):
     def fs(self, dirs, ls_error=None, rms=None):
         """假手机：dirs = {设备侧目录: [条目…]}，不在 dirs 里的目录 ls 报 AFC 不存在；ls_error = 每次 ls 都报这句（锁屏 / 没装）"""
         class Cl:
+            def get(self_, *a, **k): return False   # 手机账本 Documents/.s2a-games.json：这些替身里没有（旧 App）
             def call(self, op, rel):
                 if ls_error: return 1, ls_error
                 return (0, "\n".join(dirs[rel])) if rel in dirs else (1, test.MISSING)
@@ -2264,6 +2312,7 @@ class PhoneGamesTruthTests(unittest.TestCase):
         # Windows 第一次装（这台还没记录包名）：确认框里的名字照样按这次要装的包名去手机上读 control.nacp（Windows 实机曾显示成游戏号）
         seen = []
         class Cl:
+            def get(self_, *a, **k): return False   # 手机账本 Documents/.s2a-games.json：这些替身里没有（旧 App）
             def get(self, rel, dst): seen.append(rel); return False
         ph = types.SimpleNamespace(udid="U1", bid=None, bundle_for_signing=lambda: "io.s2arm.games.abcde12345")
         with um.patch.object(install, "devpush_client", lambda c, udid, bid, work: (seen.append(bid), Cl())[1]):
@@ -2286,6 +2335,54 @@ class PhoneGamesTruthTests(unittest.TestCase):
         self.assertTrue(win.app_missing(bid, "S2A_APP_MISSING：手机上没装 x"))
         self.assertFalse(win.app_missing(bid, "取不到 x 的容器（App 没装或不是开发签名）：device socket io failed"))
         self.assertFalse(win.app_missing(bid, "connection reset"))
+
+    def test_phone_ledger_removed_games_are_not_carried(self):
+        # 11-16 维护者「手机上删了的游戏，下次不用跟着自动更新」：手机账本里 B 是 removed → 不带 B，本机记录里 B 摘掉；
+        #   A present、C 不在账本里照带；这次明确要装的 D 即使账本里是 removed 也照装（leave 不在候选里，由 assemble 按 gid 放进去）。
+        #   读不到账本（None）→ 按现状。期望手写
+        atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=g, name=g) for g in (self.A, self.B, self.C, self.D)]))
+        layout.save_device(self.c, "devL", dict(games={self.A: {}, self.B: {}, self.C: {}}))
+        ph = types.SimpleNamespace(udid="U1", bid="io.s2arm.games.abcde12345", app_missing=lambda bid, why: False, c=self.c, key="devL")
+        with um.patch.object(install, "phone_games", lambda c, ph: {self.A, self.B}), um.patch.object(install, "phone_removed", lambda c, ph: {self.B, self.D}):
+            rec = layout.load_device(self.c, "devL")
+            self.assertEqual(install.container_others(self.c, ph, rec, leave=self.D), [self.A, self.C])
+        self.assertEqual(sorted(layout.load_device(self.c, "devL")["games"]), [self.A, self.C])
+        layout.save_device(self.c, "devL", dict(games={self.A: {}, self.B: {}}))
+        with um.patch.object(install, "phone_games", lambda c, ph: {self.A, self.B}), um.patch.object(install, "phone_removed", lambda c, ph: None):
+            self.assertEqual(install.container_others(self.c, ph, layout.load_device(self.c, "devL"), leave=self.D), [self.A, self.B])
+
+    def test_phone_removed_reads_the_ledger(self):
+        # 账本按格式读：version 1、state = removed 的游戏号（大写）；别的状态、坏格式、版本不对、读不到都按「没有账本」（None 或不算删）
+        def cl(text):
+            class Cl:
+                def call(self_, *a): return 0, ""
+                def get(self_, rel, dst, t=None):
+                    if text is None: return False
+                    assert rel == "Documents/.s2a-games.json"; Path(dst).write_text(text, encoding="utf-8"); return True
+            return lambda *a: Cl()
+        ph = types.SimpleNamespace(udid="U1", bid="io.s2arm.games.abcde12345", app_missing=lambda bid, why: False, c=self.c)
+        good = json.dumps({"version": 1, "games": {self.A.lower(): {"state": "removed", "at": 1}, self.B: {"state": "present", "at": 2}, "bad": {"state": "removed"}}})
+        for text, want in ((good, {self.A}), (None, None), ("{", None), (json.dumps({"version": 2, "games": {}}), None)):
+            with self.subTest(text=(text or "")[:20]), um.patch.object(install, "devpush_client", cl(text)):
+                self.assertEqual(install.phone_removed(self.c, ph), want)
+
+    def test_deleted_here_then_assemble_says_deleted_not_elsewhere(self):
+        # 11-16：在这台电脑上「删除游戏」B（library.drop_from_container 把它从设备记录摘掉），手机账本里它还在、手机上也有资源 →
+        #   组壳先问（container_would_drop），提示句是「已从这台电脑的游戏库删除」那句，不能是「在别的电脑上装的」（玩家会去找另一台电脑）
+        import library
+        atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=self.A, name="甲")]))   # B 已从游戏库删掉
+        layout.save_device(self.c, "devD", dict(games={self.A: {}, self.B: {}}))
+        library.drop_from_container(self.c, self.B)
+        rec = layout.load_device(self.c, "devD")
+        self.assertEqual((sorted(rec["games"]), rec["deleted"]), ([self.A], [self.B]))
+        ph = types.SimpleNamespace(udid="U1", bid="io.s2arm.games.abcde12345", app_missing=lambda bid, why: False, c=self.c, key="devD")
+        with um.patch.object(install, "phone_games", lambda c, ph: {self.A, self.B}), um.patch.object(install, "phone_removed", lambda c, ph: None), \
+             um.patch.object(install, "phone_game_name", lambda c, ph, g, names: "乙游戏"):
+            with self.assertRaises(Failure) as e:
+                install.container_others(self.c, ph, rec, leave=self.D)
+        self.assertEqual(e.exception.code, "container_would_drop")
+        self.assertIn("它们已从这台电脑的游戏库删除，重新加回游戏库、「打 iPhone 包」再装一次就回来：「乙游戏」", str(e.exception))
+        self.assertNotIn("别的电脑", str(e.exception))
 
     def test_include_what_we_can_ask_before_dropping_the_rest(self):
         # 本机记录 A；手机上 A、B、C；本机游戏库有 C（另一台电脑装的、这台也导入过）→ 带 A、C；B 只在手机上 → 先问

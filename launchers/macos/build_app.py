@@ -174,7 +174,7 @@ def main():
         print(f"补丁库：收 {len(took)} 款（{' '.join(took) or '无'}），跳过 {len(skipped)} 款（没验过）")
     else:
         print("🟡 没设 S2A_RELEASE_PATCHES：本版启动器不带补丁库")
-    # 社区补丁与金手指本地库（11-13 维护者：随启动器装在本地、云端兜底）：完整快照放 Resources/CommunityPatches/patches-v2.tar，
+    # 社区补丁与金手指本地库（11-13 维护者：随启动器装在本地、云端兜底）：完整快照放 Resources/CommunityPatches/patches-v3.tar（v2 发版时转成分块 xz，11-16 瘦身），
     #   出包时 pack/jobs/patches.py 本地优先、按云端清单增量。来源 S2A_PATCH_SNAPSHOT（本机文件）> 下载站；取不到不挡打包（出包时照样向云端要）
     sys.path.insert(0, str(ROOT / "tools")); import patch_pack
     why = patch_pack.stage_snapshot(str(resources / "CommunityPatches"))
@@ -240,14 +240,20 @@ def main():
     bundle_shell(resources / "Engine/engine.json", resources / "Shell", env)
     info = dict(**frontend_layout.info_identity(front), CFBundlePackageType="APPL",
                 CFBundleIconFile="S2Arm", LSMinimumSystemVersion=runtime_sources.deployment_target(),
-                NSHighResolutionCapable=True, CFBundleDevelopmentRegion="en", CFBundleLocalizations=["en", "zh-Hans"],
-                NSBluetoothAlwaysUsageDescription="连接 Switch 2 Pro 手柄，接收按键与体感并发送游戏震动。",
+                NSHighResolutionCapable=True, CFBundleDevelopmentRegion="en", CFBundleLocalizations=["en", "zh-Hans", "zh-Hant", "ja", "es", "fr"],   # 同界面语言（frontend/l10n）；系统语言不在其中时照 CFBundleDevelopmentRegion 用英文
+                NSBluetoothAlwaysUsageDescription=json.loads((ROOT / "launchers/macos/frontend/l10n/en.json").read_text())["bluetooth.usage"],
                 **release_identity(resources / "Engine/engine.json"))
     # Sparkle：appcast 地址、验签公钥（Ed25519，私钥只在发版机 ~/.s2arm/.secrets/sparkle_ed25519）；不开定时检查（查新版走启动时的公告 / 消息）
     info.update(SUFeedURL=SPARKLE_FEED, SUPublicEDKey=SPARKLE_PUBLIC_KEY, SUEnableAutomaticChecks=False, SUAutomaticallyUpdate=False)
     info["UTExportedTypeDeclarations"] = [dict(UTTypeIdentifier="org.s2arm.save-backup", UTTypeDescription="S2Arm Save Backup",
         UTTypeConformsTo=["public.zip-archive"], UTTypeTagSpecification={"public.filename-extension": ["s2asave"]})]
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
+    # 蓝牙授权框的说明文字：每种界面语言一份 <lproj>/InfoPlist.strings（文字取 frontend/l10n 的 bluetooth.usage）。
+    #   授权框由系统画、整个框跟系统语言走（11-15 实机：App 设中文、系统英文 → 整框英文），App 改不了；说明文字随系统挑同一种语言
+    for lproj, l10n in (("en", "en"), ("zh-Hans", "zh"), ("zh-Hant", "zh-Hant"), ("es", "es"), ("fr", "fr"), ("ja", "ja")):
+        text = json.loads((ROOT / f"launchers/macos/frontend/l10n/{l10n}.json").read_text())["bluetooth.usage"]
+        (resources / f"{lproj}.lproj").mkdir(exist_ok=True)
+        (resources / f"{lproj}.lproj/InfoPlist.strings").write_text(f"NSBluetoothAlwaysUsageDescription = {json.dumps(text, ensure_ascii=False)};\n", encoding="utf-8")
     # 启动器本体同样去掉调试映射（见 bundle_engine.strip_debug_maps），再签整个 App
     exe = app / "Contents/MacOS" / front["executable"]
     if os.environ.get("S2A_SYMBOLS_OUT"):   # 未去符号原件随发版存档（同 bundle_engine.strip_debug_maps）

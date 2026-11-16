@@ -19,21 +19,22 @@ from pathlib import Path
 import layout
 from core import Failure
 
-PROGRAM_DIR = "original-exefs"
+PROGRAM_DIR = layout.PROGRAM_EXEFS
 MODULES = ("main", "main.npdm", "sdk") + tuple(f"subsdk{i}" for i in range(10))
 
 
 def saved_program(c, gid):
-    d = layout.path(c, gid, PROGRAM_DIR, create=False)
+    d = layout.program_exefs(c, gid)
     return d if (d / "main").is_file() and (d / "main.npdm").is_file() else None
 
 
 def save_program(c, gid, exefs):
-    """原始程序存一份到这款游戏文件夹（已存且主程序相同就不动）→ 存下的目录；源目录不完整 → None"""
+    """原始程序存一份到游戏程序专用文件夹（layout.program_store；已存且主程序相同就不动）→ 存下的目录；源目录不完整 → None"""
     exefs = Path(exefs)
     if not ((exefs / "main").is_file() and (exefs / "main.npdm").is_file()):
         return None
-    dest = layout.path(c, gid, PROGRAM_DIR)
+    dest = layout.program_exefs(c, gid)
+    dest.parent.mkdir(parents=True, exist_ok=True)
     if (dest / "main").is_file() and (dest / "main").read_bytes()[0x40:0x60] == (exefs / "main").read_bytes()[0x40:0x60]:
         return dest
     tmp = dest.with_name(PROGRAM_DIR + ".partial")
@@ -190,6 +191,13 @@ def fi_supported():
     return bool(v) and int(v.split(".")[0]) >= 26
 
 
+def fps_failed(c, gid, platform):
+    """这款这一端出包时没打进去的帧率补丁（patches.record 记的 sgradeResult.<端>.failed 里 cat = fps）→ [{name, why}]（why = 文案键 result.why.*）。
+    11-15 #934：补丁库有这一版的帧率补丁、一份都没打进去时，开关不能显示成开着生效，要如实写「没能打入（原因）」"""
+    res = ((layout.game_info(c, gid) or {}).get("sgradeResult") or {}).get(platform) or {}
+    return [dict(name=f.get("name") or "", why=f.get("why") or "") for f in res.get("failed") or [] if isinstance(f, dict) and f.get("cat") == "fps"][:3]
+
+
 def state(c, game, match=None):
     """→ {platform: mac, widescreen: {…}, fps: {…}, gfx: {…}, cheats: {…}}（Mac 启动器读；iPhone 读出包写进 kit 的 sgrade_state.json + 本机开关）"""
     import community, cheats
@@ -254,7 +262,9 @@ def state(c, game, match=None):
     fst = next((v for k, v in st.items() if k.startswith("fps:") and v[0] == "开"), None)   # 非玩家句（表列名 / 运行时状态值）
     target = int(pick) if pick.isdigit() and int(pick) else (max(levels) if levels else 0)
     weak = bool(fst) and fst[1].startswith("fps=") and fst[1][4:].isdigit() and int(fst[1][4:]) < (min(target, 60) if pick == "0" else target) - 5
+    ffail = [] if levels else fps_failed(c, gid, "mac")
     if opted: s = "opted_out"
+    elif ffail: s = "failed"   # 补丁库有、一份没打进去（转换器不支持 / 对不上 …）：不说成开着生效，也不说成「不支持补帧」
     elif not levels and not exported: s = "unknown"
     elif not levels and not fi_ok: s = "unsupported"
     elif auto([("fps", "fps60")]) and not on: s = "off_auto"
@@ -262,10 +272,11 @@ def state(c, game, match=None):
     elif weak: s = "ineffective"
     else: s = "on"
     out["fps"] = {"state": s, "source": "patch" if levels else "fi", "fiSupported": fi_ok, "active": {"levels": levels, "pick": pick}, "lastRun": community.patch_result(fst),
+                  **({"failed": ffail} if ffail else {}),
                   "autoOff": auto([("fps", "fps60")]), "versions": versions("fps")}
     # 画面：Mac 才打（iPhone 一律 mac_only）
     gfx = [it for it in community.packed_patches(c, gid) if it["kind"] == "gfx"]
-    gon = [it for it in gfx if pset.get(it["id"]) is not False]
+    gon = [it for it in gfx if community.patch_on(pset, it)]   # 没选过：降负载的缺省关（11-16）
     gkeys = [("patch", it["id"]) for it in gfx]
     if opted: s = "opted_out"
     elif not gfx: s = missing("gfx")
@@ -322,7 +333,9 @@ def write_kit_state(c, gid, kit):
         ws = "patch" if any(i.startswith(("widescreen:", "wsauto:")) for i in ids) else "own"   # 11-15：没补丁一律可开我方通用满屏（不看已验证名单）
         out = {"schema": 1, "build": m.get("build") or "", "optedOut": (layout.game_info(c, gid) or {}).get("sgradeOff") is True,
                "widescreen": dict(source=ws, port="failed" if m.get("port") and not (m.get("exact") or {}).get("widescreen") else "none", versions=vers("widescreen")),
-               "fps": dict(versions=vers("fps")), "gfx": dict(state="mac_only"), "cheats": dict(versions=vers("cheat"))}
+               "fps": dict(versions=vers("fps"), **({} if any(i.startswith("fps:") for i in ids) or not fps_failed(c, gid, "ios") else
+                                                    dict(state="failed", failed=fps_failed(c, gid, "ios")))),
+               "gfx": dict(state="mac_only"), "cheats": dict(versions=vers("cheat"))}
         atomic(kit / "sgrade_state.json", out)
     except (OSError, ValueError, TypeError) as e:
         c.emit("message", f"【黄】S 级状态底料没写出（不影响出包）：{str(e)[:120]}")   # 非玩家句

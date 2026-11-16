@@ -230,6 +230,7 @@
 "vpad.menu.face.xbox" = "Buttons: Xbox layout";
 "vpad.menu.face.xbox.note" = "Xbox button positions; the bottom button confirms";
 "vpad.menu.gyro" = "Phone gyro";
+"vpad.menu.gyro.note" = "Xbox-style controllers such as 8BitDo or GameSir only have motion controls in Switch mode.";
 "vpad.menu.haptic.note" = "A light tap when you press a button";
 "vpad.menu.holdLock.note" = "Hold for 2 s to lock; this game only";
 "vpad.menu.hud" = "Performance overlay";
@@ -341,6 +342,7 @@
 "diag.error.zip" = "Couldn’t create the bundle (writing the zip failed; the phone may be out of space)";
 "diag.export" = "Export diagnostics";
 "diag.prompt.abnormalExit" = "S2Arm didn’t quit normally last time (it crashed, froze or was closed by the system)";
+"diag.prompt.imlLost" = "S2Arm didn’t quit normally last time. This install lost the “Increased Memory Limit” permission, so a large game quitting is most likely running out of memory. Reinstall with “Install on iPhone” in S2Arm on your computer (a free Apple ID keeps this permission too). If you sign it yourself, use Xcode or AltStore Classic v2.3; re-signing with SideStore 0.7.0 drops it. For an existing install, you can also add the permission to the App ID with GetMoreRam and reinstall";
 "diag.prompt.crash" = "The system reported that S2Arm crashed or froze last time";
 "diag.prompt.message" = "%@. This uploads run logs, crash reports and the list of graphics pipelines the games used (shader IDs only) — no saves, keys or game files — and gives you a short code.";
 "diag.prompt.no" = "No thanks";
@@ -387,7 +389,7 @@
 "gfx.fpsLimit" = "Frame rate limit";
 "gfx.fpsLimit.none" = "Unlimited";
 "gfx.resolution" = "Render resolution";
-"iml.lost.body" = "Large games may run out of memory or slow down. Re-sign with Xcode or AltStore Classic v2.3 and reinstall, or use GetMoreRam to add the permission to the App ID and reinstall.";
+"iml.lost.body" = "Large games may run out of memory and quit or slow down. Reinstall with “Install on iPhone” in S2Arm on your computer (a free Apple ID keeps this permission too). If you sign it yourself, use Xcode or AltStore Classic v2.3; re-signing with SideStore 0.7.0 drops it. For an existing install, you can also add the permission to the App ID with GetMoreRam and reinstall.";
 "iml.lost.title" = "This install lost the “Increased Memory Limit” permission";
 "lan.denied.later" = "Not now";
 "lan.denied.message" = "The system hasn’t allowed “%@” to find devices on your local network, so multiplayer can’t find other players.\n\nGo to Settings › Privacy & Security › Local Network, turn on “%@”, then come back and join multiplayer again.";
@@ -546,6 +548,14 @@
 "sgrade.state.version.older" = "Patches only exist for the older version %1$@; there's none for your version yet.";
 "sgrade.state.version.port_failed" = "We tried adapting it to your version, but it didn't work.";
 "sgrade.state.none" = "The patch library has no %1$@ patch for this game yet.";
+"sgrade.state.failed" = "This game's %1$@ patch couldn't be added: %2$@";
+"sgrade.result.why.mismatch" = "it doesn't match your copy of the game";
+"sgrade.result.why.conflict" = "it conflicts with another patch";
+"sgrade.result.why.translate" = "this part can't be translated yet";
+"sgrade.result.why.full" = "there are too many patches for this module";
+"sgrade.result.why.port" = "it's for another version and couldn't be adapted";
+"sgrade.result.why.version" = "this mod was made for another version of the game";
+"sgrade.result.why.unsupported" = "the patch uses something S2Arm doesn't support yet";
 "sgrade.state.opted_out" = "Not added: \"Add when building\" was off at export. Turn it on and export again.";
 "sgrade.state.pending.ios" = "New patches are available: open S2Arm on your computer and choose \"S-grade upgrade\".";
 "sgrade.state.mac_only" = "Graphics patches are Mac-only.";

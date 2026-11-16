@@ -54,12 +54,6 @@ ALLOW = {
         "运行期（宿主服务）：设备上读游戏数据目录，不是出包步骤",
     ("pack/jobs/mods.py", "_find:rglob"):
         "误判：导入 / 列出的是玩家给的 mod 压缩包或文件夹（只有 mod 自己的几个文件），不是游戏 RomFS；不进出包流程",
-    ("pack/jobs/mods.py", "import_paths:rglob"):
-        "误判：导入 / 列出的是玩家给的 mod 压缩包或文件夹（只有 mod 自己的几个文件），不是游戏 RomFS；不进出包流程",
-    ("pack/jobs/mods.py", "listing:rglob"):
-        "误判：导入 / 列出的是玩家给的 mod 压缩包或文件夹（只有 mod 自己的几个文件），不是游戏 RomFS；不进出包流程",
-    ("pack/jobs/install.py", "push_mods:rglob"):
-        "误判：装机时推的是这款游戏文件夹 mods/<名字> 下玩家导入的 mod 文件，不是游戏 RomFS",
     ("services/S2A.Services/RomFsMods.cs", "*"):
         "运行期（起局）：列的是玩家放进 <文档根>/mods/ 的 mod 文件夹（只有 mod 自己的几个文件），不是游戏 RomFS；游戏 RomFS 经 LibHac 文件表读，不遍历目录",
 }

@@ -369,6 +369,8 @@ def game_info(c, gid):
 def update_info(c, gid, **fields):
     d = game_dir(c, gid)
     atomic(d / GAME_JSON, dict(read(d / GAME_JSON, {}), **fields))
+    if "ios" in fields:   # 程序件的兼容记录（壳号 / 宿主约定号 / 直连链号…）同存一份到专用文件夹：游戏文件夹被删了，更新手机照样判得出能不能带这款
+        atomic(program_store(c, gid, create=True) / PROGRAM_INFO, fields["ios"])
 
 
 def read_sizes(c, gid):
@@ -433,8 +435,45 @@ def image_ios(c, gid, create=True):
     return path(c, gid, "image", "ios", create=create)
 
 
+# ---- 游戏程序专用文件夹（11-16 维护者：玩家打完包常删输出目录、之后不碰电脑，更新 S2Arm 时组容器要的游戏程序跟着丢了）----
+# 默认位置根 .programs/<程序号>/：kit/（组容器的程序件）、original-exefs/（原始程序，S 级升级用，sgrade.py）、ios.json（程序件的兼容记录，同 game.json 的 ios）。
+#   按程序号分、不在游戏文件夹里：删游戏文件夹、换存放位置删旧位置、「释放空间」都不碰它；只有「删除游戏」（library.delete：从库里删掉、也从各台手机记录摘掉）才删。
+#   旧库的 image/ios/kit、original-exefs 第一次用到时搬过来（同卷改名，跨卷拷后删）。一款约 56–238 MB（11-16 常驻库 14 款实测合计 1971 MB）
+PROGRAMS, PROGRAM_INFO, PROGRAM_EXEFS = ".programs", "ios.json", "original-exefs"
+
+
+def program_store(c, gid, create=False):
+    d = c.library / PROGRAMS / gid.upper()
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+        hide(c.library / PROGRAMS)
+    return d
+
+
+def _adopt(c, gid, name, legacy):
+    """专用文件夹里还没有 name、游戏文件夹里的旧位置 legacy 有 → 搬过来；搬不动（盘只读 / 被占用）就先用旧位置，下次再搬"""
+    new = program_store(c, gid) / name
+    if os.path.lexists(new) or not os.path.isdir(legacy):
+        return new
+    try:
+        program_store(c, gid, create=True)
+        _move_any(legacy, new)
+    except OSError:
+        return legacy
+    return new
+
+
 def ios_kit(c, gid):
-    return image_ios(c, gid, create=False) / IOS_KIT
+    return _adopt(c, gid, IOS_KIT, image_ios(c, gid, create=False) / IOS_KIT)
+
+
+def program_exefs(c, gid):
+    return _adopt(c, gid, PROGRAM_EXEFS, path(c, gid, PROGRAM_EXEFS, create=False))
+
+
+def program_info(c, gid):
+    """程序件的兼容记录：游戏文件夹 game.json 的 ios 优先，没有（游戏文件夹被删了）读专用文件夹的那份"""
+    return game_info(c, gid).get("ios") or read(program_store(c, gid) / PROGRAM_INFO, {}) or {}
 
 
 def ios_pack(c, gid):
@@ -898,7 +937,7 @@ def adopt_library_logs(c):
         if src.name != "jobs" or not src.is_dir():
             continue
         prune_jobs(c.private, jobs=src)
-        for p in src.glob("*.json"):
+        for p in entries(src, "*.json"):
             if p.name.endswith(".request.json"):
                 continue
             try:
@@ -942,6 +981,18 @@ OS_JUNK_PREFIX = "._"
 
 def os_junk(name):
     return name in OS_JUNK or name.startswith(OS_JUNK_PREFIX)
+
+
+def entries(d, pattern="*", recursive=False):
+    """d 下按 pattern 列出的业务文件 / 目录（排好序）：路径里任何一级是系统附属文件都不算（d 不存在 / 不是目录 → []）。
+    玩家能放到外置盘上的目录（游戏库、数据目录、mod / 金手指 / 导出文件夹）一律经这里列：exFAT / FAT 上 macOS 给每个带扩展属性的文件
+    配一份 ._<名>（4 KB AppleDouble，含 NUL、非 UTF-8），pathlib 的 glob("*.json") / rglob 照样匹配它；逐个调用点各自补过滤，
+    换个调用点又漏（#812 #816 #911 #1010 #369 #382 都是这一类）"""
+    d = Path(d)
+    if not d.is_dir():
+        return []
+    found = d.rglob(pattern) if recursive else d.glob(pattern)
+    return sorted(p for p in found if not any(os_junk(part) for part in p.relative_to(d).parts))
 
 
 def has_content(d):

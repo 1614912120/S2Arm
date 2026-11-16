@@ -201,6 +201,7 @@
 "vpad.menu.face.xbox" = "手把按鍵：Xbox 配置";
 "vpad.menu.face.xbox.note" = "依 Xbox 的按鍵位置，下鍵確認";
 "vpad.menu.gyro" = "手機陀螺儀";
+"vpad.menu.gyro.note" = "八位堂、蓋世小雞這類 Xbox 外形的手把，切到 Switch 模式才有體感。";
 "vpad.menu.haptic.note" = "按下時輕震一下";
 "vpad.menu.holdLock.note" = "按住 2 秒鎖定，只對這款遊戲";
 "vpad.menu.hud" = "效能浮層";
@@ -312,6 +313,7 @@
 "diag.error.zip" = "打包失敗（寫入 zip 時出錯，可能是手機空間不足）";
 "diag.export" = "匯出診斷包";
 "diag.prompt.abnormalExit" = "上次 S2Arm 沒有正常結束（當機、卡住或被系統關閉）";
+"diag.prompt.imlLost" = "上次 S2Arm 沒有正常結束。這次安裝遺失了「提高記憶體上限」權限，玩大型遊戲時結束多半是記憶體不足：在電腦上的 S2Arm 點「裝到 iPhone」重新安裝（免費 Apple ID 也會帶上這項權限）；自己簽署的話用 Xcode 或 AltStore Classic v2.3，SideStore 0.7.0 重新簽署會遺失；已經裝好的也可以用 GetMoreRam 為 App ID 補上權限後重新安裝";
 "diag.prompt.crash" = "系統回報上次 S2Arm 當機或卡住了";
 "diag.prompt.message" = "%@。會上傳執行紀錄、當機紀錄和遊戲用過的圖形管線清單（只有著色器編號），不會上傳存檔、金鑰和遊戲檔案；上傳完成後會給你一組短碼。";
 "diag.prompt.no" = "不用了";
@@ -358,7 +360,7 @@
 "gfx.fpsLimit" = "幀率上限";
 "gfx.fpsLimit.none" = "不限";
 "gfx.resolution" = "渲染解析度";
-"iml.lost.body" = "大型遊戲可能會記憶體不足或變慢。請用 Xcode 或 AltStore Classic v2.3 重新簽署後重新安裝，或用 GetMoreRam 為 App ID 補上權限後重新安裝。";
+"iml.lost.body" = "大型遊戲可能會記憶體不足而閃退或變慢。在電腦上的 S2Arm 點「裝到 iPhone」重新安裝（免費 Apple ID 也會帶上這項權限）；自己簽署的話用 Xcode 或 AltStore Classic v2.3，SideStore 0.7.0 重新簽署會遺失；已經裝好的也可以用 GetMoreRam 為 App ID 補上權限後重新安裝。";
 "iml.lost.title" = "這次安裝遺失了「提高記憶體上限」權限";
 "lan.denied.later" = "以後再說";
 "lan.denied.message" = "系統沒有允許「%@」尋找區域網路中的裝置，連線遊玩時找不到其他玩家。\n\n請到「設定 › 隱私權與安全性 › 區域網路」，開啟「%@」，再回來重新進入連線遊玩。";
@@ -546,6 +548,14 @@
 "sgrade.state.version.older" = "補丁只有舊版本 %1$@ 的，你這個版本暫時沒有。";
 "sgrade.state.version.port_failed" = "已試過移植到你這份，沒成功。";
 "sgrade.state.none" = "補丁庫裡還沒有這款遊戲的%1$@補丁。";
+"sgrade.state.failed" = "這款的%1$@補丁沒能打入：%2$@";
+"sgrade.result.why.mismatch" = "和你這份遊戲對不上";
+"sgrade.result.why.conflict" = "和另一份補丁改的是同一處";
+"sgrade.result.why.translate" = "這一處暫時轉譯不了";
+"sgrade.result.why.full" = "同一模組的補丁太多，放不下";
+"sgrade.result.why.port" = "補丁是別的版本的，移植不到你這份";
+"sgrade.result.why.version" = "這個 Mod 是給別的遊戲版本做的，和你這份對不上";
+"sgrade.result.why.unsupported" = "補丁用了 S2Arm 還不支援的寫法";
 "sgrade.state.opted_out" = "沒打入：出包時取消了「出包時打入」。重新出包時勾上就有。";
 "sgrade.state.pending.ios" = "電腦上有可用的新補丁：在電腦的 S2Arm 點「S 級優化升級」裝進來。";
 "sgrade.state.mac_only" = "畫面補丁只在 Mac 版裡。";

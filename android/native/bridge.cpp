@@ -943,6 +943,8 @@ Java_org_s2arm_android_NativeBridge_configureFrameLogDir(JNIEnv *env, jclass, js
 
 // 外挂 Vulkan 驱动目录（direct_session.c 的 custom_driver_open 读）：内部目录用于复制与 dlopen，
 // 外部私有目录用于 adb push（selected.txt 与驱动文件）。没选驱动时两边都不碰。
+// 另一个读者：会话标记（lifecycle_android.c 的 s2a_sesmark_clear_home，#528 第 15 项）在优雅收尾最后用 files 目录删 end 标记。
+//   所以外壳每次装载运行库后都要调 configureGpuDriver（不管选没选驱动）；不调的话每次正常退局库页都会误报「上一局异常结束」。
 static std::string g_gpu_driver_files_dir, g_gpu_driver_external_dir;
 extern "C" const char *s2a_android_gpu_driver_files_dir(void) { return g_gpu_driver_files_dir.c_str(); }
 extern "C" const char *s2a_android_gpu_driver_external_dir(void) { return g_gpu_driver_external_dir.c_str(); }
@@ -1392,6 +1394,13 @@ Java_org_s2arm_android_NativeBridge_setHostBuild(JNIEnv *env, jclass, jstring bu
 extern "C" JNIEXPORT jint JNICALL
 Java_org_s2arm_android_NativeBridge_pollSaveAtomic(JNIEnv *, jclass) {
     return s2a_save_atomic_poll();
+}
+// 游玩时间落盘（共用 runtime/src/playtime.c，口径同 iOS app.m 的 10 秒心跳与进后台）：Java 侧游戏在前台时每 10 秒、
+//   onPause 与收局前各调一次；攒着不满 1 秒时内部空转。诊断目标不链 playtime.c，弱引用取不到就跳过。
+extern "C" int s2a_playtime_flush(void) __attribute__((weak));
+extern "C" JNIEXPORT void JNICALL
+Java_org_s2arm_android_NativeBridge_flushPlaytime(JNIEnv *, jclass) {
+    if (s2a_playtime_flush) s2a_playtime_flush();
 }
 // 直连安全网提示出口（dguard_android.c 弱引用，这里是强实现）：在游戏线程上被调，
 // 经 JNI 上叫 NativeBridge.dguardPrompt 弹阻塞对话框；玩家选「仍然启动」才返回

@@ -28,14 +28,19 @@ import S2ArmAppleAdapter
                 XCTAssertEqual(players.count, 4)
                 let playerRect = window.convertFromScreen(players[player].frame)
                 try click(CGPoint(x: playerRect.midX, y: playerRect.midY), in: window)
-                try await Task.sleep(for: .milliseconds(180))
-                let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-                host.cacheDisplay(in: host.bounds, to: bitmap)
+                // 等选中态真画出来再判：固定等 180 ms 在整套负载下偶发取到旧色。每 50 ms 截一次取色，选中即停，最多等 3 秒
                 let point = host.convert(CGPoint(x: playerRect.minX + 5, y: playerRect.midY), from: nil)
-                let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
-                let sampleY = host.isFlipped ? point.y : host.bounds.maxY - point.y
-                let color = try XCTUnwrap(bitmap.colorAt(x: Int(point.x * scale), y: Int(sampleY * scale))?.usingColorSpace(.deviceRGB))
-                XCTAssertGreaterThan(color.redComponent, 0.8, "必须实际选中玩家\(player + 1)，不能重复验证玩家 1")
+                var red: CGFloat = 0
+                let deadline = Date().addingTimeInterval(3)
+                repeat {
+                    try await Task.sleep(for: .milliseconds(50))
+                    let bitmap = try XCTUnwrap(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+                    host.cacheDisplay(in: host.bounds, to: bitmap)
+                    let scale = CGFloat(bitmap.pixelsWide) / host.bounds.width
+                    let sampleY = host.isFlipped ? point.y : host.bounds.maxY - point.y
+                    red = try XCTUnwrap(bitmap.colorAt(x: Int(point.x * scale), y: Int(sampleY * scale))?.usingColorSpace(.deviceRGB)).redComponent
+                } while red <= 0.8 && Date() < deadline
+                XCTAssertGreaterThan(red, 0.8, "必须实际选中玩家\(player + 1)，不能重复验证玩家 1")
                 for target in ["A", "B", "Y", "X", "L"] {
                     navigation.focus("input.map." + target)
                     let key = try XCTUnwrap(navigation.controlTargets(in: window).first { $0.id == "input.map." + target })
@@ -263,6 +268,7 @@ import S2ArmAppleAdapter
                 location: GameLocation(catalog: ["state": "ok", "path": first]))
             for stage in 0..<4 {
                 let model = stage < 2 ? fixture.model : S2ArmLauncherModel(client: fixture.model.provider.client)
+                fixture.quiet(model)
                 if stage >= 2 {
                     if stage == 3 { fixture.runner.storageResponse = ["locations": [], "last": ""] }
                     model.loadLocations()
@@ -378,6 +384,70 @@ import S2ArmAppleAdapter
         XCTAssertEqual(fixture.runner.requests.filter { $0["operation"] as? String == "export" }.count, 1)
         navigation.source.tick(now: 0.8)
         XCTAssertEqual(fixture.runner.requests.filter { $0["operation"] as? String == "export" }.count, 1, "长按不能重复开始出包")
+    }
+
+    /// #1272：选过方案后出包页看得到选的是哪套、能「更改」（弹同一个确认页，不顺带开出包）；没选过不出这一行（导出 iPhone 时确认页会问）
+    func testExportPageShowsDownstreamChoiceWithChange() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        for choice in [nil, ""] as [String?] {
+            fixture.runner.catalogDownstreamChoice = choice
+            fixture.model.refresh()
+            for _ in 0..<200 where fixture.model.games.first?.downstream?.choice != choice || fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
+            let game = try XCTUnwrap(fixture.model.games.first)
+            XCTAssertEqual(game.downstream?.choice, choice)
+            let padFocus = PadFocus()
+            let page = AnyView(ExportView(model: fixture.model, covers: CoverCache(), game: game, install: {})
+                .environmentObject(padFocus).padScope("main", padFocus).frame(width: 1120, height: 900))
+            let (host, window) = try await render(page, fixture: fixture, language: .zh)
+            let navigation = fixture.navigation
+            navigation.source.controllers = { [] }; navigation.attach(window); navigation.source.stop()
+            defer { navigation.detach(); window.close() }
+            let has = navigation.controlTargets(in: window).contains { $0.id == "export.downstream.change" }
+            XCTAssertEqual(has, choice != nil, "选过才出「更改」（choice \(String(describing: choice))）")
+            if choice != nil {
+                try snapshot(host, "export-downstream-change-zh")
+                let before = fixture.runner.requests.count
+                navigation.focus("export.downstream.change"); navigation.handle(.confirm)
+                for _ in 0..<100 where fixture.model.downstreamPromptFor == nil { try await Task.sleep(for: .milliseconds(10)) }
+                XCTAssertEqual(fixture.model.downstreamPromptFor, game.id, "「更改」弹确认页")
+                XCTAssertFalse(fixture.runner.requests.dropFirst(before).contains { $0["operation"] as? String == "export" }, "更改不顺带开出包")
+                fixture.model.downstreamPromptFor = nil
+            }
+        }
+    }
+
+    /// 11-16 维护者「出包的时候没办法同时安装其他游戏到 iPhone 上，这个控制纯属多余」：手机作业走独立的手机槽。期望按规则手写：
+    ///   A 在出包（主槽）时装 B → 立刻发 install、主槽那单不动；装 A → 排队不发；手机槽忙时再装 B → 排队；主槽 A 结束 → A 的装机接上
+    func testInstallRunsWhileAnotherGameExportsAndQueuesRealConflicts() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.runner.catalogGameCount = 2
+        fixture.model.refresh()
+        for _ in 0..<200 where fixture.model.games.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        let a = try XCTUnwrap(fixture.model.games.first { $0.id == "fixture" }), b = try XCTUnwrap(fixture.model.games.first { $0.id == "fixture-1" })
+        func installs(_ id: String) -> Int { fixture.runner.requests.filter { $0["operation"] as? String == "install" && $0["gameId"] as? String == id }.count }
+        var export = JobSession(kind: .export, gameID: a.id, name: a.name); export.export = ExportRun(platforms: [.ios])
+        fixture.model.session = export   // A 正在出包（主槽）
+        XCTAssertTrue(fixture.model.mainBusy && !fixture.model.phoneBusy)
+
+        fixture.model.install(b, device: "dev-1")
+        XCTAssertEqual(fixture.model.phoneSession?.gameID, b.id, "A 出包时装 B：手机槽立刻起")
+        XCTAssertEqual(fixture.model.session?.gameID, a.id, "主槽那单不动")
+        fixture.model.install(a, device: "dev-1")
+        XCTAssertTrue(fixture.model.phoneQueued(a.id), "装正在出包的 A：排队")
+        fixture.model.install(b, device: "dev-1")
+        XCTAssertEqual(fixture.model.phoneQueue.map(\.gameID), [a.id, b.id], "手机槽忙时再装 B：排在后面")
+        for _ in 0..<200 where installs(b.id) < 1 || fixture.model.phoneBusy { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(installs(a.id), 0, "A 还在出包：A 的装机不发")
+        for _ in 0..<200 where installs(b.id) < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(installs(b.id), 2, "手机槽空了：排着的 B 接上（A 被主槽占着跳过它）")
+        XCTAssertEqual(fixture.model.phoneQueue.map(\.gameID), [a.id])
+
+        fixture.model.finish(.completed, message: "")   // A 出包结束
+        for _ in 0..<200 where installs(a.id) < 1 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(installs(a.id), 1, "A 出完：A 的装机接上")
+        XCTAssertTrue(fixture.model.phoneQueue.isEmpty)
     }
 
     func testExportNameControllerOpensKeyboardWithoutRenameAlert() async throws {
@@ -580,7 +650,8 @@ import S2ArmAppleAdapter
         }
     }
 
-    func testHomeRightTriggerPreparesTheGameWhileConfirmOnlySelectsItsCard() async throws {
+    /// 首页：左右移动就是选中；焦点所在的卡片按 A = 主操作（同 R2 / ZR）。确认键界面一律显示 A（单只 Joy-Con 没有 ZR），按住不连发
+    func testHomeConfirmOnFocusedCardRunsThePrimaryActionLikeRightTrigger() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
         fixture.runner.catalogNeedsPreparation = true
@@ -596,18 +667,69 @@ import S2ArmAppleAdapter
         let controller = GCController.withExtendedGamepad(), pad = try XCTUnwrap(controller.extendedGamepad)
         navigation.source.controllers = { [controller] }; navigation.source.tick(now: 0)
         navigation.focus("card." + game.id)
-        pad.buttonA.setValue(1); navigation.source.tick(now: 0.01)
-        pad.buttonA.setValue(0); navigation.source.tick(now: 0.02)
-        XCTAssertEqual(fixture.model.selectedID, game.id)
-        XCTAssertNil(fixture.model.exportFor, "确认键选中封面，不应同时打开准备页")
+        fixture.model.selectedID = game.id
         XCTAssertEqual(navigation.shortcutTargets(in: window)[.rightTrigger], ["hero.export"])
         try snapshot(host, "home-r2-prepare")
-        pad.rightTrigger.setValue(1); navigation.source.tick(now: 0.03)
-        XCTAssertEqual(fixture.model.exportFor, game.id, "R2 才执行准备游戏")
+        pad.buttonA.setValue(1); navigation.source.tick(now: 0.01)
+        XCTAssertEqual(fixture.model.exportFor, game.id, "卡片按 A 执行主操作（准备游戏），同 R2")
         try await Task.sleep(for: .milliseconds(150))
         navigation.source.tick(now: 0.8)
         XCTAssertFalse(fixture.runner.requests.contains { $0["operation"] as? String == "export" },
-            "按住 R2 从首页进入出包页，不能再触发新页面的开始出包")
+            "按住 A 从首页进入出包页，不能再触发新页面的开始出包")
+    }
+
+    /// v0.5.0 手柄验收 A1：首页横向封面，手柄左右切游戏，选中的游戏（大图与标题）跟着换。注入 GCController 十字键，走生产输入路径
+    func testAcceptanceHomeDpadSwitchesTheSelectedGame() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.runner.catalogGameCount = 3
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.count < 3 { try await Task.sleep(for: .milliseconds(10)) }
+        let navigation = fixture.model.gamepad
+        navigation.source.controllers = { [] }
+        let (host, window) = try await render(AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture")
+            .frame(width: 1280, height: 760)), fixture: fixture, language: .zh)
+        navigation.attach(window); navigation.source.stop(); navigation.source.isActive = { true }
+        defer { navigation.detach(); window.close() }
+        let controller = GCController.withExtendedGamepad(), pad = try XCTUnwrap(controller.extendedGamepad)
+        navigation.source.controllers = { [controller] }; navigation.source.tick(now: 0)
+        fixture.model.selectedID = "fixture"; navigation.focus("card.fixture")
+        try await Task.sleep(for: .milliseconds(120))
+        try snapshot(host, "acceptance-A1-0")
+        var now = 0.01
+        for expected in ["fixture-1", "fixture-2"] {
+            pad.dpad.setValueForXAxis(1, yAxis: 0); navigation.source.tick(now: now); now += 0.01
+            pad.dpad.setValueForXAxis(0, yAxis: 0); navigation.source.tick(now: now); now += 0.01
+            try await Task.sleep(for: .milliseconds(200))
+            XCTAssertEqual(fixture.model.selectedID, expected, "十字键右一下切到下一款")
+            XCTAssertEqual(navigation.focusedID, "card." + expected)
+            try snapshot(host, "acceptance-A1-" + expected)
+        }
+        pad.dpad.setValueForXAxis(-1, yAxis: 0); navigation.source.tick(now: now); now += 0.01
+        pad.dpad.setValueForXAxis(0, yAxis: 0); navigation.source.tick(now: now)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(fixture.model.selectedID, "fixture-1", "十字键左一下切回上一款")
+    }
+
+    /// v0.5.0 手柄验收 A6：玩过的游戏首页显示游玩时长（单独一块）；没玩过的不显示
+    func testAcceptanceHomeShowsPlaytimeOnlyForPlayedGames() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.runner.catalogGameCount = 2
+        fixture.runner.catalogPlaytime = ["seconds": 9059, "lastPlayed": Date().timeIntervalSince1970 - 86_400]
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(fixture.model.games.first { $0.id == "fixture" }?.playtime?.seconds, 9059)
+        XCTAssertNil(fixture.model.games.first { $0.id == "fixture-1" }?.playtime)
+        fixture.model.gamepad.source.controllers = { [] }
+        for (id, played) in [("fixture", true), ("fixture-1", false)] {
+            fixture.model.selectedID = id
+            let (host, window) = try await render(AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture")
+                .frame(width: 1280, height: 760)), fixture: fixture, language: .zh)
+            defer { window.close() }
+            XCTAssertEqual(fixture.model.games.first { $0.id == id }?.playtime != nil, played, played ? "玩过的带游玩时长（首页那块按它显示，截图为证）" : "没玩过的不带")
+            try snapshot(host, "acceptance-A6-" + id)
+        }
     }
 
     func testTitlebarActionsAlignWithTheHomeControls() async throws {
@@ -1561,6 +1683,8 @@ private struct SearchControlPreview: View {
     let model: S2ArmLauncherModel
     let navigation = LauncherPadNavigation()
     let runner = SettingsRunner()
+    /// 模型想弹的提示框（标题：内容）：走记录不走真 NSAlert（runAlert 注入）
+    private(set) var alerts: [String] = []
     init() throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("s2arm-settings-layout-" + UUID().uuidString)
         try FileManager.default.createDirectory(at: root.appendingPathComponent("Jobs"), withIntermediateDirectories: true)
@@ -1568,7 +1692,10 @@ private struct SearchControlPreview: View {
         try Data().write(to: root.appendingPathComponent("Jobs/main.py"))
         model = S2ArmLauncherModel(client: JobClient(environment: JobEnvironment(privateRoot: root, resources: root,
             library: root.appendingPathComponent("library").path, libraryId: "layout-fixture"), runner: runner))
+        quiet(model)
     }
+    /// 这个夹具里建的模型（含重启后新建的）一律接上：提示框记下来，不弹真窗
+    func quiet(_ m: S2ArmLauncherModel) { m.runAlert = { [weak self] a in self?.alerts.append(a.messageText + "：" + a.informativeText); return .alertSecondButtonReturn } }
     func remove() { try? FileManager.default.removeItem(at: root) }
 }
 
@@ -1596,6 +1723,17 @@ private final class SettingsRunner: JobProcessRunner {
         get { lock.withLock { gameCount } }
         set { lock.withLock { gameCount = newValue } }
     }
+    private var downstreamChoice: String? = nil
+    /// 夹具款上次选的下游方案（nil = 没选过；"" = 仍用原版）
+    var catalogDownstreamChoice: String? {
+        get { lock.withLock { downstreamChoice } }
+        set { lock.withLock { downstreamChoice = newValue } }
+    }
+    private var playtime: [String: Any]? = nil
+    var catalogPlaytime: [String: Any]? {
+        get { lock.withLock { playtime } }
+        set { lock.withLock { playtime = newValue } }
+    }
     var requests: [[String: Any]] { lock.withLock { captured } }
     func start(executable: URL, arguments: [String], environment: [String: String], onLine: @escaping (Data) -> Void,
                onStderr: @escaping (Data) -> Void, onExit: @escaping (Int32) -> Void) throws -> JobProcessHandle {
@@ -1610,8 +1748,11 @@ private final class SettingsRunner: JobProcessRunner {
                 "en": ["title": "Choose a configuration", "body": "Original layout fixture for long content", "points": (1...24).map { "Original item \($0): a longer configuration description to verify scrolling and keep the actions visible" },
                        "recommend": "Use recommended", "original": "Use original"]]
             result = ["games": (0..<catalogGameCount).map { index in
-                ["id": index == 0 ? "fixture" : "fixture-\(index)", "name": "Original UI fixture \(index)", "cover": catalogCover, "ready": true, "needsPreparation": catalogNeedsPreparation, "missing": [],
-                 "downstream": ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy]] as [String: Any]
+                var game: [String: Any] = ["id": index == 0 ? "fixture" : "fixture-\(index)", "name": "Original UI fixture \(index)", "cover": catalogCover, "ready": true, "needsPreparation": catalogNeedsPreparation, "missing": [],
+                 "downstream": ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy]]
+                if index == 0, let playtime = catalogPlaytime { game["playtime"] = playtime }
+                if let choice = catalogDownstreamChoice { game["downstream"] = ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy, "choice": choice] }
+                return game
             }]
         }
         if request["operation"] as? String == "community" {

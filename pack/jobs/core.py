@@ -201,7 +201,7 @@ def read(path, default=None):
     按 UTF-8 原子回写，回读核对与原对象相等。都解不开照样抛错（不返回空游戏库）"""
     path = Path(path)
     try:
-        raw = path.read_bytes()
+        raw = winproc.read_shared(path) if os.name == "nt" else path.read_bytes()   # Windows 读时带共享删除，不挡作业替换记录（#561）
     except (FileNotFoundError, NotADirectoryError):   # NotADirectoryError：路径中间一级是文件（遍历到 .DS_Store 再读 .DS_Store/game.json，#343）＝没有
         return default
     try:
@@ -222,14 +222,16 @@ def read(path, default=None):
         raise first
 
 
-# Windows：目标被别的进程打开且没带共享删除时，替换报 PermissionError（#130：Python 读方 open() 不带 FILE_SHARE_DELETE，杀毒 / 索引也会短暂占用）
+# Windows：替换走 winproc.replace_file（POSIX 语义，读方带共享删除时不再撞「拒绝访问」，#245 / #561 的根因）。
+#   剩下的撞车只有第三方不带共享删除打开（杀毒 / 索引的短暂占用，或卷不支持 POSIX 语义回落 MoveFileEx）：仍按下面的退避重试（#130）
 WIN_REPLACE_RETRIES = (0.02, 0.05, 0.1, 0.2, 0.4, 0.8)
 
 
 def replace_retrying(tmp, path):
-    for delay in (*WIN_REPLACE_RETRIES, None) if os.name == "nt" else (None,):
+    nt = os.name == "nt"
+    for delay in (*WIN_REPLACE_RETRIES, None) if nt else (None,):
         try:
-            return os.replace(tmp, path)
+            return winproc.replace_file(tmp, path) if nt else os.replace(tmp, path)
         except PermissionError:
             if delay is None:
                 raise
@@ -629,6 +631,7 @@ class Context:
         self.last_journal = 0.0
         self.jobpath = self.logs / "jobs" / (self.task + ".json")
         self.events = self.logs / "jobs" / (self.task + ".events.jsonl")
+        self.events_private = False
         self.requestpath = self.logs / "jobs" / (self.task + ".request.json")
         layout.follow_task(self)   # 索引表第一项核成默认库位置；同一任务上次跑在库建好之前（记录在私有目录）：先把它的记录搬过来，续跑的次数、阶段接得上
         if not self.recorded:
@@ -778,12 +781,16 @@ class Context:
                     if durable or now - self.last_journal >= JOURNAL_PROGRESS_S:
                         atomic(self.jobpath, self.job)
                         self.last_journal = now
-                    with self.events.open("a", encoding="utf-8") as f:
+                    # 0o600 在创建时给（O_CREAT 的 mode），不再每条事件 chmod：Windows 上那是一次额外的按路径改属性，
+                    #   撞上占用同样报「拒绝访问」、整局判 journal_write_failed（#561）；旧版留下的宽权限文件本进程第一次写时收紧一次
+                    with os.fdopen(os.open(self.events, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600), "a", encoding="utf-8") as f:
                         f.write(line + "\n")
                         if durable:
                             f.flush()
                             os.fsync(f.fileno())   # a killed worker must not take its own last stage line with it (J10 journal)
-                    os.chmod(self.events, 0o600)
+                    if not self.events_private:
+                        os.chmod(self.events, 0o600)
+                        self.events_private = True
             except OSError as error:
                 # A full or failing disk used to let the job finish "successfully" with its record missing: whoever looks for it later finds
                 # nothing, or finds it stuck at an old stage. Say so and fail the job instead (J10).
@@ -1414,7 +1421,7 @@ def pid_start(pid):
     return result.stdout.strip()
 
 
-WIN_RUNTIME_PATH = ["python", r"python\Scripts", "dotnet", r"git\usr\bin", "zstd"]   # 同 bundle_runtime_win.env_cmd 的 PATH（tests 核两处一致）
+WIN_RUNTIME_PATH = ["python", r"python\Scripts", r"git\usr\bin", "zstd"]   # 同 bundle_runtime_win.env_cmd 的 PATH（tests 核两处一致）
 
 
 def win_metal_dir(environ):
@@ -1427,12 +1434,12 @@ def win_metal_dir(environ):
 
 
 def win_runtime_env(runtime, engine, system_root):
-    """Windows 出包作业的环境（同随包 s2arm_env.cmd）：只用随包 Python / .NET 运行时 / bash / zstd + 系统目录，预编件在引擎 Binaries/Prepare（同 Mac）"""
+    """Windows 出包作业的环境（同随包 s2arm_env.cmd）：只用随包 Python / bash / zstd + 系统目录（不带 .NET：C# 件是 NativeAOT 单文件），预编件在引擎 Binaries/Prepare（同 Mac）"""
     import ntpath
     rt = str(runtime)
     paths = [ntpath.join(rt, d) for d in WIN_RUNTIME_PATH] + [ntpath.join(system_root, "system32"), system_root,
                                                                ntpath.join(system_root, r"System32\WindowsPowerShell\v1.0")]
-    return dict(PATH=";".join(paths), DOTNET_ROOT=ntpath.join(rt, "dotnet"), DOTNET_MULTILEVEL_LOOKUP="0",
+    return dict(PATH=";".join(paths),
                 S2A_BASH=ntpath.join(rt, r"git\usr\bin\bash.exe"), PYTHONHOME=ntpath.join(rt, "python"), PYTHONUTF8="1",
                 LC_ALL="C.UTF-8",   # 机器上设了 LANG=C / en_US 时 cygpath -m 在第一个中文字符处截断路径（#85：D:/浏览器下载/… → D:/）；与 MSYS 无语言变量时的缺省相同
                 S2A_PREBUILT_TOOLS=ntpath.join(str(engine), r"Binaries\Prepare"),
@@ -1619,7 +1626,8 @@ def status(private):
             newest = (stamp, path.name)
         if oldest is None or stamp < oldest[0]:
             oldest = (stamp, path.name)
-    for record_path in (p for d in dirs for p in d.glob("*.json")):
+    import layout
+    for record_path in (p for d in dirs for p in layout.entries(d, "*.json")):   # ._<任务>.json（数据目录在 exFAT 上搬过）不是坏记录（#1010）
         if record_path.name.endswith(".request.json") or record_path.is_symlink():
             continue
         record, reason = _scan_job_record(record_path)

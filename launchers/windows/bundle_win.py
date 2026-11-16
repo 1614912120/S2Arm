@@ -6,7 +6,7 @@
   Engine/           引擎快照（同 Mac：按 bundle_engine.INPUTS 挑仓库文件）+ Binaries/Prepare（bundle_prepare_win 预编件 + Tzdata）+ engine.json
                     （逐文件大小 + sha256、源码指纹、壳编号、出包要的 git 值；作业层 embedded.install 校验后克隆进私有目录）。
                     打包时建的单提交 Git 库只用来算 git 值（bundle_engine.seal_snapshot），算完删掉、不随包
-  Runtime/          随包运行时（bundle_runtime_win.py：Python 嵌入版、.NET 运行时、bash、zstd、许可）
+  Runtime/          随包运行时（bundle_runtime_win.py：Python 嵌入版、bash、zstd、许可；不带 .NET）
   Shell/            预编壳（壳编号须等于 engine.json 的 shellId）
   Fonts/            开源共享字体 7 份 .bfttf
   ThirdParty/Impactor/  官方原版 Impactor + plumesign（v2.7.2，不改不重签，SHA-256 钉在 pack/jobs/impactor.py BUNDLED，不符拒打）+ 许可（MIT、内嵌 apple-codesign 的 MPL-2.0）+ 来源说明
@@ -108,8 +108,8 @@ def bundle_impactor(dest, cache=None, fetch=None):
 
 def smoke_reader(runtime, engine):
     """出包作业怎么找读取器、用什么环境，这里就照样起一次（v0.4.4 候选：作业直接执行 nx_unpack.dll，Windows 交给旧 .NET Framework，导入全挂；
-    打包机装着 .NET，平常跑得通也看不出）：环境只有 core.win_runtime_env 给的那些 + SystemRoot，不继承本机的 DOTNET_* / PATH，
-    DOTNET_ROOT 指随包运行时、不找全局安装。读取器不带参数会打用法、退出码 2：看到用法就算起得来"""
+    打包机装着 .NET，平常跑得通也看不出）：环境只有 core.win_runtime_env 给的那些 + SystemRoot，不继承本机的 DOTNET_* / PATH；
+    读取器是 NativeAOT 单文件，不带参数会打用法、退出码 2：看到用法就算起得来（顺带证明它不依赖任何 .NET 安装）"""
     sys.path.insert(0, str(ROOT / "pack/jobs"))
     import types
     import core, toolchain   # noqa: E401  作业层自己的取法，不另写一份
@@ -151,7 +151,7 @@ def bundle(target, shell, tzdata, fonts):
     for f in bft:
         shutil.copy2(f, target / "Fonts" / f.name)
     say("[组装] 随包 Impactor"); bundle_impactor(target / impactor.BUNDLE_DIR)
-    # 社区补丁与金手指本地库（11-13，同 Mac build_app.py）：完整快照放 <启动器目录>/CommunityPatches/patches-v2.tar（启动器把本目录作 resources 交作业层）
+    # 社区补丁与金手指本地库（11-13，同 Mac build_app.py）：完整快照放 <启动器目录>/CommunityPatches/patches-v3.tar（v2 发版时转成分块 xz，11-16 瘦身；启动器把本目录作 resources 交作业层）
     sys.path.insert(0, str(ROOT / "tools")); import patch_pack
     why = patch_pack.stage_snapshot(str(target / "CommunityPatches"))
     say("[组装] 社区补丁快照：" + ("已放进 CommunityPatches" if not why else f"🟡 {why}，本版启动器不带本地补丁库"))
