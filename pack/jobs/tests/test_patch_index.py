@@ -47,25 +47,31 @@ class PatchIndexTests(unittest.TestCase):
 
     def test_mod_with_romfs_companion_is_not_half_indexed(self):
         # 11-16 D-Q3QJ（王国之泪 1800p：exefs 改分辨率 + romfs 调大显存堆，只收 exefs 半边 → 按 1800p 建缓冲分配失败崩溃）。期望手写：
-        #   ① 包里 1800p/ 同时有 exefs 补丁和 romfs/ → 它的补丁不收；② 散文件 Big/exefs + Big/romfs → 不收；
-        #   ③ 别的库里单独放着同一份 1800p 补丁（内容一样）→ 也不收；④ 同包里不带 romfs 的 Plain/exefs → 照收
+        #   ① 包里 1800p/ 有 exefs 补丁、romfs 配套是显存堆配置（HeapSize）→ 它的补丁不收；② 散文件 Big/exefs + Big/romfs/System/HeapSize → 不收；
+        #   ③ 别的库里单独放着同一份 1800p 补丁（内容一样）→ 也不收；④ 同包里不带 romfs 的 Plain/exefs → 照收；
+        #   ⑤ 配套只是界面布局（Wide/romfs/UI/LayoutArchive，缺了只是界面没拉宽、不崩；维护者定：超宽屏不一刀切）→ 照收
         p1800 = b"@nsobid-AABBCCDDEEFF00112233445566778899\n@enabled\n"
         plain = b"@nsobid-AABBCCDDEEFF00112233445566778899\n// plain\n@enabled\n"
         big = b"@nsobid-AABBCCDDEEFF00112233445566778899\n// big\n@enabled\n"
+        wide = b"@nsobid-AABBCCDDEEFF00112233445566778899\n// wide\n@enabled\n"
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as z:
             z.writestr("1800p/exefs/1.2.1.pchtxt", p1800)
             z.writestr("1800p/romfs/System/HeapSize/Product.HeapDef.byml.zs", b"heap")
             z.writestr("Plain/exefs/1.2.1.pchtxt", plain)
+            z.writestr("Wide/exefs/1.2.1.pchtxt", wide)
+            z.writestr("Wide/romfs/UI/LayoutArchive/Common.Product.blarc.zs", b"ui")
         g = self.m / "orig__mods" / "Zelda [0100F2C0115B6000]"; g.mkdir(parents=True)
         (g / "res.zip").write_bytes(buf.getvalue())
         (g / "Big/exefs").mkdir(parents=True); (g / "Big/exefs/1.2.1.pchtxt").write_bytes(big)
-        (g / "Big/romfs/System").mkdir(parents=True); (g / "Big/romfs/System/x.zs").write_bytes(b"x")
+        (g / "Big/romfs/System/HeapSize").mkdir(parents=True); (g / "Big/romfs/System/HeapSize/x.zs").write_bytes(b"x")
+        (g / "Wide2/exefs").mkdir(parents=True); (g / "Wide2/exefs/1.2.1.pchtxt").write_bytes(wide + b"// 2\n")
+        (g / "Wide2/romfs/UI").mkdir(parents=True); (g / "Wide2/romfs/UI/x.blarc").write_bytes(b"ui")
         o = self.m / "other__mods" / "Zelda [0100F2C0115B6000]/1800p/exefs"; o.mkdir(parents=True)
         (o / "1.2.1.pchtxt").write_bytes(p1800)
         (self.m / "SOURCES.tsv").write_text("来源\tURL\t提交号\n" + "".join(f"{r}\tu\t{'c' * 40}\n" for r in ("orig__mods", "ADEMOLA200__mods", "other__mods")))
         got = sorted(r["sha256"] for r in patch_index.dedupe(patch_index.scan(str(self.m))) if "0100F2C0115B6000" in r["gids"])
-        self.assertEqual(got, [hashlib.sha256(plain).hexdigest()])
+        self.assertEqual(got, sorted(hashlib.sha256(x).hexdigest() for x in (plain, wide, wide + b"// 2\n")))
         self.assertEqual(sorted(h for _, _, h in patch_index.HALVES), sorted(hashlib.sha256(x).hexdigest() for x in (p1800, big)))
 
     def test_cheat_libraries_are_not_indexed_twice(self):
