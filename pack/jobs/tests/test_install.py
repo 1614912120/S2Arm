@@ -1407,22 +1407,18 @@ class AssembleTests(unittest.TestCase):
             with um.patch.object(diag, "devicectl", f):
                 self.assertEqual(install.app_running(self.c, "dev", "b"), want)
 
-    def test_install_mode_defaults_and_persists(self):
-        """装到 iPhone 的方式：没设过 = device；不认识的拒收；设成 device / export 写进 install.json；导出作业在 = exportAvailable"""
-        self.assertEqual(install.install_mode_job(self.c)["mode"], "device")
-        self.c.r = dict(self.c.r, mode="cloud")
-        with self.assertRaises(Failure): install.install_mode_job(self.c)
-        self.c.r = dict(self.c.r, mode="device")
-        self.assertEqual(install.install_mode_job(self.c), dict(mode="device", exportAvailable=True, signMode="appleId"))
-        self.assertEqual(json.loads((self.c.private / "install.json").read_text()), {"mode": "device"})
-        self.c.r = dict(self.c.r, mode="export")
-        self.assertEqual(install.install_mode_job(self.c)["mode"], "export")
-        self.c.r = {k: v for k, v in self.c.r.items() if k != "mode"}
-        self.assertEqual(install.install_mode(self.c), "export")
-        with um.patch.object(install, "export_phone", None):   # 导出作业不在（旧版）：置灰、拒收 export
-            self.c.r = dict(self.c.r, mode="export")
-            with self.assertRaises(Failure): install.install_mode_job(self.c)
-            self.assertFalse(install.export_available(self.c))
+    def test_install_mode_job_reads_signing_and_drops_old_setting(self):
+        """11-15 导出不再是装法：installMode 作业只回签名身份；旧版留下的 install.json（装法设置）迁移时删掉，之后导不导出只看请求带的 mode"""
+        self.assertEqual(install.install_mode_job(self.c), dict(exportAvailable=True, signMode="appleId"))
+        self.assertFalse((self.c.private / "install.json").exists(), "旧装法设置迁移一次就删")
+        self.assertFalse(install.wants_export(self.c), "没带 mode：一键装")
+        self.c.r = dict(self.c.r, mode="export"); self.assertTrue(install.wants_export(self.c))
+        self.c.r = dict(self.c.r, mode="device"); self.assertFalse(install.wants_export(self.c))
+        with um.patch.object(install, "export_phone", None):
+            self.assertFalse(install.install_mode_job(self.c)["exportAvailable"])
+        (self.c.private / "install.json").write_text("{}")   # 删不掉（Windows 上被占用）：作业照常回签名身份，不失败
+        with um.patch("pathlib.Path.unlink", side_effect=PermissionError(13, "in use")):
+            self.assertEqual(install.install_mode_job(self.c)["signMode"], "appleId")
     def test_other_signer_install_error_is_named(self):
         """玩家先自签装过同包名的 S2Arm：系统安装服务拒绝覆盖的两种原文都认成 app_other_signer（Mac devicectl / Windows 同一句），不落到笼统的装机失败"""
         import impactor
@@ -1740,7 +1736,7 @@ class ExportPhoneTests(unittest.TestCase):
         import ipa as packer, host_update, rewrite_refresh
         self.sid = "SID1"
         shell = self.c.private / "shell"; shell.mkdir(exist_ok=True); (shell / "manifest.json").write_text("{}")
-        self.c.r = dict(self.c.r, **request)
+        self.c.r = dict(self.c.r, **{"mode": "export", **request})   # 导出自签包：请求带 mode = export（11-15 起没有装法设置）
         def no_phone(c):
             raise AssertionError("导出不该找手机")
         fake = self._run([])
@@ -1786,7 +1782,6 @@ class ExportPhoneTests(unittest.TestCase):
         """导出本身不碰手机（几 GB，推不推由玩家在完成页选，11-13 维护者）；点「推到手机」时没连手机 / 手机上没装 S2Arm → 报缺什么、怎么做"""
         A = self.A
         self._library((A, "甲")); self._img(A, b"S2AIMG01-a")
-        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
         patch, calls = self._fake_phone(["io.x.s2arm\t0.3.10\tS2Arm"])
         with patch:
             r = self._export(dict(gameId=A))
@@ -1807,7 +1802,6 @@ class ExportPhoneTests(unittest.TestCase):
         import push_pack as P
         A, B = self.A, self.B
         self._library((A, "甲"), (B, "乙")); self._img(A, b"S2AIMG01-a" * 5000); self._img(B, b"S2AIMG01-b")
-        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
         self._export(dict(gameId=A))
         patch, calls = self._fake_phone(["io.x.s2arm\t0.3.10\tS2Arm"])
         with patch:
@@ -1825,7 +1819,6 @@ class ExportPhoneTests(unittest.TestCase):
         """连着几台、没指定：只推给装着 S2Arm 的那台（不默认第一台，11-13 实测误推进另一台）；几台都装着 → device_required 请玩家选；指定了且连着 → 就推给它"""
         A = self.A
         self._library((A, "甲")); self._img(A, b"S2AIMG01-a")
-        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
         self._export(dict(gameId=A))
         app = "io.x.s2arm\t0.3.10\tS2Arm"
         patch, calls = self._fake_phone({"U1": [], "U2": [app]})
@@ -1846,7 +1839,6 @@ class ExportPhoneTests(unittest.TestCase):
         A, B, C = self.A, self.B, self.C
         self._library((A, "甲"), (B, "乙"), (C, "丙"), (self.D, "丁"))
         self._img(A, b"S2AIMG01-a"); self._img(B, b"S2AIMG01-b"); ios_fixture(self.c, C)
-        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
         r = self._export(dict(gameId=A))
         out = self.c.library / install.EXPORT_DIRS["zh"]
         self.assertEqual((r["exported"], r["outputPath"], r["games"], r["skipped"]), (True, str(out), [A, B], ["丙"]))
@@ -1882,7 +1874,6 @@ class ExportPhoneTests(unittest.TestCase):
             self._img(g, data)
         for g, t in ((A, 3), (B, 1), (C, 3)):   # 头 +0x0C 位 1–3 = 地址空间类型
             (layout.ios_kit(self.c, g) / "main.npdm").write_bytes(b"META" + bytes(8) + bytes([t << 1]) + bytes(0x80))
-        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
         r = self._export(dict(gameId=A))
         self.assertEqual((r["games"], r["skipped"]), ([A, C], ["乙"]))
         warn = [d for d in self.c.job.get("diagnostics", []) if d["code"] == "container_incompatible"]
@@ -1896,7 +1887,6 @@ class ExportPhoneTests(unittest.TestCase):
         self._library((A, "甲"), (B, "乙"))
         self._img(A, b"S2AIMG01-a"); self._img(B, b"S2AIMG01-b")
         cat = self.c.catalog(); cat["games"][1]["hidden"] = True; self.c.catalog = lambda: cat
-        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
         r = self._export(dict(gameId=A))
         self.assertEqual((r["games"], r["skipped"]), ([A], []))
         self.assertEqual([d for d in self.c.job.get("diagnostics", []) if "已从游戏库删除" in d.get("summary", "")], [])   # 导出前就不带：不出「已从游戏库删除」这类提醒
@@ -1916,7 +1906,6 @@ class ExportPhoneTests(unittest.TestCase):
         A, B, C = self.A, self.B, self.C
         self._library((A, "甲"), (B, "乙"))
         self._img(A, b"S2AIMG01-a"); self._img(B, b"S2AIMG01-b")
-        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
         out = self.c.library / install.EXPORT_DIRS["zh"]
         wrote = self._count_writes()
         r = self._export(dict(gameId=A))
@@ -1940,7 +1929,6 @@ class ExportPhoneTests(unittest.TestCase):
         """建不了硬链接（exFAT 等）：照常重写，导出照样成功"""
         A = self.A
         self._library((A, "甲")); self._img(A, b"S2AIMG01-a")
-        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
         wrote = self._count_writes()
         self._export(dict(gameId=A)); wrote.clear()
         with um.patch("os.link", side_effect=OSError(45, "Operation not supported")):
@@ -2025,18 +2013,16 @@ class ExportPhoneTests(unittest.TestCase):
         self.assertEqual(install._img_name("", self.C, used), f"{self.C}.img")
 
     def test_request_mode_overrides_setting(self):
-        """完成页临时换一次：设置是 export、请求带 mode=device → 照一键装走（put_game）；设置是 device、请求带 export → 导出"""
+        """请求带 mode=device → 照一键装走（put_game）；带 export → 导出（11-15 起只看请求，没有装法设置）"""
         self._library((self.A, "甲")); self._img(self.A, b"S2AIMG01-a")
-        (self.c.private / "install.json").write_text(json.dumps({"mode": "export"}))
         with um.patch.object(install, "put_game", return_value=dict(device="x")) as put, um.patch.object(install, "phone_for", return_value=object()):
             self.c.r = dict(self.c.r, gameId=self.A, mode="device")
             self.assertEqual(install.install(self.c), dict(device="x"))
             put.assert_called_once()
-        (self.c.private / "install.json").write_text(json.dumps({"mode": "device"}))
         self.assertTrue(self._export(dict(gameId=self.A, mode="export"))["exported"])
 
     def test_update_in_export_mode_exports(self):
-        """导出模式的「导出新版 S2Arm」：不连手机，游戏库里能带的各款出到文件夹，updated = True"""
+        """「导出新版 S2Arm」（请求带 mode = export）：不连手机，游戏库里能带的各款出到文件夹，updated = True"""
         self._library((self.A, "甲"), (self.B, "乙")); self._img(self.A, b"a"); self._img(self.B, b"b")
         r = self._export(dict(mode="export"), fn=install.update_phone)
         self.assertEqual((r["exported"], r["updated"], r["games"]), (True, True, [self.A, self.B]))

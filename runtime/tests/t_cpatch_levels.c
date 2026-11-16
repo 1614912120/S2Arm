@@ -118,9 +118,10 @@ int main(void) {
     const char *want2 = "档 2:60/120 开 80 77 2 120 份 0 120 关 0 00 份 0 0";   // ⑦ 按份问：选 120 只有 fps:H 选中（120），60 那份 0；关帧率两份都 0
     CHECK(!strcmp(got, want2), "②⑦ 玩家设置 S2A_FPS_PICK=120 起局、按份问选中档：期望 %s，实得 %s", want2, got);
     // ④ 补帧开着（iOS 设置页缺省写 DM_PRESENT_FI=1）：选 120 照样要 120 Hz 显示链（2，nvn_mtl.m mtl_init 见到 2 不再清成 0）；
-    //   不在高刷档时回到 0（不建显示链，画面交还补帧），不是 1。期望手写
+    //   不在高刷档时回 60 Hz 显示链（1），和补帧关着一样——这一帧真补不补、要不要关成 0 归图形层判（present_link_from_env 看 Metal 3、
+    //   fi_link_follow 每帧看补帧开没开 / 有没有补丁占来源）。审计 P1-188：原先这里见补帧环境就写 0（旧实现得 0，红）。期望手写
     g_fi = 1; run(dir, 0, got, sizeof got); g_fi = 0;
-    const char *want4 = "档 2:60/120 开 40 55 0 60 选120 80 77 2 120 选60 40 55 0 60 关 0 00";
+    const char *want4 = "档 2:60/120 开 40 55 1 60 选120 80 77 2 120 选60 40 55 1 60 关 0 00";
     CHECK(!strcmp(got, want4), "④ 补帧开着：期望 %s，实得 %s", want4, got);
     run_group(0, got, sizeof got);
     CHECK(!strcmp(got, "6 11 22 00 份 60 60 0"), "⑥⑦ 同档两组、都没验过 → 只开第一组、按份问只有它选中：期望 6 11 22 00 份 60 60 0，实得 %s", got);

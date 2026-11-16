@@ -22,8 +22,8 @@ struct InstallView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
-                // 装法是导出时标题照导出写（维护者 11-13：出包页起分两路），不写「装到 iPhone」
-                LauncherSheetHeading(model.installMode.mode == "export" ? text("install.mode.export") : loc.t(model.installKey("s2arm.install.title")), subtitle: game?.name ?? "")
+                // 导出自签包时标题照导出写，不写「装到 iPhone」。
+                LauncherSheetHeading(exportJob != nil ? text("library.hero.selfSign") : loc.t(model.installKey("s2arm.install.title")), subtitle: game?.name ?? "")
                 if model.installChecking { ProgressView().controlSize(.small) }
             }
             .padding(.horizontal, LauncherTheme.Space.page).padding(.top, LauncherTheme.Space.page).padding(.bottom, 20)
@@ -32,7 +32,16 @@ struct InstallView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, LauncherTheme.Space.page).padding(.bottom, 12)
             }
-            if model.installDone == gameID { doneContent } else if let job = installJob {
+            if let job = exportJob {
+                // 导出自签包（11-15 维护者：1 下开始导出，进度 / 完成 / 失败都只在这一张卡上，不出现装机清单、Apple ID、数据线、装回、删除）
+                VStack(alignment: .leading, spacing: 10) {
+                    ScrollView { PhoneJobPanel(model: model, session: job).frame(maxWidth: .infinity, alignment: .leading) }
+                    if case .finished = job.phase {} else {   // 跑着才给「放到后台继续」，跑完底栏「完成」
+                        HStack { Spacer(); Button(text("install.background")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.background").controllerShortcut(.back) }
+                    }
+                }
+                .padding(.horizontal, LauncherTheme.Space.page).padding(.bottom, LauncherTheme.Space.section).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if model.installDone == gameID { doneContent } else if let job = installJob {
                 VStack(alignment: .leading, spacing: 10) {
                     // 手机作业三态统一（PhoneJobPanel）：钥匙串提示只在后端标了 keychainPrompt 的阶段挂（#266），在组件里
                     ScrollView { PhoneJobPanel(model: model, session: job).frame(maxWidth: .infinity, alignment: .leading) }
@@ -109,7 +118,17 @@ struct InstallView: View {
             // 认得出的风险（会挤掉别处装的游戏 / 存档没能备份……）在结局页里问（PhoneJobPanel），不弹框
             }
             Divider().opacity(0.3)
-            if model.installDone == gameID {
+            if let job = exportJob {
+                HStack {
+                    Spacer()
+                    if case .finished = job.phase {
+                        Button(loc.t("launch.done")) { dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger, .back)
+                    } else {
+                        Button(loc.t("s2arm.job.cancel")) { model.stop() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).disabled(job.phase == .stopping).controllerShortcut(.back)
+                    }
+                }
+                .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
+            } else if model.installDone == gameID {
                 HStack { Spacer(); Button(text("install.close")) { model.installDone = nil; dismiss() }.controllerButtonStyle(LauncherSecondaryButtonStyle()).keyboardShortcut(.defaultAction).controllerShortcut(.rightTrigger, .back) }
                     .padding(.horizontal, LauncherTheme.Space.page).padding(.vertical, LauncherTheme.Space.large)
             } else if let job = installJob {
@@ -156,6 +175,13 @@ struct InstallView: View {
         .tint(LauncherPalette.cream)
     }
 
+    /// 这一款的「导出自签包」会话：在跑的那个，或刚结束的那个（结局卡按它画）
+    private var exportJob: JobSession? {
+        guard model.selfSigning else { return nil }
+        if let s = model.session, s.kind == .install, s.gameID == gameID { return s }
+        if let s = model.lastPhoneSession, s.kind == .install, s.gameID == gameID { return s }
+        return nil
+    }
     private var installJob: JobSession? { (model.session?.kind == .install || model.session?.kind == .installRemove || model.session?.kind == .installRestore) ? model.session : nil }
     private func text(_ id: String) -> String { BackendText.launcherText(id, language: loc.lang.sharedCode) }
 

@@ -1,6 +1,7 @@
 """金手指（pack/jobs/cheats.py，11-12）：出包时查公开库、玩家导入、启动器列出与开关。不联网：库函数换成桩。期望按规则手写"""
 import json, shutil, sys, tempfile, unittest
 from pathlib import Path
+from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import cheats
 import community
@@ -96,13 +97,44 @@ class CheatsTests(unittest.TestCase):
     def test_import_via_community_save(self):
         src = self.t / "mine.txt"; src.write_text(TEXT)
         bad = self.t / "bad.txt"; bad.write_text("hello\n")
-        self.c.r = {"gameId": GID, "cheatsImport": [str(src)], "cheats": {"mine.txt/Gold x2": True}}
+        self.c.r = {"gameId": GID, "cheatsImport": [str(src)], "cheats": {"mine.txt/Gold x2": True}, "cheatsShare": False}
         r = community.save(self.c)
         self.assertEqual([(it["key"], it["enabled"]) for it in r["cheats"]["items"]], [("mine.txt/Infinite Health", False), ("mine.txt/Gold x2", True)])
         self.assertEqual(json.loads((self.d / "sources.json").read_text())["mine.txt"]["from"], "player")
-        self.c.r = {"gameId": GID, "cheatsImport": [str(bad)]}
+        self.c.r = {"gameId": GID, "cheatsImport": [str(bad)], "cheatsShare": False}
         with self.assertRaises(Failure):
             community.save(self.c)
+
+    def test_import_share(self):
+        # 11-15 玩家分享：勾了「分享给其他玩家」逐份上传原文 + 程序号 + 构建号（只这些，不带设备 / 账号）；没勾不传；传失败不挡导入。
+        #   补丁库「玩家分享」上游来的条目标 shared（开之前提示一句可能坏存档）。期望手写
+        src = self.t / "mine.txt"; src.write_text(TEXT)
+        sent = []
+        class Resp:
+            def __init__(self, body): self.body = body
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return self.body
+        def ok(req, timeout=0):
+            sent.append((req.full_url, json.loads(req.data), req.get_header("X-s2arm-client")))
+            return Resp(b'{"sha":"x","duplicate":false}')
+        with mock.patch.object(cheats, "main_build", return_value=BID), mock.patch.object(cheats.urllib.request, "urlopen", ok):
+            self.c.r = {"gameId": GID, "cheatsImport": [str(src)], "cheatsShare": True}
+            r = community.save(self.c)
+        self.assertEqual(r["cheatsImported"], [{"name": "mine.txt", "shared": "shared"}])
+        self.assertEqual((sent[0][0], sent[0][1], sent[0][2].split("/")[0]),
+                         (cheats.SHARE_URL, {"gid": GID.upper(), "bid": BID, "name": "mine.txt", "text": TEXT}, "mac"))
+        with mock.patch.object(cheats.urllib.request, "urlopen", side_effect=AssertionError("不该上传")):
+            self.c.r = {"gameId": GID, "cheatsImport": [str(src)], "cheatsShare": False}
+            self.assertEqual(community.save(self.c)["cheatsImported"], [{"name": "mine.txt", "shared": "off"}])
+        def down(req, timeout=0): raise OSError("网络不通")
+        with mock.patch.object(cheats, "main_build", return_value=BID), mock.patch.object(cheats.urllib.request, "urlopen", down):
+            self.c.r = {"gameId": GID, "cheatsImport": [str(src)], "cheatsShare": True}
+            r = community.save(self.c)
+        self.assertEqual((r["cheatsImported"], (self.d / "mine.txt").is_file()), ([{"name": "mine.txt", "shared": "failed"}], True))
+        src_json = json.loads((self.d / "sources.json").read_text()); src_json["mine.txt"]["repo"] = cheats.PLAYER_REPO
+        (self.d / "sources.json").write_text(json.dumps(src_json))
+        self.assertEqual({it["shared"] for it in cheats.listing(self.c, self.game)["items"] if it["file"] == "mine.txt"}, {True})
 
     def test_crash_turns_them_off_then_notice_is_acknowledged(self):
         # 11-13 维护者改定：异常退出时开着的几条当场关掉、记下来；下次开始时启动器只通知（不问），看过（ack）清记录、开关不再动

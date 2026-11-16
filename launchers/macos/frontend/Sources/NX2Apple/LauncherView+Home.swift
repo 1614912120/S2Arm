@@ -65,6 +65,14 @@ extension LauncherView {
                     .keyboardShortcut(.return, modifiers: [])
                     .help(homePrimaryTitle(game)).accessibilityLabel(homePrimaryTitle(game))
                     .controllerID(game.playable ? "hero.play" : game.iphoneReady ? "hero.install" : "hero.export").controllerShortcut(.rightTrigger)
+                Button {
+                    model.exportSelfSign(game)
+                    if game.iphoneExportable { installFor = game.id }
+                } label: {
+                    Label(txt("library.hero.selfSign"), systemImage: "square.and.arrow.up")
+                }
+                .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.selfSign")
+                .disabled(game.iphoneReady ? model.busy : model.busy && model.session?.export == nil)
                 Button { moreFor = game.id } label: { Image(systemName: "ellipsis") }
                     .controllerButtonStyle(ConsoleIconButtonStyle(size: 52)).controllerID("hero.more")
                     .help(loc.t("home.details")).accessibilityLabel(loc.t("home.details"))
@@ -214,15 +222,14 @@ extension LauncherView {
     private func homePrimarySymbol(_ game: GameSummary) -> String {
         if model.busy { return "arrow.up.forward.app" }
         if game.playable { return model.cloudSyncing ? "arrow.triangle.2.circlepath" : "play.fill" }
-        if game.iphoneReady { return model.installMode.mode == "export" ? "square.and.arrow.up" : "iphone.and.arrow.forward" }
+        if game.iphoneReady { return "iphone.and.arrow.forward" }
         return "shippingbox"
     }
     func homePrimaryTitle(_ game: GameSummary) -> String {
         if model.busy { return loc.t("home.currentTask") }
         if game.playable { return loc.t(model.cloudSyncing ? "s2arm.cloud.syncing" : "library.play") }
         if game.iphoneReady {
-            return txt(model.installMode.mode == "export" ? "export.done.export"
-                       : game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install")
+            return txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install")
         }
         return loc.t("home.prepare")
     }
@@ -234,7 +241,7 @@ extension LauncherView {
         }
         if game.location.state == "missing" { missingFor = game; return }
         if game.playable { model.play(game, uiLanguage: uiLanguage) }
-        else if game.iphoneReady { model.targetInstalledDevice(of: game); installFor = game.id }
+        else if game.iphoneReady { model.selfSigning = false; model.targetInstalledDevice(of: game); installFor = game.id }
         else { model.exportFor = game.id }
     }
     func reconcileHomeSelection() {

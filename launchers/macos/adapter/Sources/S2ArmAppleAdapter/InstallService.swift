@@ -142,8 +142,11 @@ public final class InstallService {
     /// 装。
     /// device：要装的那台（UDID / 设备名），必须给：作业层不替玩家挑，不给即报 device_required（pack/jobs/install.py phone）
     /// acceptDropped：玩家已确认「手机上只在别的电脑装过的游戏这次带不上」（作业层 container_would_drop 之后再点）
-    public func install(gameId: String, teamId: String? = nil, device: String? = nil, acceptDropped: Bool = false, accept: Set<String> = [], events: EventSink = .discard) async throws -> InstallResult {
+    /// mode = "export"：游戏库「导出自签包」——不连手机、不签名，出未签名 S2Arm.ipa 和各款 .img 到文件夹（11-15 起导出只看这次请求）
+    public func install(gameId: String, teamId: String? = nil, device: String? = nil, acceptDropped: Bool = false, accept: Set<String> = [], mode: String? = nil,
+                        events: EventSink = .discard) async throws -> InstallResult {
         var extra: [String: Any] = ["gameId": gameId]
+        if let mode { extra["mode"] = mode }
         if acceptDropped { extra["acceptDropped"] = true }
         for key in accept { extra[key] = true }   // 玩家在结局页确认过的（acceptDropped / acceptNoBackup / acceptStale，作业层按码认）
         if let teamId, !teamId.isEmpty { extra["teamId"] = teamId }
@@ -198,9 +201,9 @@ public final class InstallService {
         try await client.perform("signingProject", extra: [:], events: .discard).result["path"] as? String ?? ""
     }
 
-    /// 装到 iPhone 的方式（installMode 作业，pack/jobs/install.py install_mode_job）：mode 给了就改，返回现况
-    public func installMode(set mode: String? = nil) async throws -> InstallModeInfo {
-        InstallModeInfo(result: try await client.perform("installMode", extra: mode.map { ["mode": $0] } ?? [:], events: .discard).result)
+    /// 签名身份（installMode 作业只读；11-15 起导出不再是装法，旧版的装法设置由作业层迁移删掉）
+    public func installMode() async throws -> InstallModeInfo {
+        InstallModeInfo(result: try await client.perform("installMode").result)
     }
 
     /// 更新 iPhone 上的 S2Arm（installUpdate 作业，install.update_phone）：本版壳 + 已有程序模块，只装 App；
@@ -235,16 +238,14 @@ public final class InstallService {
     }
 }
 
-/// 装到 iPhone 的方式：device = 一键装到 iPhone（启动器签名并装），export = 导出、自己签名安装；导出作业合入前 exportAvailable 为 false（界面置灰）
+/// 签名身份（installMode 作业）：signMode = devcert（我的开发者证书）/ appleId；exportAvailable = 导出作业在不在
 public struct InstallModeInfo: Equatable, Sendable {
-    public let mode: String
     public let exportAvailable: Bool
     public let signMode: String
-    public init(mode: String = "device", exportAvailable: Bool = false, signMode: String = "appleId") {
-        self.mode = mode; self.exportAvailable = exportAvailable; self.signMode = signMode
+    public init(exportAvailable: Bool = false, signMode: String = "appleId") {
+        self.exportAvailable = exportAvailable; self.signMode = signMode
     }
     init(result r: [String: Any]) {
-        self.init(mode: r["mode"] as? String == "export" ? "export" : "device", exportAvailable: r["exportAvailable"] as? Bool ?? false,
-                  signMode: r["signMode"] as? String ?? "appleId")
+        self.init(exportAvailable: r["exportAvailable"] as? Bool ?? false, signMode: r["signMode"] as? String ?? "appleId")
     }
 }

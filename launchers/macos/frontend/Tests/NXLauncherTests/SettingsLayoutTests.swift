@@ -225,7 +225,7 @@ import S2ArmAppleAdapter
                     }
                 }
             }
-            navigation.focus("env.installMode.device")
+            navigation.focus("export.sign.mode")
             for step in 0..<14 {
                 navigation.handle(.scrollDown)
                 try await Task.sleep(for: .milliseconds(25))
@@ -942,7 +942,7 @@ import S2ArmAppleAdapter
         }
     }
 
-    func testSigningSubcontentSharesTheParentRightEdge() async throws {
+    func testSigningIdentityUsesCardInsetsWithoutModeSwitch() async throws {
         let previous = UserDefaults.standard.object(forKey: S2ArmLauncherModel.teamCodeKey)
         UserDefaults.standard.set("fixture-team-id", forKey: S2ArmLauncherModel.teamCodeKey)
         defer { UserDefaults.standard.set(previous, forKey: S2ArmLauncherModel.teamCodeKey) }
@@ -955,11 +955,12 @@ import S2ArmAppleAdapter
                 let (host, window) = try await render(page, fixture: fixture, language: language)
                 defer { window.close() }
                 let controls = fixture.navigation.controlTargets(in: window)
-                let parent = try XCTUnwrap(controls.first { $0.id == "env.installMode.device" })
                 let identity = try XCTUnwrap(controls.first { $0.id == "export.sign.mode" })
-                let delta = parent.frame.maxX - identity.frame.maxX
+                XCTAssertFalse(controls.contains { $0.id.hasPrefix("env.installMode.") }, "导出不再是设置中的装法选项")
+                let rightEdge = window.convertToScreen(host.bounds).maxX - 32 - LauncherTheme.Metrics.cardInset
+                let delta = rightEdge - identity.frame.maxX
                 print("signing-right-edge language=\(language.code) width=\(width) delta=\(delta)")
-                XCTAssertEqual(delta, 0, accuracy: 0.5, "签名子布局右侧应与父选项对齐")
+                XCTAssertEqual(delta, 0, accuracy: 0.5, "签名身份应沿用卡片内容的右边距")
                 try snapshot(host, "signing-right-edge-\(language.code)-\(Int(width))")
             }
         }

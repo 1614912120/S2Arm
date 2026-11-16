@@ -127,6 +127,8 @@ struct QueuedExport {
     let spaceOverride: Bool
     /// 存放位置（游戏库结构 v3）：nil = 这款现在的位置 / 上次用的位置（后端定）
     var location: String? = nil
+    /// "export" = 这次出包是为了导出自签包（作业层步骤名照自签路写）
+    var mode: String? = nil
 }
 
 /// 这次出包要占多少、盘上还有多少（只取游戏库所在的卷）。
@@ -203,6 +205,10 @@ public final class S2ArmLauncherModel: ObservableObject {
     var updateRepack: [String] = []
     var batchInstallAfter = false
     var installAfterQueue: [String] = []
+    /// 「导出自签包」点在没出过包的款上：这几款出完 iPhone 包接着导出（不是装机）
+    var selfSignAfterPack: Set<String> = []
+    /// 这次装机会话是导出自签包（进度 / 结局页照导出写；完成后看结局里的导出文件夹）
+    @Published var selfSigning = false
     /// 添加游戏 / 放密钥弹窗（ImportSheet）：这两个作业的进度和失败原因都留在弹窗里，不换页。
     @Published var updateState: UpdateState = .idle
     @Published var notice: [String: Any]?   // 顶部公告条：最新一条没看过的重要公告（S2ArmLauncherModel+Update.swift loadInbox）；nil = 不显示
@@ -393,7 +399,7 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     /// keptModulesLoop 的一次（单测直接调）：→ 这次有没有发起「更新 iPhone」
     @discardableResult func keptModulesTick() async -> Bool {
-        if busy || installMode.mode == "export" { return false }
+        if busy { return false }
         guard let r = try? await provider.client.perform("phoneKeptPull").result else { return false }
         let kept = (r["kept"] as? [String]) ?? [], device = r["device"] as? String ?? ""
         if kept.isEmpty || device.isEmpty { return false }
@@ -731,7 +737,8 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// 一个平台没成不挡后面的平台；取消就整次停。
     /// platforms 不给 = 出包页勾的；本机控制口（AI 操作）按命令给一个平台，deviceTarget 只用于 iPhone 出包（提示地址窗口）。
     @discardableResult
-    func export(_ game: GameSummary, platforms chosen: [ExportPlatform]? = nil, deviceTarget: [String: Any]? = nil, spaceOverride: Bool = false, location: String? = nil) -> ExportBlocker? {
+    func export(_ game: GameSummary, platforms chosen: [ExportPlatform]? = nil, deviceTarget: [String: Any]? = nil, spaceOverride: Bool = false, location: String? = nil,
+                mode: String? = nil) -> ExportBlocker? {
         if let blocker = exportBlocker(game, platforms: chosen), blocker.stopsStart { return blocker }
         // 这款有下游深度方案、玩家还没选过、这次要出 iPhone：先问一次（选完 chooseDownstream 接着导出）。选过就照选的走，作业层按记下的选择分流
         if game.downstream != nil, game.downstream?.choice == nil, (chosen ?? exportTargets).contains(.ios) {
@@ -739,7 +746,7 @@ public final class S2ArmLauncherModel: ObservableObject {
             downstreamPromptFor = game.id
             return nil
         }
-        let item = QueuedExport(game: game, platforms: chosen ?? exportTargets, target: deviceTarget ?? currentDeviceTarget, spaceOverride: spaceOverride, location: location)
+        let item = QueuedExport(game: game, platforms: chosen ?? exportTargets, target: deviceTarget ?? currentDeviceTarget, spaceOverride: spaceOverride, location: location, mode: mode)
         exportFor = nil
         welcomeGameID = nil
         if busy || batchRunning {   // 正在出别的 / 一批正在出：排队，出完接着出（11-08 维护者：出好一个接着出下一个）
@@ -793,7 +800,7 @@ public final class S2ArmLauncherModel: ObservableObject {
         if !sgradeOn(game.id) { plan["sgrade"] = false }   // 出包页取消「S 级优化（Beta）」：这次不带社区补丁与金手指（pack/jobs/patches.py prepare）
         start(session) { [weak self] sink in
             guard let self else { return nil }
-            do { _ = try await self.provider.export(plan: plan, hasIPhone: platforms.contains(.ios), events: self.exportSink(sink)) }
+            do { _ = try await self.provider.export(plan: plan, hasIPhone: platforms.contains(.ios), mode: item.mode, events: self.exportSink(sink)) }
             catch let pause as JobFailure where pause.state == .paused { throw ExportIncomplete() }   // 磁盘满：那个平台已按 stepEnded 记失败（码 disk_full），整次算没全成
             if self.session?.export?.failed.isEmpty == false { throw ExportIncomplete() }
             return nil
@@ -827,9 +834,9 @@ public final class S2ArmLauncherModel: ObservableObject {
                                                              notes: o["notes"] as? [String] ?? [],
                                                              boost: (o["boost"] as? [String: Any] ?? [:]).compactMapValues { ($0 as? NSNumber)?.intValue },
                                                              sgrade: SGradeOutcome(o["boost"] as? [String: Any] ?? [:])))
-                // 装法是「导出，自己签名安装」：iPhone 包出好就接着导出（D-9ZF9，维护者实测：原先出完包停在完成页，导出要再点一次，文件夹里什么都没有）。
-                //   导出不连手机、不签名，没有副作用；排进 installAfterQueue，这次出包会话结束后由 pumpQueue 接着跑
-                if platform == .ios, state == .completed, self.installMode.mode == "export", !self.batchRunning, let gid = self.session?.gameID,
+                // 「导出自签包」点在没出过包的款上：iPhone 包出好就接着导出（D-9ZF9：原先出完包停在完成页，导出要再点一次）。
+                //   导出不连手机、不签名，没有副作用；排进 installAfterQueue，这次出包会话结束后由 pumpQueue 接着跑（installNextQueued 按 selfSignAfterPack 走导出）
+                if platform == .ios, state == .completed, let gid = self.session?.gameID, self.selfSignAfterPack.contains(gid), !self.batchRunning,
                    !self.installAfterQueue.contains(gid) { self.installAfterQueue.append(gid) }
                 if self.batchRunning { self.batchStepEnded() }
             default:
@@ -1034,7 +1041,9 @@ public final class S2ArmLauncherModel: ObservableObject {
     struct DropConfirm { let kind: JobSession.Kind; var game: GameSummary? = nil; let message: String; var update: UpdateArgs? = nil
                          var code = "container_would_drop"; var accept: Set<String> = []
                          /// 当初装到哪台：确认后原样带回（不能退回「界面选中的那台」，控制口指定的设备会被换掉）
-                         var device: String? = nil }
+                         var device: String? = nil
+                         /// 当初是「导出自签包」：确认后照导出重发
+                         var export = false }
     @Published var dropConfirm: DropConfirm?
     /// 上一次「更新手机上的 S2Arm」的参数：失败页「重试」按它再来
     var lastUpdateArgs: UpdateArgs?
@@ -1052,19 +1061,21 @@ public final class S2ArmLauncherModel: ObservableObject {
         return t.count == 10 ? t : nil
     }
 
-    func install(_ game: GameSummary, teamId: String? = nil, device: String? = nil, acceptDropped: Bool = false, accept: Set<String> = [], ask: Bool = true) {
+    /// export = true：游戏库「导出自签包」——不连手机、不签名，出到文件夹（作业层 install 请求带 mode = export）
+    func install(_ game: GameSummary, teamId: String? = nil, device: String? = nil, acceptDropped: Bool = false, accept: Set<String> = [], ask: Bool = true, export: Bool = false) {
         let accept = acceptDropped ? accept.union(["acceptDropped"]) : accept
         // 不在这里再核装机页清单（启动器剃刀 M1）：装机页按钮和控制口调用前各自核过；批量出完自动装的款从没打开过装机页，原先在这里被悄悄挡掉、队列停住
         guard !busy else { return }
         let teamId = teamId ?? Self.enteredTeam
         failAction(nil, game: nil)
         // 装到玩家选的那台（控制口明说了 device 的照它；s2armctl 不带就是空，作业层拒绝）。界面发起的一律带上，不靠作业层挑
-        let device = device ?? installDeviceID
+        let device = export ? nil : device ?? installDeviceID
         installedTo = ""
         phoneOutcome = nil
+        selfSigning = export
         start(.install, game: game, name: game.name) { [weak self] sink in
             do {
-                let r = try await self?.provider.install(gameId: game.id, teamId: teamId, device: device, accept: accept, events: sink)
+                let r = try await self?.provider.install(gameId: game.id, teamId: teamId, device: device, accept: accept, mode: export ? "export" : nil, events: sink)
                 if let r, !r.exportFolder.isEmpty {   // 导出模式：没装手机，打开放好的文件夹
                     self?.phoneOutcome = PhoneOutcome(skipped: r.skipped, exportFolder: r.exportFolder, exportGames: r.exportGames, exportBytes: r.exportBytes,
                                                      exportFresh: r.exportFresh, exportReused: r.exportReused)
@@ -1077,7 +1088,7 @@ public final class S2ArmLauncherModel: ObservableObject {
             }
             catch let f as JobFailure where ask && Self.confirmCodes[f.code ?? ""] != nil {
                 self?.dropConfirm = DropConfirm(kind: .install, game: game, message: f.errorDescription ?? "", code: f.code ?? "",
-                                                accept: accept.union([Self.confirmCodes[f.code ?? ""]!]), device: device)
+                                                accept: accept.union([Self.confirmCodes[f.code ?? ""]!]), device: device, export: export)
                 throw f
             }
             return nil
@@ -1090,7 +1101,7 @@ public final class S2ArmLauncherModel: ObservableObject {
         if let u = d.update { updatePhone(acceptStale: u.acceptStale || d.accept.contains("acceptStale"), repack: u.repack, language: u.language, device: u.device, accept: d.accept,
                                           mode: u.mode, sgradeUpgrade: u.sgradeUpgrade); return }
         guard let game = d.game else { return }
-        if d.kind == .installRemove { removeFromPhone(game, device: d.device, accept: d.accept) } else { install(game, device: d.device, accept: d.accept) }
+        if d.kind == .installRemove { removeFromPhone(game, device: d.device, accept: d.accept) } else { install(game, device: d.device, accept: d.accept, export: d.export) }
     }
 
     /// 装回上一版手机 S2Arm（只换宿主后新宿主不好用时）。
@@ -1546,6 +1557,9 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
         if state == .completed && session.kind == .install { installDone = session.gameID }
         if session.kind == .installUpdate { phoneUpdateEnded(completed: state == .completed) }
+        // 「导出自签包」点在没出过包的款上：出包没成（起不来 / 失败 / 取消）就没排进 installAfterQueue，标记清掉——
+        //   否则这款以后正常出包会被画成导出、批量「更新并重新出」排进来的装机会误走导出
+        if session.kind == .export, let gid = session.gameID, !installAfterQueue.contains(gid) { selfSignAfterPack.remove(gid) }
         if session.kind == .install || (session.kind == .export && !installAfterQueue.isEmpty) { Task { pumpQueue() } }   // 导出模式出完包排了导出（runExport / exportSink）
         if [.delete, .clearCache].contains(session.kind), let n = libraryNotice, n.kind == .running {   // 删除 / 清缓存的结果写进游戏库页顶部那条提示
             libraryNotice = LibraryNotice(kind: state == .completed ? .done : .failed, key: n.key, name: n.name,
