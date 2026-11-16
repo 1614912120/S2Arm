@@ -8697,6 +8697,70 @@ static void c207_all(const char *dir) {
     printf("C207 诊断读数互不清零：近 300 帧读数与逐笔读数各自读增量、不清零共享累加器，已核对\n");
 }
 
+// C209：管线标签随对象（#1274）。管线预热清单把（槽号, 槽代号）标签存在后端管线对象上（nvn_gpu_pipe_warm_tag / _tag_set），
+// 热路径上换到同一条管线时只读标签、不再序列化配方和算散列。这个做法靠两条前提：
+//   ① 一局内管线对象与（配方 + 程序）一一对应：缓存键含着色器句柄指针，句柄不按内容合并——同一份 SPIR-V 载入两次是两个句柄，
+//      配同一份描述得到两条管线。将来若有人让句柄按内容合并，这里变红：请回头看清单标签的前提（nvn_vk_pipe_warm.h）；
+//   ② 一局内管线不淘汰、指针不复用：销毁只在会话收尾整批做；哈希表翻倍重排只搬节点，不换对象。
+// 起始 16 桶（用例开关 4）建 C209_N = 700 条互不相同的管线（翻倍 6 次）。建每条时标签必须是 0（新对象不继承旧的），
+// 建完立刻写一个互不相同的标签；全部建完再按描述逐条取一遍：取回的是原对象、标签原样读回。
+extern uint64_t nvn_gpu_pipe_warm_tag(nvn_gpu_pipe p);
+extern void nvn_gpu_pipe_warm_tag_set(nvn_gpu_pipe p, uint64_t tag);
+enum { C209_N = 700 };
+static uint64_t c209_tag_of(int i) { return ((uint64_t)(unsigned)(i + 1) << 32) | (uint64_t)(unsigned)(i + 1); }
+static void c209_pipe_tag(const char *dir) {
+    nvn_gpu_shader vs = NULL, fs = NULL, vs2 = NULL, fs2 = NULL; void *vm = NULL, *fm = NULL, *vm2 = NULL, *fm2 = NULL;
+    nvn_gpu_pipe_desc base, base2, d, d2; nvn_gpu_pipe p2 = NULL; nvn_gpu_err e = {0};
+    nvn_gpu_pipe *pp = calloc(C209_N, sizeof *pp), *srt = calloc(C209_N, sizeof *srt);
+    int bad = 0, fresh = 0, dup = 0, miss = 0, lost = 0;
+    CHECK(pp && srt, "C209 分配");
+    if (!(pp && srt)) goto done;
+    if (!load_shader_pair(dir, "tri3.vert", "solid_green.frag", NULL, NULL, &vs, &fs, &vm, &fm)) { CHECK(0, "C209 读着色器"); goto done; }
+    fill_gpipe_desc(&base, vs, fs, 0);
+    nvn_vk_dbg_pipe_test_mode(4);
+    for (int i = 0; i < C209_N; i++) {
+        c205_desc(&base, i, &d);
+        if (!OK(nvn_gpu_pipe_get(&d, NVN_GPU_PIPE_SYNC, &pp[i], &e)) || !pp[i]) { bad++; continue; }
+        if (nvn_gpu_pipe_warm_tag(pp[i]) != 0) fresh++;
+        nvn_gpu_pipe_warm_tag_set(pp[i], c209_tag_of(i));
+    }
+    nvn_vk_dbg_pipe_test_mode(0);
+    CHECK(bad == 0, "C209：建 %d 条管线期望全部成功 → 失败 %d（%s）", C209_N, bad, e.why);
+    CHECK(fresh == 0, "C209：新建的管线对象标签期望是 0（不继承别的对象的）→ %d 条不是", fresh);
+    memcpy(srt, pp, C209_N * sizeof *pp);
+    qsort(srt, C209_N, sizeof *srt, c205_ptr_cmp);
+    for (int i = 1; i < C209_N; i++) if (srt[i] == srt[i - 1]) dup++;
+    CHECK(dup == 0, "C209：一局内描述不同的管线指针期望互不相同（指针不复用）→ 重复 %d 对", dup);
+    for (int i = 0; i < C209_N; i++) {
+        nvn_gpu_pipe q = NULL; c205_desc(&base, i, &d);
+        if (!OK(nvn_gpu_pipe_get(&d, NVN_GPU_PIPE_SYNC, &q, &e)) || q != pp[i]) miss++;
+        else if (nvn_gpu_pipe_warm_tag(q) != c209_tag_of(i)) lost++;
+    }
+    CHECK(miss == 0 && lost == 0, "C209：翻倍重排后按描述再取一遍期望取回原对象、标签原样读回 → 没取回 %d、标签变了 %d / %d", miss, lost, C209_N);
+    // 前提 ①：同一份 SPIR-V 再载入一次得到新句柄，配同一份描述（只换句柄）是另一条管线，标签 0，原来那条的标签不动
+    if (!load_shader_pair(dir, "tri3.vert", "solid_green.frag", NULL, NULL, &vs2, &fs2, &vm2, &fm2)) { CHECK(0, "C209 再读着色器"); goto done; }
+    CHECK(vs2 != vs && fs2 != fs, "C209：同一份 SPIR-V 载入两次期望是两个句柄（句柄不按内容合并）→ 顶点 %s、片元 %s", vs2 != vs ? "不同" : "相同", fs2 != fs ? "不同" : "相同");
+    fill_gpipe_desc(&base2, vs2, fs2, 0);
+    c205_desc(&base2, 0, &d2);
+    CHECK(OK(nvn_gpu_pipe_get(&d2, NVN_GPU_PIPE_SYNC, &p2, &e)) && p2 && p2 != pp[0], "C209：只换着色器句柄的同一份描述期望是另一条管线对象（管线按句柄分，不按内容合并）→ %s", e.why);
+    CHECK(p2 && nvn_gpu_pipe_warm_tag(p2) == 0, "C209：另一条管线对象的标签期望是 0");
+    CHECK(pp[0] && nvn_gpu_pipe_warm_tag(pp[0]) == c209_tag_of(0), "C209：原来那条管线的标签期望不动");
+done:
+    free(pp); free(srt);
+    if (vs) nvn_gpu_shader_release(vs);
+    if (fs) nvn_gpu_shader_release(fs);
+    if (vs2) nvn_gpu_shader_release(vs2);
+    if (fs2) nvn_gpu_shader_release(fs2);
+    free(vm); free(fm); free(vm2); free(fm2);
+}
+static void c209_all(const char *dir) {
+    nvn_gpu_err e = {0};
+    if (!open_backend()) { CHECK(0, "C209 open"); return; }
+    c209_pipe_tag(dir);
+    CHECK(OK(nvn_gpu_close(5000000000ull, &e)), "C209 close：%d %s", e.rc.code, e.why);
+    printf("C209 管线标签随对象：新对象标签为 0 / 翻倍重排后对象与标签不丢 / 指针不复用 / 同一份 SPIR-V 载入两次不合并句柄，已核对\n");
+}
+
 // 上屏 EASU 开关夹具：单独进程跑一次，先关后开各呈现一次。
 // 为什么单独：nvn_gpu_surface 是进程级单例，且提交信号序列由 C71 占着；
 // 插在大套件里会把 C71 的时间线打成失败终态（实测 signal 7 < 91）。
@@ -8854,6 +8918,13 @@ int main(int argc, char **argv) {
         memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
         c207_all(argv[1]);
         printf("nvn_gpu Vulkan 后端 C207 单跑：%s（%d 处不符）\n", g_fail ? "红" : "绿", g_fail);
+        s2a_vk_device_destroy(&g_dev, 1);
+        return g_fail ? 1 : 0;
+    }
+    if (getenv("S2A_TEST_C209_ONLY") && argc > 1) {   // 开发时只跑 C209（管线标签随对象；run.sh 不设这个变量）
+        memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
+        c209_all(argv[1]);
+        printf("nvn_gpu Vulkan 后端 C209 单跑：%s（%d 处不符）\n", g_fail ? "红" : "绿", g_fail);
         s2a_vk_device_destroy(&g_dev, 1);
         return g_fail ? 1 : 0;
     }
@@ -9257,6 +9328,7 @@ int main(int argc, char **argv) {
 
     c205_all(argv[1]);   // C205 图形管线散列表：每个臂自己一个会话
     c207_all(argv[1]);   // C207 诊断读数互不清零：自己一个会话（计时开关、逐笔读数周期都在用例里开 / 还原）
+    c209_all(argv[1]);   // C209 管线标签随对象（#1274）：自己一个会话（起始 16 桶的用例开关要在会话里第一条管线之前设）
 
     for (int sw = 0; sw < 2; sw++) {
         if (!open_backend()) return 1;
