@@ -77,16 +77,18 @@ extension LauncherView {
                     model.exportSelfSign(game)
                     if game.iphoneExportable { installFor = game.id }
                 } label: {
-                    Label(txt("library.hero.selfSign"), systemImage: "square.and.arrow.up")
+                    fitLabel(txt("library.hero.selfSign"), "square.and.arrow.up")
                 }
                 .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.selfSign")
+                .help(txt("library.hero.selfSign")).accessibilityLabel(txt("library.hero.selfSign"))
                 .disabled(game.iphoneReady ? model.busy : model.busy && model.session?.export == nil)
                 // 主按钮是「开始游戏」时，出过 iPhone 包的款照样要能一键装到 iPhone（主线游戏库两个都在）
                 if game.playable, game.iphoneReady {
                     Button { model.selfSigning = false; model.targetInstalledDevice(of: game); installFor = game.id } label: {
-                        Label(txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"), systemImage: "iphone")
+                        fitLabel(txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"), "iphone")
                     }
                     .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.install").disabled(model.busy)
+                    .help(txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"))
                 }
                 // 这款上次出包 / 装机 / 导出的结果页（主线游戏库「查看结果」）
                 if model.finishedExports[game.id] != nil, !(model.busy && model.session?.gameID == game.id) {
@@ -111,6 +113,14 @@ extension LauncherView {
         }
         .frame(maxWidth: min(740, size.width * 0.64), alignment: .leading)
         .accessibilityElement(children: .contain).accessibilityIdentifier("home.preview")
+    }
+
+    /// 游戏卡次按钮的标签：整句放得下就带字，放不下（窄窗、法语这类长译文）只留图标，不截成半句（W1 同一原则：放不下就收成图标）；说明在 .help 里
+    private func fitLabel(_ title: String, _ symbol: String) -> some View {
+        ViewThatFits(in: .horizontal) {
+            Label(title, systemImage: symbol).lineLimit(1).fixedSize()
+            Image(systemName: symbol)
+        }
     }
 
     private func homeControls(size: CGSize) -> some View {
