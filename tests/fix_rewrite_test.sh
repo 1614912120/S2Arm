@@ -34,11 +34,11 @@ printf 'c\tmain\t100\tword\tf9400008\td65f03c0\t# release → ret\n' > "$T/ok.ts
 printf 'c\tmain\t100\tword\tdeadbeef\td65f03c0\n' > "$T/bad.tsv"
 printf 'c\tsdk\t100\tword\tf9400008\td65f03c0\n' > "$T/other.tsv"
 r1=$(run ok "$T/ok.tsv"); w1=$(w "$T/ok")
-ck "① 0x100 改成 ret、其余原样、日志有修补行、0 缺口、退出码 0（实：$w1，缺口 $(gaps "$T/ok")，rc $r1）" '[ "$w1" = "d65f03c0 f9400101 d61f0020" ] && grep -q "游戏缺陷修补：main+0x100 f9400008 → d65f03c0" "$T/ok.log" && [ "$(gaps "$T/ok")" = 0 ] && [ "$r1" = 0 ]'
+ck "① 0x100 改成 ret、其余原样、日志有修补行、0 缺口、退出码 0（实：${w1}，缺口 $(gaps "$T/ok")，rc ${r1}）" '[ "${w1}" = "d65f03c0 f9400101 d61f0020" ] && grep -q "游戏缺陷修补：main+0x100 f9400008 → d65f03c0" "$T/ok.log" && [ "$(gaps "$T/ok")" = 0 ] && [ "${r1}" = 0 ]'
 r2=$(run bad "$T/bad.tsv"); w2=$(w "$T/bad")
-ck "② 原字写错：0x100 原样、记缺口 fix、退出码 3（实：$w2，rc $r2）" '[ "$w2" = "f9400008 f9400101 d61f0020" ] && grep -q "fix" "$T/bad/main.gaps.tsv" && [ "$r2" = 3 ]'
+ck "② 原字写错：0x100 原样、记缺口 fix、退出码 3（实：${w2}，rc ${r2}）" '[ "${w2}" = "f9400008 f9400101 d61f0020" ] && grep -q "fix" "$T/bad/main.gaps.tsv" && [ "${r2}" = 3 ]'
 r3=$(run other "$T/other.tsv"); w3=$(w "$T/other")
-ck "③ 别的模块的行不碰 main（实：$w3，缺口 $(gaps "$T/other")，rc $r3）" '[ "$w3" = "f9400008 f9400101 d61f0020" ] && [ "$(gaps "$T/other")" = 0 ] && [ "$r3" = 0 ]'
+ck "③ 别的模块的行不碰 main（实：${w3}，缺口 $(gaps "$T/other")，rc ${r3}）" '[ "${w3}" = "f9400008 f9400101 d61f0020" ] && [ "$(gaps "$T/other")" = 0 ] && [ "${r3}" = 0 ]'
 r4=$(run none ""); 
-ck "④ 不给表：产物与 ③ 逐字节相同（rc $r4）" '[ "$r4" = 0 ] && cmp -s "$T/none/main.patched.bin" "$T/other/main.patched.bin"'
+ck "④ 不给表：产物与 ③ 逐字节相同（rc ${r4}）" '[ "${r4}" = 0 ] && cmp -s "$T/none/main.patched.bin" "$T/other/main.patched.bin"'
 [ $bad = 0 ] && echo "✓ fix_rewrite_test" || { echo "✗ fix_rewrite_test"; exit 1; }
