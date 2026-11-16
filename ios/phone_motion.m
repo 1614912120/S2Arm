@@ -9,6 +9,7 @@
 #import <UIKit/UIKit.h>
 #import <CoreMotion/CoreMotion.h>
 #import <CoreHaptics/CoreHaptics.h>
+#include "haptic_safe.h"
 #include "native.h"
 #include "s2a_pad.h"
 #include "phone_axes.h"
@@ -187,7 +188,7 @@ static void hp_apply(const s2a_pad_vibration v[2], int kind) {
     if (atomic_exchange(&g_hp_stale, 0)) { g_player = nil; g_playing = 0; }   // 引擎被系统复位：下一次 hp_start 会重新 startAndReturnError
     if (kind == S2A_PHONE_RUMBLE_WARM) { hp_start(); pthread_mutex_unlock(&g_hp_mu); return; }
     if (kind == S2A_PHONE_RUMBLE_STOP || !v) {
-        if (g_player && g_playing) { [g_player stopAtTime:CHHapticTimeImmediate error:nil]; g_playing = 0; }
+        if (g_player && g_playing) { s2a_hp_stop(g_player); g_playing = 0; }
         g_zero_since_ns = 0;
         pthread_mutex_unlock(&g_hp_mu); return;
     }
@@ -204,8 +205,8 @@ static void hp_apply(const s2a_pad_vibration v[2], int kind) {
     uint64_t t = hp_now_ns();
     if (amp <= 0.01f) {
         if (!g_zero_since_ns) g_zero_since_ns = t;
-        if (g_player && g_playing && t - g_zero_since_ns > 1000000000ull) { [g_player stopAtTime:CHHapticTimeImmediate error:nil]; g_playing = 0; }
-        if (g_player && g_playing) [g_player sendParameters:@[[[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:0 relativeTime:0]] atTime:CHHapticTimeImmediate error:nil];
+        if (g_player && g_playing && t - g_zero_since_ns > 1000000000ull) { s2a_hp_stop(g_player); g_playing = 0; }
+        if (g_player && g_playing) s2a_hp_send(g_player, @[[[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:0 relativeTime:0]], NULL);
         pthread_mutex_unlock(&g_hp_mu); return;
     }
     g_zero_since_ns = 0;
@@ -213,10 +214,10 @@ static void hp_apply(const s2a_pad_vibration v[2], int kind) {
     g_last_ns = t;
     if (hp_start()) {
         NSError *e = nil;
-        if (!g_playing) { if ([g_player startAtTime:CHHapticTimeImmediate error:&e]) g_playing = 1; }
-        [g_player sendParameters:@[
+        if (!g_playing) { if (s2a_hp_start(g_player, &e)) g_playing = 1; }
+        s2a_hp_send(g_player, @[
             [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:amp relativeTime:0],
-            [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharp - 0.5f relativeTime:0]] atTime:CHHapticTimeImmediate error:nil];
+            [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharp - 0.5f relativeTime:0]], NULL);
         static int said; if (!said++) LOG("手机震动：首次 强度 %.2f 锐度 %.2f（%.0f Hz）", amp, sharp, hz);
     }
     pthread_mutex_unlock(&g_hp_mu);

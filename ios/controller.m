@@ -2,6 +2,7 @@
 #import <GameController/GameController.h>
 #import "s2a_l10n.h"
 #import <CoreHaptics/CoreHaptics.h>
+#include "haptic_safe.h"
 #import "controller.h"
 #import <UIKit/UIGestureRecognizerSubclass.h>   // S2ATouchWatch 要改 state
 #include "native.h"
@@ -84,12 +85,12 @@ static s2a_pad_vibration g_phone_pair[2];
 
 static void system_stop_on_queue(void) {
     s2a_ea_rumble_stop();
-    for (int k = 0; k < 2; k++) { if (g_haptic_player[k] && g_haptic_playing[k]) [g_haptic_player[k] stopAtTime:CHHapticTimeImmediate error:nil]; g_haptic_playing[k] = NO; }
+    for (int k = 0; k < 2; k++) { if (g_haptic_player[k] && g_haptic_playing[k]) s2a_hp_stop(g_haptic_player[k]); g_haptic_playing[k] = NO; }
     if (g_haptic_timer) dispatch_source_set_timer(g_haptic_timer, DISPATCH_TIME_FOREVER, DISPATCH_TIME_FOREVER, 0);
 }
 static void system_reset_on_queue(void) {
     system_stop_on_queue();
-    for (int k = 0; k < 2; k++) { [g_haptic_engine[k] stopWithCompletionHandler:nil]; g_haptic_player[k] = nil; g_haptic_engine[k] = nil; }
+    for (int k = 0; k < 2; k++) { s2a_hp_engine_stop(g_haptic_engine[k]); g_haptic_player[k] = nil; g_haptic_engine[k] = nil; }
 }
 void s2a_rumble_apply_settings(void);
 // 游戏震动的总开关和强度（设置页「按键显示与触感」）：提交前按倍率缩放振幅，手机马达 / 实体手柄 / NS2 Pro 共用
@@ -183,14 +184,14 @@ static BOOL system_channel_on_queue(int k, GCHapticsLocality locality, float amp
     }
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     if (g_haptic_playing[k] && !g_haptic_loops[k] && now - g_haptic_started_ns[k] > S2A_HAPTIC_RESTART_NS) {   // 普通播放器：事件 30 秒，连着震到 20 秒就重起一轮
-        [g_haptic_player[k] stopAtTime:CHHapticTimeImmediate error:nil]; g_haptic_playing[k] = NO;
+        s2a_hp_stop(g_haptic_player[k]); g_haptic_playing[k] = NO;
     }
-    if (!g_haptic_playing[k] && ![g_haptic_player[k] startAtTime:CHHapticTimeImmediate error:&error]) { system_fail_on_queue("播放失败", error); return NO; }
+    if (!g_haptic_playing[k] && !s2a_hp_start(g_haptic_player[k], &error)) { system_fail_on_queue("播放失败", error); return NO; }
     if (!g_haptic_playing[k]) g_haptic_started_ns[k] = now;
     g_haptic_playing[k] = YES;
-    if (![g_haptic_player[k] sendParameters:@[
+    if (!s2a_hp_send(g_haptic_player[k], @[
         [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:amplitude relativeTime:0],
-        [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharp - 0.5f relativeTime:0]] atTime:CHHapticTimeImmediate error:&error]) {
+        [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharp - 0.5f relativeTime:0]], &error)) {
         system_fail_on_queue("更新强度失败", error); return NO;
     }
     return YES;
