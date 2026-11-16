@@ -326,8 +326,9 @@ static uint64_t mask_minmax(uint32_t lo, uint32_t hi) { uint32_t r = hi - lo + 1
 //   一款 Switch 2 游戏起局把堆开满到池上限（9156 / 9216 MB）、第 7 帧分配拿到空指针崩，要验「真机池更大、游戏按更大的池规划」这个猜测（参考实现 12 GB 档 9809 MiB）。
 //   设了不是正数照旧缺省。纯读环境，t_svc_mem 测
 uint64_t s2a_ounce_pool(void) {
-    const char *e = getenv("S2A_APP_POOL_MB"); long long v = e && *e ? atoll(e) : 0;
-    return v > 0 ? (uint64_t)v << 20 : 0x240000000ull;
+    const char *e = getenv("S2A_APP_POOL_MB"); unsigned long long v = e && *e && *e != '-' ? strtoull(e, NULL, 10) : 0;   // strtoull：安卓 VM 夹具链接集合里有它（atoll / strtoll 没有，android/test.sh 端点核对）；负数当没设
+    if (v > (1ull << 24)) v = 0;   // 大到不像 MiB 的（溢出 / 乱写）也当没设
+    return v ? (uint64_t)v << 20 : 0x240000000ull;
 }
 static int npdm_read(const char *path, uint32_t *as_type, uint64_t *sysres, uint32_t *main_stack, uint64_t *pid, int apply) {
     FILE *f = fopen(path, "rb"); if (!f) return -1;

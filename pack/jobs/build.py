@@ -348,6 +348,7 @@ def launch(c):
                 kept_nros_mac(c, game["id"], runtime)   # 收局就补上（#8be819），玩家再点开始就能玩，不用判断要重出什么
             import cheats   # 停帧救场：局内画面停住时帧率补丁已被运行时关掉、留了标记 → 这款「帧率」写关，下次开始时通知（正常退出 / 崩溃都要读）
             cheats.note_stall(c, game, env["S2A_DOCS"])
+            cheats.note_widen(c, game, env["S2A_DOCS"])   # 我方通用满屏自检退回：满屏写关、下次开始时通知
             # Context.run waits for the host, including failure/cancellation.
             # Do not accumulate per-run snapshots after the process exits.
             if env.get("S2A_INPUT_CONFIG"):

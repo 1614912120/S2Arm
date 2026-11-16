@@ -552,6 +552,12 @@ def launch_env(c, gid):
     elif s.get("fps60") is False:
         env["S2A_FPS60"] = "0"
     # 帧率档位（11-13 维护者：60 / 120 帧补丁都带进去，玩家自己选）：选了具体档才写，宿主（runtime/src/cpatch.c fps_pick）取不超过它的最高一档；没选 / 自动不写，宿主按屏幕最高刷新率挑
+    # 帧率解锁（11-15 维护者「补帧稳定了就直接用补帧」）：同一个开关——有社区帧率补丁用补丁，没有就用补帧（二选一，补丁开着时补帧每帧让路，
+    #   graphics/nvn/gfx/nvn/nvn_present_fi.inc fi_wanted）。Mac 今天缺省不补帧：只有玩家明确开才写 DM_PRESENT_FI=1，明确关写 0，没选过不写（不退化）
+    if s.get("fps60") is True:
+        env["DM_PRESENT_FI"] = "1"
+    elif s.get("fps60") is False:
+        env["DM_PRESENT_FI"] = "0"
     if str(s.get("fpsPick") or "0") not in ("", "0"):
         env["S2A_FPS_PICK"] = str(s["fpsPick"])
     # 满屏（11-13 合并「宽屏」与「宽屏强制启用」，同 iPhone settings.m）：明确开 = 没验证过也铺满（画面被拉伸会自动退回 16:9）；明确关 = 16:9；
@@ -560,7 +566,9 @@ def launch_env(c, gid):
     strong = caps.get("widen") == "0" and "强信号" in runtime_caps_rows(c, gid).get("widen", ("", ""))[1]  # 非玩家句
     fams, fam_default = adaptive_patches(c, gid)
     full = False if strong else s["widescreen"] if isinstance(s.get("widescreen"), bool) else (caps.get("widen") == "1" or bool(fams))   # 有自适应满屏补丁 = 默认开（11-13）
-    if s.get("widescreen") is True and not strong and not fams and os.environ.get("S2A_CAPS_OWN") == "1":   # 11-15：我方通用满屏缺省不用（runtime/src/widen.c），老设置不再绕过
+    # 11-15 维护者「没补丁的游戏手动打开满屏就走咱们通用方案」：玩家明确开满屏、没有自适应满屏补丁 → 我方通用满屏（第三层整套放宽，不看已验证名单）。
+    #   原先这里还要 S2A_CAPS_OWN=1（v0.4.0 撤通用满屏时加的），手动开也不生效。没选过照旧不开（宿主缺省关，runtime/src/widen.c）
+    if s.get("widescreen") is True and not strong and not fams:
         env["S2A_WIDEN_VERIFIED"] = "1"
         env["S2A_WIDESCREEN"] = "1"
     elif s.get("widescreen") is False:

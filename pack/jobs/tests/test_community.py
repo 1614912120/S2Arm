@@ -55,7 +55,7 @@ class CommunityTests(unittest.TestCase):
         self.assertEqual(community.launch_env(self.c, GID), {"S2A_CPATCH_ON": "gfx:bb,widescreen:aa", "S2A_WIDESCREEN": "0"})   # 没选过：包里的补丁全开（11-13），开着宽屏补丁 S2Arm 满屏让开；60 帧由宿主定
         self.c.r.update(settings={"widescreen": False, "fps60": False}, graphics={"gfx:bb": True})
         community.save(self.c)
-        self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDESCREEN": "0", "S2A_FPS60": "0", "S2A_CPATCH_ON": "gfx:bb,widescreen:aa"})   # 玩家明确关：写 0；没关过的补丁照开
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDESCREEN": "0", "S2A_FPS60": "0", "DM_PRESENT_FI": "0", "S2A_CPATCH_ON": "gfx:bb,widescreen:aa"})   # 玩家明确关：写 0；没关过的补丁照开
         self.c.r = {"gameId": GID, "graphics": {"widescreen:aa": True}}
         r = community.save(self.c); g = {it["id"]: it for it in r["graphics"]}
         self.assertEqual((g["widescreen:aa"]["enabled"], g["gfx:bb"]["enabled"]), (True, True))
@@ -268,10 +268,8 @@ class MacDisplayTests(unittest.TestCase):
         # 满屏明确开 = 没验证过也铺满（同 iPhone settings.m）；明确关 = 16:9；强信号判坏的款明确开也不开
         self.caps()
         self.save(widescreen=True)
-        # 11-15：我方通用满屏缺省不用（runtime/src/widen.c），满屏明确开只在旧口径（S2A_CAPS_OWN=1）强开
-        self.assertEqual(community.launch_env(self.c, GID), {})
-        with mock.patch.dict(os.environ, {"S2A_CAPS_OWN": "1"}):
-            self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
+        # 11-15 维护者「没补丁的游戏手动打开满屏就走咱们通用方案」：明确开 = 我方通用满屏，不要 S2A_CAPS_OWN（原先要，手动开也不生效）
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
         self.save(widescreen=False)
         self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDESCREEN": "0"})
         self.caps("widen\t1\t# 默认开：widen_verified.tsv\ndirect\t1\n")
@@ -325,20 +323,18 @@ class MacDisplayTests(unittest.TestCase):
         self.caps()
         write(community.launch_path(self.c, GID), json.dumps({"schema": 1, "settings": {"widenForce": True}, "patches": {}}))
         self.assertTrue(self.mac()["widescreen"]["value"])
-        self.assertEqual(community.launch_env(self.c, GID), {})   # 11-15 缺省口径：我方通用满屏不用
-        with mock.patch.dict(os.environ, {"S2A_CAPS_OWN": "1"}):
-            self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})   # 11-15：明确开 = 我方通用满屏
 
     def test_fps60_off_and_manual_on_over_a_red_game(self):
         self.caps()
         self.save(fps60=False)
-        self.assertEqual(community.launch_env(self.c, GID), {"S2A_FPS60": "0"})             # 玩家明确关：写 0
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_FPS60": "0", "DM_PRESENT_FI": "0"})             # 玩家明确关：写 0
         self.assertFalse(self.mac()["fps60"]["value"])
         self.save(fps60=True)                                                               # 清单开的款玩家开：也要明确传 1（宿主不再看清单）
-        self.assertEqual(community.launch_env(self.c, GID), {"S2A_FPS60": "1"})
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_FPS60": "1", "DM_PRESENT_FI": "1"})
         self.caps("fps60\t0\t# 判红\ndirect\t1\n")
         self.save(fps60=True)
-        self.assertEqual(community.launch_env(self.c, GID), {"S2A_FPS60": "1"})
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_FPS60": "1", "DM_PRESENT_FI": "1"})
         self.assertTrue(self.mac()["fps60"]["value"])
 
     def test_changing_one_switch_does_not_decide_the_others(self):

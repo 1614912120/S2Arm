@@ -142,7 +142,7 @@ struct LaunchSettingsSheet: View {
                     VStack(alignment: .leading, spacing: LauncherTheme.Space.section) {
                         // 分组顺序：画面 → S 级优化（社区补丁 + 金手指，金色卡）→ 手柄 → 其他（定义表 launchers/shared/game_settings.v1.json 的 group）
                         ForEach(["display", "sgrade", "controls", "other"], id: \.self) { group in
-                            let rows = items.filter { $0.group == group && visible($0) }
+                            let rows = items.filter { groupOf($0) == group && visible($0) }
                             if !rows.isEmpty {
                                 if group == "sgrade" {
                                     SGradeGroupCard(t("display.group.sgrade"), note: t("export.sgrade.hit.note")) { sgradeRows(rows) }
@@ -167,11 +167,21 @@ struct LaunchSettingsSheet: View {
         .task { if !loaded { await load(nil) } }
     }
 
-    /// S 级优化组：社区补丁 / 金手指两个小节（SGradeSettingsRows：小标题与各行文字同一条起始线、开关靠右）
+    /// 满屏 / 帧率解锁（连同帧率档位）放进 S 级金卡最上面（11-15 维护者定：三项挪到一级、金色 S、页面更简洁），定义表里仍在 display 组
+    private static let sgradeTop = ["widescreen", "fps60", "fpsPick"]
+    private func groupOf(_ item: GameSettingItem) -> String { Self.sgradeTop.contains(item.id) ? "sgrade" : item.group }
+
+    /// S 级优化组：最上面满屏 / 帧率解锁两行（金字 + 金色 S）、帧率档位；下面金手指（标题带金色 S）与默认收起的社区补丁明细
     @ViewBuilder private func sgradeRows(_ rows: [GameSettingItem]) -> some View {
         let p = rows.first { $0.type == "patches" }, c = rows.first { $0.type == "cheats" }
+        let top = Self.sgradeTop.compactMap { id in rows.first { $0.id == id } }
+        ForEach(Array(top.enumerated()), id: \.element.id) { i, item in
+            if i > 0 { CardDivider() }
+            if item.id == "fpsPick" { row(item) } else { topRow(item) }
+        }
+        if !top.isEmpty && (p != nil || c != nil) { CardDivider() }
         SGradeSettingsRows(
-            patchesTitle: p?.text(lang) ?? "", patchesNote: p?.detail(lang) ?? "",
+            patchesTitle: t("sgrade.cpatch.detail"), patchesNote: p?.detail(lang) ?? "",
             patches: p == nil ? [] : patches.map { SGradeToggle(id: $0.id, label: $0.label, detail: $0.result.isEmpty ? "" : loc.backend($0.result), on: $0.enabled) },
             cheatsTitle: c?.text(lang) ?? "", cheatsNote: cheats.isEmpty && !cheatsReason.isEmpty ? loc.backend(cheatsReason) : (c?.detail(lang) ?? ""),
             cheats: c == nil ? [] : cheats.map { SGradeToggle(id: $0.id, label: $0.name, detail: cheatDetail($0), on: $0.enabled, enabled: $0.ok) },
@@ -180,7 +190,31 @@ struct LaunchSettingsSheet: View {
             onCheat: { id, on in Task { await load(nil, cheats: [id: on]) } },
             onImport: { importCheats() },
             summary: { on, all in t("display.cheats.summary").replacingOccurrences(of: "{0}", with: String(on)).replacingOccurrences(of: "{1}", with: String(all)) },
-            searchPrompt: t("display.cheats.search"), clearSearchTitle: loc.t("home.clearSearch"))
+            searchPrompt: t("display.cheats.search"), clearSearchTitle: loc.t("home.clearSearch"),
+            patchesSummary: { on, all in t("display.cheats.summary").replacingOccurrences(of: "{0}", with: String(on)).replacingOccurrences(of: "{1}", with: String(all)) },
+            cheatsIcon: SGradeCardView.sGold)
+    }
+
+    /// 金卡最上面的满屏 / 帧率解锁：同一个开关（作业层 widescreen / fps60），副标题写现在用的是什么；自动关给「重新打开」；真用不了置灰
+    @ViewBuilder private func topRow(_ item: GameSettingItem) -> some View {
+        let option = options[item.id], cat = item.id == "widescreen" ? "widescreen" : "fps"
+        let st = sgrade[cat], on = option?.value as? Bool ?? false
+        let note = SGradeStateText.rowNote(cat: cat, st, hasFpsPatch: st?.source == "patch" || (st?.target ?? 0) > 0, fpsOn: on, t: t,
+                                           date: { $0.formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(Locale(identifier: lang))) },
+                                           backend: { loc.backend($0) })
+        let reenable = stateLine(item.id)?.reenable
+        SGradeTopRow(cat == "fps" ? t("sgrade.row.fps") : item.text(lang),
+                     note: option?.available == false ? loc.backend(option?.reason ?? "") : note?.text ?? item.detail(lang), dim: note?.disabled == true) {
+            if let reenable {
+                Button(t("sgrade.state.reenable")) { Task { await self.reenable(reenable) } }.controllerButtonStyle(LauncherSecondaryButtonStyle())
+                    .accessibilityIdentifier("launch." + item.id + ".reenable").disabled(saving || model.busy)
+            } else {
+                Toggle("", isOn: Binding(get: { on }, set: { v in Task { await load([item.id: v]) } }))
+                    .toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(item.text(lang))
+                    .accessibilityIdentifier("launch." + item.id)
+                    .disabled(option?.available != true || note?.disabled == true || saving || model.busy)
+            }
+        }
     }
 
     @ViewBuilder private func groupRows(_ rows: [GameSettingItem]) -> some View {

@@ -62,16 +62,17 @@ class SgradeStateTests(unittest.TestCase):
         self.assertEqual((s["fps"]["state"], s["fps"]["autoOff"]), ("on", None))
 
     def test_own_widen_version_ineffective_opted_out(self):
-        # 没有满屏补丁、本包在宽屏已验证名单且清单 widen 1 → 来源 own、on
+        # 11-15 维护者「没补丁的游戏手动打开满屏就走咱们通用方案」：没有满屏补丁 → 来源 own（不看已验证名单），缺省关（off_user），玩家明确开 → on
         self.tsv("fps:F1\tmain\t2\tfps\t60 帧\tMIT\to/r\t\t1\t60\t\t")
-        (self.img / "widen_verified.tsv").write_text("x\n"); (self.img / "s2a_caps.tsv").write_text("widen\t1\t# 缺省开\nfps60\t1\t# x\n")
+        s = self.st()
+        self.assertEqual((s["widescreen"]["state"], s["widescreen"]["source"]), ("off_user", "own"))
+        self.c.r = {"gameId": GID, "settings": {"widescreen": True}}; community.save(self.c)
         s = self.st()
         self.assertEqual((s["widescreen"]["state"], s["widescreen"]["source"]), ("on", "own"))
-        # 不在名单、补丁库只有别的版本的满屏 → version，列出可用版本
-        (self.img / "widen_verified.tsv").unlink()
+        # 补丁库只有别的版本的满屏：照旧是 own（这一版能开通用满屏），可用版本照列（升级页提示）
         self.m["others"] = [{"version": "1.2.0", "cats": ["widescreen", "fps"]}]
         s = self.st()
-        self.assertEqual((s["widescreen"]["state"], s["widescreen"]["source"], s["widescreen"]["versions"]["available"]), ("version", "none", ["1.2.0"]))
+        self.assertEqual((s["widescreen"]["state"], s["widescreen"]["source"], s["widescreen"]["versions"]["available"]), ("on", "own", ["1.2.0"]))
         # 上一局帧率补丁开着、实测只有 40 帧（目标 60）→ ineffective
         tmp = self.c.library / "temp" / GID; tmp.mkdir(parents=True); (tmp / "cpatch_status.tsv").write_text("fps:F1\t开\tfps=40\n")
         self.assertEqual(self.st()["fps"]["state"], "ineffective")
@@ -79,6 +80,33 @@ class SgradeStateTests(unittest.TestCase):
         layout.update_info(self.c, GID, sgradeOff=True)
         s = self.st()
         self.assertEqual({s[k]["state"] for k in ("widescreen", "fps", "gfx", "cheats")}, {"opted_out"})
+
+    def test_own_widen_auto_off_and_fi_source(self):
+        # 11-15 维护者：没补丁的款手动开满屏走我方通用满屏，失败 / 崩了下一局自动关；帧率解锁没补丁时用补帧。期望手写：
+        #   ① 运行时自检退回留下 widen_auto_off → 收局 note_widen：满屏写关、状态 off_auto、原因 widen_fit、标记删掉
+        #   ② 再手动开满屏、这局崩了（落点在游戏）→ note_crash 把满屏算进开着的项、关掉（原因 crash）
+        #   ③ 没有帧率补丁：来源 fi；这台能补帧时缺省 off_user（Mac 今天缺省不补），明确开 → on；不能补帧 → unsupported
+        self.tsv("gfx:G1\tmain\t1\tgfx\t画面\tMIT\to/r\t\t1\t\t\t")
+        self.c.r = {"gameId": GID, "settings": {"widescreen": True}}; community.save(self.c)
+        docs = self.t / "docs"; docs.mkdir(); (docs / "widen_auto_off").write_text("1\n")
+        self.assertTrue(cheats.note_widen(self.c, self.game, docs))
+        s = self.st()
+        self.assertEqual((s["widescreen"]["state"], s["widescreen"]["source"], s["widescreen"]["autoOff"]["cause"], (docs / "widen_auto_off").exists()),
+                         ("off_auto", "own", "widen_fit", False))
+        self.c.r = {"gameId": GID, "settings": {"widescreen": True}}; community.save(self.c)
+        (docs / "crash_where").write_text("game\n")
+        cheats.note_crash(self.c, self.game, docs)
+        self.assertEqual((self.st()["widescreen"]["state"], community.load_launch(self.c, GID)["settings"].get("widescreen")), ("off_auto", False))
+        real = sgrade.fi_supported
+        try:
+            sgrade.fi_supported = lambda: True
+            f = self.st()["fps"]; self.assertEqual((f["source"], f["fiSupported"], f["state"]), ("fi", True, "off_user"))
+            self.c.r = {"gameId": GID, "settings": {"fps60": True}}; community.save(self.c)
+            self.assertEqual(self.st()["fps"]["state"], "on")
+            sgrade.fi_supported = lambda: False
+            self.assertEqual(self.st()["fps"]["state"], "unsupported")
+        finally:
+            sgrade.fi_supported = real
 
     def test_kit_state_for_iphone(self):
         # 出 iPhone 包写的底料：kit 里有自适应满屏 → 来源 patch；没有补丁、带宽屏已验证标记 → own；版本对照照 match 抄；画面类 mac_only。期望手写

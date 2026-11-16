@@ -2388,13 +2388,18 @@ static void t_pass_3d_slice_view(void) {
 // 期望值手算：各槽的样本数由替身在完成时给出，报告值 = 复位之后、报告之前开过的各槽之和（跨段接着加）。
 // 开段失败（审计 P1-174）：时间线照走一格，不回放出任何绘制；中途交段之后开新段失败时，已经交出去的段完成回调不能碰到放掉的提交。
 static void t_begin_fail(void) {
-    // ① 一上来就开不了段：这次提交一笔都没交，返回的栅栏值 = 原值 + 64；下一次正常提交用的是再 + 64，两次的值不重
+    // ① 一上来就开不了段：这次提交一笔都不画，返回的栅栏值 = 原值 + 64；下一次正常提交用的是再 + 64，两次的值不重。
+    //    这一格要有人点亮（P1-174）：补交一个空段、值就是这一格，做完后等这一格的线程不靠下一次提交就放行
     pass_fresh(); g_gdraws = 0; uint64_t f0 = nvn_be_last_fence(); int c0 = g_main_commits; g_npend = 0;
     static stream s; memset(&s, 0, sizeof s); q_env(&s); q_draw(&s); end(&s);
     g_begin_fail_at = 1; nvn_be_sub_begin(); nvn_be_exec(s.b); uint64_t f1 = nvn_be_sub_commit();
-    CHECK(f1 == f0 + 64 && nvn_be_last_fence() == f0 + 64 && g_main_commits == c0 && g_gdraws == 0 && g_begin_fail_at == 0);
+    CHECK(f1 == f0 + 64 && nvn_be_last_fence() == f0 + 64 && g_gdraws == 0 && g_begin_fail_at == 0);
+    CHECK(g_main_commits == c0 + 1 && g_npend == 1 && g_pend[0].signal == f0 + 64);   // 补点亮的空段：恰好一个、值就是这一格
+    CHECK(nvn_gpu_fence_wait(f1, 0, NULL).code == NVN_GPU_E_TIMEOUT);
+    fake_complete(NVN_GPU_DONE_OK);
+    CHECK(nvn_gpu_fence_wait(f1, 0, NULL).code == NVN_GPU_OK);   // 没有下一次提交，这一格也已点亮
     nvn_be_sub_begin(); nvn_be_exec(s.b); uint64_t f2 = nvn_be_sub_commit();
-    CHECK(f2 == f0 + 128 && g_main_commits == c0 + 1 && g_npend && g_pend[g_npend - 1].signal == f0 + 128);
+    CHECK(f2 == f0 + 128 && g_main_commits == c0 + 2 && g_npend && g_pend[g_npend - 1].signal == f0 + 128);
     fake_complete(NVN_GPU_DONE_OK);
     // ② 带遮挡计数、画 13 笔（每段 12 笔）：中途交出一段之后开新段失败。主段只交了那一个中途段（值 = 原值 + 1 或 + 2：前面可能有一个前置段），
     //    提交返回原值 + 64；随后那个中途段完成，回调要往所属提交里攒结果——这时那份提交必须还活着（用地址消毒器跑这条用例看得出来）。
@@ -2406,7 +2411,8 @@ static void t_begin_fail(void) {
     for (int i = 0; i < 13; i++) q_draw(&t);
     put_set_rt_n(&t, b_, 1, NULL); q_draw(&t); end(&t);
     nvn_be_sub_begin(); CHECK(g_occ_slots_decl != 0); g_begin_fail_at = 1; nvn_be_exec(t.b); uint64_t f3 = nvn_be_sub_commit();
-    CHECK(g_begin_fail_at == 0 && g_main_commits == c0 + 1 && f3 == f0 + 64 && g_gdraws == 13);   // 第 14 笔在开不出来的新段里：不画
+    CHECK(g_begin_fail_at == 0 && g_main_commits == c0 + 2 && f3 == f0 + 64 && g_gdraws == 13);   // 第 14 笔在开不出来的新段里：不画；主段 = 中途段 + 补点亮这一格的空段
+    CHECK(g_npend >= 2 && g_pend[g_npend - 1].signal == f0 + 64 && g_pend[g_npend - 2].signal < f0 + 64);   // 空段在中途段之后、值是这一格
     static uint64_t occ[4] = {7, 0, 0, 0}; g_fake_occ = occ; g_fake_nocc = 1;
     fake_complete(NVN_GPU_DONE_OK); g_fake_occ = NULL; g_fake_nocc = 0;
     nvn_be_sub_begin(); nvn_be_exec(s.b); CHECK(nvn_be_sub_commit() == f0 + 128); fake_complete(NVN_GPU_DONE_OK);   // 之后照常
