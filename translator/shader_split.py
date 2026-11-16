@@ -1291,6 +1291,15 @@ def write_degrade(path, file_red, blocks, same_key, cap=DEGRADE_ROWS_CAP):
             if len(items) > cap: f.write(f'extract\t{kind}\t{len(items) - cap}\t\t{what}：另有 {len(items) - cap} 条未逐列（见 split.log）\n')
 
 
+def skip_summary(file_red, skipped, same_key, show=3):
+    """降级汇总的收尾行（标准错误，进 split.log）：读不了、整份没抽的文件计红（个数 + 前 show 个路径与原因），丢了程序块 / 同键不同内容照旧黄。
+    读不了的文件原先只并进一行黄（RomFS 只有镜像 romfs.std 时 19012 个文件全部这样跳过，另一路抽取补齐才没露馅）"""
+    out = []
+    if file_red: out.append(f'【红】直连抽取：{len(file_red)} 个文件读不了、整份没抽（前 {min(show, len(file_red))} 个：{"；".join(" ".join(str(m).split())[:200] for m in file_red[:show])}），其余照抽；这些文件里的着色器运行时首遇现编，逐条见上方 [WARN]')
+    if skipped or same_key: out.append(f'【黄】直连抽取：丢了程序块 {len(skipped)} 个、同键不同内容 {len(same_key)} 处（留先到的），其余照抽；逐条见上方 [WARN] / [RED]')
+    return out
+
+
 def scan_counted(job):
     """scan_file + the Unity program blocks this file had left out (SKIPPED). A file the readers cannot read (a [RED] exit or a parse
     error inside its scan) is left out alone and recorded (FILE_RED), the rest are read on (v0.3.1: do not stop on what we cannot be sure of;
@@ -1619,7 +1628,7 @@ def main():
     for m in file_red: print('[WARN] skipped: ' + m, flush=True)
     for m in same_key: print('[WARN] ' + m, flush=True)
     write_degrade(os.path.join(os.path.dirname(os.path.abspath(mapout)), 'degrade.tsv'), file_red, [f'{w}: {why}' for w, why in skipped], same_key)
-    if file_red or skipped or same_key: print(f'【黄】直连抽取：跳过读不了的文件 {len(file_red)} 个、丢了程序块 {len(skipped)} 个、同键不同内容 {len(same_key)} 处（留先到的），其余照抽；逐条见上方 [WARN] / [RED]', file=sys.stderr)
+    for line in skip_summary(file_red, skipped, same_key): print(line, file=sys.stderr)
     sp, cover = separable_pairs(keys); pairs |= sp
     if cover: print(f'single-stage programs: {len({v for v, _ in sp}):,} vertex shaders are paired with a cover of {len(cover)} pixel shader(s) ({" ".join(cover)})')
     os.makedirs(pkg, exist_ok=True)
