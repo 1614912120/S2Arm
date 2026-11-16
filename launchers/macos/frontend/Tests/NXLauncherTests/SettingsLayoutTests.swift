@@ -608,6 +608,60 @@ import S2ArmAppleAdapter
             "按住 A 从首页进入出包页，不能再触发新页面的开始出包")
     }
 
+    /// v0.5.0 手柄验收 A1：首页横向封面，手柄左右切游戏，选中的游戏（大图与标题）跟着换。注入 GCController 十字键，走生产输入路径
+    func testAcceptanceHomeDpadSwitchesTheSelectedGame() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.runner.catalogGameCount = 3
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.count < 3 { try await Task.sleep(for: .milliseconds(10)) }
+        let navigation = fixture.model.gamepad
+        navigation.source.controllers = { [] }
+        let (host, window) = try await render(AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture")
+            .frame(width: 1280, height: 760)), fixture: fixture, language: .zh)
+        navigation.attach(window); navigation.source.stop(); navigation.source.isActive = { true }
+        defer { navigation.detach(); window.close() }
+        let controller = GCController.withExtendedGamepad(), pad = try XCTUnwrap(controller.extendedGamepad)
+        navigation.source.controllers = { [controller] }; navigation.source.tick(now: 0)
+        fixture.model.selectedID = "fixture"; navigation.focus("card.fixture")
+        try await Task.sleep(for: .milliseconds(120))
+        try snapshot(host, "acceptance-A1-0")
+        var now = 0.01
+        for expected in ["fixture-1", "fixture-2"] {
+            pad.dpad.setValueForXAxis(1, yAxis: 0); navigation.source.tick(now: now); now += 0.01
+            pad.dpad.setValueForXAxis(0, yAxis: 0); navigation.source.tick(now: now); now += 0.01
+            try await Task.sleep(for: .milliseconds(200))
+            XCTAssertEqual(fixture.model.selectedID, expected, "十字键右一下切到下一款")
+            XCTAssertEqual(navigation.focusedID, "card." + expected)
+            try snapshot(host, "acceptance-A1-" + expected)
+        }
+        pad.dpad.setValueForXAxis(-1, yAxis: 0); navigation.source.tick(now: now); now += 0.01
+        pad.dpad.setValueForXAxis(0, yAxis: 0); navigation.source.tick(now: now)
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(fixture.model.selectedID, "fixture-1", "十字键左一下切回上一款")
+    }
+
+    /// v0.5.0 手柄验收 A6：玩过的游戏首页显示游玩时长（单独一块）；没玩过的不显示
+    func testAcceptanceHomeShowsPlaytimeOnlyForPlayedGames() async throws {
+        let fixture = try SettingsFixture()
+        defer { fixture.remove() }
+        fixture.runner.catalogGameCount = 2
+        fixture.runner.catalogPlaytime = ["seconds": 9059, "lastPlayed": Date().timeIntervalSince1970 - 86_400]
+        fixture.model.refresh()
+        for _ in 0..<100 where fixture.model.games.count < 2 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(fixture.model.games.first { $0.id == "fixture" }?.playtime?.seconds, 9059)
+        XCTAssertNil(fixture.model.games.first { $0.id == "fixture-1" }?.playtime)
+        fixture.model.gamepad.source.controllers = { [] }
+        for (id, played) in [("fixture", true), ("fixture-1", false)] {
+            fixture.model.selectedID = id
+            let (host, window) = try await render(AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture")
+                .frame(width: 1280, height: 760)), fixture: fixture, language: .zh)
+            defer { window.close() }
+            XCTAssertEqual(fixture.model.games.first { $0.id == id }?.playtime != nil, played, played ? "玩过的带游玩时长（首页那块按它显示，截图为证）" : "没玩过的不带")
+            try snapshot(host, "acceptance-A6-" + id)
+        }
+    }
+
     func testTitlebarActionsAlignWithTheHomeControls() async throws {
         let fixture = try SettingsFixture()
         defer { fixture.remove() }
@@ -1594,6 +1648,11 @@ private final class SettingsRunner: JobProcessRunner {
         get { lock.withLock { gameCount } }
         set { lock.withLock { gameCount = newValue } }
     }
+    private var playtime: [String: Any]? = nil
+    var catalogPlaytime: [String: Any]? {
+        get { lock.withLock { playtime } }
+        set { lock.withLock { playtime = newValue } }
+    }
     var requests: [[String: Any]] { lock.withLock { captured } }
     func start(executable: URL, arguments: [String], environment: [String: String], onLine: @escaping (Data) -> Void,
                onStderr: @escaping (Data) -> Void, onExit: @escaping (Int32) -> Void) throws -> JobProcessHandle {
@@ -1608,8 +1667,10 @@ private final class SettingsRunner: JobProcessRunner {
                 "en": ["title": "Choose a configuration", "body": "Original layout fixture for long content", "points": (1...24).map { "Original item \($0): a longer configuration description to verify scrolling and keep the actions visible" },
                        "recommend": "Use recommended", "original": "Use original"]]
             result = ["games": (0..<catalogGameCount).map { index in
-                ["id": index == 0 ? "fixture" : "fixture-\(index)", "name": "Original UI fixture \(index)", "cover": catalogCover, "ready": true, "needsPreparation": catalogNeedsPreparation, "missing": [],
-                 "downstream": ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy]] as [String: Any]
+                var game: [String: Any] = ["id": index == 0 ? "fixture" : "fixture-\(index)", "name": "Original UI fixture \(index)", "cover": catalogCover, "ready": true, "needsPreparation": catalogNeedsPreparation, "missing": [],
+                 "downstream": ["id": "original-demo", "name": "Original Demo", "eligible": true, "copy": copy]]
+                if index == 0, let playtime = catalogPlaytime { game["playtime"] = playtime }
+                return game
             }]
         }
         if request["operation"] as? String == "community" {
