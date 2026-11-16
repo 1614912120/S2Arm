@@ -109,6 +109,16 @@ import NXLauncher
 }
 
 @MainActor final class ControllerAssignNavigationTests: XCTestCase {
+    /// 分配中一代 Joy-Con：系统已当整只手柄读的那一侧，导航只走系统手柄那一路（不再按 HID 换算，免得按一下导航两次、竖握一对的左只「下」被当确认）
+    func testGen1NavigationDefersToSystemReadSide() {
+        let pair = [(name: "Joy-Con (L/R)", extended: true)]
+        XCTAssertTrue(Switch2ProConnectionPopover.gen1ReadBySystem(side: 0, systemPads: pair), "系统合成的一对：左只交给系统")
+        XCTAssertTrue(Switch2ProConnectionPopover.gen1ReadBySystem(side: 1, systemPads: pair), "系统合成的一对：右只交给系统")
+        XCTAssertFalse(Switch2ProConnectionPopover.gen1ReadBySystem(side: 0, systemPads: [(name: "Joy-Con (L)", extended: false)]), "系统没当整只读（无 extendedGamepad）：照旧 HID 横握换算")
+        XCTAssertFalse(Switch2ProConnectionPopover.gen1ReadBySystem(side: 0, systemPads: [(name: "Joy-Con (R)", extended: true)]), "只有右只被系统读：左只照旧 HID")
+        XCTAssertFalse(Switch2ProConnectionPopover.gen1ReadBySystem(side: 1, systemPads: [(name: "Joy-Con 2 (R)", extended: true), (name: "Xbox Wireless Controller", extended: true)]), "Joy-Con 2、别的手柄不算一代")
+    }
+
     /// 分配中 Switch 2 按键（原始、未转横握）→ 界面导航：竖握 A/B，单只横握照 NS2JoyCon.c 的转法
     func testSwitch2ButtonsMapToNavigation() {
         func bits(_ n: Int...) -> UInt64 { n.reduce(0) { $0 | (1 << UInt64($1)) } }

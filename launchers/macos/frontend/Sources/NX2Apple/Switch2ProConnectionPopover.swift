@@ -14,6 +14,7 @@
 //   - 顶栏：三条通道合并看（任一通道连着 = 绿点「已连接」，见 NS2LauncherController.buttonStatus / title）。
 //   - 上线前面板不显示 Mobile 区块，只预留 ControllerIcon.Glyph.mobile。
 import SwiftUI
+import GameController
 import AppKit
 import NXCore
 import NXModel
@@ -278,7 +279,11 @@ extension Switch2ProConnectionPopover {
                     if case let .gen1Pair(l, r) = unit, l == id || r == id { side = l == id ? 0 : 1; sideways = false }
                 }
                 if side < 0 { side = systems.gen1.first { $0.id == id }?.side ?? 1 }
-                if let action = NS2LauncherController.padAction(gen1Key: key, side: side, sideways: sideways) { navigation.handle(action) }
+                // 系统已把这一侧当整只手柄读（如系统合成的「Joy-Con (L/R)」）：导航走系统手柄那一路（LauncherPadInput），这里不再换算——
+                //   否则按一下导航两次，没登记的竖握一对也会被当横握、左只按「下」直接「完成」
+                let systemPads = GCController.controllers().map { (name: $0.vendorName ?? $0.productCategory, extended: $0.extendedGamepad != nil) }
+                if !Self.gen1ReadBySystem(side: side, systemPads: systemPads),
+                   let action = NS2LauncherController.padAction(gen1Key: key, side: side, sideways: sideways) { navigation.handle(action) }
             }
             controller.flashPlayer(key: key) { unit in
                 switch unit {
@@ -295,6 +300,11 @@ extension Switch2ProConnectionPopover {
                 return event
             }
         }
+    }
+    /// 一代 Joy-Con 这一侧（0 左只 / 1 右只）是否已被系统当整只手柄读（GameController 有 extendedGamepad 的「Joy-Con (L/R)」「Joy-Con (L)」等）：
+    ///   是 = 分配中的导航交给系统手柄那一路，HID 直读只认手、亮行，不再换算导航
+    nonisolated static func gen1ReadBySystem(side: Int, systemPads: [(name: String, extended: Bool)]) -> Bool {
+        systemPads.contains { $0.extended && PlayerAssignment.gen1Sides($0.name).contains(side) }
     }
     /// 键盘按键 → 显示的字（最多两个字）
     static func keyLabel(_ event: NSEvent) -> String? {
