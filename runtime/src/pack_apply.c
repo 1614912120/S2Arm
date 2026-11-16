@@ -47,6 +47,19 @@ static void clear_stale(const char *root, char *p) {
 }
 static uint64_t oct(const char *s, int n) { uint64_t v = 0; for (int i = 0; i < n && s[i]; i++) if (s[i] >= '0' && s[i] <= '7') v = v * 8 + (uint64_t)(s[i] - '0'); return v; }
 static int safe(const char *p) { return *p && *p != '/' && !strstr(p, "../") && strcmp(p, "..") && !(strlen(p) >= 3 && !strcmp(p + strlen(p) - 3, "/..")); }
+// IMG 目录表的路径区自检（D-4VAX：玩家机上本体目录表里出现「823/ac_2_b1_nxsystemdata/0100000000000823/」——相邻两条路径首尾拼成的一截，路径区偏移错位，
+//   原先照解、每次同一处 -4）：路径非空、中间没有 NUL、不以「/」结尾、没有「//」、安全（不越出资源包根）；整表没有重复路径。任一不对 = 本体目录表被改坏，
+//   不硬解（后面的条目可能同样错位、解出来的内容是错的），按「IMG 坏」报，让玩家删掉重新导入 / 重推
+static int toc_path_ok(const uint8_t *p, uint32_t pl) {
+    if (!pl || memchr(p, 0, pl) || p[pl - 1] == '/') return 0;
+    char tmp[4200]; if (pl >= sizeof tmp) return 0; memcpy(tmp, p, pl); tmp[pl] = 0;
+    return !strstr(tmp, "//") && safe(tmp);
+}
+static int rel_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
+static int toc_has_dup(char **rels, size_t n) {   // 有重复路径 → 1
+    if (n < 2) return 0; char **v = malloc(n * sizeof *v); if (!v) return 0; memcpy(v, rels, n * sizeof *v); qsort(v, n, sizeof *v, rel_cmp);
+    int dup = 0; for (size_t i = 1; i < n && !dup; i++) dup = !strcmp(v[i - 1], v[i]); free(v); return dup;
+}
 
 // 解一个 tar 到 root；返回 0 成功，负数 = 失败码（-1 读不了 -2 头坏 -3 路径不安全 -4 写失败；认不出的条目类型跳过、不算失败）；*nf / *nb 累计文件数与字节
 int s2a_untar(const char *tar, const char *root, unsigned *nf, uint64_t *nb) {
@@ -148,11 +161,17 @@ static int img_toc_file(const char *p, img_ent **out, size_t *n) {   // 同上�
     img_ent *e = calloc(slots ? slots : 1, sizeof *e); size_t k = 0;
     for (uint32_t i = 0; i < slots; i++) { const uint8_t *s = t + 8 + (size_t)i * 32; uint64_t hh; memcpy(&hh, s, 8); if (!hh) continue;
         uint32_t po, pl; memcpy(&e[k].off, s + 8, 8); memcpy(&e[k].len, s + 16, 8); memcpy(&po, s + 24, 4); memcpy(&pl, s + 28, 4);
-        if (pbase + po + pl > tl || e[k].off + e[k].len > total) { for (size_t j = 0; j < k; j++) free(e[j].rel); free(e); free(t); goto out; }
+        if (pbase + po + pl > tl || e[k].off + e[k].len > total || !toc_path_ok(t + pbase + po, pl)) {
+            if (pbase + po + pl <= tl) untar_err("IMG 目录表路径不对（本体被改坏）", (const char *)t + pbase + po, EINVAL);
+            for (size_t j = 0; j < k; j++) free(e[j].rel); free(e); free(t); goto out; }
         e[k].rel = strndup((const char *)t + pbase + po, pl);
         if (!strcmp(e[k].rel, "romfs.list")) { free(e[k].rel); continue; }
         k++; }
-    free(t); *out = e; *n = k; rc = 0;
+    free(t);
+    { char **rels = malloc((k ? k : 1) * sizeof *rels); if (rels) { for (size_t j = 0; j < k; j++) rels[j] = e[j].rel;
+        int dup = toc_has_dup(rels, k); free(rels);
+        if (dup) { untar_err("IMG 目录表有重复路径（本体被改坏）", p, EINVAL); for (size_t j = 0; j < k; j++) free(e[j].rel); free(e); goto out; } } }
+    *out = e; *n = k; rc = 0;
 out:
     close(fd); return rc;
 }
@@ -685,7 +704,7 @@ static int upd_read_toc(int fd, uint64_t to, uint64_t tl, upd_ent **out, size_t 
     upd_ent *e = calloc(slots ? slots : 1, sizeof *e); size_t k = 0;
     for (uint32_t i = 0; i < slots; i++) { const uint8_t *q = t + 8 + (size_t)i * 32; uint64_t hh; memcpy(&hh, q, 8); if (!hh) continue;
         uint32_t po, pl; memcpy(&e[k].off, q + 8, 8); memcpy(&e[k].len, q + 16, 8); memcpy(&po, q + 24, 4); memcpy(&pl, q + 28, 4);
-        if (pb + po + pl > tl) { for (size_t j = 0; j < k; j++) free(e[j].rel); free(e); free(t); return -1; }
+        if (pb + po + pl > tl || !toc_path_ok(t + pb + po, pl)) { for (size_t j = 0; j < k; j++) free(e[j].rel); free(e); free(t); return -1; }   // 路径区自检同 img_toc_file：坏表不拿来重写
         e[k++].rel = strndup((const char *)t + pb + po, pl); }
     free(t); *out = e; *n = k; return 0;
 }

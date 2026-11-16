@@ -475,6 +475,24 @@ int main(void) {
       snprintf(c, sizeof c, "printf '\\011' | dd of='%s/game.img' bs=1 seek=8 conv=notrunc 2>/dev/null && rm -rf '%s/exefs' && printf '' > '%s/.applied'", G, G, G); sh(c);
       CHECK(s2a_pack_apply(D) != 0, "⑬e 格式号 9 → 解包失败");
       snprintf(c, sizeof c, "grep -q '格式号' '%s/unpack.log'", D); CHECK(sh(c) == 0, "⑬e 解包日志带「格式号」"); 
+      { // ⑬f D-4VAX（本体目录表路径区错位：表里出现「…/0100000000000823/」这种相邻两条路径首尾拼成的一截，原先当文件写 → 每次同一处 -4 EISDIR）：
+        //   读表自检，路径以「/」结尾 / 有重复路径 = 本体被改坏 → 不硬解，判 IMG 坏（码 ios_install_img_corrupt），现场写明。期望手写
+        const char *bad8[2] = {"823/ac_2_b1_nxsystemdata/0100000000000823/", "exefs/main.npdX"};   // 一条以「/」结尾；一条造好后在文件里改成和第一行重复（img.py 自己不写重复项）
+        const char *expect8[2] = {"IMG 目录表路径不对", "IMG 目录表有重复路径"};
+        for (int v = 0; v < 2; v++) {
+            char D8[1300], G8[1400]; snprintf(D8, sizeof D8, "%s/img_docs8_%d", T, v); snprintf(G8, sizeof G8, "%s/资源包", D8);
+            snprintf(c, sizeof c, "mkdir -p '%s' && : > '%s/src/empty' && printf 'exefs/main.npdm\t%s/src/npdm\nctl/control.nacp\t%s/src/nacp\n%s\t%s/src/empty\n' > '%s/src/others_bad%d.tsv'"
+                     " && python3 '%s/pack/img.py' build - '%s/src/others_bad%d.tsv' '%s/game.img' --gid 0100abcd0000000a --pack-id img8 > /dev/null"
+                     " && printf 'game.img\t%%s\tx\n' $(stat -f %%z '%s/game.img' 2>/dev/null || stat -c %%s '%s/game.img') > '%s/index.tsv'"
+                     " && printf '{\"version\":3,\"format\":\"img\",\"imgFile\":\"game.img\",\"index_sha256\":\"img8\"}' > '%s/manifest.json'",
+                     G8, D, D, D, bad8[v], D, D, v, R, D, v, G8, G8, G8, G8, G8);
+            int built = sh(c) == 0;
+            if (built && v == 1) { snprintf(c, sizeof c, "python3 -c \"import sys;p=sys.argv[1];b=open(p,'rb').read();assert b.count(b'exefs/main.npdX')==1;open(p,'wb').write(b.replace(b'exefs/main.npdX',b'exefs/main.npdm'))\" '%s/game.img'", G8); built = sh(c) == 0; }
+            int r8 = built ? s2a_pack_apply(D8) : 99;
+            CHECK(built && r8 != 0 && !strcmp(s2a_pack_apply_code(), "ios_install_img_corrupt") && strstr(s2a_pack_apply_failure(), expect8[v]),
+                  "⑬f 坏表 %d：不硬解、判 IMG 坏、现场写「%s」（造 %d、返回 %d、码 %s「%s」）", v, expect8[v], built, r8, s2a_pack_apply_code(), s2a_pack_apply_failure());
+        }
+      }
       // ⑭ 玩家把 IMG 放进「文件」里 S2Arm 的「放这里导入」文件夹：s2a_img_scan 挪进 games/<头里的游戏号>/资源包/game.img、写 manifest（资源包号同头）与 index.tsv；
       //   拷到一半的（长度不等于头里的整个文件长）不动；导入文件夹以外的（Documents/下载）不扫、不动（v0.3.0）；挪好后应用成功
       char D3[1300]; snprintf(D3, sizeof D3, "%s/scan_docs", T);   // 小文件清单借 ⑬ 的夹具（exefs/main.npdm = 随机 5000 字节、ctl = NACP）
