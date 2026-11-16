@@ -5588,9 +5588,9 @@ static void tex_top_report(unsigned long long frame) {
         said++;
         MLOG("textures by size up to frame %llu: %lu textures %llu MB in the residency set; largest %d:", frame, nt, (unsigned long long)(total >> 20), N);
         for (int i = 0; i < N && top[i]; i++) { id<MTLTexture> t = top[i];
-            MLOG("  #%d %llu MB: %lux%lux%lu array %lu mips %lu samples %lu type %lu format %lu storage %lu usage %#lx label %s", i + 1, (unsigned long long)(tb[i] >> 20),
+            MLOG("  #%d %llu MB: %lux%lux%lu array %lu mips %lu samples %lu type %lu format %lu storage %lu usage %#lx", i + 1, (unsigned long long)(tb[i] >> 20),
                  (unsigned long)t.width, (unsigned long)t.height, (unsigned long)t.depth, (unsigned long)t.arrayLength, (unsigned long)t.mipmapLevelCount, (unsigned long)t.sampleCount,
-                 (unsigned long)t.textureType, (unsigned long)t.pixelFormat, (unsigned long)t.storageMode, (unsigned long)t.usage, t.label.UTF8String ?: "-"); } }
+                 (unsigned long)t.textureType, (unsigned long)t.pixelFormat, (unsigned long)t.storageMode, (unsigned long)t.usage); } }   // 不读 t.label：本编译单元发出的选择子都要有延后编码替身（t_nvn_rec_cover），编码器 / 命令缓冲协议里都有 label
 }
 void nvn_be_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
     tex_top_report(frame);
