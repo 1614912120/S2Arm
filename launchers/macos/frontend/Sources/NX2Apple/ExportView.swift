@@ -116,12 +116,18 @@ struct ExportView: View {
                         .controllerButtonStyle(.plain).font(.manrope(12.5, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.85))
                         .controllerID("export.install").controllerShortcut(.rightTrigger, focused: true)
                 }
+                if game.appleTvReady {   // 已出过 Apple TV 包：直接装到 Apple TV（tvInstall 作业）
+                    Button(x("installAppleTV")) { model.installAppleTV(game) }
+                        .controllerButtonStyle(.plain).font(.manrope(12.5, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.85))
+                        .disabled(model.busy).controllerID("export.installAppleTV")
+                }
             }
             HStack(alignment: .top, spacing: 12) {
                 ForEach(ExportPlatform.allCases) { platform in tile(platform) }
             }
             locationRow
-            if model.exportTargets.contains(.ios) { TargetDeviceRow(model: model); InstallModeLine(model: model) }   // 签名 / 安装方式收进环境检查（v0.3.0），这里只读 + 更改
+            if model.exportTargets.contains(.ios) { TargetDeviceRow(model: model); InstallModeLine(model: model) }
+            if model.exportTargets.contains(.tvos) || game.appleTvReady { appleTVRow }   // 签名 / 安装方式收进环境检查（v0.3.0），这里只读 + 更改
             if let error = model.choiceError {
                 Text(loc.backend(error)).font(.manrope(12)).foregroundStyle(LauncherPalette.danger).fixedSize(horizontal: false, vertical: true)
             }
@@ -129,6 +135,30 @@ struct ExportView: View {
     }
 
     private func x(_ id: String) -> String { BackendText.launcherText("export." + id, language: loc.lang.sharedCode) }
+
+    /// 装到哪台 Apple TV：配对过的电视列成下拉（tvDevices 作业）；一台都没有时说怎么配对，装的那一步再报真原因
+    private var appleTVRow: some View {
+        let options = model.appleTVs.compactMap { d -> (value: String, label: String)? in
+            guard let id = d["id"] as? String else { return nil }
+            let name = (d["name"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Apple TV"
+            return (id, d["online"] as? Bool == false ? x("appleTV.offline").replacingOccurrences(of: "{0}", with: name) : name)
+        }
+        return HStack(spacing: 12) {
+            LauncherRowIcon("appletv")
+            Text(x("appleTV.device")).font(.manrope(13)).foregroundStyle(.secondary)
+            Spacer(minLength: 12)
+            if options.isEmpty {
+                Text(x("appleTV.none")).font(.manrope(12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } else {
+                LauncherDropdown(options: options, selection: model.appleTVDevice ?? "", label: x("appleTV.device")) { model.appleTVChoice = $0 }
+                    .controllerID("export.appleTV")
+            }
+            Button(x("appleTV.refresh")) { model.loadAppleTVs() }.controllerButtonStyle(.plain).font(.manrope(12.5, .semibold))
+        }
+        .padding(.horizontal, 14).padding(.vertical, 12)
+        .background(LauncherPalette.surface.opacity(0.7), in: RoundedRectangle(cornerRadius: 12))
+        .onAppear { model.loadAppleTVs() }
+    }
 
     /// 存放位置（游戏库结构 v3，像 Steam 的库文件夹）：这款游戏的文件夹放在哪；换了位置，出包前先整个搬过去（存档跟着走）。
     private var locationRow: some View {
@@ -187,6 +217,7 @@ struct ExportView: View {
     private func note(_ platform: ExportPlatform) -> String {
         switch platform {
         case .ios: return loc.t("s2arm.export.note.ios")
+        case .tvos: return x("note.tvos")
         case .mac: return loc.t(game.playable ? "s2arm.export.note.macReady" : "s2arm.export.note.mac")
         case .android, .ohos: return loc.t("s2arm.export.soon")
         }
@@ -214,7 +245,7 @@ struct ExportView: View {
                     }
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(loc.t("s2arm.export.platform." + platform.rawValue)).font(.manrope(16, .semibold))
+                    Text(platform.title(loc)).font(.manrope(16, .semibold))
                     Text(note(platform)).font(.manrope(12.5)).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -231,7 +262,7 @@ struct ExportView: View {
         .disabled(!open || model.busy)
         .busyHint(model, disabled: open)
         .padTarget("export." + platform.rawValue, scope: "main", radius: 16) { model.toggleExport(platform) }
-        .accessibilityLabel(loc.t("s2arm.export.platform." + platform.rawValue))
+        .accessibilityLabel(platform.title(loc))
         .accessibilityValue(open ? loc.t(on ? "s2arm.export.checked" : "s2arm.export.unchecked") : loc.t("s2arm.export.soon"))
         .accessibilityAddTraits(on ? .isSelected : [])
         .accessibilityIdentifier("export.platform." + platform.rawValue)
@@ -302,10 +333,16 @@ struct ExportView: View {
 }
 
 extension ExportPlatform {
+    /// 平台卡上的名字：Apple TV 的文案在共享体验表（export.platform.tvos），其余照旧在前端表
+    func title(_ loc: Localizer) -> String {
+        self == .tvos ? BackendText.launcherText("export.platform.tvos", language: loc.lang.sharedCode) : loc.t("s2arm.export.platform." + rawValue)
+    }
+
     /// 平台卡上的图（同旧启动器 BuildPlatform.symbol）。
     var symbol: String {
         switch self {
         case .ios: return "iphone"
+        case .tvos: return "appletv"
         case .mac: return "laptopcomputer"
         case .android: return "apps.iphone"
         case .ohos: return "square.stack.3d.up"

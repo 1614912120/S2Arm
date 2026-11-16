@@ -997,7 +997,15 @@
   "sgrade.upgrade.version.mine": " (la vôtre : {0})",
   "sgrade.upgrade.cat.cheatPlain": "codes de triche",
   "phone.done.export.fresh": "Fichiers .img à copier cette fois : {0}. Les {1} autres sont identiques à la dernière exportation ; s'ils sont déjà sur votre téléphone, inutile de les recopier.",
-  "phone.done.export.same": "Tous les .img sont identiques à la dernière exportation ; s'ils sont déjà sur votre téléphone, inutile de les recopier."
+  "phone.done.export.same": "Tous les .img sont identiques à la dernière exportation ; s'ils sont déjà sur votre téléphone, inutile de les recopier.",
+  "export.platform.tvos": "Apple TV",
+  "export.note.tvos": "S'installe sur l'Apple TV (même réseau, jumelée une fois dans Xcode) ; nécessite un compte développeur Apple payant",
+  "export.installAppleTV": "Installer sur l'Apple TV",
+  "export.done.tvos": "La version Apple TV est prête. Cliquez sur Installer sur l'Apple TV pour la mettre sur votre TV.",
+  "export.appleTV.device": "Apple TV cible",
+  "export.appleTV.none": "Aucune Apple TV jumelée pour l'instant : mettez la TV sur le même réseau que ce Mac et jumelez-la une fois dans Devices and Simulators de Xcode.",
+  "export.appleTV.offline": "{0} (hors ligne)",
+  "export.appleTV.refresh": "Actualiser"
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "Correctif plein écran (choisi selon votre ratio d'écran)",
@@ -3788,6 +3796,23 @@
   "开始准备": "Commencer la préparation",
   "继续准备": "Continuer la préparation",
   "运行": "Jouer",
-  "停止": "Arrêter"
+  "停止": "Arrêter",
+  "Apple TV 版的两项权限（提高内存上限、扩展虚拟寻址）只有付费 Apple 开发者账号签得了：在 Xcode「设置 → 账户」登录付费开发者账号或选付费团队，再装到 Apple TV。": "Les deux capacités de la version Apple TV (limite de mémoire étendue et adressage virtuel étendu) ne peuvent être signées qu'avec un compte développeur Apple payant : connectez un compte payant dans Xcode › Réglages › Comptes ou choisissez une équipe payante, puis réinstallez sur l'Apple TV.",
+  "Apple TV 版要付费开发者账号": "L'Apple TV nécessite un compte développeur payant",
+  "Apple TV 版要的两项权限只有付费 Apple 开发者账号签得了；具体原因见本任务的错误摘要。": "Les deux capacités nécessaires à la version Apple TV ne peuvent être signées qu'avec un compte développeur Apple payant. Consultez le résumé d'erreur de cette tâche pour la raison précise.",
+  "没看到 Apple TV：让 Apple TV 开着、和这台 Mac 连同一个网络，并在 Xcode 的「Devices and Simulators」窗口里和它配对过一次（Apple TV 上打开「设置 → 遥控器与设备 → 遥控器 App 与设备」会显示配对码），再试一次。": "Aucune Apple TV trouvée : laissez l'Apple TV allumée sur le même réseau que ce Mac et jumelez-la une fois dans la fenêtre Devices and Simulators de Xcode (sur l'Apple TV, Réglages › Télécommandes et appareils › App Remote et appareils affiche le code), puis réessayez.",
+  "这台 Mac 看得到不止一台 Apple TV：{0}。在装机页选要装的那一台再装。": "Ce Mac voit plusieurs Apple TV : {0}. Choisissez celle sur laquelle installer, puis installez.",
+  "{0}这次没放进 Apple TV 上的 S2Arm（要按新版重新出 Apple TV 包）；电视上它们的存档和资源都还在，重新出包再装就回来。": "{0} n'ont pas été inclus cette fois dans S2Arm sur l'Apple TV (ils doivent être recompilés pour l'Apple TV) ; leurs sauvegardes et données restent sur la TV et reviennent après une nouvelle compilation et installation.",
+  "Apple TV 版要付费的 Apple 开发者账号：tvOS 上「提高内存上限」和「扩展虚拟寻址」两项权限只有付费开发者账号签得了，免费账号签出来会被系统丢掉、大游戏开不了。在 Xcode 的「设置 → 账户」里登录付费开发者账号（或在团队里选付费团队），再装一次。": "La version Apple TV nécessite un compte développeur Apple payant : sur tvOS, les capacités de limite de mémoire étendue et d'adressage virtuel étendu ne se signent qu'avec un compte payant ; avec un compte gratuit le système les retire et les gros jeux ne s'ouvrent pas. Connectez un compte payant dans Xcode › Réglages › Comptes (ou choisissez une équipe payante), puis réinstallez.",
+  "申请 Apple TV 开发描述文件（第一次要几十秒）": "Demande du profil de provisionnement de développement Apple TV (la première fois prend quelques dizaines de secondes)",
+  "找签名账号与 Apple TV": "Recherche du compte de signature et de l'Apple TV",
+  "把这款放进 Apple TV 上的 S2Arm": "Ajout de ce jeu à S2Arm sur l'Apple TV",
+  "把游戏推进 Apple TV（只推变了的文件；第一次大游戏要几分钟）": "Envoi du jeu vers l'Apple TV (seulement les fichiers modifiés ; un gros jeu prend quelques minutes la première fois)",
+  "这台电脑上还没有 Apple TV 版的预编壳：先给这款出一次 Apple TV 包，再装到 Apple TV。": "Cet ordinateur n'a pas encore l'enveloppe précompilée Apple TV : compilez ce jeu pour l'Apple TV une fois, puis installez-le sur l'Apple TV.",
+  "这款的 Apple TV 版不是这一版 S2Arm 出的（或还没出）：先出 Apple TV 包，再装到 Apple TV。": "La version Apple TV de ce jeu n'a pas été faite par cette version de S2Arm (ou pas encore) : compilez-la d'abord pour l'Apple TV, puis installez-la sur l'Apple TV.",
+  "这个 S2Arm 安装包不完整（缺 Apple TV 签名权限文件），请重新下载 S2Arm。": "Cette installation de S2Arm est incomplète (le fichier de droits de signature Apple TV manque). Retéléchargez S2Arm.",
+  "这款游戏还没出 Apple TV 包：先在出包页勾上「Apple TV」出一次包。": "Ce jeu n'a pas encore été compilé pour l'Apple TV : cochez Apple TV sur la page de compilation et compilez-le une fois.",
+  "没找到这款的 Apple TV 资源包（{0}），没有装。请重新出 Apple TV 包后再装。": "Le pack de ressources Apple TV de ce jeu est introuvable ({0}), rien n'a été installé. Recompilez-le pour l'Apple TV, puis installez-le.",
+  "装到 Apple TV": "Installer sur l'Apple TV"
  }
 }
