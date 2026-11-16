@@ -122,7 +122,7 @@ class Svc(http.server.BaseHTTPRequestHandler):
         self.send_response(200); self.end_headers(); self.wfile.write(b'{"code": "D-7K3Q"}')
     def log_message(self, *a):
         pass
-mac_want = ["manifest.json", "jobs/setup.txt", "logs/launcher.log", "logs/sub/deep.log", "logs/error-summary.log",
+mac_want = ["manifest.json", "jobs/setup.txt", "logs/launcher.log", "logs/sub/deep.log", "logs/long-session.log", "logs/error-summary.log",
             "phone/host.log", "phone/frames.tsv", "phone/threads.txt", "phone/logs/host-20261116-120000.log", "phone/diag/run.json",
             "phone/metrickit/m.json", "phone/crash.ips", "phone/table.csv", "phone/notes.txt", "phone/shot.png",
             f"diagrun/{A}_shot.png", f"pso/{A}.tsv", f"shader_miss/{A}.tar"]
@@ -135,6 +135,8 @@ class Mac(JobCase):
         c = self.c
         for rel in ("launcher.log", "sub/deep.log", "notes.txt"):
             f = c.logs / rel; f.parent.mkdir(parents=True, exist_ok=True); f.write_text("x\n")
+        # 超长日志（长局 Mac 实际会有）：真经 library.diagnostics 截成头尾 + 中间心跳，成员要在收件单个成员上限内（11-16 原上限 200 MB 时整包被拒）
+        big = c.logs / "long-session.log"; big.write_bytes(("[s2a] [心跳] 帧 1，热状态 0\n" + "[帧] 第 1 帧 数据 " + "y" * 200 + "\n" * 1) .encode() * 90000)
         pull = c.private / "diagnostics" / "20261116-120000-iphone"
         for rel in ("host.log", "frames.tsv", "threads.txt", "logs/host-20261116-120000.log", "diag/run.json", "metrickit/m.json", "crash.ips",
                     "table.csv", "notes.txt", "shot.png", "other.bin", "S2Arm-diag.zip"):
@@ -159,6 +161,10 @@ problems = [t for _, t in res.errors + res.failures]
 ck("③ Mac / Windows 上传作业跑完、假服务收到一份包", not problems and len(got) == 1, (problems[0][-600:] if problems else f"收到 {len(got)} 份"))
 if got:
     judge_zip("③ Mac / Windows（pack/jobs/library.py diagnostics + diag_upload）", got[0], mac_want)
+# 电脑端单份日志上限与收件单个成员上限的关系（期望手写：上限 + 中间心跳 / 现场段 + 每 1 MB 留 1/4 的脱敏与非法字节替换余量 ≤ member_bytes）
+cap = library.DIAGNOSTIC_LOG_LIMIT + library.DIAGNOSTIC_LOG_BEATS + library.DIAGNOSTIC_LOG_SCENE + 4096
+ck("③ 电脑端单份日志上限留够余量、截后成品不会超收件单个成员上限", cap + library.DIAGNOSTIC_LOG_LIMIT // 4 <= contract["limits"]["member_bytes"],
+   f"日志上限 {library.DIAGNOSTIC_LOG_LIMIT} + 中间段 {cap - library.DIAGNOSTIC_LOG_LIMIT} + 余量 {library.DIAGNOSTIC_LOG_LIMIT // 4} 对 member_bytes {contract['limits']['member_bytes']}")
 
 # ④ 安卓：DiagnosticBundlePolicy.validate 的允许名单（还没有上传端，不打包）：字面量全名 + 归档日志正则的两个样例，逐个过契约
 src = (H / "android/app/src/main/java/org/s2arm/android/DiagnosticBundlePolicy.java").read_text(encoding="utf-8")
