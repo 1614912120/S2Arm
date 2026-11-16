@@ -98,6 +98,8 @@ def bundle_shell(engine_json, dest, env):
         raise SystemExit(f"【红】发版壳 {cache} 链接的 iOS SDK 是 {linked_sdk(cache / 'root/S2Arm')}，不是本机最新 Xcode 的 {want}")
     print(f"发版壳：{sid}，iOS SDK {'.'.join(map(str, want))}（{newest}）")
     shutil.copytree(cache, dest, symlinks=True)
+    if os.environ.get("S2A_SYMBOLS_OUT") and (cache.parent / (cache.name + ".symbols")).is_dir():   # 壳的未去符号原件（pack/shell_build.sh 放在壳目录旁）随发版存档
+        shutil.copytree(cache.parent / (cache.name + ".symbols"), Path(os.environ["S2A_SYMBOLS_OUT"]) / "Shell", dirs_exist_ok=True)
 
 
 SPARKLE_FEED = "https://dl.s2arm.com/appcast/mac.xml"
@@ -247,7 +249,11 @@ def main():
         UTTypeConformsTo=["public.zip-archive"], UTTypeTagSpecification={"public.filename-extension": ["s2asave"]})]
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps(info))
     # 启动器本体同样去掉调试映射（见 bundle_engine.strip_debug_maps），再签整个 App
-    subprocess.run(["xcrun", "strip", "-S", str(app / "Contents/MacOS" / front["executable"])], env=env, check=True)
+    exe = app / "Contents/MacOS" / front["executable"]
+    if os.environ.get("S2A_SYMBOLS_OUT"):   # 未去符号原件随发版存档（同 bundle_engine.strip_debug_maps）
+        (Path(os.environ["S2A_SYMBOLS_OUT"]) / "MacOS").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(exe, Path(os.environ["S2A_SYMBOLS_OUT"]) / "MacOS" / exe.name)
+    subprocess.run(["xcrun", "strip", "-S", "-x", str(exe)], env=env, check=True)
     subprocess.run(["codesign", "--force", "--sign", "-", str(macos / "S2ArmNS2Connection")], env=env, check=True)
     # Sparkle 里面的程序由里往外签（发版签名 sign_release.sh 同样由里往外）：XPC 服务 / Updater.app / Autoupdate → 框架本身
     fw = app / "Contents/Frameworks/Sparkle.framework"
