@@ -687,14 +687,23 @@ static void geo_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
     if (di0 && (di.itype < 0 || di.itype > 2 || !nvn_host_readable(di.ibuf, (uint64_t)count * isz))) {
         GEO_RED("【红】 geometry index buffer is not readable"); return;
     }
-    for (int i = 0; i < count; i++) {
+    // 没有图元重启时（11-16 能耗线：040074A01BF12000 帧回放，一帧 121 笔几何、每笔约 1k 个下标，这段原占 geo_draw 约三成指令）：按下标宽度各走一个紧循环，
+    //   只记 order 与上下界（编译器向量化），去重直接读 order（装配之后它不再用），不再逐个抄进 unique；有重启时照旧逐个判
+    if (!restart) {
+        const uint8_t *q = di0 ? (const uint8_t *)(uintptr_t)di.ibuf : NULL; uint32_t l = UINT32_MAX, h = 0;
+        if (!di0) { for (int i = 0; i < count; i++) order[i] = (uint32_t)i; l = 0; h = (uint32_t)count - 1; }
+        else if (isz == 2) for (int i = 0; i < count; i++) { uint16_t x; memcpy(&x, q + 2 * (size_t)i, 2); order[i] = x; l = MIN(l, (uint32_t)x); h = MAX(h, (uint32_t)x); }
+        else if (isz == 4) for (int i = 0; i < count; i++) { uint32_t x; memcpy(&x, q + 4 * (size_t)i, 4); order[i] = x; l = MIN(l, x); h = MAX(h, x); }
+        else for (int i = 0; i < count; i++) { uint32_t x = q[i]; order[i] = x; l = MIN(l, x); h = MAX(h, x); }
+        lo = l; hi = h; nu = (size_t)count;
+    } else for (int i = 0; i < count; i++) {
         uint32_t v = (uint32_t)i;
         if (di0) {   // typed loads, not a variable-length memcpy per index (a library call each; unaligned-safe through memcpy of a fixed size)
             const uint8_t *q = (const uint8_t *)(uintptr_t)di.ibuf + (size_t)i * isz;
             if (isz == 2) { uint16_t h; memcpy(&h, q, 2); v = h; } else if (isz == 4) memcpy(&v, q, 4); else v = *q;
         }
         order[i] = v;
-        if (restart && v == restart_index) continue;
+        if (v == restart_index) continue;
         lo = MIN(lo, v); hi = MAX(hi, v); unique[nu++] = v;
     }
     if (!nu) { return; }
@@ -736,7 +745,7 @@ static void geo_draw(NvProg *pr, const p_draw *dw0, const p_draw_idx *di0) {
     nvn_geo_assemble(prim, order, count, restart, restart_index, pmap, words);
     for (size_t i = 0; i < words; i++) ((uint32_t *)pmap)[i] -= lo;
     static uint64_t *uq_bm; static size_t uq_words;   // submit thread only
-    size_t unique_count = nvn_geo_unique_sorted(unique, nu, lo, hi, (uint32_t *)pcapture_ix, &uq_bm, &uq_words);
+    size_t unique_count = nvn_geo_unique_sorted(restart ? unique : order, nu, lo, hi, (uint32_t *)pcapture_ix, &uq_bm, &uq_words);
     uint32_t vi[8] = {(uint32_t)span, (uint32_t)instances, 0, 0, (uint32_t)np, 0, 0, 0}; memcpy(pinfo, vi, 32);
     uint64_t ci[2] = {input, 0}; memcpy(pcapture_info, ci, 16);
     uint32_t cc[4] = {(uint32_t)first, (uint32_t)span, first_instance, (uint32_t)instances}; memcpy((uint8_t *)pcapture_info + 16, cc, 16);
