@@ -201,20 +201,49 @@ struct LauncherView: View {
         return (info?["CFBundleShortVersionString"] as? String).map { "v" + $0 + "-dev" } ?? "dev"   // swift run 等不经 build_app 的开发构建
     }
 
+    private var wordmark: some View {
+        Image(nsImage: BrandArt.wordmark).resizable().interpolation(.high).frame(width: 108, height: 28)
+    }
+    // 界面作者署名；名字带作者主页链接，不加提示，当小彩蛋
+    private var credit: some View {
+        Text(Self.uiCredit).font(.manrope(9, .medium)).foregroundStyle(.secondary).tint(.secondary)
+            .lineLimit(1).fixedSize().accessibilityIdentifier("topbar.credit")
+    }
+    private var version: some View {
+        Text(verbatim: Self.displayVersion).font(.manrope(8.5, .medium)).monospacedDigit().foregroundStyle(.tertiary)
+            .lineLimit(1).fixedSize().textSelection(.enabled).help(Self.displayVersion).accessibilityIdentifier("topbar.version")
+    }
+    /// 「UI by NX2Apple & SkyRiN」：SkyRiN 链到界面作者主页，样式与正文一样。
+    static let uiCredit: AttributedString = {
+        var text = AttributedString("UI by NX2Apple & ")
+        var name = AttributedString("SkyRiN")
+        name.link = URL(string: "https://x.com/skyrin1008")
+        text.append(name)
+        return text
+    }()
+
     private var topBar: some View { topBarRow.onChange(of: model.showInstallFor) { id in if let id { installFor = id; model.showInstallFor = nil } } }   // 控制口 /show install（单独一层：挂在 body 长链上编译器类型检查超时）
 
     private var topBarRow: some View {
         HStack(spacing: 12) {
-            // 点品牌名回欢迎页（社区贡献者补丁 #2）
-            LauncherHeadingLine {
+            // 点品牌字标回欢迎页（社区贡献者补丁 #2）
+            HStack(alignment: .center, spacing: LauncherTheme.Space.medium) {
                 Button { installFor = nil; model.goToLibrary(); model.welcomeHome = true } label: {
-                    Text(brand).font(.manrope(19, .bold)).tracking(-0.5)
+                    // 字标 957×247，左边 247×247 是 S 图标：右侧按钮太宽（法语窄窗口）时只留图标，不被挤到红绿灯上
+                    ViewThatFits(in: .horizontal) {
+                        wordmark
+                        wordmark.frame(width: 28, alignment: .leading).clipped()
+                    }
                 }
-                .controllerButtonStyle(.plain).controllerID("top.brand")
-            } subtitle: {
-                Text(verbatim: Self.displayVersion).font(.manrope(10.5, .semibold)).monospacedDigit().foregroundStyle(.secondary)
-                    .textSelection(.enabled).help(Self.displayVersion).accessibilityIdentifier("topbar.version")
+                .controllerButtonStyle(.plain).controllerID("top.brand").accessibilityLabel(brand).layoutPriority(1)
+                // 窄窗口先收版本号、再收署名，不压右侧按钮
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: LauncherTheme.Space.medium) { credit; version }
+                    credit
+                    Color.clear.frame(width: 0, height: 0)
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(.leading, 90).padding(.trailing, max(24, titlebarActionsWidth + LauncherTheme.Space.medium))
         .frame(height: 52)   // = a unified toolbar's title bar: the system centres the traffic lights in it, so they share this bar's midline
