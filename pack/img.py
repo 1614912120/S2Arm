@@ -243,12 +243,11 @@ def tool_error(text):
 
 
 def default_romfs_index():
-    """发版应用：预编工具（S2A_PREBUILT_TOOLS/romfs/romfs_index.dll，Windows 没有 bash）；开发树：services/romfs_index.sh 现编"""
+    """发版应用 Windows：预编工具 S2A_PREBUILT_TOOLS/romfs/romfs_index.exe（NativeAOT 单文件，Windows 没有 bash、不带 .NET）直接执行；
+    Mac 发版件经 services/romfs_index.sh 执行同一份预编件；开发树：services/romfs_index.sh 现编"""
     pre = os.environ.get('S2A_PREBUILT_TOOLS')
-    if pre and os.path.isfile(os.path.join(pre, 'romfs', 'romfs_index.dll')):
-        import shutil
-        dn = os.environ.get('DOTNET') or shutil.which('dotnet') or 'dotnet'
-        return f'{shlex.quote(dn)} {shlex.quote(os.path.join(pre, "romfs", "romfs_index.dll"))}'
+    if pre and os.path.isfile(os.path.join(pre, 'romfs', 'romfs_index.exe')):
+        return shlex.quote(os.path.join(pre, "romfs", "romfs_index.exe"))
     return f'bash {shlex.quote(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "services", "romfs_index.sh"))}'
 
 

@@ -183,6 +183,8 @@ public sealed partial class EnvironmentWindow
     /// 这款现在能不能动（选、出包、移动、清缓存、删除）：只问作业登记（JobSlots.cs FrontJob.Blocks）——游戏库 / 导入 / 出包 / 释放空间在跑时都不能；
     /// 装机在跑时只锁正在装的那款（玩家装一款大游戏的十几分钟里别的照常用）。原先漏了导入：导入中还能点出包（启动器剃刀 W20）
     private bool BusyFor(LibraryGame game) => jobs.Any(j => j.Blocks(game.Id));
+    /// <summary>这款的手机作业（装机 / 导出已出好的）现在点不了：出包和别的手机作业不挡（排队），导入 / 游戏库 / 释放空间等照旧挡；已排上的也灰</summary>
+    private bool PhoneBlockedFor(LibraryGame game) => jobs.Any(j => j.Kind is not (JobKind.Pack or JobKind.Phone) && j.Blocks(game.Id)) || PhoneQueued(game.Id);
     private LibraryGame? SelectedGame => catalog?.Games.FirstOrDefault(g => g.Id == selectedGame && !g.Hidden);
     private static double Clock => DateTime.UtcNow.Subtract(DateTime.UnixEpoch).TotalSeconds;
 
@@ -348,7 +350,7 @@ public sealed partial class EnvironmentWindow
         // platforms
         var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         heading.Children.Add(Label(T("export.platforms"), 16));
-        var existing = Action(PadKey("export.install_existing"), () => { readinessFor = null; Navigate("install"); }, !BusyFor(game) || installBusy);   // 装机中也能进装机页：看别的游戏时提示「另一款正在装 · 查看那一款」
+        var existing = Action(PadKey("export.install_existing"), () => { readinessFor = null; Navigate("install"); }, !PhoneBlockedFor(game));   // 装机中也能进装机页：看别的游戏时提示「另一款正在装 · 查看那一款」
         Grid.SetColumn(existing, 1); heading.Children.Add(existing);
         body.Children.Add(heading);
         var tiles = new UniformGrid { Columns = 4 };
@@ -573,7 +575,7 @@ public sealed partial class EnvironmentWindow
     private HashSet<string> SGradeOff()
     {
         if (sgradeOff is not null) return sgradeOff;
-        try { sgradeOff = JsonSerializer.Deserialize<HashSet<string>>(File.ReadAllText(SGradeOffPath)) ?? []; }
+        try { sgradeOff = JsonOut.ReadStringSet(File.ReadAllText(SGradeOffPath)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException) { sgradeOff = []; }
         return sgradeOff;
     }
@@ -581,7 +583,7 @@ public sealed partial class EnvironmentWindow
     {
         var set = SGradeOff();
         if (on) set.Remove(gameId); else set.Add(gameId);
-        try { Directory.CreateDirectory(privateRoot); File.WriteAllText(SGradeOffPath, JsonSerializer.Serialize(set)); }
+        try { Directory.CreateDirectory(privateRoot); File.WriteAllText(SGradeOffPath, JsonOut.Serialize(set)); }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }   // 记不住只影响下次进页面的初值；这次出包照当前勾选
         Render();
     }
@@ -1551,10 +1553,16 @@ public sealed partial class EnvironmentWindow
         var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
         var recheck = Action("action.recheck", () => _ = CheckInstallAsync(), !installChecking && !installBusy);
         recheck.Margin = new Thickness(0, 0, 12, 0); buttons.Children.Add(recheck);
-        var start = Primary(T("install.start"), () => _ = InstallAsync(game), !installBusy && !packRunning);   // 不按清单置灰（同 Mac InstallView）：真做不下去的作业层开头判、回真实原因
+        var queued = PhoneQueued(game.Id);   // 别的作业在跑也能点（排队）；只有这款已排上时置灰
+        var start = Primary(T("install.start"), () => _ = InstallAsync(game), !queued);   // 不按清单置灰（同 Mac InstallView）：真做不下去的作业层开头判、回真实原因
         AutomationId(start, "install.start");
         buttons.Children.Add(start);
-        var remove = new Button { Content = T("install.remove_game"), IsEnabled = !installBusy && !packRunning,
+        if (queued)   // 已排队：手机上前一个作业完成、或这款出完包后自动接着装（同 Mac 装机窗）
+        {
+            var note = Muted(T("install.queued"), 13); AutomationId(note, "install.queued");
+            list.Children.Add(note);
+        }
+        var remove = new Button { Content = T("install.remove_game"), IsEnabled = !queued,
             Padding = new Thickness(14, 8), CornerRadius = new CornerRadius(8),
             Background = Brush.Parse("#29292D"), Foreground = Ink, Margin = new Thickness(12, 0, 0, 0),
             VerticalAlignment = VerticalAlignment.Center };
@@ -1565,7 +1573,7 @@ public sealed partial class EnvironmentWindow
         if (game.IphoneRestorable)
         {
             // 手机上的 S2Arm 换了新版运行层（只换宿主）后不好用：装回上一版（installRestore，同 Mac 装机页）
-            var restore = new Button { Content = T("install.restore"), IsEnabled = !installBusy && !packRunning,
+            var restore = new Button { Content = T("install.restore"), IsEnabled = !queued,
                 Padding = new Thickness(14, 8), CornerRadius = new CornerRadius(8),
                 Background = Brush.Parse("#29292D"), Foreground = Ink, Margin = new Thickness(12, 0, 0, 0),
                 VerticalAlignment = VerticalAlignment.Center };
@@ -1671,7 +1679,7 @@ public sealed partial class EnvironmentWindow
     /// <param name="export">游戏库「导出自签包」：不连手机、不签名，出到文件夹（作业层 install 请求带 mode = export，不带设备）</param>
     private async Task InstallAsync(LibraryGame game, IReadOnlySet<string>? accept = null, bool ask = true, bool export = false)
     {
-        if (installBusy) return;
+        if (QueuePhone(game.Id, () => InstallAsync(game, accept, ask, export))) return;   // 出包在跑不挡；手机上装机在跑 / 这款正在出包 → 排队
         accept ??= new HashSet<string>();
         installExport = export;
         var front = BeginPhoneJob(game, "");
@@ -1830,7 +1838,6 @@ public sealed partial class EnvironmentWindow
     /// <summary>Confirm dialog for a phone-side action; texts are &lt;prefix&gt;_title / _body / _confirm.</summary>
     private async Task<bool> ConfirmInstallActionAsync(string prefix, string? bodyText = null, string? titleText = null)
     {
-        if (installBusy || packRunning) return false;
         var dialog = new Window
         {
             Title = titleText ?? T(prefix + "_title"), Width = 420, SizeToContent = SizeToContent.Height,
@@ -1862,7 +1869,7 @@ public sealed partial class EnvironmentWindow
     /// <summary>installRemove / installRestore; texts are &lt;prefix&gt;_running / _done / _failed.</summary>
     private async Task RunPhoneJobAsync(LibraryGame game, string operation, string prefix, IReadOnlySet<string>? accept = null, bool ask = true)
     {
-        if (installBusy || packRunning) return;
+        if (QueuePhone(game.Id, () => RunPhoneJobAsync(game, operation, prefix, accept, ask))) return;   // 同 InstallAsync
         accept ??= new HashSet<string>();
         var front = BeginPhoneJob(game, T(prefix + "_running"), operation);
         string? dropAsk = null, askCode = null;

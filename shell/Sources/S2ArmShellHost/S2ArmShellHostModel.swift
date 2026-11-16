@@ -80,7 +80,8 @@ public final class S2ArmShellHostModel {
                 installState: ((String) -> Int32)? = nil, installGame: ((String) -> Bool)? = nil, installProgress: ((String) -> (Int, Int)?)? = nil,
                 installPhase: ((String) -> (Int, Double?)?)? = nil, installFailure: ((String) -> String?)? = nil, installWait: (() -> Int32)? = nil,
                 now: @escaping () -> Date = Date.init, pickGameData: ((String) -> Void)? = nil, identityStore: GameIdentityStore = .live,
-                gamesRoot: URL = S2ArmContainer.gamesRoot(), packGamesRoot: URL? = nil) {
+                gamesRoot: URL = S2ArmContainer.gamesRoot(), packGamesRoot: URL? = nil,
+                imlNotice: (() -> String?)? = nil, installID: String = Bundle.main.bundlePath) {
         self.gamesRoot = gamesRoot
         self.packGamesRoot = packGamesRoot ?? Self.packGamesRoot(for: gamesRoot)
         self.stores = stores; self.layoutState = layoutState; bannerURLs = catalogue.bannerURLs
@@ -119,6 +120,9 @@ public final class S2ArmShellHostModel {
         for tile in catalogue.tiles { applyIdentity(tile.id) }
         for p in catalogue.problems { NSLog("S2Arm 游戏库：%@", p) }
         Self.sweepDeleting(gamesRoot)
+        self.installID = installID
+        let json = imlNotice.map { $0() } ?? { guard let p = s2a_shell_iml_notice() else { return nil }; defer { free(p) }; return String(cString: p) }()
+        self.imlNotice = Self.imlNotice(json: json, closed: stores.app.string(forKey: Self.imlClosedKey), install: installID)
         refreshGameData()
         // 测试开关（真机自动化要 XCTest 触控 ID 授权、人不在时点不进去；同 diag.m S2A_OPEN_SETTINGS，环境变量只有 devicectl / Xcode 起 App 能给，玩家碰不到）：
         //   S2A_SHELL_OPEN_LAYOUT_EDITOR=<游戏号> 起来直接盖上这款的「调整位置」编辑页
@@ -502,6 +506,20 @@ public final class S2ArmShellHostModel {
             }
         }
     }
+
+    /// 这次安装丢了「提高内存上限」权限（宿主 ios/iml_probe.m，确定丢了才给，读不到不报）：库顶上一条可关的提示，不拦开局。
+    ///   玩家关了，这次安装内不再出（按 App 包路径认「这次安装」：重装 / 更新后路径会变，换了装法仍丢就再提示）
+    public struct IMLNotice: Equatable, Sendable { public let title: String; public let body: String }
+    public private(set) var imlNotice: IMLNotice?
+    @ObservationIgnored private var installID = ""
+    static let imlClosedKey = "S2AIMLNoticeClosedInstall"
+    nonisolated static func imlNotice(json: String?, closed: String?, install: String) -> IMLNotice? {
+        guard let json, closed != install,
+              let o = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
+              let title = o["title"] as? String, let body = o["body"] as? String, !title.isEmpty else { return nil }
+        return IMLNotice(title: title, body: body)
+    }
+    public func closeIMLNotice() { stores.app.set(installID, forKey: Self.imlClosedKey); imlNotice = nil }
 
     /// 删除进度与结果（宿主视图在库上方画一条提示）：正在删除 → 已删除（释放多少）/ 失败原因；结果停留 4 秒后自动收起
     public struct DeleteNotice: Equatable, Sendable {

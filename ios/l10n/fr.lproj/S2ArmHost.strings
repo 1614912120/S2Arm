@@ -337,6 +337,7 @@
 "diag.error.zip" = "Impossible de créer le paquet (échec d'écriture du zip ; le téléphone manque peut-être d'espace)";
 "diag.export" = "Exporter le diagnostic";
 "diag.prompt.abnormalExit" = "S2Arm ne s'est pas fermé normalement la dernière fois (crash, blocage ou fermeture par le système)";
+"diag.prompt.imlLost" = "S2Arm ne s'est pas fermé normalement la dernière fois. Cette installation a perdu la permission « Limite de mémoire accrue » : si un jeu volumineux s'est fermé, c'est très probablement un manque de mémoire. Réinstallez avec « Installer sur l'iPhone » dans S2Arm sur votre ordinateur (un identifiant Apple gratuit conserve aussi ce droit). Si vous signez vous-même, utilisez Xcode ou AltStore Classic v2.3 ; une nouvelle signature avec SideStore 0.7.0 le supprime. Pour une installation existante, vous pouvez aussi ajouter le droit à l'App ID avec GetMoreRam puis réinstaller";
 "diag.prompt.crash" = "Le système a signalé que S2Arm a crashé ou s'est bloqué la dernière fois";
 "diag.prompt.message" = "%@. Cela envoie les journaux d'exécution, les rapports de crash et la liste des pipelines graphiques utilisés par les jeux (ID de shaders uniquement) — pas de sauvegardes, clés ou fichiers de jeu — et vous donne un code court.";
 "diag.prompt.no" = "Non merci";
@@ -383,7 +384,7 @@
 "gfx.fpsLimit" = "Limite de fréquence d'images";
 "gfx.fpsLimit.none" = "Illimitée";
 "gfx.resolution" = "Résolution de rendu";
-"iml.lost.body" = "Les jeux volumineux peuvent manquer de mémoire ou ralentir. Re-signez avec Xcode ou AltStore Classic v2.3 et réinstallez, ou utilisez GetMoreRam pour ajouter la permission à l'App ID et réinstallez.";
+"iml.lost.body" = "Les jeux volumineux peuvent manquer de mémoire et se fermer ou ralentir. Réinstallez avec « Installer sur l'iPhone » dans S2Arm sur votre ordinateur (un identifiant Apple gratuit conserve aussi ce droit). Si vous signez vous-même, utilisez Xcode ou AltStore Classic v2.3 ; une nouvelle signature avec SideStore 0.7.0 le supprime. Pour une installation existante, vous pouvez aussi ajouter le droit à l'App ID avec GetMoreRam puis réinstaller.";
 "iml.lost.title" = "Cette installation a perdu la permission « Limite de mémoire accrue »";
 "lan.denied.later" = "Pas maintenant";
 "lan.denied.message" = "Le système n'a pas autorisé « %@ » à trouver des appareils sur votre réseau local, donc le multijoueur ne peut pas trouver d'autres joueurs.\n\nAllez dans Réglages › Confidentialité et sécurité › Réseau local, activez « %@ », puis revenez et rejoignez à nouveau le multijoueur.";

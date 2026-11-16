@@ -275,7 +275,7 @@ struct ExportView: View {
         }
         .controllerButtonStyle(.plain)
         .controllerID("export.platform." + platform.rawValue)
-        .disabled(!open || model.busy)
+        .disabled(!open || model.mainBusy)
         .busyHint(model, disabled: open)
         .padTarget("export." + platform.rawValue, scope: "main", radius: 16) { model.toggleExport(platform) }
         .accessibilityLabel(platform.title(loc))
@@ -332,7 +332,7 @@ struct ExportView: View {
                 .controllerButtonStyle(LauncherSecondaryButtonStyle(prominent: true))
                 .keyboardShortcut(.cancelAction).controllerID("export.cancel").controllerShortcut(.back)
             Button { model.export(game, location: location.isEmpty ? nil : location) } label: {
-                Label(model.busy ? x("action.queue") : count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"), systemImage: "shippingbox.fill")
+                Label(model.mainBusy || model.phoneHolds(game.id) ? x("action.queue") : count > 1 ? String(format: loc.t("s2arm.export.startCount"), count) : loc.t("s2arm.export.start"), systemImage: "shippingbox.fill")
             }
             .controllerButtonStyle(LauncherPrimaryButtonStyle(prominent: true))
             .disabled(blocker?.stopsStart == true)   // 缺文件 / 缺 keys 只在左边提示，不置灰（作业层核实）

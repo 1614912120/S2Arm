@@ -50,7 +50,7 @@ struct ExportSessionView: View {
     }
 
     /// 这次出包是为了导出自签包（游戏库「导出自签包」点在没出过包的款上）：按钮和说明照导出写，出完自动接着导出
-    private var exportMode: Bool { model.selfSignAfterPack.contains(session.gameID ?? "") || (model.selfSigning && model.session?.kind == .install) }
+    private var exportMode: Bool { model.selfSignAfterPack.contains(session.gameID ?? "") || (model.selfSigning && model.phoneSession?.kind == .install) }
     private func x(_ id: String) -> String { BackendText.launcherText("export." + id, language: uiLanguage) }
 
     var body: some View {
