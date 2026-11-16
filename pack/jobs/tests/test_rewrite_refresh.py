@@ -358,3 +358,139 @@ class SwapKeepsOld(unittest.TestCase):
         with patch.object(rr.shutil, "copyfile", side_effect=boom), self.assertRaises(OSError):
             rr.apply_sgrade(self.out, self.kit, ["main"], [self.newtab])
         self.assertEqual(self.state(), before)
+
+
+class OriginalExefsFormatTests(unittest.TestCase):
+    """S 级升级的原始 exefs 来源：NUP、Switch 2 dump、extract / loose；只用合成数据。"""
+
+    TID = "0100000000000000"
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.saved = self.tmp / "saved-program"
+        self.engine = Path(__file__).resolve().parents[3]
+        self.game = {"id": self.TID, "name": "synthetic"}
+        self.packages = []
+        self.reader_args = None
+
+        def run(args, log, env):
+            self.reader_args = list(map(str, args))
+            out = Path(args[2]) / "exefs"
+            out.mkdir(parents=True)
+            (out / "main").write_bytes(b"reader-main")
+            (out / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+
+        self.c = types.SimpleNamespace(
+            private=self.tmp, library=self.tmp / "library", engine=self.engine,
+            keys=self.tmp / "prod.keys", env=lambda: dict(os.environ), run=run,
+        )
+        self.c.keys.write_text("synthetic")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def original(self, packages=None):
+        import build, library, sgrade
+        rows = self.packages if packages is None else packages
+        with patch.object(sgrade, "saved_program", return_value=None), \
+             patch.object(build, "extract_valid", return_value=False), \
+             patch.object(rr.layout, "image_mac", return_value=self.tmp / "no-mac"), \
+             patch.object(rr.layout, "path", return_value=self.saved), \
+             patch.object(library, "selected_packages", return_value=rows):
+            return rr.original_exefs(self.c, self.game, self.tmp / "work")
+
+    def package(self, source, fmt, kind="base", version=0):
+        return {"type": kind, "version": version, "format": fmt, "path": str(source),
+                "titleId": self.TID if kind == "base" else f"{int(self.TID, 16) | 0x800:016X}"}
+
+    def assert_saved(self, source_main):
+        result = self.original()
+        self.assertEqual(result, self.saved)
+        self.assertEqual((self.saved / "main").read_bytes(), source_main)
+        self.assertEqual((self.saved / "main.npdm").read_bytes(), jobcase.synthetic_npdm(int(self.TID, 16)))
+
+    def test_extract_and_loose_use_existing_exefs_layout_and_save_copy(self):
+        for fmt in ("extract", "loose"):
+            with self.subTest(format=fmt):
+                import shutil
+                shutil.rmtree(self.saved, ignore_errors=True)
+                root = self.tmp / fmt
+                exefs = root / "exefs"; exefs.mkdir(parents=True)
+                (exefs / "main").write_bytes(fmt.encode())
+                (exefs / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+                self.packages = [self.package(root, fmt)]
+                self.assert_saved(fmt.encode())
+                self.assertEqual((exefs / "main").read_bytes(), fmt.encode(), "来源目录保持原样")
+
+    def test_dump_uses_selected_latest_update_exefs_and_saves_copy(self):
+        root = self.tmp / "dump"
+        base = root / "base" / "exefs"; base.mkdir(parents=True)
+        (base / "main").write_bytes(b"base-main")
+        (base / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+        older = root / "updates" / "2" / "exefs"; older.mkdir(parents=True)
+        (older / "main").write_bytes(b"older-update")
+        (older / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+        newest = root / "updates" / "9" / "exefs"; newest.mkdir(parents=True)
+        (newest / "main").write_bytes(b"selected-update")
+        (newest / "main.npdm").write_bytes(jobcase.synthetic_npdm(int(self.TID, 16)))
+        self.packages = [self.package(root, "dump")]
+        self.assert_saved(b"selected-update")
+
+    def test_nup_uses_base_plus_selected_update_and_saves_copy(self):
+        import library
+        ns2_nup = library.engine_tool(self.c, "ns2_nup")
+        ns2_dump = library.engine_tool(self.c, "ns2_dump")
+        from jobcase import synthetic_nup, synthetic_npdm
+        source = self.tmp / "synthetic.nup"
+        app = int(self.TID, 16)
+        synthetic_nup(source, app, [
+            (ns2_nup.BASE, app, 0,
+             {"main": b"nup-base", "main.npdm": synthetic_npdm(app)}, {"base.bin": b"base-romfs"}, {}),
+            (ns2_nup.UPDATE, app | 0x800, 65536,
+             {"main": b"nup-old-update", "main.npdm": synthetic_npdm(app)}, {"old.bin": b"old-romfs"}, {}),
+            (ns2_nup.UPDATE, app | 0x800, 131072,
+             {"main": b"nup-selected-update", "main.npdm": synthetic_npdm(app)}, {"huge.bin": b"not-extracted"}, {}),
+        ])
+        self.packages = [self.package(source, "nup", "base"),
+                         self.package(source, "nup", "update", 131072)]
+        import hashlib
+        with ns2_nup.Nup(str(source)) as container:
+            expected_exefs = ns2_nup.scan(container)[2][131072].exefs
+        before = hashlib.sha256(source.read_bytes()).digest()
+        with patch.object(library, "engine_tool", side_effect=lambda _c, name: {"ns2_nup": ns2_nup, "ns2_dump": ns2_dump}[name]), \
+             patch.object(ns2_nup, "write_tree", wraps=ns2_nup.write_tree) as write_tree:
+            self.assert_saved(b"nup-selected-update")
+        self.assertEqual(write_tree.call_args.args[1], expected_exefs, "只写所选更新包的 exefs 目录，不解 romfs")
+        self.assertEqual(hashlib.sha256(source.read_bytes()).digest(), before, "NUP 原件保持不变")
+
+    def test_each_extracted_format_missing_npdm_returns_none(self):
+        for fmt in ("dump", "extract", "loose"):
+            with self.subTest(format=fmt):
+                root = self.tmp / (fmt + "-missing")
+                exefs = root / ("base/exefs" if fmt == "dump" else "exefs")
+                exefs.mkdir(parents=True)
+                (exefs / "main").write_bytes(b"main-without-npdm")
+                self.packages = [self.package(root, fmt)]
+                self.assertIsNone(self.original())
+
+    def test_nup_missing_main_returns_none(self):
+        import library
+        ns2_nup = library.engine_tool(self.c, "ns2_nup")
+        from jobcase import synthetic_nup, synthetic_npdm
+        source = self.tmp / "missing-main.nup"
+        app = int(self.TID, 16)
+        synthetic_nup(source, app, [(ns2_nup.BASE, app, 0,
+                                     {"main.npdm": synthetic_npdm(app)}, {"r": b"r"}, {})])
+        self.packages = [self.package(source, "nup")]
+        self.assertIsNone(self.original())
+
+    def test_nsp_reader_exefs_only_remains_negative_control(self):
+        import toolchain
+        source = self.tmp / "synthetic.nsp"; source.write_bytes(b"nsp fixture")
+        self.packages = [self.package(source, "nsp")]
+        with patch.object(toolchain, "reader", return_value="synthetic-reader"):
+            result = self.original()
+        self.assertEqual(result, self.saved)
+        self.assertIn("--exefs-only", self.reader_args)
+        self.assertIn(str(source), self.reader_args)

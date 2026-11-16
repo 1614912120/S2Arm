@@ -74,8 +74,13 @@ def original_exefs(c, game, work):
     except (OSError, Failure):
         pass
     packages = selected_packages(game)
+    formats = {p.get("format") for p in packages if p.get("type") in ("base", "update")}
+    if formats and formats <= {"nup"}:
+        return _original_nup_exefs(c, game, packages, work)
+    if formats and formats <= {"dump", "extract", "loose"}:
+        return _original_tree_exefs(c, game, packages, work)
     if any(p.get("format") for p in packages if p.get("format") not in (None, "nsp", "xci", "nsz", "xcz")):
-        return None   # 解包好的文件夹 / Switch 2 NUP：没有现成的只解 exefs 路子，留给重新出包
+        return None
     paths = [source_path(c, p) for p in packages if p["type"] in ("base", "update")]
     if not paths or not all(Path(p).is_file() for p in paths):
         return None
@@ -96,6 +101,80 @@ def original_exefs(c, game, work):
     if not (out / "exefs/main").is_file():
         return None
     return sgrade.save_program(c, game["id"], out / "exefs") or out / "exefs"   # 从原件解出来的存一份，下次不用回原件
+
+
+def _save_normalized_exefs(c, game, source, work):
+    """复制并规范化一个松散 exefs，再按原始程序缓存的原子替换规则保存；不写回 source。"""
+    from library import engine_tool
+    import sgrade
+    dump = engine_tool(c, "ns2_dump")
+    Path(work).mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix="sgrade-exefs-", dir=work))
+    try:
+        normalized = scratch / "normalized"
+        dump.normalize_exefs(str(source), str(normalized), int(game["id"], 16))
+        return sgrade.save_program(c, game["id"], normalized)
+    finally:
+        # save_program 已复制所需模块；保存失败则不留下半成品临时目录。
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _original_tree_exefs(c, game, packages, work):
+    """Switch 2 dump 或已解包目录：dump 取最新数字更新（有 main 才用），其余取 exefs/。"""
+    from library import source_path
+    rows = [p for p in packages if p.get("type") in ("base", "update")]
+    if not rows:
+        return None
+    root = Path(source_path(c, rows[-1]))
+    fmt = rows[-1].get("format")
+    if fmt == "dump":
+        updates = root / "updates"
+        versions = sorted((p for p in updates.iterdir() if p.is_dir() and p.name.isdigit()), key=lambda p: int(p.name)) if updates.is_dir() else []
+        latest = versions[-1] / "exefs" if versions and (versions[-1] / "exefs" / "main").is_file() else None
+        source = latest or root / "base" / "exefs"
+    else:
+        source = root / "exefs"
+    if not (source / "main").is_file() or not (source / "main.npdm").is_file():
+        return None
+    return _save_normalized_exefs(c, game, source, work)
+
+
+def _original_nup_exefs(c, game, packages, work):
+    """NUP：复用 NUP 扫描与 ns2_dump 的选择规则，只写入本体或所选更新的 exefs 树。"""
+    from library import source_path, engine_tool
+    import sgrade
+    rows = [p for p in packages if p.get("type") in ("base", "update")]
+    if not rows:
+        return None
+    source = source_path(c, rows[-1])
+    if not Path(source).is_file():
+        return None
+    nup = engine_tool(c, "ns2_nup")
+    dump = engine_tool(c, "ns2_dump")
+    with nup.Nup(str(source)) as container:
+        app, base, updates, _ = nup.scan(container)
+        if app != int(game["id"], 16):
+            raise ValueError(f"NUP 程序号 {app:016X} 与游戏库 {game['id']} 不一致")
+        selected_update = next((p for p in rows if p.get("type") == "update"), None)
+        chosen = updates.get(int(selected_update["version"])) if selected_update else base
+        if chosen is None:
+            return None
+        if chosen.exefs == nup.NO_DIR or container.child(chosen.exefs, b"main") is None:
+            # 与 ns2_dump.convert 一致：更新里没有 main 才回退本体 exefs。
+            chosen = base if selected_update else None
+        if chosen is None or chosen.exefs == nup.NO_DIR or container.child(chosen.exefs, b"main") is None:
+            return None
+        Path(work).mkdir(parents=True, exist_ok=True)
+        scratch = Path(tempfile.mkdtemp(prefix="sgrade-nup-", dir=work))
+        try:
+            extracted = scratch / "exefs"
+            stat = [0, 0, 0]
+            nup.write_tree(container, chosen.exefs, str(extracted), stat)
+            normalized = scratch / "normalized"
+            dump.normalize_exefs(str(extracted), str(normalized), app)
+            return sgrade.save_program(c, game["id"], normalized)
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 def rewrite_env(c, kit, exefs, target):   # exefs None：不带随包代码补丁（补丁按主程序构建号认，只改 exefs 模块）
