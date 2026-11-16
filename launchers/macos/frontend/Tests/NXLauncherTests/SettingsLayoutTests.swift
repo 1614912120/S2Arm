@@ -616,7 +616,7 @@ import S2ArmAppleAdapter
         fixture.model.refresh()
         for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         fixture.model.gamepad.source.controllers = { [] }
-        for language in [Lang.zh, .en] {
+        for language in Lang.all {   // 六种界面语言都要（W1：英 / 日 / 西 / 法默认宽度下顶栏按钮压住品牌名）
             for width: CGFloat in [800, 1120, 1440] {
                 let page = AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture").frame(width: width, height: 630))
                 let (host, window) = try await render(page, fixture: fixture, language: language)
@@ -639,7 +639,7 @@ import S2ArmAppleAdapter
         fixture.model.refresh()
         for _ in 0..<100 where fixture.model.games.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         fixture.model.gamepad.source.controllers = { [] }
-        for language in [Lang.zh, .en] {
+        for language in Lang.all {   // 六种界面语言都要（W1：英 / 日 / 西 / 法默认宽度下顶栏按钮压住品牌名）
             for width: CGFloat in [800, 1120, 1440] {
                 let page = AnyView(LauncherView(model: fixture.model,
                     brand: "Original launcher title with a deliberately long name").frame(width: width, height: 630))
