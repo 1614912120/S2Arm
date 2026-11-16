@@ -2944,8 +2944,10 @@ void nvn_hle_queue_enter(void *q) {
     vsh_sync();   // copies of non-aliasable virtual pool pages: what the CPU wrote behind them since (hle_nvn.c vsh_*)
 }
 void nvn_hle_piece_begun(void) { nvn_ft_poll(); }
+static void rt_work_tick(int who);   // 提交 / 编码线程的实时声明（DM_RT_SUBMIT，见 set_time_constraint_comp 之后）
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
     gfx_enter();
+    rt_work_tick(1);
     if (dm_gfx_session_stopping()) { gfx_leave(); return; }
     pthread_mutex_lock(&g_sub_mu);
     if (dm_gfx_session_stopping()) { pthread_mutex_unlock(&g_sub_mu); gfx_leave(); return; }
@@ -3575,6 +3577,36 @@ static void rt_comp_tick(uint64_t period_ns) {
     double p90 = v[107], comp = fmax(p90 * 1.25, v[119] * 1.1), cap = period_ns * 0.9 / 1e6; if (comp > cap) comp = cap; if (comp < 1) comp = 1;
     if (comp > g_rt_comp_ms * 1.15 || comp < g_rt_comp_ms * 0.85) set_time_constraint_comp(period_ns, (uint64_t)(comp * 1e6));
 }
+// 提交 / 编码线程的实时声明（DM_RT_SUBMIT，按位：1 提交线程、2 编码线程 dm-encode（nvn_rec.h，iOS 缺省开的延后编码），3 两条；缺省 0 关）：
+//   实时约束只声明在取图线程上；回放 + 提交的那条线程（游戏渲染线程）每帧 8–19 ms，
+//   只有 QoS 0x21、没有帧截止时间，性能控制器按普通线程给核给频率。0400486024DEC000 一台测试手机上：这条线程 0% 在性能核、能效核 1.28 GHz，每帧 CPU 19.1 ms、
+//   墙钟 20.3 ms > 16.7，帧率 53。这里给它同样的声明（周期 = 取图线程声明的帧周期，计算量按这条线程每帧 CPU 的口径同 rt_comp_tick：120 帧窗口取
+//   p90 × 1.25 与峰值 × 1.1 的大者，封顶周期的九成；变动超过 15% 才重报）。与取图线程是同一条线程时不另报。
+//   要和功耗一起读：10-30 帧间隔工作组 all 档同样把线程推上性能核，60 帧不变而整机 1.69 → 2.47 W
+static _Thread_local struct { uint64_t frame, c0; double win[120], decl; int n; } t_rts;
+static void rt_work_tick(int who) {
+    static int on = -1; if (on < 0) { const char *e = getenv("DM_RT_SUBMIT"); on = e ? atoi(e) & 3 : 0; if (on) LOG("[nvn] DM_RT_SUBMIT=%d: the time-constraint policy also goes to the %s", on, on == 3 ? "submit and encode threads" : on == 1 ? "submit thread" : "encode thread"); }
+    if (!(on & who) || g_rt_period_ms <= 0 || atomic_load(&g_rt_port) == pthread_mach_thread_np(pthread_self())) return;
+    uint64_t f = dm_nvn_frame_count(), c = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
+    if (!t_rts.frame) { t_rts.frame = f; t_rts.c0 = c; return; }
+    if (f == t_rts.frame) return;
+    t_rts.win[t_rts.n++] = (double)(c - t_rts.c0) / 1e6 / (double)(f - t_rts.frame); t_rts.frame = f; t_rts.c0 = c;
+    if (t_rts.n < 120) return;
+    double v[120]; memcpy(v, t_rts.win, sizeof v); qsort(v, 120, sizeof *v, dcmp); t_rts.n = 0;
+    double period = g_rt_period_ms, comp = fmax(v[107] * 1.25, v[119] * 1.1), cap = period * 0.9; if (comp > cap) comp = cap; if (comp < 1) comp = 1;
+    double eff = fmax(comp, period / 2);   // 内核把小于约束一半的计算量抬到一半（读回已证）：按生效值判变动，免得 3 → 4 ms 这类没变化的重报
+    if (t_rts.decl > 0 && eff <= t_rts.decl * 1.15 && eff >= t_rts.decl * 0.85) return;
+    static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
+    thread_time_constraint_policy_data_t pol = {.period = (uint32_t)(period * 1e6 * tb.denom / tb.numer), .computation = (uint32_t)(comp * 1e6 * tb.denom / tb.numer),
+        .constraint = (uint32_t)(period * 1e6 * tb.denom / tb.numer), .preemptible = 1};
+    kern_return_t kr = thread_policy_set(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&pol, THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+    thread_time_constraint_policy_data_t g = {0}; mach_msg_type_number_t gc = THREAD_TIME_CONSTRAINT_POLICY_COUNT; boolean_t gd = 0;
+    int got = thread_policy_get(pthread_mach_thread_np(pthread_self()), THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t)&g, &gc, &gd) == KERN_SUCCESS && !gd;
+    if (kr == KERN_SUCCESS) t_rts.decl = eff;
+    LOG("[nvn] %s thread time-constraint policy (period %.3f ms, computation %.3f ms; its CPU a frame p90 %.2f / peak %.2f ms) %s; kernel now holds computation %.3f / constraint %.3f ms%s",
+        who == 1 ? "submit" : "encode", period, comp, v[107], v[119], kr == KERN_SUCCESS ? "set" : "failed to set", got ? g.computation * (double)tb.numer / tb.denom / 1e6 : 0, got ? g.constraint * (double)tb.numer / tb.denom / 1e6 : 0, got ? "" : " (read back failed)");
+}
+void dm_rt_encode_tick(void) { rt_work_tick(2); }   // nvn_rec.h 编码线程每处理完一块调
 static void sleep_until_ns(uint64_t dl) {   // absolute time on the monotonic clock
     static mach_timebase_info_data_t tb; if (!tb.denom) mach_timebase_info(&tb);
     uint64_t now = now_ns(); if (dl <= now) return;
