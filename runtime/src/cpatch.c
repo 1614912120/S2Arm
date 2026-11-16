@@ -218,6 +218,18 @@ void s2a_cpatch_frame(uint64_t now, int game, uint64_t dt) {
     }
     t0 = now; frames = ok = bad = 0;
 }
+// 玩家导入的 mod 带的代码补丁（编号 mod:，pack/jobs/mods.py code_index；11-15）：开关跟 mod 走、不看 S2A_CPATCH_ON——
+//   第 7 列「来源」= <mod 名>/<文件名>，本款 mod 目录（S2A_MODS_DIR：Mac 作业层给游戏文件夹 mods/；否则文档根 mods/，与服务层 RomFsMods.cs 同一处）
+//   下有 <mod 名> 文件夹 = 开；关掉的 mod 改名为 .off-<mod 名>（启动器 / iPhone 资源 Mod 页）= 关；删了 = 关。资源与代码同一个开关，手机上关掉不用重出包
+static int cp_mod_on(const char *src) {
+    const char *slash = src ? strchr(src, '/') : NULL;
+    if (!slash || slash == src || (size_t)(slash - src) >= 200 || src[0] == '.') return 0;
+    char dir[1300]; const char *own = getenv("S2A_MODS_DIR");
+    int n = own && *own ? snprintf(dir, sizeof dir, "%s/%.*s", own, (int)(slash - src), src)
+                        : s2a_docs_path(dir, sizeof dir, "mods/%.*s", (int)(slash - src), src);
+    struct stat st;
+    return n > 0 && n < (int)sizeof dir && !stat(dir, &st) && S_ISDIR(st.st_mode);
+}
 static int cp_ios_blocked(const char *id) {   // iOS 上不开的类：画面类（见上面 en 的说明）
 #if defined(__APPLE__) && TARGET_OS_IPHONE
     return !strncmp(id, "gfx:", 4);
@@ -282,7 +294,7 @@ static void cpatch_load_stream(module_t *m, FILE *f) {
         char *end; long bit = strtol(c[2], &end, 10);
         // 玩家没选过（没有 S2A_CPATCH_ON）= 默认开（11-13 维护者：S 级优化命中的补丁出包时打入并默认开，用户少做选择）；表里「缺省开」列现在只表示我方验过（界面标签）。
         //   画面类（gfx:，提分辨率 / 画质）在 iOS 上一律不开（维护者：iOS 默认不打——手机内存更紧，Switch 上没事的提分辨率可能被系统杀），Mac 照常默认开
-        int en = cp_ios_blocked(c[0]) ? 0 : on ? (strcmp(on, "none") && in_list(on, c[0])) : 1, fps = !strncmp(c[0], "fps:", 4);
+        int en = !strncmp(c[0], "mod:", 4) ? cp_mod_on(c[6]) : cp_ios_blocked(c[0]) ? 0 : on ? (strcmp(on, "none") && in_list(on, c[0])) : 1, fps = !strncmp(c[0], "fps:", 4);
         n++;
         // 帧率补丁里最高的目标帧率（s2a_cpatch_fps_follow 按它定出图上限、出图节拍与服务层 vsync）。帧率类的开关位本来就跟 60 帧开关走、不看开关列表，
         //   目标却原先只从列表里的取：iOS 设置页把帧率补丁做成 60 帧开关的联动、从不写进 S2ACommunityPatches，玩家动过任何一个补丁开关后目标就是 0，

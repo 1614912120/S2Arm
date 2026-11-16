@@ -370,6 +370,10 @@
 "dprompt.expiry.title" = "签名快到期了";
 "dprompt.ns2pro.body" = "四指长按屏幕 1.5 秒打开设置，打开「启用 Switch 2 Pro 手柄」，再按手柄上的配对键。";
 "dprompt.ns2pro.title" = "用 Switch 2 Pro 手柄？";
+"dprompt.motion.title" = "体感操作";
+"dprompt.motion.padNone.phone" = "读不到这个手柄的体感（比如 Joy-Con 一代、Xbox 手柄），游戏里的体感改由手机陀螺仪完成：转动手机就行。";
+"dprompt.motion.padNone.off" = "读不到这个手柄的体感（比如 Joy-Con 一代、Xbox 手柄），手机陀螺仪也关着，所以体感暂时用不了。要用的话：左上角齿轮 →「手柄与体感」→ 打开「手机陀螺仪」。";
+"dprompt.motion.phoneOff" = "这款游戏用到了体感，但「手机陀螺仪」关着，体感没有反应。要用的话：左上角齿轮 →「手柄与体感」→ 打开「手机陀螺仪」。";
 "gfx.antiAliasing" = "抗锯齿";
 "gfx.antiAliasing.high" = "SMAA 高";
 "gfx.antiAliasing.medium" = "SMAA 中";

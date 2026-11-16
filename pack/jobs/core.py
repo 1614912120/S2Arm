@@ -1225,6 +1225,10 @@ class Context:
             if run_env.get("S2A_DEVELOPER_DIR"):
                 out.write("S2Arm frontend toolchain: DEVELOPER_DIR=" + run_env["DEVELOPER_DIR"] + "\n")
                 out.flush()
+            # 进度文件的起读位置在起子进程之前量：起了再量，机器忙时子进程可能已经写完退出，起读位置落在它写的行之后，
+            #   这一步的进度一行都发不出（11-15 满载跑作业层全量：失败工具的最后进度读成 None）
+            pf = run_env.get("S2A_PROGRESS")
+            ppos = os.path.getsize(pf) if pf and os.path.exists(pf) else 0
             try:
                 spawn = winproc.popen if os.name == "nt" else subprocess.Popen
                 p = spawn(args, cwd=cwd or self.engine, env=run_env,
@@ -1255,8 +1259,6 @@ class Context:
                 reader.start()
                 # 阶段内进度（10-25 维护者「能看到进度么」）：阶段往 S2A_PROGRESS 追加「时刻 阶段 已完成 总数」（tools/progress.sh / progress.py），
                 #   这里每秒读一次新增的行、发 progress 事件，前端阶段条按完成比例填、按本步实际速度外推剩余时间
-                pf = run_env.get("S2A_PROGRESS")
-                ppos = os.path.getsize(pf) if pf and os.path.exists(pf) else 0
                 pnext = 0.0
                 until_at = 0.0
                 satisfied = False

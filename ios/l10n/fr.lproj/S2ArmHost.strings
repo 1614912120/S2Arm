@@ -365,6 +365,10 @@
 "dprompt.expiry.title" = "La signature expire bientôt";
 "dprompt.ns2pro.body" = "Maintenez quatre doigts sur l'écran pendant 1,5 seconde pour ouvrir Réglages, activez « Activer la manette Switch 2 Pro », puis appuyez sur le bouton d'appairage de la manette.";
 "dprompt.ns2pro.title" = "Vous utilisez une manette Switch 2 Pro ?";
+"dprompt.motion.title" = "Commandes de mouvement";
+"dprompt.motion.padNone.phone" = "Impossible de lire les mouvements de cette manette (par exemple les Joy-Con de première génération ou les manettes Xbox) : les commandes de mouvement du jeu passent par le gyroscope du téléphone. Il suffit de tourner le téléphone.";
+"dprompt.motion.padNone.off" = "Impossible de lire les mouvements de cette manette (par exemple les Joy-Con de première génération ou les manettes Xbox) et « Gyro du téléphone » est désactivé : les commandes de mouvement ne marchent pas pour l’instant. Pour les utiliser : engrenage en haut à gauche → « Manettes & Mouvement » → activez « Gyro du téléphone ».";
+"dprompt.motion.phoneOff" = "Ce jeu utilise les commandes de mouvement, mais « Gyro du téléphone » est désactivé : elles ne réagissent pas. Pour les utiliser : engrenage en haut à gauche → « Manettes & Mouvement » → activez « Gyro du téléphone ».";
 "gfx.antiAliasing" = "Anticrénelage";
 "gfx.antiAliasing.high" = "SMAA élevé";
 "gfx.antiAliasing.medium" = "SMAA moyen";

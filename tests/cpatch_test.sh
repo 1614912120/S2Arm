@@ -278,6 +278,28 @@ for tag, items, want in (
     ('5', [('i', IPSN, '60', '40008052', 0), ('j', IPSN.replace('/N/', '/M/'), '60', '60008052', 0), ('k', 'k/exefs/m.pchtxt', '60', '40008052', 1)], ['j'])):
     got = pick_case(tag, items)
     ck(f'⑧ {tag}：期望收 {want}（实得 {got}）', got == want)
+# ⑨ 玩家导入的 mod 代码补丁（11-15，pack/jobs/mods.py code_index：索引表头带 mod 列）：编号前缀 mod:、「来源」= <mod 名>/<文件>（运行时按第一段认 mod 开关）；
+#    与社区帧率补丁改同一处 0x100 → 收 mod、社区那份落选（玩家自己选的优先；旧代码按索引顺序先到先得：社区在前 → 收社区）
+r9 = f'{T}/mod9'; os.makedirs(r9); shutil.copytree(root + '/exefs', r9 + '/exefs')
+c9, m9 = f'{T}/mod9_fps', f'{T}/mod9_mod'; os.makedirs(c9); os.makedirs(m9 + '/Smooth')
+open(c9 + '/c.pchtxt', 'w').write(f'@nsobid-{BID}\n@flag offset_shift 0x100\n@enabled\n00000100 40008052\n@stop\n')
+open(c9 + '/INDEX.tsv', 'w').write('title_id\ttype\tpath\ttarget_fps\n0100A3501946E000\tpchtxt\tc.pchtxt\t60\n')
+open(m9 + '/Smooth/m.pchtxt', 'w').write(f'@nsobid-{BID}\n@flag offset_shift 0x100\n@enabled\n00000100 60008052\n@stop\n')
+open(m9 + '/INDEX.tsv', 'w').write('game\ttitle_id\tpath\ttype\tsource\tlicense\tin_pack\tsha256\tmod\torigin\n\t0100A3501946E000\tSmooth/m.pchtxt\tpchtxt\tmod\t\tyes\t\tSmooth\tSmooth/m.pchtxt\n')
+subprocess.run([sys.executable, H + '/pack/cpatch.py', 'plan', r9, '', c9, m9], capture_output=True, text=True)
+mid = 'mod:' + hashlib.sha256(open(m9 + '/Smooth/m.pchtxt', 'rb').read()).hexdigest()[:16]
+got9 = [l.split('\t')[:2] for l in open(r9 + '/cpatch_plan.log').read().splitlines() if l.startswith(('收\t', '不收\t'))]
+row9 = [l.split('\t') for l in open(r9 + '/cpatch.tsv').read().splitlines()[1:]] if os.path.exists(r9 + '/cpatch.tsv') else []
+ck(f'⑨ mod 先占位：期望收 {mid}、社区 fps 落选（实得 {got9}）', got9[:1] == [['收', mid]] and [g[0] for g in got9[1:]] == ['不收'])
+ck(f'⑨ cpatch.tsv：期望一行 {mid}、来源 Smooth/m.pchtxt（实得 {[(r[0], r[6]) for r in row9]}）', [(r[0], r[6]) for r in row9] == [(mid, 'Smooth/m.pchtxt')])
+# ⑩ mod 构建号对不上（11-15）：mod 索引里一份 pchtxt 的 @nsobid 是别的构建号 → 不收、原因「mod 构建号对不上」（完成页要列给玩家）；社区索引同样对不上的不记
+r10 = f'{T}/mod10'; os.makedirs(r10); shutil.copytree(root + '/exefs', r10 + '/exefs')
+m10 = f'{T}/mod10_mod'; os.makedirs(m10 + '/Old')
+open(m10 + '/Old/x.pchtxt', 'w').write('@nsobid-1111222233334444\n@enabled\n00000100 60008052\n@stop\n')
+open(m10 + '/INDEX.tsv', 'w').write('game\ttitle_id\tpath\ttype\tsource\tlicense\tin_pack\tsha256\tmod\torigin\n\t0100A3501946E000\tOld/x.pchtxt\tpchtxt\tmod\t\tyes\t\tOld\tOld/x.pchtxt\n')
+subprocess.run([sys.executable, H + '/pack/cpatch.py', 'plan', r10, '', m10], capture_output=True, text=True)
+lg10 = open(r10 + '/cpatch_plan.log').read() if os.path.exists(r10 + '/cpatch_plan.log') else ''
+ck(f'⑩ mod 版本对不上记「不收」（实得 {[l for l in lg10.splitlines() if l.startswith("不收")]}）', any(l.startswith('不收\tmod:') and 'mod 构建号对不上：mod 是 1111222233334444' in l for l in lg10.splitlines()))
 sys.exit(bad)
 EOF
 [ $bad = 0 ] && echo "✅ cpatch_test 全过" || { echo "🔴 cpatch_test 有不通项"; exit 1; }
