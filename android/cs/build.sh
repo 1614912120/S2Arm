@@ -107,7 +107,7 @@ if [ "${S2ARM_ANDROID_CS_SERVICES:-0}" = static ] && [ "${S2A_CS_STATIC_CACHE:-1
     if [ -n "$cs_key" ]; then
         rm -rf "$out/jniLibs" "$out/assets"
         if python3 "$cs_dir/static_cache.py" restore --out "$out" --cache "$cache/cs-static" --key "$cs_key"; then
-            echo "NativeAOT services (static): 缓存命中 $cs_key，跳过 dotnet publish"
+            echo "NativeAOT services (static): 缓存命中 ${cs_key}，跳过 dotnet publish"
             codecs_link
             exit 0
         fi
