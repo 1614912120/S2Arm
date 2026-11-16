@@ -4,7 +4,7 @@ import SwiftUI
 import NXLauncher
 import S2ArmAppleAdapter
 
-/// The banner is independent of the square cover, including when the player has customized that cover.
+/// The banner is the default artwork; a cover the player customized takes precedence (the player's choice wins).
 struct HomeBackdrop: View {
     let game: GameSummary?
     @ObservedObject var covers: CoverCache

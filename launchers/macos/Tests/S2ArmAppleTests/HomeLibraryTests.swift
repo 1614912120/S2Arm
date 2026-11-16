@@ -46,7 +46,7 @@ import LauncherPadBridge
         }
         let firstID = String(format: "%016X", 0)
         let firstPixel = try pixel(host, x: 0.88, y: 0.5)
-        XCTAssertGreaterThan(firstPixel.redComponent, firstPixel.blueComponent + 0.15, "第一款红色 banner 必须铺到窗口右半侧；自定义绿色封面不能取代 banner")
+        XCTAssertGreaterThan(firstPixel.redComponent, firstPixel.blueComponent + 0.15, "第一款红色 banner 必须铺到窗口右半侧（没自定义过封面时用横幅）")
         model.gamepad.focus("card." + firstID)
         model.gamepad.handle(.left)
         XCTAssertEqual(model.selectedID, firstID, "第一款向左不能越界或跳进其他操作")
@@ -146,6 +146,17 @@ import LauncherPadBridge
             XCTAssertGreaterThan(color.greenComponent, color.redComponent + 0.15, "banner 缺失或无法解码时仍显示有效封面")
             window.close()
         }
+        // 玩家自己换过封面：大图用玩家的封面（绿），不用自带横幅（红）——11-15 维护者「玩家自行选择优先级更高」
+        var custom = GameSummary(id: "fixture", name: "Original", cover: root.appendingPathComponent("cover.png").path, customCover: true)
+        custom.banner = root.appendingPathComponent("banner-red.png").path
+        let host = NSHostingView(rootView: HomeBackdrop(game: custom, covers: covers))
+        let window = NSWindow(contentRect: NSRect(x: 50, y: 50, width: 1000, height: 720), styleMask: [.borderless], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false; window.contentView = host; window.orderBack(nil)
+        host.layoutSubtreeIfNeeded()
+        try await Task.sleep(for: .milliseconds(80))
+        let color = try pixel(host, x: 0.88, y: 0.5)
+        XCTAssertGreaterThan(color.greenComponent, color.redComponent + 0.15, "自定义封面优先于自带横幅")
+        window.close()
     }
 
     private func pixel(_ host: NSView, x: CGFloat, y: CGFloat) throws -> NSColor {
@@ -188,7 +199,7 @@ private final class HomeCatalogRunner: JobProcessRunner {
             result = ["games": (0..<21).map { ["id": String(format: "%016X", $0),
                 "name": $0 == 19 ? "Original Fixture 19 — A Very Long Adventure Across the Mountains and the Distant Sea" : "Original Fixture \($0)",
                 "ready": true, "missing": [],
-                "customCover": true, "cover": artwork.appendingPathComponent("cover.png").path,
+                "customCover": false, "cover": artwork.appendingPathComponent("cover.png").path,
                 "banner": artwork.appendingPathComponent($0 % 2 == 0 ? "banner-red.png" : "banner-blue.png").path] as [String: Any] }, "keys": [:]]
         }
         let event: [String: Any] = ["schema": 1, "taskId": request["taskId"] ?? "", "type": "result", "state": "succeeded", "result": result]
