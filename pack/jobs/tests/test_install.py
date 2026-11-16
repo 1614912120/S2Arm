@@ -1427,7 +1427,30 @@ class AssembleTests(unittest.TestCase):
                 self.assertEqual(install.phone_kept_pull(self.c)["running"], want)
         def none(c): raise Failure("没连手机", code="device_not_connected")
         with um.patch.object(install, "phone_for", side_effect=none):
-            self.assertEqual(install.phone_kept_pull(self.c), dict(device="", new=0, kept=[], running=False))
+            self.assertEqual(install.phone_kept_pull(self.c), dict(device="", new=0, kept=[], shellUpdate=False, stale=[], running=False))
+
+    def test_phone_kept_pull_shell_update(self):
+        """启动器升级顺带更新 iPhone App（11-16）：连着的手机壳比本版旧、没有要重出包的款 → shellUpdate 真（没在玩时启动器自动更新）；
+        有要重出的款 → shellUpdate 假、stale 列出（留给顶栏按钮问）；壳是本版 → shellUpdate 假；正在玩 / 查不清 → running 真"""
+        A = self.A
+        self._update()
+        ph = types.SimpleNamespace(key="dev1", pull_kept=lambda games: 0, app_running=lambda: False)
+        import ipa as packer, rewrite_refresh
+        def run(sid, usable=True, running=False):
+            ph.app_running = lambda: running
+            with um.patch.object(install, "phone_for", return_value=ph), um.patch.object(packer, "current_shell_id", return_value=sid), \
+                 um.patch.object(packer, "usable_kit", return_value=("kit" if usable else None)), \
+                 um.patch.object(rewrite_refresh, "kept_todo", return_value=[]):
+                r = install.phone_kept_pull(self.c)
+            return (r["shellUpdate"], r["stale"], r["running"])
+        self.assertEqual(run("NEWSHELL"), (True, [], False))
+        games = sorted(install.layout.load_device(self.c, "dev1")["games"])   # 夹具这台装了两款
+        self.assertEqual(len(games), 2)
+        self.assertEqual(run("NEWSHELL", usable=False), (False, games, False))
+        self.assertEqual(run("NEWSHELL", running=True), (True, [], True))
+        self.assertEqual(run("NEWSHELL", running=None), (True, [], True))
+        cur = install.layout.load_device(self.c, "dev1").get("shellId")
+        self.assertEqual(run(cur), (False, [], False))
 
     def test_app_running(self):
         """自动推送前查手机上 S2Arm 是否在跑（#8be819）：进程在它安装目录下 = True；没有 = False；没装 = False；devicectl 查不了 = None"""

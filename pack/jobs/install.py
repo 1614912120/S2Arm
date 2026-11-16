@@ -2305,18 +2305,26 @@ def phone_updates(c):
 
 def phone_kept_pull(c):
     """「手机插着、启动器开着」时启动器隔一阵调一次（phoneKeptPull 作业）：连着的那台手机上，宿主留下的 NRO（#8be819）拉回游戏库。
-    → {device, new: 新收的个数, kept: 还没补进 iPhone 件的款, running: 手机上 S2Arm 正在跑或查不清}；有 kept 且 running 为假时启动器自动发起「更新 iPhone」
+    → {device, new: 新收的个数, kept: 还没补进 iPhone 件的款, shellUpdate: 壳比本版旧且不用问玩家, stale: 壳旧了但要重出包的款,
+       running: 手机上 S2Arm 正在跑或查不清（有要更新的才查）}；(kept 或 shellUpdate) 且 running 为假时启动器自动发起「更新 iPhone」
     只推程序（正在玩就不推：装 App 会杀掉这局，等它退了下一轮再推）。没连手机 / 没装过 = new 0、不报错"""
     try:
         ph = phone_for(c)
     except Failure:
-        return dict(device="", new=0, kept=[], running=False)
+        return dict(device="", new=0, kept=[], shellUpdate=False, stale=[], running=False)
     rec = layout.load_device(c, ph.key)
     games = [g for g in rec.get("games") or [] if isinstance(g, str)]
     new = ph.pull_kept(games)
     import rewrite_refresh
     kept = [g for g in games if rewrite_refresh.kept_todo(c, g, layout.ios_kit(c, g))]   # 没补进的款（手动按钮兜底同 phone_updates）
-    return dict(device=ph.key, new=new, kept=kept, running=bool(kept) and ph.app_running() is not False)
+    # 这台手机上的 S2Arm 壳比本版旧（启动器升级了）：shellUpdate = 可以不问玩家直接更新（没有要按新版重新出包的款）；
+    #   有要重出的款 → shellUpdate 为假、stale 列出来，留给游戏库顶栏「更新 iPhone」按钮问（11-16 启动器升级顺带更新 iPhone App）
+    import ipa as packer
+    st = shell_outdated(c, rec, packer.current_shell_id(c))
+    stale = [s["gameId"] for s in (st or {}).get("stale", [])]
+    shell_update = bool(st) and not stale
+    return dict(device=ph.key, new=new, kept=kept, shellUpdate=shell_update, stale=stale,
+                running=bool(kept or shell_update) and ph.app_running() is not False)
 
 
 def online_devices(c):
