@@ -64,16 +64,15 @@ def romfs_glsl(romfs):
     逐文件 mmap 后搜，不整文件 read()（审计 #1534 P1-97）：RomFS 里几 GB 的资源文件整份读进内存，内存不够时抛的是 MemoryError、不是 OSError，
     冒出进程，判图形接口失败、刷新停在 direct；mmap 由页缓存按需换入、可回收，Python 堆不随文件大小涨，匹配语义与整串搜相同（不切块，不漏跨块的串）。
     空文件不映射（mmap 不收 0 长度，里面也不会有 #version）"""
-    import mmap
     # romfs_list：仓库里唯一的 RomFS 遍历（walk 同 os.walk）
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import romfs_list
     for d, _, fs in romfs_list.walk(romfs):
         for n in fs:
-            try:
-                with open(os.path.join(d, n), 'rb') as h:
-                    if os.fstat(h.fileno()).st_size == 0: continue
-                    with mmap.mmap(h.fileno(), 0, access=mmap.ACCESS_READ) as m:
-                        if GLSL_VERSION.search(m): return 1
+            p = os.path.join(d, n)
+            try:   # 按路径读经 romfs_list（romfs/ 不在、只有 romfs.std 时从镜像读；目录形态同 open + mmap）
+                if romfs_list.file_size(p) == 0: continue
+                with romfs_list.map_file(p) as m:
+                    if GLSL_VERSION.search(m): return 1
             except OSError: pass
     return 0
 
@@ -102,7 +101,7 @@ def romfs_nros(romfs):   # 惰性给出 romfs 里每个 NRO 的 (romfs 相对路
             if not n.lower().endswith('.nro'): continue
             p = os.path.join(d, n)
             try:
-                with open(p, 'rb') as h: img = h.read()
+                img = romfs_list.read_file(p)   # romfs/ 不在、只有 romfs.std 时从镜像读
                 if img[0x10:0x14] != b'NRO0': continue
                 yield os.path.relpath(p, romfs), {s for s, df, _ in nso_syms.dynsyms(img) if not df}   # NRO 映像不压缩，文件偏移即模块内偏移
             except (OSError, ValueError, KeyError, IndexError, struct.error): continue
