@@ -13,6 +13,10 @@ third-party ZIP bytes without scanning their contents; credentials, game paths
 and non-regular Git entries remain protected.
 --base gates content findings on added
 lines and metadata findings on new/renamed files; old findings do not block.
+With --base only the files changed since the merge-base are read (plus pinned
+reviewed archives, whose hash check blocks either way); unchanged files cannot
+block, so reading them only cost time. The whole-tree read stays in inventory
+mode (no --base: CI on every pull request and main push).
 """
 import argparse
 import codecs
@@ -326,6 +330,12 @@ def scan(repo, ref, paths, list_only=False, base=None):
             if not matching:
                 counts['outside_selection'] += 1
                 continue
+            # 门禁只扫本支改动（11-16 门禁刀五：全树每次读一遍、均 67 秒，而 --base 下未改动的文件一条都不会挡）：
+            #   未改动的不读不判；已审压缩包例外（哈希不符无论改没改都挡，只核表里点名的那几个路径）
+            if base_commit is not None and path not in changed and \
+                    reviewed_archive(path, mode, kind, rules) is None:
+                counts['unchanged_not_read'] += 1
+                continue
             decision, meta_categories = classify(
                 path, mode, kind, size, rules,
                 read_blob=None if list_only else lambda: reader.read(oid, size))
@@ -504,10 +514,12 @@ def main():
             print('全量公开仓扫描：候选 {}，未读阻挡 {}，有理由保留未读 {}（仍未扫描正文）'.format(
                 report['blocking_count'], len(report['uncovered_blocking']), len(report['uncovered_allowed'])))
         else:
-            print('公开仓扫描：增量命中 {}，存量命中 {}，增量未覆盖 {}，增量未审类型 {}；全量清单含未覆盖边界'.format(
+            print('公开仓扫描：增量命中 {}，改动文件里的存量命中 {}，增量未覆盖 {}，增量未审类型 {}；只读了本支改动的 {} 个文件（未改动 {} 个不读，全量在 CI 清单模式）'.format(
                 report['blocking_count'], sum(f['status'] == 'existing' for f in report['findings']),
                 len(report['incomplete_changed']),
-                sum(f['reason'] == 'unreviewed_type' for f in report['warnings_changed'])))
+                sum(f['reason'] == 'unreviewed_type' for f in report['warnings_changed']),
+                sum(n for k, n in report['coverage'].items() if k not in ('outside_selection', 'unchanged_not_read')),
+                report['coverage'].get('unchanged_not_read', 0)))
     if report['blocking_count'] or report['uncovered_blocking']:
         return 1
     return 2 if report['incomplete_changed'] else 0

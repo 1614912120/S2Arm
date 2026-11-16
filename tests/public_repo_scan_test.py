@@ -399,6 +399,31 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(proc.returncode, 0)
         self.assertEqual(report['findings'], [])
 
+    def test_gate_reads_only_changed_files_and_still_blocks_real_shapes(self):
+        # 门禁只扫本支改动（11-16 门禁刀五）。形状照近期门禁真红样例：大文件第 440 行新增一行内部称呼、新文件第 3 行内部称呼、
+        #   改动文件里原有的存量行不挡；未改动文件（含存量命中）一个字节都不读。期望手写
+        stock = {f'src/m{i}.py': 'clean\n' for i in range(30)}
+        stock['docs/stock.md'] = '作者 jhz 定\n'
+        big = ''.join(f'line {i}\n' for i in range(1, 440))
+        base = self.commit({**stock, 'ui/Model.swift': big, 'docs/old.md': '作者 jhz\nclean\n'})
+        unchanged = {self.git('rev-parse', f'HEAD:{p}') for p in stock}
+        self.commit({'ui/Model.swift': big + '// 作者 jhz 定\n', 'jobs/programs.py': '"""x\n\n作者 jhz 定\n"""\n',
+                     'docs/old.md': '作者 jhz\nclean edit\n'})
+        read = []
+        orig = self.mod.Blobs.read
+        with patch.object(self.mod.Blobs, 'read', autospec=True,
+                          side_effect=lambda me, oid, size: read.append(oid) or orig(me, oid, size)):
+            report = self.mod.scan(self.root, 'HEAD', ['.'], base=base)
+        self.assertEqual(sorted((f['path'], f.get('line'), f['category']) for f in report['findings'] if f['status'] == 'changed'),
+                         [('jobs/programs.py', 3, 'internal_name'), ('ui/Model.swift', 440, 'internal_name')])
+        self.assertEqual(report['blocking_count'], 2)
+        self.assertEqual([(f['path'], f['line']) for f in report['findings'] if f['status'] == 'existing'], [('docs/old.md', 1)])
+        self.assertEqual(report['coverage']['unchanged_not_read'], len(stock))
+        self.assertEqual(unchanged & set(read), set())
+        # 同一提交清单模式（无 --base）仍全量读：存量 docs/stock.md 照样报出
+        full = self.mod.scan(self.root, 'HEAD', ['.'])
+        self.assertIn('docs/stock.md', {f['path'] for f in full['findings']})
+
     def test_team_forms(self):
         for line in ['"F1X2T3U4R5"', 'teamID": "F1X2T3U4R5"',
                      's2arm.f1x2t3u4r5.012345', 'TEAM_ID=F1X2T3U4R5',
@@ -617,8 +642,12 @@ class ScanTests(unittest.TestCase):
         self.commit({'docs/clean.md': 'still clean\n'})
         p, r = self.scan('--base', base)
         self.assertEqual(p.returncode, 0)
-        self.assertEqual(len(r['findings']), 1)
-        self.assertEqual(r['findings'][0]['status'], 'existing')
+        # 门禁只读本支改动（11-16）：没改的 docs/old.md 不读、不出存量；清单模式（无 --base）仍全量读到它
+        self.assertEqual(r['findings'], [])
+        self.assertEqual(r['coverage'].get('unchanged_not_read'), 1)
+        p, r = self.scan()
+        self.assertEqual(p.returncode, 1)
+        self.assertEqual([(f['path'], f['status']) for f in r['findings']], [('docs/old.md', 'existing')])
         self.commit({'docs/old.md': '/Users/fixtureperson/old\nunrelated edit\n'})
         p, r = self.scan('--base', base)
         self.assertEqual(p.returncode, 0)
@@ -879,7 +908,7 @@ class ScanTests(unittest.TestCase):
         self.assertNotIn('fixtureperson', red.stdout + red.stderr)
         report = json.loads((self.root / 'build/public_repo_scan.json').read_text())
         self.assertGreater(report['blocking_count'], 0)
-        self.assertTrue(any(f['status'] == 'existing' for f in report['findings']))
+        self.assertGreater(report['coverage'].get('unchanged_not_read', 0), 0)   # 存量（未改动的文件）不读、不挡
 
     def test_contrib_doc_executes_scan_and_red_takes_priority(self):
         base = self.install_gate_fixture()
