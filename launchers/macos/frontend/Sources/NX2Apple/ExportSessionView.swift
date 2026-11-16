@@ -49,7 +49,8 @@ struct ExportSessionView: View {
         }
     }
 
-    private var exportMode: Bool { model.installMode.mode == "export" }
+    /// 这次出包是为了导出自签包（游戏库「导出自签包」点在没出过包的款上）：按钮和说明照导出写，出完自动接着导出
+    private var exportMode: Bool { model.selfSignAfterPack.contains(session.gameID ?? "") || (model.selfSigning && model.session?.kind == .install) }
     private func x(_ id: String) -> String { BackendText.launcherText("export." + id, language: uiLanguage) }
 
     var body: some View {
@@ -411,7 +412,7 @@ struct ExportSessionView: View {
             HStack(spacing: 14) {
                 if platform == .ios {
                     // 装法是「导出，自己签名安装」时（D-9ZF9 / 维护者实测）：按钮和说明照导出写，不再写「一键装到 iPhone / 连上数据线」；出完包会自动接着导出
-                    Button { install(session.gameID ?? "") } label: { LauncherHeroActionLabel(title: x(exportMode ? "done.export" : "done.install"), symbol: exportMode ? "square.and.arrow.up" : "iphone") }
+                    Button { if exportMode, let game { model.exportSelfSign(game) } else { install(session.gameID ?? "") } } label: { LauncherHeroActionLabel(title: x(exportMode ? "done.export" : "done.install"), symbol: exportMode ? "square.and.arrow.up" : "iphone") }
                         .buttonStyle(.plain).keyboardShortcut(.defaultAction).accessibilityIdentifier("result.ios.install")
                     // 出包这步没有 IPA（装机时才组装、整库共用一份）：给「打开游戏文件夹」；真有 IPA 才给「显示 .ipa」
                     if let ipa = o.ipa, !ipa.isEmpty { finderButton(loc.t("s2arm.export.revealIpa")) { model.revealIpa(ipa) } }

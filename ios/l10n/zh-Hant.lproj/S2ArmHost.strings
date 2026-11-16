@@ -9,6 +9,11 @@
 "cheats.footer.buildId" = "本遊戲版本號（組建編號前 16 位）：%@。金手指檔名通常就是它，名稱對不上的檔案不會生效。";
 "cheats.footer.empty" = "還沒有金手指檔案，請點右上角「匯入 txt」。";
 "cheats.import" = "匯入 txt";
+"cheats.share" = "分享給其他玩家";
+"cheats.share.note" = "打開後，之後匯入的金手指會公開給其他玩家。只上傳金手指內容和遊戲版本，不帶你的裝置和帳號資訊。";
+"cheats.shared.warn.title" = "其他玩家分享的金手指";
+"cheats.shared.warn.message" = "這條是其他玩家分享的，S2Arm 沒驗證過，可能讓遊戲出錯或弄壞存檔。仍要打開嗎？";
+"cheats.shared.warn.on" = "仍然打開";
 "cheats.import.badItem" = "%@（%@）";
 "cheats.import.failed" = "有檔案未匯入";
 "cheats.import.failed.message" = "%@";

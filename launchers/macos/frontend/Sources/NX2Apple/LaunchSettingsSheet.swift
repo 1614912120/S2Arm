@@ -55,13 +55,14 @@ struct LaunchCheat: Identifiable {
     let license: String
     let status: String
     let fixed: Bool   // 写死地址（pack/jobs/cheats.py fixed_address）：标「地址写死，可能不生效」
+    let shared: Bool  // 玩家分享、未验证（补丁库「玩家分享」上游，pack/jobs/cheats.py PLAYER_REPO）：打开前提示一句可能坏存档，不拦
 
     init?(_ raw: [String: Any]) {
         guard let key = raw["key"] as? String else { return nil }
         id = key; name = raw["name"] as? String ?? key; enabled = raw["enabled"] as? Bool ?? false; ok = raw["ok"] as? Bool ?? false
         reason = raw["reason"] as? String ?? ""; fromLibrary = raw["from"] as? String == "library"; repo = raw["repo"] as? String ?? ""
         author = raw["author"] as? String ?? ""; license = raw["license"] as? String ?? ""; status = raw["status"] as? String ?? ""
-        fixed = raw["fixed"] as? Bool ?? false
+        fixed = raw["fixed"] as? Bool ?? false; shared = raw["shared"] as? Bool ?? false
     }
 }
 
@@ -81,12 +82,13 @@ extension S2ArmLauncherModel {
 
     /// 同上，另带 S 级每类状态（作业层 sgradeState：widescreen / fps / gfx，作业层；没出这个字段 = 空，界面不画状态句）
     func launchSettingsFull(_ gameID: String, change: [String: Any]? = nil, patches: [String: Bool]? = nil, cheats: [String: Bool]? = nil,
-                            cheatsImport: [String]? = nil) async throws -> ([String: LaunchOption], [LaunchPatch], [LaunchCheat], String, [String: SGradeCategoryState]) {
+                            cheatsImport: [String]? = nil, cheatsShare: Bool? = nil) async throws -> ([String: LaunchOption], [LaunchPatch], [LaunchCheat], String, [String: SGradeCategoryState]) {
         var extra: [String: Any] = [:]
         if let change { extra["settings"] = change }
         if let patches { extra["graphics"] = patches }
         if let cheats { extra["cheats"] = cheats }
         if let cheatsImport { extra["cheatsImport"] = cheatsImport }
+        if let cheatsShare { extra["cheatsShare"] = cheatsShare }
         let result = try await saveJob(extra.isEmpty ? "community" : "communitySave", gameID: gameID, extra: extra)
         let mac = (result["mac"] as? [String: Any] ?? [:]).mapValues(LaunchOption.init)
         let gfx = (result["graphics"] as? [[String: Any]] ?? []).compactMap { g -> LaunchPatch? in
@@ -191,7 +193,7 @@ struct LaunchSettingsSheet: View {
             cheats: c == nil ? [] : cheats.map { SGradeToggle(id: $0.id, label: $0.name, detail: cheatDetail($0), on: $0.enabled, enabled: $0.ok) },
             importTitle: t("display.cheats.import"), busy: saving || model.busy,
             onPatch: { id, on in Task { await load(nil, patches: [id: on]) } },
-            onCheat: { id, on in Task { await load(nil, cheats: [id: on]) } },
+            onCheat: { id, on in if confirmShared(id, on) { Task { await load(nil, cheats: [id: on]) } } },
             onImport: { importCheats() },
             summary: { on, all in t("display.cheats.summary").replacingOccurrences(of: "{0}", with: String(on)).replacingOccurrences(of: "{1}", with: String(all)) },
             searchPrompt: t("display.cheats.search"),
@@ -261,7 +263,7 @@ struct LaunchSettingsSheet: View {
             }
             ForEach(cheats) { ch in
                 CardRow("  " + ch.name, detail: cheatDetail(ch)) {
-                    Toggle("", isOn: Binding(get: { ch.enabled }, set: { on in Task { await load(nil, cheats: [ch.id: on]) } }))
+                    Toggle("", isOn: Binding(get: { ch.enabled }, set: { on in if confirmShared(ch.id, on) { Task { await load(nil, cheats: [ch.id: on]) } } }))
                         .toggleStyle(LauncherSwitchStyle()).labelsHidden().accessibilityLabel(ch.name)
                         .accessibilityIdentifier("launch.cheat." + ch.id)
                         .disabled(!ch.ok || saving || model.busy)
@@ -321,20 +323,39 @@ struct LaunchSettingsSheet: View {
         return parts.joined(separator: " · ")
     }
 
+    /// 打开玩家分享、未验证的条目前提示一句（可能坏存档），不拦：玩家点「仍然打开」照开
+    private func confirmShared(_ id: String, _ on: Bool) -> Bool {
+        guard on, cheats.first(where: { $0.id == id })?.shared == true else { return true }
+        let a = NSAlert(); a.messageText = t("display.cheats.shared.warn.title"); a.informativeText = t("display.cheats.shared.warn.message")
+        a.addButton(withTitle: t("display.cheats.shared.warn.on")); a.addButton(withTitle: t("action.cancel"))
+        return a.runModal() == .alertFirstButtonReturn
+    }
+
+    /// 缺省勾不勾「分享给其他玩家」（维护者定，改这一行；同 pack/jobs/cheats.py SHARE_DEFAULT、iOS kS2ACheatsShareDefault）。玩家上次的选择记在 App 级
+    static let shareDefault = true
     private func importCheats() {
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true; panel.canChooseDirectories = false
         panel.allowedContentTypes = [.plainText]
+        // 玩家分享（11-15）：勾了就把这次导入的金手指原文 + 游戏版本传给我们（diag.s2arm.com/v1/cheats），收进补丁库「玩家分享」，别的玩家出包时带上
+        let box = NSButton(checkboxWithTitle: t("display.cheats.share"), target: nil, action: nil)
+        box.state = (UserDefaults.standard.object(forKey: "S2ACheatsShare") as? Bool ?? Self.shareDefault) ? .on : .off
+        box.toolTip = t("display.cheats.share.note"); box.setAccessibilityIdentifier("launch.cheats.share")
+        let note = NSTextField(wrappingLabelWithString: t("display.cheats.share.note")); note.font = .systemFont(ofSize: NSFont.smallSystemFontSize); note.textColor = .secondaryLabelColor
+        let stack = NSStackView(views: [box, note]); stack.orientation = .vertical; stack.alignment = .leading; stack.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
+        stack.widthAnchor.constraint(equalToConstant: 460).isActive = true
+        panel.accessoryView = stack; panel.isAccessoryViewDisclosed = true
         guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        let paths = panel.urls.map(\.path)
-        Task { await load(nil, cheatsImport: paths) }
+        let paths = panel.urls.map(\.path), share = box.state == .on
+        UserDefaults.standard.set(share, forKey: "S2ACheatsShare")
+        Task { await load(nil, cheatsImport: paths, cheatsShare: share) }
     }
 
-    private func load(_ change: [String: Any]?, patches change2: [String: Bool]? = nil, cheats change3: [String: Bool]? = nil, cheatsImport: [String]? = nil) async {
+    private func load(_ change: [String: Any]?, patches change2: [String: Bool]? = nil, cheats change3: [String: Bool]? = nil, cheatsImport: [String]? = nil, cheatsShare: Bool? = nil) async {
         saving = true; defer { saving = false }
         do {
             if items.isEmpty { items = try GameSettingsSpec.macItems() }
-            (options, patches, cheats, cheatsReason, sgrade) = try await model.launchSettingsFull(gameID, change: change, patches: change2, cheats: change3, cheatsImport: cheatsImport)
+            (options, patches, cheats, cheatsReason, sgrade) = try await model.launchSettingsFull(gameID, change: change, patches: change2, cheats: change3, cheatsImport: cheatsImport, cheatsShare: cheatsShare)
             failure = nil; loaded = true
         } catch {
             failure = (error as? JobClientError)?.message ?? error.localizedDescription

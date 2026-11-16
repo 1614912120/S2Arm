@@ -288,6 +288,13 @@ int mtl_m3_buf(uint64_t gpu, void **buf, uint64_t *off) { NSUInteger o = 0; id<M
 static NSHashTable *g_res_objects;
 // Residency churn by call site (the power line every 300 frames, nvn_be_res_stats): each commit with changes is a kernel call whose cost grows with what was added or removed
 enum { RS_SITES = 16 }; static struct { int line; uint64_t n, bytes; } g_rs_site[RS_SITES]; static uint64_t g_rs_rm, g_rs_commits, g_rs_commit_ns;
+// S2Arm 11-15 (#1117: textures held only by the residency set grew by about 2 GB over 10,000 frames): each resource remembers the line that added it, so removals in the
+//   window (g_rs_rmsite) and what is resident now (g_rs_live, kept across windows) are counted by that line too: a line whose resident count only grows adds without a removal
+static struct { int line; uint64_t n; } g_rs_rmsite[RS_SITES]; static struct { int line; int64_t n, bytes; } g_rs_live[RS_SITES]; static char g_rs_line_key;
+static void rs_live_bump(int line, int64_t n, int64_t bytes) {   // under g_res_mu
+    int k = 0; while (k < RS_SITES - 1 && g_rs_live[k].line && g_rs_live[k].line != line) k++;
+    g_rs_live[k].line = line; g_rs_live[k].n += n; g_rs_live[k].bytes += bytes;
+}
 #define res_add(r) res_add_at((r), __LINE__)
 // 大贴图建立账（S2A_MEM_SPLIT=1，缺省关；11-05 时之笛第二十三版读档进场景：约 0.1 秒私有贴图 417 → 1708 MB，同期随包首传只有约 325 MB，要知道多出来的是哪些）：
 //   进驻留集的私有贴图 ≥ 4 MB 各打一行（建它的源码行号定是哪条路：GPU 贴图 / 随包上传 / 升级 / 放宽 / 内部分辨率 / 临时图），带 Metal 侧尺寸、格式、级数、层数、用途与累计；
@@ -324,6 +331,7 @@ static void res_add_at_body(id<MTLResource> r, int line) {
     if ([g_res_objects containsObject:r]) { pthread_mutex_unlock(&g_res_mu); return; }   // already resident (a shared texture resolved again): marking the set dirty would cost a commit that changes nothing
     if (big_tex_on()) big_tex_res(r, line);   // first time into the residency set only
     { int k = 0; while (k < RS_SITES - 1 && g_rs_site[k].line && g_rs_site[k].line != line) k++; g_rs_site[k].line = line; g_rs_site[k].n++; g_rs_site[k].bytes += r.allocatedSize; }
+    rs_live_bump(line, 1, (int64_t)r.allocatedSize); objc_setAssociatedObject(r, &g_rs_line_key, @(line), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [g_res addAllocation:(id<MTLAllocation>)r];
     { int k = [r conformsToProtocol:@protocol(MTLTexture)] ? 0 : r.storageMode == MTLStorageModePrivate ? 1 : 2; g_stl_radd_b[k] += r.allocatedSize; g_stl_radd_n[k]++; }
     [g_res_objects addObject:r];
@@ -343,6 +351,9 @@ static void res_remove_body(id<MTLResource> r) {
     [g_res_objects removeObject:r];
     if (g_m3 && [r conformsToProtocol:@protocol(MTLBuffer)]) m3_buf_del((id<MTLBuffer>)r);
     g_res_dirty = 1; g_rs_rm++; g_stl_rm_n++;
+    { NSNumber *ln = objc_getAssociatedObject(r, &g_rs_line_key); int line = ln ? ln.intValue : 0;
+      rs_live_bump(line, -1, -(int64_t)r.allocatedSize);
+      int k = 0; while (k < RS_SITES - 1 && g_rs_rmsite[k].line && g_rs_rmsite[k].line != line) k++; g_rs_rmsite[k].line = line; g_rs_rmsite[k].n++; }
     pthread_mutex_unlock(&g_res_mu);
 }
 // ---------- Metal 3 argument tables (#279 D3-3) ----------
@@ -442,8 +453,15 @@ void nvn_be_res_stats(char *out, size_t n) {
     size_t o = snprintf(out, n, "commits %llu / %.1f ms, added %llu, %.0f MB (", (unsigned long long)g_rs_commits, g_rs_commit_ns / 1e6, (unsigned long long)tn, tb / 1048576.0);
     for (int i = 0; i < 4 && o < n; i++) { int best = -1; for (int k = 0; k < RS_SITES; k++) if (g_rs_site[k].n && (best < 0 || g_rs_site[k].bytes > g_rs_site[best].bytes)) best = k;
         if (best < 0) break; o += snprintf(out + o, n - o, "%sline %d: %llu, %.0f MB", i ? ", " : "", g_rs_site[best].line, (unsigned long long)g_rs_site[best].n, g_rs_site[best].bytes / 1048576.0); g_rs_site[best].n = 0; }
-    if (o < n) snprintf(out + o, n - o, "), removed %llu", (unsigned long long)g_rs_rm);
-    memset(g_rs_site, 0, sizeof g_rs_site); g_rs_rm = g_rs_commits = g_rs_commit_ns = 0;
+    if (o < n) o += snprintf(out + o, n - o, "), removed %llu (", (unsigned long long)g_rs_rm);
+    for (int i = 0; i < 4 && o < n; i++) { int best = -1; for (int k = 0; k < RS_SITES; k++) if (g_rs_rmsite[k].n && (best < 0 || g_rs_rmsite[k].n > g_rs_rmsite[best].n)) best = k;   // added by which line
+        if (best < 0) break; o += snprintf(out + o, n - o, "%sline %d: %llu", i ? ", " : "", g_rs_rmsite[best].line, (unsigned long long)g_rs_rmsite[best].n); g_rs_rmsite[best].n = 0; }
+    if (o < n) o += snprintf(out + o, n - o, "), resident by adding line (");
+    { uint8_t used[RS_SITES] = {0};   // not reset: what is resident now, the largest four by bytes
+      for (int i = 0; i < 4 && o < n; i++) { int best = -1; for (int k = 0; k < RS_SITES; k++) if (!used[k] && g_rs_live[k].line && g_rs_live[k].n > 0 && (best < 0 || g_rs_live[k].bytes > g_rs_live[best].bytes)) best = k;
+          if (best < 0) break; used[best] = 1; o += snprintf(out + o, n - o, "%sline %d: %lld, %.0f MB", i ? ", " : "", g_rs_live[best].line, (long long)g_rs_live[best].n, g_rs_live[best].bytes / 1048576.0); } }
+    if (o < n) snprintf(out + o, n - o, ")");
+    memset(g_rs_site, 0, sizeof g_rs_site); memset(g_rs_rmsite, 0, sizeof g_rs_rmsite); g_rs_rm = g_rs_commits = g_rs_commit_ns = 0;
     pthread_mutex_unlock(&g_res_mu);
 }
 
