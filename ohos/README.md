@@ -17,7 +17,12 @@ cmake --build <audio-build>
 ```
 
 产物为 libs2arm_ohos_native.a、libs2arm_ohos_direct.a、libs2arm_ohaudio.a。
-完整链接入口 `python ohos/link_engine.py --help`，要求显式提供上述归档、Opus/VPX、NativeAOT对象和运行库输入表。性能接口目前还需要 HMS native headers，通过 --hms-include 提供；公开 OpenHarmony SDK 单独完成最终链接尚未验证。没有隐式读取仓库外 PGO 文件，没有 ABI 成功桩。
+完整链接入口 `python ohos/link_engine.py --help`，要求显式提供上述归档、Opus/VPX、NativeAOT对象和运行库输入表。`--hms-include` 可选；不带 HMS 头时记录能力缺失并保留公开 QoS/帧计数，带头时保留 HMS 提示。两种性能对象交叉编译已通过；本轮最终引擎链接未验。没有隐式读取仓库外 PGO 文件，没有 ABI 成功桩。
+
+OpenSSL 必须随引擎部署：见 [构建入口](openssl/README.md)。复用安卓版本/摘要，输出 OHOS `libssl.so.3` / `libcrypto.so.3` 与许可证，不提交生成库。
+
+2026-11-16 接收协作者修复：codec 工具按平台选后缀；VPX 在构建副本打共享补丁并验证整份补丁状态；native 引用共享帧周期控制，补齐图形选择就绪钩子；TSD 排除本线程栈里的旧指针副本。没有带入模拟器的 VA39 空洞预占或 Dummy 音频开关。
+离线回归：`python ohos/codecs/test_patch.py`；`CC=<宿主编译器> python ohos/native/test_tsd_probe.py`。后者使用合成地址和 API 替身，不替代真实 musl/设备 ABI 验证。
 
 `ohos/build_signed_modules.py` 只公开生成器源码。它读取用户本机改写输出，生成的载体含游戏派生代码，必须留在本地；不附证书、密钥或任何载体结果。原本地工作树未提交的载体变更没有覆盖或混入此片。
 
