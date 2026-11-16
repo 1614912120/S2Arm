@@ -1889,5 +1889,8 @@
   "s2arm.install.teamGuide.step1": "打开引导项目，选择 S2ArmSigning → Signing & Capabilities → Personal Team",
   "s2arm.install.teamGuide.step2": "连接并解锁 iPhone，在 Xcode 顶部选择设备后点击运行",
   "s2arm.install.teamGuide.step3": "运行成功后返回，点击「重新检查」更新签名状态",
-  "s2arm.install.teamGuide.failed": "未能打开引导项目：{0}"
+  "s2arm.install.teamGuide.failed": "未能打开引导项目：{0}",
+  "s2arm.env.widget.group": "主屏小组件",
+  "s2arm.env.widget.title": "装到 iPhone 时带主屏小组件",
+  "s2arm.env.widget.detail": "iPhone 桌面上的游戏机样子小组件：显示最近玩的游戏和玩得最多的游戏，点封面直接开。用免费 Apple ID 时，每次新装会多用一个 App ID 名额（7 天 10 个）"
 }

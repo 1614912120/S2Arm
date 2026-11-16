@@ -444,6 +444,16 @@ public sealed partial class EnvironmentWindow : Window
 
         body.Children.Add(InstallModeCard());   // 装到 iPhone 的方式（v0.3.0，InstallModePage.cs）
 
+        var widgetRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };   // 主屏小组件（11-16，缺省开）
+        var widgetText = new StackPanel { Spacing = 4 };
+        widgetText.Children.Add(Label(T("environment.widget.title"), 16));
+        widgetText.Children.Add(Label(homeWidgetError.Length > 0 ? homeWidgetError : T("environment.widget.detail")));
+        widgetRow.Children.Add(widgetText);
+        var widgetToggle = new ToggleSwitch { IsChecked = HomeWidget, OnContent = "", OffContent = "", VerticalAlignment = VerticalAlignment.Center };
+        widgetToggle.IsCheckedChanged += (_, _) => { if (widgetToggle.IsChecked != HomeWidget) SetHomeWidget(widgetToggle.IsChecked == true); };
+        Grid.SetColumn(widgetToggle, 1); widgetRow.Children.Add(widgetToggle);
+        body.Children.Add(Card(widgetRow));
+
         var aiRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var aiText = new StackPanel { Spacing = 4 };
         aiText.Children.Add(Label(T("environment.ai.title"), 16));

@@ -1464,6 +1464,17 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
     }
 
+    // ---- 装到 iPhone 时带主屏小组件（11-16，缺省开；设置写 launch-settings.json 的 homeWidget）----
+
+    @Published private(set) var homeWidgetError: String?
+    var homeWidget: Bool { provider.settings.homeWidget }
+
+    func setHomeWidget(_ on: Bool) {
+        homeWidgetError = nil
+        objectWillChange.send()
+        do { try provider.settings.setHomeWidget(on) } catch { homeWidgetError = error.localizedDescription }
+    }
+
     // ---- 允许 AI 操作 S2Arm（本机控制口，见 S2ArmControl）----
 
     /// 开关状态（--control / S2ARM_CONTROL=1 启动时恒为开）。

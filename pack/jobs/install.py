@@ -1502,6 +1502,11 @@ def sign_and_install(c, ipa, team, dev, udid, bid, games, steps=True):
             pl["CFBundleDisplayName"] = shown
         info.write_bytes(plistlib.dumps(pl))
         check_shell_sdk(c, app, dev)
+        # 主屏小组件扩展（PlugIns/S2ArmWidget.appex，11-16）：这条签名路（Apple ID 开发签名只申请主包名一份描述文件 / 玩家自己的证书只有一份）
+        #   还签不了扩展，先整个去掉——App 照常装、只是没有小组件；侧载工具（AltStore / SideStore / Windows）按壳里的扩展照带
+        if (app / "PlugIns").is_dir():
+            shutil.rmtree(app / "PlugIns")
+            print("[装机] 这条签名方式暂不带主屏小组件，已去掉扩展", file=sys.stderr, flush=True)  # 非玩家句
         if devcert.active(c):   # 玩家自己的开发者证书（v0.2.4）：rcodesign 直接读 p12 签，不申请描述文件、不要 Xcode 账号
             if steps: c.begin("用你的开发者证书签名", 4, 6)
             devcert.sign_app(c, app, log)
