@@ -44,6 +44,32 @@ extension LauncherView {
         }.frame(maxWidth: .infinity, maxHeight: .infinity).padding(24)
     }
 
+    /// 游玩时间：玩家在意的数，单独一块放大——数字大号加粗，单位与「哪天」小一号；规则同 iPhone 游戏库（GamePlaytime）
+    private func playtimeBadge(_ playtime: GamePlaytime) -> some View {
+        let p = playtime.parts(now: Date(), calendar: .current, locale: Locale(identifier: uiLanguage), text: txt)
+        let template = txt(p.template)
+        let split = template.components(separatedBy: "{0}")
+        var line = AttributedString(split.first ?? "")
+        line.font = Font.manrope(15, .medium); line.foregroundColor = .white.opacity(0.75)
+        var number = AttributedString(p.number)
+        number.font = Font.manrope(24, .bold); number.foregroundColor = LauncherPalette.cream
+        line.append(number)
+        var unit = AttributedString(split.dropFirst().joined(separator: "{0}"))
+        unit.font = Font.manrope(15, .medium); unit.foregroundColor = .white.opacity(0.75)
+        line.append(unit)
+        return HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "clock.fill").font(.system(size: 15, weight: .semibold)).foregroundStyle(LauncherPalette.cream)
+                .alignmentGuide(.firstTextBaseline) { $0[.bottom] - 2 }
+            Text(line).monospacedDigit().lineLimit(1)
+            Text(p.when).font(.manrope(13, .medium)).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 8)
+        .background(Capsule().fill(.white.opacity(0.08)))
+        .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
+        .fixedSize()
+        .accessibilityElement(children: .combine).accessibilityIdentifier("hero.playtime")
+    }
+
     private func homePreview(_ game: GameSummary, size: CGSize) -> some View {
         let compact = size.height < 740
         return VStack(alignment: .leading, spacing: compact ? 10 : 16) {
@@ -56,6 +82,7 @@ extension LauncherView {
                 }
                 status(game).lineLimit(2)
             }
+            if let playtime = game.playtime { playtimeBadge(playtime) }
             if game.playable, game.hostUpdate == "incompatible" {
                 // 新版改了宿主读产物的约定、换不了宿主：旧版本照常能玩，重新出一次 Mac 版才能用上新版修复（host_update.py；主线游戏库同一句）
                 HStack(spacing: 10) {
