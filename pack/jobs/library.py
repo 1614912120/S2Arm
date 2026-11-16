@@ -2468,11 +2468,13 @@ def prune_build(c, gid, *, retain_compiler=True, record=True):
 
 
 def drop_from_container(c, gid):
-    """游戏库里删了的款从各台手机的记录（devices/<设备>.json）摘掉，不装机：下次给那台装机时现组的容器就不再带它（#227）"""
+    """游戏库里删了的款从各台手机的记录（devices/<设备>.json）摘掉，不装机：下次给那台装机时现组的容器就不再带它（#227）。
+    同时记进这台的 deleted（本机删过的款）：手机上它还在时，组壳提示说「已从这台电脑的游戏库删除」，不说成「在别的电脑上装的」（11-16）"""
     gid = gid.upper()
     for key, rec in layout.devices(c):
         if gid in (rec.get("games") or {}):
             rec["games"].pop(gid)
+            rec["deleted"] = sorted(set(rec.get("deleted") or []) | {gid})
             layout.save_device(c, key, rec)
 
 

@@ -2322,6 +2322,24 @@ class PhoneGamesTruthTests(unittest.TestCase):
             with self.subTest(text=(text or "")[:20]), um.patch.object(install, "devpush_client", cl(text)):
                 self.assertEqual(install.phone_removed(self.c, ph), want)
 
+    def test_deleted_here_then_assemble_says_deleted_not_elsewhere(self):
+        # 11-16 总指挥：在这台电脑上「删除游戏」B（library.drop_from_container 把它从设备记录摘掉），手机账本里它还在、手机上也有资源 →
+        #   组壳先问（container_would_drop），提示句是「已从这台电脑的游戏库删除」那句，不能是「在别的电脑上装的」（玩家会去找另一台电脑）
+        import library
+        atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=self.A, name="甲")]))   # B 已从游戏库删掉
+        layout.save_device(self.c, "devD", dict(games={self.A: {}, self.B: {}}))
+        library.drop_from_container(self.c, self.B)
+        rec = layout.load_device(self.c, "devD")
+        self.assertEqual((sorted(rec["games"]), rec["deleted"]), ([self.A], [self.B]))
+        ph = types.SimpleNamespace(udid="U1", bid="io.s2arm.games.abcde12345", app_missing=lambda bid, why: False, c=self.c, key="devD")
+        with um.patch.object(install, "phone_games", lambda c, ph: {self.A, self.B}), um.patch.object(install, "phone_removed", lambda c, ph: None), \
+             um.patch.object(install, "phone_game_name", lambda c, ph, g, names: "乙游戏"):
+            with self.assertRaises(Failure) as e:
+                install.container_others(self.c, ph, rec, leave=self.D)
+        self.assertEqual(e.exception.code, "container_would_drop")
+        self.assertIn("它们已从这台电脑的游戏库删除，重新加回游戏库、「打 iPhone 包」再装一次就回来：「乙游戏」", str(e.exception))
+        self.assertNotIn("别的电脑", str(e.exception))
+
     def test_include_what_we_can_ask_before_dropping_the_rest(self):
         # 本机记录 A；手机上 A、B、C；本机游戏库有 C（另一台电脑装的、这台也导入过）→ 带 A、C；B 只在手机上 → 先问
         atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=self.A, name="甲"), dict(id=self.C, name="丙")]))

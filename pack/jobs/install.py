@@ -2021,9 +2021,10 @@ def container_others(c, ph, rec, leave=None):
     # 带不进的两种：手机上有、这台电脑没记录也没有（别的电脑装的）；这台电脑记录装在手机上、游戏库里已删（玩家删了这款）——
     #   后者原先在 ipa.assemble 里按「已删」静默不带，手机上这款就悄悄打不开了；现在同样先问
     lost = [g for g in candidates if g not in names and (g in on_phone or g in known)]
+    here = known | set(rec.get("deleted") or [])   # 这台电脑记录装在手机上的 + 在这台电脑上「删除游戏」时摘掉的（library.drop_from_container 记）
     if lost and c.r.get("acceptDropped") is not True:
-        elsewhere = "".join("「" + phone_game_name(c, ph, g, names) + "」" for g in lost if g not in known)
-        deleted = "".join("「" + phone_game_name(c, ph, g, names) + "」" for g in lost if g in known)
+        elsewhere = "".join("「" + phone_game_name(c, ph, g, names) + "」" for g in lost if g not in here)
+        deleted = "".join("「" + phone_game_name(c, ph, g, names) + "」" for g in lost if g in here)
         # 每行一个固定句式（游戏名进 {0} 占位），两端界面按 Localizable.json 逐行翻
         lines = ["这次装完，手机上这几款游戏会打不开（存档和资源包都还在手机上）。"] \
             + ([f"它们是在别的电脑上装的，到那台电脑上再「装到 iPhone」一次就回来：{elsewhere}"] if elsewhere else []) \
@@ -2090,7 +2091,8 @@ def put_game(c, gid, ph, steps=True, others=None, skipped=()):
         rec = layout.load_device(c, ph.key)
         # signed：这次签名（游戏库页的「还有几天到期 / 续签」读 layout.install_record）：免费账号的描述文件 7 天到期，容器里每款同一次签名
         signed = dict(signed=dict(at=time.time(), free=bool(ph.info["free"]), device=ph.info["device"])) if "free" in ph.info and not skipped else {}   # 跳过安装 = 没重签：到期时间照旧
-        layout.save_device(c, ph.key, dict(rec, games={g: dict(pack=pushed[g], **({"mods": modset[g]} if modset[g] else {})) for g in games}, shellId=sid, bundleId=ph.bid or rec.get("bundleId", ""), at=time.time(),
+        layout.save_device(c, ph.key, dict(rec, games={g: dict(pack=pushed[g], **({"mods": modset[g]} if modset[g] else {})) for g in games},
+                                           deleted=[g for g in rec.get("deleted") or [] if g not in games], shellId=sid, bundleId=ph.bid or rec.get("bundleId", ""), at=time.time(),
                                            staleAgreed={sid: left_out} if left_out else {}, **signed))
     packer.commit_phone_ipa(c, ipa, sid)
     # 资源传完但电脑没拉起 App 解开（manual_unpack_required，11-09 #336）：不算「已装好」，结果带上还差的一步，两端前端据此显示「还差最后一步」而不是「已装到 iPhone」
