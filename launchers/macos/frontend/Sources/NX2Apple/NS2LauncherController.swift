@@ -145,11 +145,7 @@ final class NS2LauncherController: ObservableObject {
             })
         }
         refreshSystemControllers()
-        // 每次开 S2Arm 都清掉键盘的登记：键盘要当 P1–P8 得经「分配玩家」按键加入；没登记时照旧并进 P1（没接任何手柄时就是 P1）
-        if let index = assignment.units.firstIndex(of: .keyboard) {
-            assignment.remove(at: index, keepConnectedWithoutSlot: true)
-            persist()
-        }
+        // 键盘登记过的玩家位跨次保留（玩家自己排的优先，同其他玩家位）：要换顺序 / 撤掉在「分配玩家」里改；没登记时照旧并进 P1
     }
     deinit {
         for observer in observers { notifications.removeObserver(observer) }
