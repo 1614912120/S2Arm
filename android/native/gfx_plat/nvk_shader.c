@@ -1045,6 +1045,9 @@ static struct entry *warm_work_run(const struct nvk_prog_rec *rec, int nst) {
     // c1 随清单落盘（开局 source_store 是空的）：views 在上面按清单填好、传给 build()，逐位与真实解析一致。
     struct entry *e = build(bytes, len, views, nst, rec->identity);
     if (e && !e->failed && have_res && alias_on()) entry_set_res(e, rsha, (uint64_t)len, nst);
+    // 结果合并命中时前台要把事实复用（#1187）登记到这份程序上，登记要用「编译器实际读了哪些绑定事实」的掩码：
+    // 前台自己建的（work_run）本来就算好了，预热带建的也要算（纯函数，后台线程能算）。关着开关时保持原样不算。
+    if (e && !e->failed && alias_on()) e->fact_ok = (uint8_t)fact_cache_mask(bytes, len, &e->prog, e->fact_mask);
     free(bytes);
     return e;
 }
@@ -1376,6 +1379,9 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
         if (a_adopted) nvk_prog_warm_stat_draw_hit();   // 合并到的正是预热带建的那份：第一次被真实 draw 采用
         if (ae) {
             *out = &ae->prog;
+            // 与下面「正常发布后」同一处登记：合并命中的身份也进事实复用表。否则只靠前台建过的程序登记事实，合并之后前台几乎不建了，
+            // 「只差编译器没读的贴图事实」的新身份（盘上没有它的文件）就失去复用、退回现场编（真机一局 3 → 198 次）。
+            if (reusable && ae->fact_ok) fact_cache_keep_mask(&id, fact_base, ae->fact_mask, &ae->prog);
             prog_note_use(sha, stages, nst, &id, &f, &ae->prog);
             prog_tally_log();
             return 0;
