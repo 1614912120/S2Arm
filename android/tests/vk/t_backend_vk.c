@@ -5906,7 +5906,9 @@ static void c87_resolve(const char *dir) {
     pd.samples = 4; pd.prim = 5; pd.chmask.mask = 0xf; pd.color.logic_op = 3;
     pd.attr[0].fmt = pd.attr[1].fmt = NVN_FORMAT_RGBA32F; pd.attr[1].offset = 16; pd.stream[0].stride = 32;
     nvn_gpu_pipe pipe = NULL; CHECK(OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e)), "C87 MSAA管线：%s", e.why);
-    float verts[4][8] = {{-1,-1,0,1,1,0,0,1},{-1,1,0,1,1,0,0,1},{1,-1,0,1,1,0,0,1},{1,1,0,1,1,0,0,1}};
+    // 覆盖由几何边定，不靠小数视口：视口边界只保 viewportSubPixelBits 位（规范最小 0，Mali-G715 报 0，宽 0.5 的视口可能一个样本都不盖），
+    // 顶点位置至少 4 位子像素。NDC x=-0.75 落在帧缓冲 x=0.5，标准 4× 位置下首列盖住 x=0.375 / 0.125 两个样本。
+    float verts[4][8] = {{-1,-1,0,1,1,0,0,1},{-1,1,0,1,1,0,0,1},{-0.75f,-1,0,1,1,0,0,1},{-0.75f,1,0,1,1,0,0,1}};
     nvn_gpu_buf vb = make_buf(sizeof verts, NVN_GPU_MEM_SHARED, verts);
     nvn_gpu_tex b = make_tex(4, 4, NVN_FORMAT_RGBA8, NVN_GPU_TEX_RENDER);
     nvn_gpu_view av = make_view(a), bv = make_view(b); nvn_gpu_buf rb = make_buf(64, NVN_GPU_MEM_SHARED, NULL);
@@ -5914,7 +5916,7 @@ static void c87_resolve(const char *dir) {
     p.color[0].view = av; p.color[0].load = NVN_GPU_LOAD_CLEAR; p.color[0].store = NVN_GPU_STORE_STORE;
     p.color[0].clear.f[2] = p.color[0].clear.f[3] = 1;
     nvn_gpu_pass_begin(c, &p); nvn_gpu_set_pipe(c, pipe);
-    nvn_gpu_dyn dyn = {0}; dyn.origin_ll = pd.origin_ll; dyn.nvp = 1; dyn.vp[0][2] = 0.5f; dyn.vp[0][3] = 4; dyn.vp[0][5] = 1;
+    nvn_gpu_dyn dyn = {0}; dyn.origin_ll = pd.origin_ll; dyn.nvp = 1; dyn.vp[0][2] = 4; dyn.vp[0][3] = 4; dyn.vp[0][5] = 1;
     dyn.has_sc = 1; dyn.sc[2] = dyn.sc[3] = 4; nvn_gpu_set_dyn(c, &dyn); nvn_gpu_set_vbuf(c, 0, vb, 0);
     nvn_gpu_draw_args da = {0}; da.prim = 5; da.count = 4; da.instances = 1; nvn_gpu_draw(c, &da); nvn_gpu_pass_end(c);
     NVNcopyRegion rr = {0, 0, 0, 4, 4, 1}; nvn_gpu_blit(c, av, &rr, bv, &rr, 0);
@@ -5923,8 +5925,13 @@ static void c87_resolve(const char *dir) {
     if (OK(rc)) {
         CHECK(OK(nvn_gpu_fence_wait(160, 5000000000ull, &e)), "C87 wait：%s", e.why);
         const uint8_t *px = buf_cpu(rb); int badpx = 0;
-        for (int i = 0; i < 16; i++) { int red = i % 4 == 0 ? 128 : 0, blue = i % 4 == 0 ? 128 : 255;
-            if (px[i*4] != red || px[i*4+1] || px[i*4+2] != blue || px[i*4+3] != 255) badpx++; }
+        // vkCmdResolveImage 对 normalized 格式按实现决定的方式合成样本，128 不是规范值：
+        // 样本一致的通道判精确值；首列红、蓝各在 [96,159]（2/4 平均 127.5，1/4、3/4 落在外面），且红 + 蓝在 255±2。
+        for (int i = 0; i < 16; i++) {
+            const uint8_t *q = px + i * 4; int mix = i % 4 == 0, sum = q[0] + q[2];
+            int ok = !q[1] && q[3] == 255 && (mix ? q[0] >= 96 && q[0] <= 159 && q[2] >= 96 && q[2] <= 159 && sum >= 253 && sum <= 257
+                                                   : !q[0] && q[2] == 255);
+            if (!ok) badpx++; }
         CHECK(!badpx, "C87 混合解析16像素不符 %d，首像素 %u,%u,%u,%u", badpx, px[0], px[1], px[2], px[3]);
     }
     nvn_gpu_view_release(av); nvn_gpu_view_release(bv); nvn_gpu_tex_release(a); nvn_gpu_tex_release(b);
