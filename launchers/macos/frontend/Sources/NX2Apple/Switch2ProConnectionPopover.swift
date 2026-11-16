@@ -23,8 +23,10 @@ struct Switch2ProConnectionPopover: View {
     @ObservedObject var controller: NS2LauncherController
     @ObservedObject var systems: SystemControllers
     let lang: String   // 界面语言代码（Lang.code）
+    var onClose: () -> Void = {}   // 手柄 B 关面板（顶栏传进来）
 
     private func t(_ key: String) -> String { NS2LauncherController.text("s2arm.controller." + key, lang) }
+    @Environment(\.padControls) private var padControls   // 界面导航（分配中把手柄按键送进来）
     @State private var keyMonitor: Any?   // 分配中收键盘按键（键盘登记成一位玩家）
     @State private var showSettings = false   // 齿轮选单
     @State private var pressKeyMonitor: Any?   // 认手柄：键盘按键让键盘那一位亮一下（不吞键）
@@ -88,16 +90,18 @@ struct Switch2ProConnectionPopover: View {
                 // 主按钮（连接 / 停止 / 断开 / 重新连接）在左、齿轮在右，不论状态都一样；两个开关收进齿轮选单（之后新设定也加进去，面板不再变高）
                 HStack(spacing: 8) {
                     Button(NS2LauncherController.mainButton(status, lang: lang, bluetoothDenied: controller.bluetoothDenied)) { controller.mainAction() }
-                        .controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true))
-                        .controllerID("controller.main-action")
-                    Button { showSettings.toggle() } label: { Image(systemName: "gearshape").font(.system(size: 15, weight: .semibold)) }
+                        .buttonStyle(LauncherSecondaryButtonStyle(fill: true))
+                        // ⚠️ 不要改回 controllerButtonStyle / controllerID（不要把这颗注册进手柄导航）。
+                        //   连接 / 断开只给鼠标点：连着时它是「断开」，面板一开手柄焦点若落在这里，玩家按 A（例如想认手柄、看玩家行亮键）
+                        //   就把正在用的 Joy-Con 2 自己断掉（11-16 实机踩过）；没连时手柄本来就按不到「连接」，注册了也没用。
+                        //   要断开请按手柄上的 sync 钮，或用鼠标点这颗。controllerExcluded 连 AX 兜底扫描也一起排除，见 PadExclusion
+                        .controllerExcluded("controller.main-action")
+                    Button { setSettings(!showSettings) } label: { Image(systemName: "gearshape").font(.system(size: 15, weight: .semibold)) }
                         .controllerButtonStyle(PanelSquareButtonStyle())   // 方钮，高度同左边主按钮
                         .help(t("settings"))
                         .accessibilityLabel(t("settings"))
                         .controllerID("controller.settings")
-                        .popover(isPresented: $showSettings, arrowEdge: .bottom) {
-                            Switch2SettingsMenu(controller: controller, lang: lang)
-                        }
+                        .anchorPreference(key: GearAnchorKey.self, value: .bounds) { $0 }
                 }
             }
 
@@ -150,17 +154,25 @@ struct Switch2ProConnectionPopover: View {
                         }
                     }
                     HStack(spacing: 8) {
-                        Button(t("cancel")) { controller.cancelAssign() }.controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true)).controllerShortcut(.back)
-                        Button(t("done")) { controller.finishAssign() }.controllerButtonStyle(LauncherPrimaryButtonStyle(fill: true)).controllerShortcut(.rightTrigger)
+                        Button(t("cancel")) { controller.cancelAssign() }.controllerButtonStyle(LauncherSecondaryButtonStyle(fill: true)).controllerShortcut(.back)   // B
+                            .controllerID("controller.assign.cancel")
+                        Button(t("done")) { controller.finishAssign() }.controllerButtonStyle(LauncherPrimaryButtonStyle(fill: true))
+                            // A 才通用（单只 Joy-Con 没有 ZR）：分配中焦点先落在「完成」，提示也显示 A；R2 / ZR 照样能按
+                            .controllerShortcut(.primary, .rightTrigger).controllerPreferredFocus(true)
+                            .controllerID("controller.assign.done")
                     }
                 }
                 .onAppear {
+                    // 进分配画面焦点落在「完成」：按「分配玩家」那一下时这两颗还没注册，导航会先挑最左边的「取消」，等注册好再放一次
+                    DispatchQueue.main.async { (padControls as? LauncherPadNavigation)?.focus("controller.assign.done") }
                     systems.watchAssign { controller.registerSystem(name: $0, index: $1) }
                     systems.watchGen1 { id, side, gesture in controller.registerGen1(id: id, side: side, gesture: gesture) }
                     // 键盘：分配中按任一键就登记成下一位（#520 讨论，不加提示）；这一下吞掉，不给 S2Arm 别处当快捷键 / 不响提示音
                     keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { _ in controller.registerKeyboard(); return nil }
                 }
                 .onDisappear {
+                    // 完成 / 取消回来：焦点回到「分配玩家」那颗（不然导航会挑最上面别的按钮，例如蓝牙设置）
+                    DispatchQueue.main.async { (padControls as? LauncherPadNavigation)?.focus("controller.assign") }
                     systems.watchAssign(nil)
                     systems.watchGen1(nil)
                     if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
@@ -181,6 +193,9 @@ struct Switch2ProConnectionPopover: View {
                                 }
                                 .controllerButtonStyle(.plain)
                                 .controllerID("controller.player.\(index)")
+                                .controllerRingRadius(LauncherTheme.Metrics.controlRadius)   // 玩家行圆角同主题控件
+                                // 面板一开手柄焦点先落在 P1，不落在主按钮：连着时主按钮是「断开」，按 A 认手柄会把手柄断掉
+                                .controllerPreferredFocus(index == 0)
                                 .accessibilityLabel("P\(index + 1) \(row.name)")
                                 .accessibilityAddTraits(currentPlayer == index ? .isSelected : [])
                             }
@@ -204,12 +219,46 @@ struct Switch2ProConnectionPopover: View {
             }
         }
         .padding(20)
+        // 手柄 B：面板自己接住，不落到系统「取消」/ Esc（没人接时 macOS 会「叮」一声）。
+        //   分配中 = 取消分配（同「取消」钮）；齿轮选单开着只关选单；其他时候关面板。一直挂着（用 if 切换会让整个面板换身份、状态重设）
+        .controllerBackAction("controller.panel.back") {
+            if controller.assigning { controller.cancelAssign() } else if showSettings { setSettings(false) } else { onClose() }
+        }
         .onAppear { controller.panelDidOpen(); startPressWatch() }   // 已被拒 / 这次没选就关了授权框：面板直接显示「允许蓝牙」
-        .onDisappear { stopPressWatch() }
+        .onDisappear { stopPressWatch(); controller.panelDidClose() }
         .frame(width: 380)   // 比稿（340）宽一些：标题不会整行撑满
+        // 齿轮选单画在面板里（齿轮下方浮层），不另开弹窗：弹窗里再开弹窗时 macOS 会重建外层弹窗、沿用旧高度，
+        //   面板内容被上下裁掉（11-16 实机：先没连、面板里连上后再开选单改开关就跑版）。同一窗口，手柄 / B 也简单
+        .overlayPreferenceValue(GearAnchorKey.self) { anchor in
+            GeometryReader { g in
+                if showSettings, let anchor {
+                    let gear = g[anchor]
+                    ZStack(alignment: .topLeading) {
+                        Color.black.opacity(0.001).contentShape(Rectangle()).onTapGesture { setSettings(false) }
+                            .accessibilityHidden(true)
+                        Switch2SettingsMenu(controller: controller, lang: lang) { setSettings(false) }
+                            .offset(x: max(10, min(gear.maxX - Switch2SettingsMenu.width, g.size.width - Switch2SettingsMenu.width - 10)), y: gear.maxY + 8)
+                    }
+                }
+            }
+        }
         .background(.regularMaterial)
         .launcherDropdownHost()
         .preferredColorScheme(.dark)
+    }
+}
+
+private struct GearAnchorKey: PreferenceKey {
+    static var defaultValue: Anchor<CGRect>?
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) { value = value ?? nextValue() }
+}
+
+extension Switch2ProConnectionPopover {
+    /// 开 / 关齿轮选单：开时手柄焦点进第一个开关，关时回齿轮
+    func setSettings(_ open: Bool) {
+        showSettings = open
+        let navigation = padControls as? LauncherPadNavigation
+        DispatchQueue.main.async { navigation?.focus(open ? "controller.settings.autoConnect" : "controller.settings") }
     }
 }
 
@@ -217,8 +266,20 @@ struct Switch2ProConnectionPopover: View {
 extension Switch2ProConnectionPopover {
     func startPressWatch() {
         controller.setPressWatch(true)
+        // 分配中所有手柄都能操作界面：Switch 2 / 一代 Joy-Con 的按键转成导航动作（系统手柄本来就走 GameController 导航）
+        let navigation = padControls as? LauncherPadNavigation
+        controller.onAssignNavigate = { navigation?.handle($0) }
         systems.watchPress { name, index, key in controller.flashPlayer(key: key) { $0 == .system(name: name, index: index) } }
         systems.watchGen1Press { id, key in
+            if controller.assigning, let key, let navigation {
+                var side = -1, sideways = true
+                for unit in controller.assignment.units {
+                    if case let .gen1(unitID, s) = unit, unitID == id { side = s }
+                    if case let .gen1Pair(l, r) = unit, l == id || r == id { side = l == id ? 0 : 1; sideways = false }
+                }
+                if side < 0 { side = systems.gen1.first { $0.id == id }?.side ?? 1 }
+                if let action = NS2LauncherController.padAction(gen1Key: key, side: side, sideways: sideways) { navigation.handle(action) }
+            }
             controller.flashPlayer(key: key) { unit in
                 switch unit {
                 case let .gen1(unitID, _): return unitID == id
@@ -254,6 +315,7 @@ extension Switch2ProConnectionPopover {
     }
     func stopPressWatch() {
         controller.setPressWatch(false)
+        controller.onAssignNavigate = nil
         systems.watchPress(nil)
         systems.watchGen1Press(nil)
         if let pressKeyMonitor { NSEvent.removeMonitor(pressKeyMonitor) }
@@ -294,18 +356,23 @@ private struct StatusLine: View {
 struct Switch2SettingsMenu: View {
     @ObservedObject var controller: NS2LauncherController
     let lang: String
+    let close: () -> Void
+    static let width: CGFloat = 360   // 稿上 300；Manrope 15 下英文开关字会折行，放宽到 360
     private func t(_ key: String) -> String { NS2LauncherController.text("s2arm.controller." + key, lang) }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // 开着时 S2Arm 一启动就连（不必打开面板）：起连接程序扫 10 秒，之后只挂着等记住的手柄回来，不持续扫描
             ToggleRow(label: t("autoConnect"),
                       isOn: Binding(get: { controller.autoConnectOnOpen }, set: { controller.setAutoConnectOnOpen($0) }))
+                .controllerID("controller.settings.autoConnect")
             ToggleRow(label: t("disconnectOnClose"),
                       isOn: Binding(get: { controller.disconnectAfterGame }, set: { controller.setDisconnectAfterGame($0) }))
+                .controllerID("controller.settings.disconnectOnClose")
         }
         .padding(16)
-        .frame(width: 360)   // 稿上 300；Manrope 15 下英文开关字会折行，放宽到 360
-        .preferredColorScheme(.dark)
+        .frame(width: Self.width)
+        .launcherDropdownSurface()   // 同主题下拉：材质底、边框、阴影
+        .onExitCommand { close() }   // 键盘 Esc：只关齿轮选单（手柄 B 由面板的 PanelBack 处理）
     }
 }
 
@@ -323,7 +390,8 @@ private struct ToggleRow: View {
 }
 
 // 齿轮方钮：与左边主按钮（LauncherSecondaryButtonStyle）同高、同底色 / 边框 / 圆角，宽 = 高
-private struct PanelSquareButtonStyle: ButtonStyle {
+private struct PanelSquareButtonStyle: ButtonStyle, PadRingShaped {
+    var padRingRadius: CGFloat { LauncherTheme.Metrics.controlRadius }
     @Environment(\.isEnabled) private var enabled
     @State private var hovered = false
     func makeBody(configuration: Configuration) -> some View {
@@ -350,8 +418,9 @@ private struct HowToTile: View {
         .multilineTextAlignment(.center)
         .frame(maxWidth: .infinity)
         .padding(8)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(red: 0x1f / 255, green: 0x1d / 255, blue: 0x1b / 255)))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.12), lineWidth: 1))
+        // 主题的半透明控件底 + 边框（同按钮），不用不透明深灰：面板的材质与背景色透得出来
+        .background(LauncherTheme.Colors.control, in: RoundedRectangle(cornerRadius: LauncherTheme.Metrics.controlRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: LauncherTheme.Metrics.controlRadius, style: .continuous).strokeBorder(LauncherTheme.Colors.border))
     }
 }
 
@@ -374,7 +443,7 @@ private struct WaitingRow: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Color.white.opacity(0.12), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+        .overlay(RoundedRectangle(cornerRadius: LauncherTheme.Metrics.controlRadius, style: .continuous).strokeBorder(LauncherTheme.Colors.border, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
     }
 }
 
@@ -405,7 +474,6 @@ private struct PlayerRow: View {
     var clearLabel = ""
     var onClear: (() -> Void)?
 
-    private static let fill = Color(red: 0x34 / 255, green: 0x31 / 255, blue: 0x2e / 255)
     private static let ledOn = Color(red: 0x7b / 255, green: 0xe0 / 255, blue: 0x1e / 255)
     private static let ledOff = Color(red: 0x5a / 255, green: 0x57 / 255, blue: 0x53 / 255)
 
@@ -450,8 +518,9 @@ private struct PlayerRow: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 12)
-        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Self.fill))
-        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(selected ? LauncherPalette.cream.opacity(0.7) : Color.white.opacity(0.12), lineWidth: 1))
+        // 主题的半透明控件底 + 边框（同按钮）；选中那一位框线奶油色
+        .background(LauncherTheme.Colors.control, in: RoundedRectangle(cornerRadius: LauncherTheme.Metrics.controlRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: LauncherTheme.Metrics.controlRadius, style: .continuous).strokeBorder(selected ? LauncherPalette.cream.opacity(0.7) : LauncherTheme.Colors.border))
         .accessibilityElement(children: .contain)
     }
 }

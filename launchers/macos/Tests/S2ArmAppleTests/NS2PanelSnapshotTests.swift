@@ -94,8 +94,8 @@ import XCTest
         let connected = make(4, kind: 2)
         try snapshot("status_connected_zh", Self.panel(connected, SystemControllers(pads: []), true))
         try snapshot("status_connected_en", Self.panel(connected, SystemControllers(pads: []), false))
-        try snapshot("settings_menu_zh", Switch2SettingsMenu(controller: connected, lang: "zh"))
-        try snapshot("settings_menu_en", Switch2SettingsMenu(controller: connected, lang: "en"))
+        try snapshot("settings_menu_zh", Switch2SettingsMenu(controller: connected, lang: "zh", close: {}))
+        try snapshot("settings_menu_en", Switch2SettingsMenu(controller: connected, lang: "en", close: {}))
         try snapshot("bluetooth_empty_en", Self.panel(make(nil), SystemControllers(pads: []), false))   // 没蓝牙手柄也有蓝牙区块
         try snapshot("status_searching_en", Self.panel(make(1), SystemControllers(pads: []), false))
         XCTAssertNil(ControllerIcon.header(kind: make(5).kind, players: 1), "失败：型号未知 → 虚线图")

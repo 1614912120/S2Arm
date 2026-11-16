@@ -138,6 +138,9 @@ static void emit_status(ns2_status status, const char *message, void *context) {
         ns2_get_info(&info);
         NSMutableDictionary *payload = [@{
             @"status": @(status),
+#ifdef NS2_SCAN_SECONDS
+            @"scanSeconds": @(NS2_SCAN_SECONDS),   // 这次编进来的扫描秒数：启动器「搜索 / 连接中」显示多久照它
+#endif
             @"message": message ? [NSString stringWithUTF8String:message] ?: @"" : @"",
             @"name": info.name[0] ? [NSString stringWithUTF8String:info.name] ?: @"" : @"",
             @"identifier": info.identifier[0] ? [NSString stringWithUTF8String:info.identifier] ?: @"" : @"",
@@ -215,6 +218,7 @@ static void *stdin_main(void *context) {
             pthread_mutex_unlock(&filterLock);
             continue;
         }
+        if (!strcmp(line, "scan") || !strcmp(line, "scan\n")) { ns2_rescan(); continue; }   // 手柄面板开着：再搜一轮好接上别的手柄（已连着手柄的链路不撤，ns2_rescan 会略过）
         if (!strncmp(line, "press start", 11)) { ns2_set_press_watch(1); continue; }   // 手柄面板打开：按键时让玩家那一行亮一下
         if (!strncmp(line, "press stop", 10)) { ns2_set_press_watch(0); continue; }
         if (!strncmp(line, "assign start", 12)) { ns2_set_assign_mode(1); ns2_rescan(); continue; }   // 分配中继续搜，好接更多手柄

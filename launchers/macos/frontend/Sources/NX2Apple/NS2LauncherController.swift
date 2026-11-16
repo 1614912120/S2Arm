@@ -181,13 +181,14 @@ final class NS2LauncherController: ObservableObject {
     /// 扫描窗口过了还没连上（扫完没找到，或只剩直连等记住的手柄）：显示灰点「未连接」。下一行状态 / 重起连接程序清掉
     @Published private(set) var idleAfterScan = false
     private var connectingTimer: Timer?
-    /// 搜索 / 连接中显示橙点多久：过了还没连上就显示灰点「未连接」（使用者 11-15 定 10 秒）。
-    ///   Mac 连接程序其实扫 60 秒（launchers/macos/build.mk NS2_SCAN_SECONDS），有记住的手柄时还会一直直连等它——
-    ///   这些照样在背景做，按 SYNC / 按手柄任一键仍会连上，只是不再一直显示「搜索中 / 连接中」
-    static let scanSeconds: TimeInterval = 10
+    /// 搜索 / 连接中显示橙点多久：照连接程序实际扫描的秒数（状态行 scanSeconds = 编进去的 NS2_SCAN_SECONDS，
+    ///   Mac 是 launchers/macos/build.mk 的 60 秒），过了还没连上才显示灰点「未连接」（使用者 11-16：原先 10 秒太短，扫描还在跑就说没找到）。
+    ///   旧连接程序没报这个字段时用 defaultScanSeconds。有记住的手柄时之后还会一直直连等它，按 SYNC / 按手柄任一键仍会连上
+    static let defaultScanSeconds: TimeInterval = 60
+    private(set) var scanSeconds: TimeInterval = NS2LauncherController.defaultScanSeconds
     private func startScanWindow() {
         guard connectingTimer == nil else { return }
-        connectingTimer = Timer.scheduledTimer(withTimeInterval: Self.scanSeconds, repeats: false) { [weak self] _ in
+        connectingTimer = Timer.scheduledTimer(withTimeInterval: scanSeconds, repeats: false) { [weak self] _ in
             Task { @MainActor in self?.connectingWindowEnded() }
         }
     }
@@ -249,8 +250,8 @@ final class NS2LauncherController: ObservableObject {
     }
     func mainAction() {
         switch status {
-        case .notConnected: if process != nil { retry() } else { connectManually() }   // 连接程序还在（等记住的手柄）：重起再扫一轮
-        case .searching, .connecting, .connected, .inUse: disconnectManually()
+        case .notConnected: stoppedWhilePanelOpen = false; if process != nil { retry() } else { connectManually() }   // 连接程序还在（等记住的手柄）：重起再扫一轮
+        case .searching, .connecting, .connected, .inUse: stoppedWhilePanelOpen = panelScanTimer != nil; disconnectManually()
         case .failed: retry()
         case .bluetoothUnavailable:
             let a = bluetoothAuthorization()
@@ -342,8 +343,28 @@ final class NS2LauncherController: ObservableObject {
         }
     }
     /// 手柄面板打开：已经被拒（或这次没选就关了）、又没在连，面板直接显示「允许蓝牙」
+    /// 手柄面板开着时一直搜：蓝牙已允许就自动开始连接；已连着手柄（按钮是「断开」）也照样搜，好让别的手柄接上（使用者 11-16）。
+    ///   连着手柄的连接程序不重扫（NS2Transport rescan 会略过），新手柄由空着的那个连接程序（syncSecond 总留一个）接。每轮扫完再搜，关面板就停
+    private var panelScanTimer: Timer?
+    private var stoppedWhilePanelOpen = false   // 面板开着时玩家自己按了「停止 / 断开」：这次不再自动连回去，关面板后重置
     func panelDidOpen() {
-        if bluetoothDenied && process == nil && status == .notConnected { showBluetoothDenied() }
+        if bluetoothDenied && process == nil && status == .notConnected { showBluetoothDenied(); return }
+        guard bluetoothAuthorization() == .allowedAlways else { return }
+        scanWhilePanelOpen()
+        panelScanTimer?.invalidate()
+        panelScanTimer = Timer.scheduledTimer(withTimeInterval: scanSeconds, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.scanWhilePanelOpen() }
+        }
+    }
+    func panelDidClose() {
+        panelScanTimer?.invalidate(); panelScanTimer = nil
+        stoppedWhilePanelOpen = false
+    }
+    private func scanWhilePanelOpen() {
+        guard !assigning, phase != .handedOff, !stoppedWhilePanelOpen else { return }   // 分配中自己会搜；游戏用着手柄时不动；玩家刚自己断开的不连回去
+        if process == nil { connectManually(); return }
+        send("scan\n")
+        extras.forEach { $0.send("scan\n") }
     }
     private func showBluetoothDenied() {
         phase = .failed
@@ -723,10 +744,55 @@ final class NS2LauncherController: ObservableObject {
         if let i = ns2StickNames.indices.first(where: { buttons & (1 << UInt64(32 + $0)) != 0 }) { return ns2StickNames[i] }
         return nil
     }
+    /// 分配玩家中，手柄按键转成界面导航（面板设）：分配中 Switch 2 不走中继（relayAllowed = !assigning），
+    ///   要靠认手柄的按键回报让 Joy-Con 2 也能按「完成」(A) / 「取消」(B)、移焦点
+    var onAssignNavigate: ((LauncherPadAction) -> Void)?
+    /// Switch 2 原始按键（连接程序报的、未转横握）→ 导航动作（纯函数）。sideways = 单只横握：面键与摇杆照 NS2JoyCon.c 的横握转法
+    nonisolated static func padAction(ns2Buttons b: UInt64, kind: Int, sideways: Bool) -> LauncherPadAction? {
+        func has(_ bit: Int) -> Bool { b & (1 << UInt64(bit)) != 0 }
+        let (a, bb, x, left, up, right, down) = (0, 1, 2, 12, 13, 14, 15)
+        let (sUp, sDown, sLeft, sRight) = (32, 33, 34, 35)
+        if sideways && kind == 2 {   // 左只横握：下 → A、左 → B；摇杆 (x, y) → (−y, x)
+            if has(down) { return .confirm }
+            if has(left) { return .back }
+            if has(sUp) { return .left }; if has(sDown) { return .right }; if has(sLeft) { return .down }; if has(sRight) { return .up }
+            return nil
+        }
+        if sideways && kind == 3 {   // 右只横握：X → A、A → B；摇杆 (x, y) → (y, −x)
+            if has(x) { return .confirm }
+            if has(a) { return .back }
+            if has(sUp) { return .right }; if has(sDown) { return .left }; if has(sLeft) { return .up }; if has(sRight) { return .down }
+            return nil
+        }
+        if has(a) { return .confirm }
+        if has(bb) { return .back }
+        if has(up) || has(sUp) { return .up }; if has(down) || has(sDown) { return .down }
+        if has(left) || has(sLeft) { return .left }; if has(right) || has(sRight) { return .right }
+        return nil
+    }
+    /// 一代 Joy-Con 按键字（Gen1HIDWatcher.keyName，原始、未转横握）→ 导航动作；单只横握同上面的转法，只取确认 / 返回
+    nonisolated static func padAction(gen1Key key: String, side: Int, sideways: Bool) -> LauncherPadAction? {
+        if sideways { return side == 0 ? (key == keyDown ? .confirm : key == keyLeft ? .back : nil) : (key == "X" ? .confirm : key == "A" ? .back : nil) }
+        return key == "A" ? .confirm : key == "B" ? .back : nil
+    }
     /// 连接程序报的一下按键（{"press": {"link", "id", "buttons", "side"}}）：按 id 找是哪一位
     func receivePress(_ event: [String: Any]) {
         guard let id = event["id"] as? String, !id.isEmpty else { return }
-        let key = Self.ns2Key(buttons: (event["buttons"] as? NSNumber)?.uint64Value ?? 0, side: (event["side"] as? NSNumber)?.intValue ?? 0)
+        let buttons = (event["buttons"] as? NSNumber)?.uint64Value ?? 0
+        if assigning, let onAssignNavigate {
+            // 已登记的照登记方式（单只 = 横握、一对 / Pro = 竖握）；还没登记的单只 Joy-Con 当横握
+            var kind = allDevices.first { $0.id == id }?.kind ?? 1, sideways = kind == 2 || kind == 3
+            for unit in assignment.units {
+                switch unit {
+                case let .single(unitID, k) where unitID == id: kind = k; sideways = true
+                case let .whole(unitID, k) where unitID == id: kind = k; sideways = false
+                case let .pair(l, r) where l == id || r == id: sideways = false
+                default: break
+                }
+            }
+            if let action = Self.padAction(ns2Buttons: buttons, kind: kind, sideways: sideways) { onAssignNavigate(action) }
+        }
+        let key = Self.ns2Key(buttons: buttons, side: (event["side"] as? NSNumber)?.intValue ?? 0)
         flashPlayer(key: key) { unit in
             switch unit {
             case let .pair(left, right): return left == id || right == id
@@ -795,6 +861,7 @@ final class NS2LauncherController: ObservableObject {
     }
 
     func apply(status code: Int, _ object: [String: Any]) {   // 单测（@testable）直接喂连接程序的状态行
+        if let seconds = (object["scanSeconds"] as? NSNumber)?.doubleValue, seconds > 0 { scanSeconds = seconds }
         if let name = object["name"] as? String, !name.isEmpty { deviceName = name }
         kind = Self.kind(from: object)
         players = Self.players(from: object)
@@ -828,7 +895,7 @@ final class NS2LauncherController: ObservableObject {
             } else {
                 helperDetail = "\(deviceName) 已连接。关闭游戏后仍会保持连接。"
             }
-        case 9:   // 扫描 10 秒结束、没找到：不是错误
+        case 9:   // 扫描时间（scanSeconds）结束、没找到：不是错误
             idleAfterScan = true
             helperDetail = "没找到手柄。按手柄任一键或长按 SYNC，再点「连接」搜一次。"
         case 5:
