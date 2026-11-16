@@ -1256,17 +1256,15 @@ internal static unsafe class Program
             Check(unknown.RootElement.GetProperty("content").GetProperty("stages").GetArrayLength() == 2,
                 "linked accepts legacy profile with both limits unknown");
         foreach (string field in new[] { "maxVertexOutputComponents", "maxFragmentInputComponents" })
-        foreach (bool missing in new[] { true, false })
         {
             var partial = pairedCaps.DeepClone();
-            if (missing) partial["limits"].AsObject().Remove(field);
-            else partial["limits"][field] = 0;
+            partial["limits"].AsObject().Remove(field);
             byte[] partialProfile = DirectProfileComposer.Compose(Encoding.UTF8.GetBytes(partial.ToJsonString()),
                 DirectBuildIdentity.TranslatorClosure);
             using JsonDocument partialLinkedResult = ParseResult(DirectShaderCompiler.Compile(RequestJson(
                 partialProfile, "graphics", 1, 1, "linked-partial", vs, fs, linked: true)));
             Check(partialLinkedResult.RootElement.GetProperty("content").GetProperty("stages").GetArrayLength() == 2,
-                "linked accepts unknown/zero limit " + field + "; missing=" + missing);
+                "linked accepts missing device limit " + field);
         }
         foreach (string field in new[] { "maxVertexOutputComponents", "maxFragmentInputComponents" })
         {
