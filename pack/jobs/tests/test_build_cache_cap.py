@@ -1,4 +1,4 @@
-"""出包可重建缓存（aoc / unpack / bake / srcver）总量上限（cache_retention.trim_build_caches，11-15）。合成目录夹具，期望在各断言旁手算：
+"""出包可重建缓存（aoc / unpack / bake / srcver，11-16 起加 NativeAOT nxaot、出壳镜像 shell_src）总量上限（cache_retention.trim_build_caches，11-15）。合成目录夹具，期望在各断言旁手算：
 上限 = 比例 ×（盘剩余 + 缓存现有），超了按最久没用删；1 小时内用过的、本次出包这款的、半成品 .tmp 不删"""
 import os
 import tempfile
@@ -50,6 +50,25 @@ class BuildCacheCap(unittest.TestCase):
         self.assertEqual(cr.trim_build_caches(self.run, share=0.5, now=self.now, free_bytes=lambda: 10 * unit)["removedEntries"], 0)   # 上限 0.5 × 12 = 6 unit ≥ 2
         r = cr.trim_build_caches(self.run, share=0.5, now=self.now, free_bytes=lambda: 0)   # 上限 0.5 × 2 = 1 unit → 删最旧的 a
         self.assertEqual(r["removedEntries"], 1); self.assertFalse(a.exists()); self.assertTrue(b.exists())
+
+    def test_nxaot_and_shell_mirrors_count_locks_untouched(self):
+        """11-16：NativeAOT 整机缓存与出壳按树镜像也进总量、最久没用的先删；.lock-* 取用锁目录不算、不删"""
+        a = self.entry("cache/nxaot", "ios-arm64-old", 40000)           # 最旧
+        b = self.entry("shell_src", "3f2a1b0c9d8e", 30000)               # 别的树的镜像，第二旧
+        c = self.entry("cache/nxaot", "ios-arm64-new", 60)               # 刚用过 → 热
+        lock = self.entry("cache/nxaot", ".lock-ios-arm64-new", 50000)   # 锁目录：再旧也不碰
+        unit = cr._tree_bytes(a)
+        r = cr.trim_build_caches(self.run, share=0.5, now=self.now, free_bytes=lambda: 0)   # 上限 0.5 ×（0 + 3）= 1.5 unit → 删 a、b 到 1 unit
+        self.assertEqual(r["removedEntries"], 2); self.assertFalse(a.exists()); self.assertFalse(b.exists())
+        self.assertTrue(c.exists() and lock.exists()); self.assertEqual(r["totalBytes"], unit)
+
+    def test_roots_only_counts_given_dir(self):
+        """另指的缓存目录（门禁共用 S2A_CS_CACHE）：只算它自己，运行区里的别的缓存不动"""
+        other = self.entry("cache/aoc", "0100aaaa00000000-k1", 90000)
+        shared = Path(self.t.name) / "nxaot_shared"; old = shared / "ios-arm64-a"; old.mkdir(parents=True); (old / "blob").write_bytes(b"x" * 4096)
+        ts = self.now - 40000; os.utime(old, (ts, ts))
+        r = cr.trim_build_caches(self.run, share=0.5, now=self.now, free_bytes=lambda: 0, roots=[shared])   # 上限 0.5 × 1 份 → 删它
+        self.assertEqual(r["removedEntries"], 1); self.assertFalse(old.exists()); self.assertTrue(other.exists())
 
 
 if __name__ == "__main__":

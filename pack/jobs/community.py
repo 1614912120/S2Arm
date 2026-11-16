@@ -495,7 +495,7 @@ def listing(c):
 def save(c):
     """请求可带 settings {设置项: 值 / null（回缺省）}（键与取值按定义表，只认 scope=game 的项）、graphics {画面编号: 真/假}（同互斥组至多开一个）、
     cheatsImport [金手指 txt 路径]（导入进这款 cheats/）与 cheats {「文件名/条目名」: 真/假}（金手指开关）、
-    modsImport [zip / 文件夹路径]（资源替换 mod 导入进这款 mods/）与 modsRemove [mod 名字]"""
+    modsImport [zip / 文件夹路径]（资源替换 mod 导入进这款 mods/）、modsRemove [mod 名字] 与 modsEnable {mod 名字: 真/假}"""
     game = game_of(c, c.r.get("gameId") or "")
     table = settings_table(c)
     data = load_launch(c, game["id"])
@@ -522,6 +522,9 @@ def save(c):
             c.r["cheatsImported"] = cheats.import_files(c, game, c.r["cheatsImport"], c.r.get("cheatsShare"))   # 勾了「分享给其他玩家」逐份上传（没给 = 缺省 cheats.SHARE_DEFAULT）
         if c.r.get("cheats") is not None:
             cheats.save(c, game, c.r["cheats"])
+    if c.r.get("modsEnable") is not None:   # mod 开关 {名字: 真 / 假}（关掉 = 改名为 .off-<名字>，pack/jobs/mods.py set_enabled）
+        import mods
+        mods.set_enabled(c, game, c.r["modsEnable"])
     if c.r.get("modsImport") or c.r.get("modsRemove"):   # 资源替换类 mod（pack/jobs/mods.py）：导入 [zip / 文件夹路径] / 删除 [名字]
         import mods
         for k in ("modsImport", "modsRemove"):
