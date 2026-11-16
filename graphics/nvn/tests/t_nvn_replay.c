@@ -586,15 +586,20 @@ static void t_pools(void) {
 // ---------- 池查找的线程内备忘（rp_entry.c pool_find_memo，#974 问 3）----------
 // 契约：答案与「候选 = 起点不超过地址的最后一个池、装得下才算」逐位一致（rp_pool_find 与 nvn_be_addr 两个入口都对）；
 // 重复的查找真的命中备忘；池表一变（加池 / 删池 / 同起点换大小）旧记录整张作废；开关关着时不命中也不计数。
-// 参考答案由用例自己登记的池直接线性扫出，不经被测实现。池彼此不重叠（真实的 NVN 内存池在客户机地址空间里不会重叠）。
+// 参考答案由用例自己登记的池直接线性扫出，不经被测实现。池区间允许嵌套：一个池的存储可能落在另一个池的区间里，
+// 命中的是「起点不超过地址、且真正覆盖 [addr, addr+len) 的池里起点最大的那个」（更具体的池优先）。
 int rp_pool_find(uint64_t addr, uint64_t len, const uint8_t **mem, uint64_t *size);   // rp_entry.c（rp_draw.c 也是就地声明）
 typedef struct { uint64_t a, n; int live; } pm_ref_t;
 enum { PM_SLOTS = 24 };
 static pm_ref_t g_pmr[PM_SLOTS]; static uint8_t g_pm_arena[0x10000];
 static int pm_ref_find(uint64_t addr, uint64_t len, uint64_t *a, uint64_t *n) {
     int cand = -1;
-    for (int i = 0; i < PM_SLOTS; i++) if (g_pmr[i].live && g_pmr[i].a <= addr && (cand < 0 || g_pmr[i].a > g_pmr[cand].a)) cand = i;
-    if (cand < 0 || addr - g_pmr[cand].a > g_pmr[cand].n || len > g_pmr[cand].n - (addr - g_pmr[cand].a)) return 0;
+    for (int i = 0; i < PM_SLOTS; i++) {
+        if (!g_pmr[i].live || g_pmr[i].a > addr) continue;
+        if (addr - g_pmr[i].a > g_pmr[i].n || len > g_pmr[i].n - (addr - g_pmr[i].a)) continue;
+        if (cand < 0 || g_pmr[i].a > g_pmr[cand].a) cand = i;   // 嵌套时更具体的池优先
+    }
+    if (cand < 0) return 0;
     *a = g_pmr[cand].a; *n = g_pmr[cand].n; return 1;
 }
 static void pm_add(int slot, uint64_t off, uint64_t size) { nvn_be_pool_add(g_pm_arena + off, size); g_pmr[slot] = (pm_ref_t){(uint64_t)(uintptr_t)(g_pm_arena + off), size, 1}; }
@@ -681,6 +686,65 @@ static void t_pool_memo(void) {
     }
     for (int i = 0; i < PM_SLOTS; i++) if (g_pmr[i].live) pm_del(i);
     pm_flag(1);
+    CHECK(rp_pool_count() == n0);
+}
+
+// ---------- 嵌套池：一个池的存储落在另一个池的区间里（#1345） ----------
+// 契约：命中的是「起点不超过地址、且真正覆盖 [addr, addr+len) 的池里起点最大的那个」。
+// 旧实现只取「起点不超过地址的最后一个池」，候选装不下就返回 0——大池会被区间内的小池遮蔽。
+static uint8_t g_pn_arena[1 << 20] __attribute__((aligned(16)));
+static void t_pool_nested(void) {
+    const uint64_t B = (uint64_t)(uintptr_t)g_pn_arena;
+    const uint64_t BIG = 1u << 20, SMALL = 0x2000, SMALL_OFF = 0x10000;
+    const int n0 = rp_pool_count();
+    const uint8_t *m = NULL; uint64_t n = 0; void *buf = NULL; uint64_t off = 0;
+    // ① 先加 1 MiB 大池，再在其 +0x10000 处加 8 KB 小池
+    nvn_be_pool_add(g_pn_arena, BIG);
+    nvn_be_pool_add(g_pn_arena + SMALL_OFF, SMALL);
+    CHECK(rp_pool_count() == n0 + 2);
+    // ② 小池内地址 → 小池
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x10, 0x20, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B + SMALL_OFF && n == SMALL);
+    buf = NULL; off = 0;
+    CHECK(nvn_be_addr(B + SMALL_OFF + 0x10, 0x20, &buf, &off) == 1 && (uint64_t)(uintptr_t)buf == B + SMALL_OFF && off == 0x10);
+    // ③ 大池内、小池之外（小池之后的地址，旧实现会被小池遮蔽返回 0）→ 大池
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x4000, 0x20, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B && n == BIG);
+    // ④ 起点在小池内、长度跨过小池尾但没出大池 → 大池
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x1ff0, 0x100, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B && n == BIG);
+    // ⑤ 先查大池内地址（让快路/备忘发布大池），再查小池内地址 → 仍必须是小池
+    //    备忘先关掉：备忘里若已经有小池记录，会先于快路答出，就测不到快路的上界（lim）了
+    pm_flag(0);
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x4000, 0x20, NULL, NULL) == 1);
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x20, 0x40, NULL, NULL) == 1);
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x20, 0x40, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B + SMALL_OFF && n == SMALL);
+    pm_flag(1);
+    // ⑥ 同一小池内地址连查 3 次（覆盖备忘与快路）：每次都要与锁内结论一致
+    for (int i = 0; i < 3; i++) {
+        m = NULL; n = 0;
+        CHECK(rp_pool_find(B + SMALL_OFF + 0x30, 0x10, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B + SMALL_OFF && n == SMALL);
+    }
+    // ⑦ 删掉小池：小池内地址回落到大池
+    nvn_be_pool_del(g_pn_arena + SMALL_OFF);
+    CHECK(rp_pool_count() == n0 + 1);
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x10, 0x20, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B && n == BIG);
+    // ⑧ 两个入口（rp_pool_find / nvn_be_addr）同一地址答案一致
+    {
+        static const uint64_t qo[5] = { 0x10, SMALL_OFF + 0x10, SMALL_OFF + 0x4000, BIG - 0x10, BIG };
+        static const uint64_t ql[5] = { 0x20, 0x20, 0x40, 0x20, 0x10 };
+        for (int i = 0; i < 5; i++) {
+            const uint8_t *mm = NULL; uint64_t nn = 0;
+            void *bb = NULL; uint64_t oo = 0;
+            const int h1 = rp_pool_find(B + qo[i], ql[i], &mm, &nn);
+            const int h2 = nvn_be_addr(B + qo[i], ql[i], &bb, &oo);
+            CHECK(h1 == h2);
+            if (h1 && h2) CHECK(mm == (const uint8_t *)bb && oo == B + qo[i] - (uint64_t)(uintptr_t)mm && nn == BIG);
+        }
+    }
+    nvn_be_pool_del(g_pn_arena);
     CHECK(rp_pool_count() == n0);
 }
 
@@ -3761,6 +3825,7 @@ int main(int argc, char **argv) {
     // 一行一个调用：外部各支都往这里加用例，挤在一行时每两支必冲突
     t_pools();
     t_pool_memo();
+    t_pool_nested();
     t_tex_init_registers_only();
     t_alias();
     t_alias_take_over();
