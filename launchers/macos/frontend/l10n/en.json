@@ -1889,5 +1889,6 @@
   "s2arm.controller.button.allowBluetooth": "Allow Bluetooth",
   "s2arm.controller.settings": "Settings",
   "s2arm.controller.gameController": "Game controller",
-  "s2arm.controller.bluetooth": "Bluetooth"
+  "s2arm.controller.bluetooth": "Bluetooth",
+  "s2arm.controller.thirdPartyMotion": "Xbox-style controllers such as 8BitDo or GameSir only have motion controls in Switch mode."
 }

@@ -201,6 +201,7 @@
 "vpad.menu.face.xbox" = "手把按鍵：Xbox 配置";
 "vpad.menu.face.xbox.note" = "依 Xbox 的按鍵位置，下鍵確認";
 "vpad.menu.gyro" = "手機陀螺儀";
+"vpad.menu.gyro.note" = "八位堂、蓋世小雞這類 Xbox 外形的手把，切到 Switch 模式才有體感。";
 "vpad.menu.haptic.note" = "按下時輕震一下";
 "vpad.menu.holdLock.note" = "按住 2 秒鎖定，只對這款遊戲";
 "vpad.menu.hud" = "效能浮層";

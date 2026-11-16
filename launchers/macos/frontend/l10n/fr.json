@@ -1856,5 +1856,6 @@
   "s2arm.controller.button.allowBluetooth": "Autoriser le Bluetooth",
   "s2arm.controller.settings": "Réglages",
   "s2arm.controller.gameController": "Manette de jeu",
-  "s2arm.controller.bluetooth": "Bluetooth"
+  "s2arm.controller.bluetooth": "Bluetooth",
+  "s2arm.controller.thirdPartyMotion": "Les manettes au format Xbox, comme celles de 8BitDo ou GameSir, n'ont les commandes de mouvement qu'en mode Switch."
 }

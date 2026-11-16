@@ -1856,5 +1856,6 @@
   "s2arm.controller.button.allowBluetooth": "Bluetooth を許可",
   "s2arm.controller.settings": "設定",
   "s2arm.controller.gameController": "ゲームコントローラー",
-  "s2arm.controller.bluetooth": "Bluetooth"
+  "s2arm.controller.bluetooth": "Bluetooth",
+  "s2arm.controller.thirdPartyMotion": "8BitDo や GameSir など Xbox 型のコントローラーは、Switch モードに切り替えるとモーション操作が使えます。"
 }

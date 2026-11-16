@@ -1856,5 +1856,6 @@
   "s2arm.controller.button.allowBluetooth": "Permitir Bluetooth",
   "s2arm.controller.settings": "Ajustes",
   "s2arm.controller.gameController": "Mando de juego",
-  "s2arm.controller.bluetooth": "Bluetooth"
+  "s2arm.controller.bluetooth": "Bluetooth",
+  "s2arm.controller.thirdPartyMotion": "Los mandos con forma de Xbox, como los de 8BitDo o GameSir, solo tienen controles de movimiento en modo Switch."
 }

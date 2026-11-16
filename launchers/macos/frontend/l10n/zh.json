@@ -1890,5 +1890,6 @@
   "s2arm.controller.button.allowBluetooth": "允许蓝牙",
   "s2arm.controller.settings": "设置",
   "s2arm.controller.gameController": "游戏手柄",
-  "s2arm.controller.bluetooth": "蓝牙"
+  "s2arm.controller.bluetooth": "蓝牙",
+  "s2arm.controller.thirdPartyMotion": "八位堂、盖世小鸡这类 Xbox 外形的手柄，切到 Switch 模式才有体感。"
 }

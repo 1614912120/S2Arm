@@ -254,7 +254,10 @@ SaveP("win_21_phone_update_done", () => Navigate(pack, "phoneupdate"));
 TrackField("ExportFolder", @"D:\S2Arm Games\S2Arm 自签导出"); TrackField("ExportGames", 3); TrackField("ExportBytes", (long?)9_800_000_000L);
 TrackField("ExportFresh", new List<string> { "丙.img" }); TrackField("ExportReused", 2);
 SaveP("win_21b_export_done_copy_only_new", () => Navigate(pack, "phoneupdate"));
-TrackField("ExportFolder", ""); TrackField("ExportGames", 0); TrackField("ExportBytes", (long?)null); TrackField("ExportFresh", new List<string>()); TrackField("ExportReused", 0);
+// 只新写点的那款：丁的 .img 这次没写 → 再点名「丁 的 .img 没写：手机上已有照常能玩，没有就点那款再导出」
+TrackField("ExportUnwritten", new List<string> { "丁" });
+SaveP("win_21c_export_done_unwritten", () => Navigate(pack, "phoneupdate"));
+TrackField("ExportFolder", ""); TrackField("ExportGames", 0); TrackField("ExportBytes", (long?)null); TrackField("ExportFresh", new List<string>()); TrackField("ExportReused", 0); TrackField("ExportUnwritten", new List<string>());
 // 失败示例用真正做不下去的情况（签名失败）；认得出的风险走 drop 态让玩家确认，不当失败（维护者 11-11）
 TrackField("Suggestion", "在 Impactor 里重新登录你的 Apple ID，再点一次。");
 SetW(pack, "updateMessage", "签名没成功：Impactor 里的 Apple ID 登录已过期。");

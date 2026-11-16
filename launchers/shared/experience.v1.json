@@ -1336,6 +1336,7 @@
       {"id": "phone.done.export", "zh-Hans": "已放进文件夹「{0}」", "en": "Saved to the folder “{0}”"},
       {"id": "phone.done.export.fresh", "zh-Hans": ".img 只要拷这次新写的：{0}。其余 {1} 款和上次导出的一样，手机上已有就不用再拷。", "en": ".img files to copy this time: {0}. The other {1} are the same as last export; no need to copy them again if they're already on your phone."},
       {"id": "phone.done.export.same", "zh-Hans": "各款 .img 都和上次导出的一样，手机上已有就不用再拷。", "en": "Every .img is the same as last export; no need to copy them again if they're already on your phone."},
+      {"id": "phone.done.export.unwritten", "zh-Hans": "这次只写了你点的这款的 .img。{0} 的 .img 没写：手机上已有就照常能玩，没有的话在游戏库里点那款再导出。", "en": "Only the game you chose got a new .img this time. No .img was written for {0}: if they're already on your phone they still work; if not, choose that game in the library and export again."},
       {"id": "phone.stat.size", "zh-Hans": "大小", "en": "Size"},
       {"id": "phone.fact.export", "zh-Hans": "按导出文件夹里的「怎么装到 iPhone.txt」签名安装 S2Arm.ipa，再用「文件」App 将 .img 放入 S2Arm 的「放这里导入」文件夹", "en": "Sign and install S2Arm.ipa, then put .img files in S2Arm’s “Import Here” folder using Files, following 怎么装到 iPhone.txt in the export folder"},
       {"id": "phone.fact.export_skipped", "zh-Hans": "这几款这次没导出（要按新版重新「打 iPhone 包」）：{0}", "en": "Not in this export (rebuild them for iPhone first): {0}"},

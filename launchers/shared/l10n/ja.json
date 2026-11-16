@@ -1015,7 +1015,8 @@
   "export.appleTV.device": "インストール先の Apple TV",
   "export.appleTV.none": "ペアリング済みの Apple TV がまだありません。テレビをこの Mac と同じネットワークにつなぎ、Xcode の「Devices and Simulators」で一度ペアリングしてください。",
   "export.appleTV.offline": "{0}（オフライン）",
-  "export.appleTV.refresh": "更新"
+  "export.appleTV.refresh": "更新",
+  "phone.done.export.unwritten": "今回は選んだゲームの .img だけを書き出しました。{0} の .img は書き出していません。すでに iPhone にあればそのまま遊べます。ない場合はライブラリでそのゲームを選んでもう一度書き出してください。"
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "全画面パッチ（画面比率に応じて自動選択）",

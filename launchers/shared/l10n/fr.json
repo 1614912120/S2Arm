@@ -1015,7 +1015,8 @@
   "export.appleTV.device": "Apple TV cible",
   "export.appleTV.none": "Aucune Apple TV jumelée pour l'instant : mettez la TV sur le même réseau que ce Mac et jumelez-la une fois dans Devices and Simulators de Xcode.",
   "export.appleTV.offline": "{0} (hors ligne)",
-  "export.appleTV.refresh": "Actualiser"
+  "export.appleTV.refresh": "Actualiser",
+  "phone.done.export.unwritten": "Cette fois, seul le .img du jeu choisi a été écrit. Aucun .img pour {0} : s'ils sont déjà sur votre téléphone, ils fonctionnent toujours ; sinon, choisissez ce jeu dans la bibliothèque et exportez à nouveau."
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "Correctif plein écran (choisi selon votre ratio d'écran)",

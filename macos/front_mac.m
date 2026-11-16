@@ -534,6 +534,7 @@ __attribute__((visibility("default"), used)) void s2a_pad_set_motion_enabled(int
 }
 // P1（槽 0）是一代 Joy-Con 单元时（#520，同 Joy-Con 2：P1 的体感 / 震动跟占 P1 的那只走）：定义在槽位表后面
 static int p1_gen1_motion(s2a_pad_motion out[2]);
+static int p1_hid_motion(s2a_pad_motion out[2]);
 static int p1_gen1_rumble(const s2a_pad_vibration values[2]);
 #define GEN1_P1_SESSION (MAC_RUMBLE_BASE | 0xffffffffull)   // P1 是一代 Joy-Con 单元时的震动会话（没有 GameController 引擎，走 HID）
 __attribute__((visibility("default"), used)) int s2a_pad_read_motion(s2a_pad_motion *out) {
@@ -555,6 +556,7 @@ __attribute__((visibility("default"), used)) int s2a_pad_read_motion(s2a_pad_mot
 __attribute__((visibility("default"), used)) int s2a_pad_read_motion_pair(s2a_pad_motion out[2]) {
     if (!out) return 0;
     { int g = p1_gen1_motion(out); if (g) return g; }   // P1 是一代单只 / 按设备的一对：照它（一对左右两路）
+    if (p1_hid_motion(out)) return 1;   // P1 是兜底手柄（第三方 Switch 模式、带陀螺仪，macos/hid_pad.m）
     if (ns2_leads() && ns2_lead_player() > 0) { out[1] = (s2a_pad_motion){0}; return s2a_mac_ns2_read_motion_player(ns2_lead_player(), &out[0]); }   // P1 是拆开的另一只：它自己那一路
     if (ns2_leads()) return s2a_mac_ns2_read_motion_pair(out);   // NS2 手柄（启动器通道）：Joy-Con 2 拼对时左右各一路（ns2_relay.h motion_left）
     s2a_pad_motion l = {0}, r = {0};
@@ -605,15 +607,18 @@ static GCController *g_rumble_main;              // 主线程：当前手柄
 @interface S2ARumbler : NSObject {
 @public
     GCController *device;
-    CHHapticEngine *engine;
-    id<CHHapticPatternPlayer> player;   // 能建循环播放器就用循环的；建不了用普通播放器，快到事件末尾时重起
-    BOOL loops, plainOnly, playing;     // plainOnly：这只手柄建循环播放器失败过，之后只建普通播放器
-    uint64_t startedNs;                 // 普通播放器这一轮的起播时刻
+    // 一路或两路（ios/haptic_retry.h s2a_hp_split）：手柄同时支持 LeftHandle / RightHandle 就左右各一个引擎（[0] 左、[1] 右），否则 [0] 两侧合成一路
+    int split;                          // -1 = 还没看过这只手柄，0 = 合成一路，1 = 左右两路
+    CHHapticEngine *engine[2];
+    id<CHHapticPatternPlayer> player[2];   // 能建循环播放器就用循环的；建不了用普通播放器，快到事件末尾时重起
+    BOOL loops[2], playing[2], plainOnly;  // plainOnly：这只手柄建循环播放器失败过，之后只建普通播放器
+    uint64_t startedNs[2];              // 普通播放器这一轮的起播时刻
     dispatch_source_t timer;
     s2a_hp_state retry;
 }
 @end
 @implementation S2ARumbler
+- (instancetype)init { if ((self = [super init])) split = -1; return self; }
 @end
 static S2ARumbler *g_rumble_main_rumbler;
 static pthread_mutex_t g_rumble_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -627,15 +632,13 @@ static float rumble_scale(void) {
 static BOOL rumble_off(void) { const char *e = getenv("S2A_RUMBLE"); return e && !strcmp(e, "0"); }
 static void rumbler_stop(S2ARumbler *r) {
     if (!r) return;
-    if (r->player && r->playing) [r->player stopAtTime:CHHapticTimeImmediate error:nil];
-    r->playing = NO;
+    for (int k = 0; k < 2; k++) { if (r->player[k] && r->playing[k]) [r->player[k] stopAtTime:CHHapticTimeImmediate error:nil]; r->playing[k] = NO; }
     if (r->timer) dispatch_source_set_timer(r->timer, DISPATCH_TIME_FOREVER, DISPATCH_TIME_FOREVER, 0);
 }
 static void rumbler_reset(S2ARumbler *r) {
     if (!r) return;
     rumbler_stop(r);
-    [r->engine stopWithCompletionHandler:nil];
-    r->player = nil; r->engine = nil;
+    for (int k = 0; k < 2; k++) { [r->engine[k] stopWithCompletionHandler:nil]; r->player[k] = nil; r->engine[k] = nil; }
 }
 static void rumbler_fail(S2ARumbler *r, const char *what, NSError *error) {
     BOOL died = s2a_hp_on_fail(&r->retry, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
@@ -645,7 +648,6 @@ static void rumbler_fail(S2ARumbler *r, const char *what, NSError *error) {
     }
     if (died) fprintf(stderr, "【红】手柄震动：本手柄本局停用（连续 %d 次失败）；换手柄会再试\n", S2A_HP_MAX_FAILS);
 }
-static float rumble_clamp(float x, float lo, float hi) { return isfinite(x) ? fminf(hi, fmaxf(lo, x)) : lo; }
 // 一代 Joy-Con / Pro（GameController 没 haptics）：照系统类别认是哪一只，交给 joycon_imu.m 的 HID 震动；不是任天堂一代手柄回 0
 static int gen1_rumble_mask(GCController *c) {
     NSString *t = [[c.productCategory ?: @"" stringByAppendingFormat:@" %@", c.vendorName ?: @""] lowercaseString];
@@ -656,71 +658,82 @@ static int gen1_rumble_mask(GCController *c) {
     if ([t containsString:@"pro controller"] && ([t containsString:@"switch"] || [t containsString:@"nintendo"])) return 4;   // Pro 自己一位：一代右只也连着时不震错只
     return 0;
 }
-static void rumbler_play(S2ARumbler *r, s2a_pad_vibration pair[2]) {
-    if (!r) return;
-    if (!r->device.haptics) {   // 一代任天堂手柄：macOS 不给 haptics，走 HID（#520 E：每位玩家的手柄都要能震）
-        int mask = gen1_rumble_mask(r->device);
-        if (mask) { s2a_joycon_rumble(mask, pair); return; }
-    }
-    float amplitude = 0, weighted = 0, weights = 0;
-    for (int i = 0; i < 2; i++) {
-        float lo = rumble_clamp(pair[i].low_amp, 0, 1), hi = rumble_clamp(pair[i].high_amp, 0, 1);
-        amplitude = fmaxf(amplitude, fmaxf(lo, hi));
-        weighted += lo * rumble_clamp(pair[i].low_hz, 0, 1250) + hi * rumble_clamp(pair[i].high_hz, 0, 1250);
-        weights += lo + hi;
-    }
-    amplitude = fminf(1, s2a_hp_feel(amplitude) * rumble_scale());
-    if (amplitude <= 0.001f || !r->device.haptics) { rumbler_stop(r); return; }
-    if (s2a_hp_should_try(&r->retry, clock_gettime_nsec_np(CLOCK_UPTIME_RAW)) == S2A_HP_SKIP) return;
-    float hz = weights > 0 ? weighted / weights : 160;
-    float sharp = rumble_clamp((hz - 160) / 160 * 0.5f + 0.3f, 0, 1);
+// 第 k 路播 amplitude / sharpness：建引擎（locality）→ 建播放器 → 起播 → 更新强度。返回 NO：失败已记，或 *again 置位要整只复位后重来
+static BOOL rumbler_channel(S2ARumbler *r, int k, GCHapticsLocality locality, float amplitude, float sharp, BOOL *again) {
     NSError *error = nil;
-    if (!r->engine) {
-        r->engine = [r->device.haptics createEngineWithLocality:GCHapticsLocalityDefault];
-        if (!r->engine) { rumbler_fail(r, "无法创建引擎", nil); return; }
-        r->engine.playsHapticsOnly = YES;
-        __weak CHHapticEngine *weakEngine = r->engine;
+    if (!r->engine[k]) {
+        r->engine[k] = [r->device.haptics createEngineWithLocality:locality];
+        if (!r->engine[k]) {
+            if (r->split > 0) { fprintf(stderr, "手柄震动（%s）：分侧引擎建不出来，改两侧合成一路\n", r->device.vendorName.UTF8String ?: "?"); r->split = 0; *again = YES; return NO; }
+            rumbler_fail(r, "无法创建引擎", nil); return NO; }
+        r->engine[k].playsHapticsOnly = YES;
+        __weak CHHapticEngine *weakEngine = r->engine[k];
         __weak S2ARumbler *weakR = r;
         void (^invalidate)(void) = ^{
             CHHapticEngine *e = weakEngine;
-            if (e) dispatch_async(g_rumble_q, ^{ S2ARumbler *x = weakR; if (x && x->engine == e) rumbler_reset(x); });
+            if (e) dispatch_async(g_rumble_q, ^{ S2ARumbler *x = weakR; if (x && (x->engine[0] == e || x->engine[1] == e)) rumbler_reset(x); });
         };
-        r->engine.resetHandler = ^{ invalidate(); };
-        r->engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) { (void)reason; invalidate(); };
+        r->engine[k].resetHandler = ^{ invalidate(); };
+        r->engine[k].stoppedHandler = ^(CHHapticEngineStoppedReason reason) { (void)reason; invalidate(); };
     }
-    if (!r->player) {
-        if (![r->engine startAndReturnError:&error]) { rumbler_fail(r, "启动引擎失败", error); rumbler_reset(r); return; }
+    if (!r->player[k]) {
+        if (![r->engine[k] startAndReturnError:&error]) { rumbler_fail(r, "启动引擎失败", error); return NO; }
         CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[
             [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1],
             [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5]] relativeTime:0 duration:30];
         CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
         // 循环播放器在有的系统 / 手柄上建不出来（11-10 M1 Max / macOS 27.0.1 / DualSense：NSCocoaErrorDomain 4097，同一引擎上普通播放器能建能播）：
-        //   退到普通播放器，它不能循环，靠下面的重起接上
-        //   循环播放器建失败后这个引擎也废了（接着在它上面建普通播放器报 GameControllerHaptics/0 Client not registred），所以记下来、丢掉引擎、从头再来一次
+        //   退到普通播放器，它不能循环，靠下面的重起接上。循环播放器建失败后这个引擎也废了，所以记下来、丢掉引擎从头再来
         if (pattern && !r->plainOnly) {
-            id<CHHapticAdvancedPatternPlayer> advanced = [r->engine createAdvancedPlayerWithPattern:pattern error:&error];
-            if (advanced) { advanced.loopEnabled = YES; r->player = advanced; r->loops = YES; }
+            id<CHHapticAdvancedPatternPlayer> advanced = [r->engine[k] createAdvancedPlayerWithPattern:pattern error:&error];
+            if (advanced) { advanced.loopEnabled = YES; r->player[k] = advanced; r->loops[k] = YES; }
             else {
                 fprintf(stderr, "手柄震动：循环播放器建不了（%s/%ld），改用普通播放器\n", error.domain.UTF8String ?: "-", error ? (long)error.code : 0L);
-                r->plainOnly = YES; rumbler_reset(r); rumbler_play(r, pair); return;
+                r->plainOnly = YES; *again = YES; return NO;
             }
-        } else if (pattern) { r->player = [r->engine createPlayerWithPattern:pattern error:&error]; r->loops = NO; }
-        if (!r->player) { rumbler_fail(r, "创建播放器失败", error); rumbler_reset(r); return; }
+        } else if (pattern) { r->player[k] = [r->engine[k] createPlayerWithPattern:pattern error:&error]; r->loops[k] = NO; }
+        if (!r->player[k]) { rumbler_fail(r, "创建播放器失败", error); return NO; }
     }
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-    if (r->playing && !r->loops && now - r->startedNs > MAC_RUMBLE_RESTART_NS) {   // 普通播放器：事件 30 秒，连着震到 20 秒就重起一轮
-        [r->player stopAtTime:CHHapticTimeImmediate error:nil]; r->playing = NO;
+    if (r->playing[k] && !r->loops[k] && now - r->startedNs[k] > MAC_RUMBLE_RESTART_NS) {   // 普通播放器：事件 30 秒，连着震到 20 秒就重起一轮
+        [r->player[k] stopAtTime:CHHapticTimeImmediate error:nil]; r->playing[k] = NO;
     }
-    if (!r->playing && ![r->player startAtTime:CHHapticTimeImmediate error:&error]) { rumbler_fail(r, "播放失败", error); rumbler_reset(r); return; }
-    if (!r->playing) r->startedNs = now;
-    r->playing = YES;
-    if (![r->player sendParameters:@[
+    if (!r->playing[k] && ![r->player[k] startAtTime:CHHapticTimeImmediate error:&error]) { rumbler_fail(r, "播放失败", error); return NO; }
+    if (!r->playing[k]) r->startedNs[k] = now;
+    r->playing[k] = YES;
+    if (![r->player[k] sendParameters:@[
         [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:amplitude relativeTime:0],
         [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharp - 0.5f relativeTime:0]] atTime:CHHapticTimeImmediate error:&error]) {
-        rumbler_fail(r, "更新强度失败", error); rumbler_reset(r); return;
+        rumbler_fail(r, "更新强度失败", error); return NO;
+    }
+    return YES;
+}
+static void rumbler_play(S2ARumbler *r, s2a_pad_vibration pair[2]) {
+    if (!r) return;
+    if (!r->device.haptics) {   // 一代任天堂手柄：macOS 不给 haptics，走 HID（#520 E：每位玩家的手柄都要能震）；HID 那边本来就分左右
+        int mask = gen1_rumble_mask(r->device);
+        if (mask) { s2a_joycon_rumble(mask, pair); return; }
+        rumbler_stop(r); return;
+    }
+    if (r->split < 0) {
+        NSSet<GCHapticsLocality> *loc = r->device.haptics.supportedLocalities;
+        r->split = s2a_hp_split([loc containsObject:GCHapticsLocalityLeftHandle], [loc containsObject:GCHapticsLocalityRightHandle]);
+        fprintf(stderr, "手柄震动（%s）：%s（支持 %s）\n", r->device.vendorName.UTF8String ?: "?", r->split ? "左右马达分开震" : "两侧合成一路", [loc.allObjects componentsJoinedByString:@","].UTF8String ?: "");
+    }
+    float lo[2] = {pair[0].low_amp, pair[1].low_amp}, hi[2] = {pair[0].high_amp, pair[1].high_amp}, lz[2] = {pair[0].low_hz, pair[1].low_hz}, hz[2] = {pair[0].high_hz, pair[1].high_hz};
+    float amp[2] = {0, 0}, sharp[2] = {0.3f, 0.3f}; int n = r->split ? 2 : 1;
+    if (r->split) for (int k = 0; k < 2; k++) s2a_hp_mix(1, &lo[k], &hi[k], &lz[k], &hz[k], &amp[k], &sharp[k]);
+    else s2a_hp_mix(2, lo, hi, lz, hz, &amp[0], &sharp[0]);
+    for (int k = 0; k < n; k++) amp[k] = fminf(1, s2a_hp_feel(amp[k]) * rumble_scale());
+    if (fmaxf(amp[0], amp[1]) <= 0.001f) { rumbler_stop(r); return; }
+    if (s2a_hp_should_try(&r->retry, clock_gettime_nsec_np(CLOCK_UPTIME_RAW)) == S2A_HP_SKIP) return;
+    for (int k = 0; k < n; k++) {
+        GCHapticsLocality locality = !r->split ? GCHapticsLocalityDefault : k == 0 ? GCHapticsLocalityLeftHandle : GCHapticsLocalityRightHandle;
+        BOOL again = NO;
+        if (!rumbler_channel(r, k, locality, amp[k], sharp[k], &again)) { rumbler_reset(r); if (again) rumbler_play(r, pair); return; }
     }
     s2a_hp_on_ok(&r->retry);
-    static BOOL logged; if (!logged) { logged = YES; fprintf(stderr, "手柄震动：播放 强度 %.2f（倍率 %.2f）锐度 %.2f\n", amplitude, rumble_scale(), sharp); }
+    static BOOL logged; if (!logged) { logged = YES; fprintf(stderr, "手柄震动：播放 %s 强度 %.2f / %.2f（倍率 %.2f）锐度 %.2f / %.2f\n", n == 2 ? "左 / 右" : "合成", amp[0], amp[1], rumble_scale(), sharp[0], sharp[1]); }
     if (!r->timer) {
         r->timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, g_rumble_q);
         __weak S2ARumbler *weakR = r;
@@ -1097,6 +1110,7 @@ __attribute__((visibility("default"), used)) int s2a_pad_read_motion_slot(int sl
     for (int p = 0; p < NS2_RELAY_PLAYERS; p++) if (owner == &ns2_slot_id[p])
         return p == 0 ? s2a_mac_ns2_read_motion_pair(out) : s2a_mac_ns2_read_motion_player(p, &out[0]);
     if (gen1_of(owner)) return gen1_motion(owner, out);   // D2：一代单只 out[0]；按设备的一对 out[0] 左、out[1] 右
+    if (s2a_mac_hid_pad_motion(owner, &out[0])) return 1;   // 兜底手柄（第三方 Switch 模式、带陀螺仪，macos/hid_pad.m）
     pthread_mutex_lock(&g_motion_mu);
     int known = g_slot_motion_known[slot];
     if (known) out[0] = g_slot_motion[slot];
@@ -1104,6 +1118,7 @@ __attribute__((visibility("default"), used)) int s2a_pad_read_motion_slot(int sl
     return known;
 }
 static int p1_gen1_motion(s2a_pad_motion out[2]) { return gen1_of(pad_id[0]) ? gen1_motion(pad_id[0], out) : 0; }
+static int p1_hid_motion(s2a_pad_motion out[2]) { if (!s2a_mac_hid_pad_motion(pad_id[0], &out[0])) return 0; out[1] = (s2a_pad_motion){0}; return 1; }
 static int p1_gen1_rumble(const s2a_pad_vibration values[2]) { return gen1_rumble(pad_id[0], values); }
 // 按槽位的 Joy-Con 2 鼠标（#520：P2 起各自的 Joy-Con 2，服务层写在各自的手柄号上，游戏靠它认 Joy-Con 2）：占这一格的是 NS2 手柄就照它这只报，否则回 0
 __attribute__((visibility("default"), used)) int s2a_pad_read_mouse_slot(int slot, s2a_pad_mouse out[2]) {

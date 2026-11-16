@@ -155,9 +155,9 @@ class CommunityTests(unittest.TestCase):
         values = [o["value"] for o in item["options"]]
         ios = re.search(r"s2a_ios_game_languages\(void\) \{\s*return @\[(.*?)\];", (REPO / "ios/settings.m").read_text(encoding="utf-8"), re.S).group(1)
         self.assertEqual(re.findall(r'@"(\w+)"', ios), values)
-        menu = (REPO / "ios/app_settings.m").read_text(encoding="utf-8")
-        labels = re.search(r"labels = @\[S2AL\(@\"settings.gameLanguage.system\"\),(.*?)\];", menu, re.S).group(1)
-        self.assertEqual(len(re.findall(r'@"[^"]+"\)?', labels)) + 1, len(values))   # 字面量与 S2AL(@"键") 各算一项
+        # 给玩家看的名字：游戏内设置页与游戏库每款设置页共用 settings.m s2a_ios_game_language_label（#1252），除「跟随系统」外每个值都要有名字
+        label = re.search(r"NSString \*s2a_ios_game_language_label\(NSString \*value\) \{(.*?)\n\}", (REPO / "ios/settings.m").read_text(encoding="utf-8"), re.S).group(1)
+        self.assertEqual(sorted(re.findall(r'@"(\w+)": ', label)), sorted(values[1:]))
         enum = (REPO / "compat/tree/src/Ryujinx.HLE/HOS/SystemState/SystemLanguage.cs").read_text(encoding="utf-8")
         self.assertEqual([v for v in values[1:] if not re.search(r"\b%s,?\s" % v, enum)], [])
         self.assertIn("ios", item["platforms"])

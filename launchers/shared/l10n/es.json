@@ -1015,7 +1015,8 @@
   "export.appleTV.device": "Apple TV de destino",
   "export.appleTV.none": "Todavía no hay ningún Apple TV enlazado: conecta el televisor a la misma red que este Mac y enlázalo una vez en Devices and Simulators de Xcode.",
   "export.appleTV.offline": "{0} (sin conexión)",
-  "export.appleTV.refresh": "Actualizar"
+  "export.appleTV.refresh": "Actualizar",
+  "phone.done.export.unwritten": "Esta vez solo se escribió el .img del juego que elegiste. No se escribió el .img de {0}: si ya están en tu teléfono siguen funcionando; si no, elige ese juego en la biblioteca y vuelve a exportar."
  },
  "text": {
   "满屏补丁（按屏幕比例自动选）": "Parche de pantalla completa (elegido según la proporción de tu pantalla)",

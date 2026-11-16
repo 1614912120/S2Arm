@@ -60,6 +60,7 @@ extension S2ArmLauncherModel {
                                                   exportFolder: r["exported"] as? Bool == true ? r["outputPath"] as? String ?? "" : "",
                                                   exportGames: (r["games"] as? [Any])?.count ?? 0, exportBytes: (r["exportBytes"] as? NSNumber)?.int64Value,
                                                   exportFresh: r["fresh"] as? [String] ?? [], exportReused: (r["reused"] as? NSNumber)?.intValue ?? 0,
+                                                  exportUnwritten: r["unwritten"] as? [String] ?? [],
                                                   sgrade: (r["sgrade"] as? [String: Any] ?? [:]).sorted { $0.key < $1.key }
                                                       .map { SGradeGameResult(name: names[$0.key.uppercased()] ?? $0.key, outcome: SGradeOutcome($0.value as? [String: Any] ?? [:])) })
                 if r["exported"] as? Bool == true, let folder = r["outputPath"] as? String { NSWorkspace.shared.open(URL(fileURLWithPath: folder)) }

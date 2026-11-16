@@ -1015,7 +1015,8 @@
   "export.appleTV.device": "裝到哪台 Apple TV",
   "export.appleTV.none": "還沒看到配對過的 Apple TV：電視和這台 Mac 連同一網路，在 Xcode 的「Devices and Simulators」裡配對一次。",
   "export.appleTV.offline": "{0}（不在線）",
-  "export.appleTV.refresh": "重新整理"
+  "export.appleTV.refresh": "重新整理",
+  "phone.done.export.unwritten": "這次只寫了你點的這款的 .img。{0} 的 .img 沒寫：手機上已有就照常能玩，沒有的話在遊戲庫裡點那款再匯出。"
  },
  "text": {
   "直连": "直連",
