@@ -102,6 +102,7 @@ int main(int argc, char **argv) {
     struct s2a_compile_request_input in={0};in.session=pc.session;in.generation=pc.generation;
     in.profile_json=pc.profile_json;in.profile_bytes=pc.profile_bytes;in.direct_abi=pc.direct_abi;
     in.translator_closure=pc.translator_closure;in.stage_count=2;in.gfx=gfx;
+    if(!policy_single) in.requires_linked_varying_interface=s2a_direct_requires_linked_varying_interface(state.stages);
     in.texture_count=tex.count;memcpy(in.textures,tex.items,sizeof tex.items);
     in.texture_array_length=state.tex_pool_n;in.sampler_array_length=state.samp_pool_n;
     for(int i=0;i<2;i++) {
@@ -117,6 +118,7 @@ int main(int argc, char **argv) {
         struct s2a_input_identity actual={0};actual.direct_abi=in.direct_abi;
         actual.translator_closure=in.translator_closure;memcpy(actual.profile_sha,env.profile_sha,32);
         actual.stage_mask=state.stages;memcpy(actual.keys,state.keys,sizeof actual.keys);
+        actual.requires_linked_varying_interface=s2a_direct_requires_linked_varying_interface(actual.stage_mask);
         actual.source_present=3;
         for(int i=0;i<2;i++) {memcpy(actual.source_sha[i],views[i].content_sha,32);
             actual.source_code_bytes[i]=views[i].code_bytes;actual.source_control_bytes[i]=views[i].control_bytes;}
@@ -135,7 +137,7 @@ int main(int argc, char **argv) {
         CHECK(!s2a_source_keep(k,0,extra,sizeof extra,ctl[0],sizeof ctl[0]));}
     if(replaced) CHECK(!s2a_source_keep(keys[0],0,code[0],sizeof code[0],ctl[0],sizeof ctl[0]));
     if(policy_single) in.stage_count=1; // omitted linked field remains zero
-    if(!strcmp(mode,"policy_different")) in.requires_linked_varying_interface=1;
+    if(!strcmp(mode,"policy_different")) in.requires_linked_varying_interface=0; // only linked differs from paired capture
     if(!strcmp(mode,"policy_negative")) in.requires_linked_varying_interface=-1;
     if(!strcmp(mode,"policy_two")) in.requires_linked_varying_interface=2;
     if(!strcmp(mode,"policy_max")) in.requires_linked_varying_interface=INT_MAX;
@@ -156,7 +158,7 @@ int main(int argc, char **argv) {
         } else {
             CHECK(claimed==0 && capsule);
             nvk_w2_capsule_release(capsule);
-            puts("PASS legacy zero policy matches frozen identity");
+            puts("PASS linked policy matches frozen identity");
         }
         for(int i=0;i<2;i++) s2a_source_release(views[i].ref);
         nvk_w2_diagnostic_cancel();
