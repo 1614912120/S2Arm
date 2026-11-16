@@ -94,6 +94,38 @@ class ProgramStoreTests(unittest.TestCase):
         self.assertFalse((kit / "romfs.std").exists())
         self.assertNotIn("romfs.std", self.names(self.store / "recipe.tar.zst"))
 
+    def test_resource_images_stay_out_unknown_small_files_stay_in(self):
+        # 期望手写：资源镜像这一小类封闭集合（romfs.std / game.img / *.nsp / *.xci / *.nca，大小写不论）不进程序件也不进配方；
+        #   不认识的小文件照常进（不是白名单：程序件有约 30 种、读写方各不相同，漏一项升级就坏）
+        product = self.product()
+        res = ("romfs.std", "game.img", "base.nsp", "card.XCI", "x.nca")
+        for n in res:
+            (product / n).write_bytes(b"R" * 64)
+        (product / "new_table.tsv").write_text("新表")
+        sgrade.save_program(self.c, GID, self.exefs())
+        kit = library.save_container_kit(self.c, GID, product)
+        recipe = self.names(self.store / "recipe.tar.zst")
+        for n in res:
+            self.assertFalse((kit / n).exists(), n); self.assertNotIn(n, recipe)
+        self.assertEqual((kit / "new_table.tsv").read_text(), "新表"); self.assertIn("new_table.tsv", recipe)
+
+    def test_oversized_kit_is_loud_and_names_the_biggest_file(self):
+        # 期望手写（阈值换成 1000 字节）：除改写产物外合计超过阈值 → 报 kit_oversized（告警、不拦），点名最大的文件；
+        #   改写产物（main.patched.bin 再大）不算；没超过不报
+        said = []
+        self.c.diagnostic = lambda msg, code="job_failed", severity="error", **kw: said.append((code, severity, msg))
+        product = self.product()
+        (product / "main.patched.bin").write_bytes(b"P" * 5000)
+        sgrade.save_program(self.c, GID, self.exefs())
+        with mock.patch.object(library, "KIT_LOUD_BYTES", 1000):
+            library.save_container_kit(self.c, GID, product)
+            self.assertEqual(said, [])
+            (product / "mystery.bin").write_bytes(b"M" * 2000)
+            kit = library.save_container_kit(self.c, GID, product)
+        self.assertEqual([(c, s) for c, s, _ in said], [("kit_oversized", "warning")])
+        self.assertIn("mystery.bin", said[0][2])
+        self.assertTrue((kit / "mystery.bin").is_file())   # 只报不拦：照常存
+
     def test_cache_deleted_rebuilds_same_kit(self):
         for rows, seen in (("", "-"), ("p main 1 2 3 # x\n", "rows")):
             with self.subTest(rows=bool(rows)):

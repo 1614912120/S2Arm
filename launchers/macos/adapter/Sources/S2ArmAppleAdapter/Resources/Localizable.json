@@ -5204,6 +5204,10 @@
   "en": "Unlock the iPhone and keep it awake on the Home Screen, then retry installation. Do not lock it during installation."
  },
  {
+  "source": "游戏照常能玩、能装；只是这款的程序件里混进了不该有的大文件，多占电脑空间、装机多推一些。请导出诊断反馈给我们。",
+  "en": "The game still installs and plays normally; this game's program files just picked up a large file that does not belong there, which takes extra disk space and makes installs push more data. Please export a diagnostic report and send it to us."
+ },
+ {
   "source": "本体已出好，照常安装即可；没解出的追加内容不在包里，游戏里用不到那部分内容。请导出诊断反馈，解码支持后重新打包即可带上。",
   "en": "The base game was packaged and can be installed as usual; the add-on content that could not be extracted is not in the package, so that content is unavailable in game. Please export a diagnostic report; repackage once decoding is supported to include it."
  },
