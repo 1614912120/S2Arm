@@ -621,6 +621,11 @@ import S2ArmAppleAdapter
                 let page = AnyView(LauncherView(model: fixture.model, brand: "Original UI fixture").frame(width: width, height: 630))
                 let (host, window) = try await render(page, fixture: fixture, language: language)
                 defer { window.close() }
+                // The native titlebar has its own hosting view; it registers its controls on a later main-loop pass.
+                try await waitUntil {
+                    let ids = Set(fixture.model.gamepad.controlTargets(in: window).map(\.id))
+                    return ids.contains("top.report") && ids.contains("home.refresh")
+                }
                 let targets = fixture.model.gamepad.controlTargets(in: window)
                 let report = try XCTUnwrap(targets.first { $0.id == "top.report" })
                 let refresh = try XCTUnwrap(targets.first { $0.id == "home.refresh" })

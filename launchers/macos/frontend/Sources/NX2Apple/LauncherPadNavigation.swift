@@ -250,14 +250,17 @@ enum LauncherPadSpatial {
         if let modal = NSApp.modalWindow { return modal }
         if let sheet = window.attachedSheet { return sheet.attachedSheet ?? sheet }
         if let key = NSApp.keyWindow, key !== window, key.isVisible { return key }
-        // macOS 27 hangs a decorative glass backdrop window under alerts and panels: visible, but it can't take focus and holds no controls.
+        // macOS 27 hangs a decorative glass backdrop window under alerts and panels: visible, but it holds nothing to operate.
         if let child = window.childWindows?.last(where: { child in
-            child.isVisible && (child.canBecomeKey || controls.values.contains { $0.view.window === child })
+            child.isVisible && (controls.values.contains { $0.view.window === child } || child.contentView.map(Self.holdsControl) == true)
         }) { return child }
         if let popup = NSApp.orderedWindows.first(where: { candidate in
             candidate !== window && candidate.isVisible && !candidate.canBecomeMain && controls.values.contains { $0.view.window === candidate }
         }) { return popup }
         return window
+    }
+    private static func holdsControl(_ view: NSView) -> Bool {
+        view is NSControl || view.subviews.contains(where: holdsControl)
     }
     var inMainContent: Bool { activeWindow === window && !trackingMenu && !hasDropdown }
     private var hasDropdown: Bool {
