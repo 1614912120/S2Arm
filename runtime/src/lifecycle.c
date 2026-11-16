@@ -1,4 +1,4 @@
-// 宿主生命周期：优雅退出（游戏 ExitProcess / Break、SIGTERM、iOS App 终止回调）。先停住游戏线程的系统调用，再让 C# 停声音 / 显卡，再写报红汇总，_exit(0)；1.5 秒兜底直接退。
+// 宿主生命周期：优雅退出（游戏 ExitProcess / Break、SIGTERM、iOS App 终止回调）。先停住游戏线程的系统调用，再让 C# 停声音 / 显卡，再写报红汇总，_exit（码见 s2a_host_exit_code，缺省 0）；1.5 秒兜底直接退。
 // 弱链接[host,ios,nvntest]：nxgal_gpu_hold（通用渲染器 gal_core.m 提供；链接行按这行放行未定义，runtime/build.mk 自动收）
 #include "native.h"
 #if defined(__ANDROID__)
@@ -41,6 +41,10 @@ static int android_shutdown_writers_begin(void) {
     return error;
 }
 #endif
+// 收局退出码：0 = 正常收局；要让启动器知道「这局是被停下的、不是玩完了」的路径在收局前设（GPU 挂死安全停 = 86，同 gal_core.m 命令缓冲出错直接退的码）。
+//   兜底的两次 _exit 和正常收尾都用它，否则安全停后进程照样 0 退出、启动器任务显示「操作完成」（#1257）
+static _Atomic int g_exit_code;
+void s2a_host_exit_code(int code) { atomic_store(&g_exit_code, code); }
 void s2a_host_shutdown(const char *why) {
     static _Atomic int once; if (atomic_exchange(&once, 1)) return;
     // 优雅收局先删「本局在跑」标记（D-D3J8，玩家反馈「有时起不来、划掉重启又好」）：标记原先只在进后台 / iOS 终止回调里删，
@@ -54,8 +58,8 @@ void s2a_host_shutdown(const char *why) {
     // 兜底先开（11-14 iPhone 实机 第 17515 帧卡死）：原先排在统计汇总之后，游戏卡死时收尾停在更早一步（日志只到「收到 自动玩家结束：优雅退出」，
     //   一行收局阶段都没有），兜底从没开，进程挂到设备锁收割 SIGKILL。带着音频会话被强杀之后，手机系统声音服务一直坏到重启。
     //   1.5 秒：照旧打汇总、冲日志再退；汇总或冲日志本身也可能等卡住线程持有的锁，2.5 秒再无条件 _exit
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{ LOG("【红】优雅退出 1.5 秒未完成，直接退出"); s2a_direct_summary(0); s2a_logcon_flush(); _exit(0); });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2500 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{ _exit(0); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1500 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{ LOG("【红】优雅退出 1.5 秒未完成，直接退出"); s2a_direct_summary(0); s2a_logcon_flush(); _exit(atomic_load(&g_exit_code)); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2500 * NSEC_PER_MSEC), dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{ _exit(atomic_load(&g_exit_code)); });
 #endif
     // Native process exit seals the host even between managed session owners.
     // Generation zero is reserved for this unconditional terminal publication.
@@ -185,7 +189,7 @@ void s2a_host_shutdown(const char *why) {
     s2a_direct_summary(1);   // _exit 不跑 atexit；显式打印现编汇总，不改变停机语义
     { void (*clr)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "s2a_sesmark_clear_home"); if (clr) clr(); }   // 会话标记（sesdiag.c）：正常收尾，下次启动不问「上次没正常退出」
     LOG("优雅退出完成（%.3f 秒）", (now_ns() - t0) / 1e9);
-    s2a_logcon_flush(); _exit(0);
+    s2a_logcon_flush(); _exit(atomic_load(&g_exit_code));
 }
 void s2a_term_install(void) {
 #if defined(__ANDROID__)

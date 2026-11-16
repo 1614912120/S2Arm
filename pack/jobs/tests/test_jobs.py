@@ -1719,6 +1719,21 @@ class JobsTests(unittest.TestCase):
                     self.assertIn("退出码 139", str(e.exception))
                     self.assertIn("fixture", e.exception.internal)   # 原文随错误摘要带走
 
+    def test_gpu_safe_stop_exit_86_reports_game_gpu_stopped_not_done(self):
+        # #1257：显卡挂死、运行时安全停（host_adapt.m s2a_gpu_safe_stop 设收局退出码 86）——报 game_gpu_stopped，不当玩完、也不说崩溃
+        game = self.game(); self.catalogue([game]); self.c.r["gameId"] = game["id"]
+        self.fake_host(game["id"])
+        def run(command, log, env, **kwargs):
+            self.c.last_rc = 86
+            raise Failure("游戏运行中失败（退出码 86）：fixture", code="tool_exit")
+        with patch.object(build, "validate_runtime", return_value={"gameId": game["id"], "memoryRequirementsVersion": 2}), \
+             patch.object(self.c, "run", side_effect=run):
+            with self.assertRaises(Failure) as e:
+                build.launch(self.c)
+        self.assertEqual(e.exception.code, "game_gpu_stopped")
+        self.assertIn("安全停下", str(e.exception))
+        self.assertIn("fixture", e.exception.internal)
+
     def test_launch_quick_checks_then_explains_broken_files_after_crash(self):
         # v0.3.1：起局前只核主程序 / 程序描述（validate_runtime files=False），不逐个核 6 万个文件；游戏非 0 退出后再完整核一遍：
         #   有缺 / 坏的运行文件 → runtime_invalid、消息点名例子并说「重新出一次 Mac 版」；都好 → 照旧 game_crashed
