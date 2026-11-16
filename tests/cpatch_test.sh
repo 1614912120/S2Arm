@@ -324,6 +324,34 @@ WHY11 = '调用改成空：main+0x104 原是调用（9400003f），改成 nop �
 for tag, w100, w108, want in (('A', 0xB940A260, 0xAA0003F4, ['不收\t' + WHY11]), ('B', 0xF9400A60, 0xAA0003F4, ['收']), ('C', 0xB940A260, 0x2A0003F4, ['收'])):
     got = nopcall_case(tag, w100, w108)
     ck(f'⑪ {tag}：期望 {want}（实得 {got}）', got == want)
+# ⑫ 其它类（11-15：认不出是画面的，tools/patch_index.py 归 other，pack/jobs/patches.py 按类别目录写索引）：索引目录名 other → 编号前缀 other:
+#    （运行时不默认开、iPhone 不开，runtime/src/cpatch.c；单测 t_cpatch ⑭）。合成 main 同 ⑪ A 的布局，补丁改 0x108 一个字
+r12 = f'{T}/other12'; os.makedirs(r12); shutil.copytree(root + '/exefs', r12 + '/exefs')
+o12 = f'{T}/other12_idx/other'; os.makedirs(o12)
+open(o12 + '/m.pchtxt', 'w').write(f'@nsobid-{BID}\n@flag offset_shift 0x100\n@enabled\n00000100 60008052\n@stop\n')
+open(o12 + '/INDEX.tsv', 'w').write('title_id\ttype\tpath\n0100A3501946E000\tpchtxt\tm.pchtxt\n')
+subprocess.run([sys.executable, H + '/pack/cpatch.py', 'plan', r12, '', o12], capture_output=True, text=True)
+ids12 = [l.split('\t')[0] for l in open(r12 + '/cpatch.tsv').read().splitlines()[1:]] if os.path.exists(r12 + '/cpatch.tsv') else []
+want12 = 'other:' + hashlib.sha256(open(o12 + '/m.pchtxt', 'rb').read()).hexdigest()[:16]
+ck(f'⑫ 其它类目录 → 编号 {want12}（实得 {ids12}）', ids12 == [want12])
+# ⑬ 画面类方向与满屏优先（11-16 维护者：iOS 收降负载画面补丁；和满屏补丁改同一处时满屏优先）。合成 main 同 ④；两个索引目录按 pack/jobs/patches.py fetch 的顺序
+#    gfx 在前、widescreen 在后（目录名排序）：gfx 索引带 dir 列——L（load）改 0x100、M（load）改 0x200；widescreen 索引 W（21:9）改 0x100、值不同
+#    期望：W 收、L 落选「与 widescreen:W 改同一处」（旧代码按索引顺序先到先得 → 收 L、W 落选 → 红）；M 收，cpatch.tsv 第 14 列方向 = load；W 那行第 14 列空
+r13 = f'{T}/dir13'; os.makedirs(r13); shutil.copytree(root + '/exefs', r13 + '/exefs'); shutil.copy(root + '/widen_sites.tsv', r13 + '/widen_sites.tsv')
+g13, w13 = f'{T}/dir13_idx/gfx', f'{T}/dir13_idx/widescreen'; os.makedirs(g13); os.makedirs(w13)
+for d, n, off, val in ((g13, 'L', 0x100, '40008052'), (g13, 'M', 0x200, '1F2003D5'), (w13, 'W', 0x100, '60008052')):
+    open(f'{d}/{n}.pchtxt', 'w').write(f'@nsobid-{BID}\n@flag offset_shift 0x100\n@enabled\n{off:08X} {val}\n@stop\n')
+open(g13 + '/INDEX.tsv', 'w').write('title_id\ttype\tpath\tdir\n0100A3501946E000\tpchtxt\tL.pchtxt\tload\n0100A3501946E000\tpchtxt\tM.pchtxt\tload\n')
+open(w13 + '/INDEX.tsv', 'w').write('title_id\ttype\tpath\taspect\n0100A3501946E000\tpchtxt\tW.pchtxt\t21:9\n')
+subprocess.run([sys.executable, H + '/pack/cpatch.py', 'plan', r13, '', g13, w13], capture_output=True, text=True)
+h13 = lambda d, n, pre: pre + hashlib.sha256(open(f'{d}/{n}.pchtxt', 'rb').read()).hexdigest()[:16]
+L13, M13, W13 = h13(g13, 'L', 'gfx:'), h13(g13, 'M', 'gfx:'), h13(w13, 'W', 'widescreen:')
+lg13 = open(r13 + '/cpatch_plan.log').read().splitlines() if os.path.exists(r13 + '/cpatch_plan.log') else []
+tab13 = {l.split('\t')[0]: l.split('\t') for l in open(r13 + '/cpatch.tsv').read().splitlines()[1:]} if os.path.exists(r13 + '/cpatch.tsv') else {}
+ck(f'⑬ 满屏优先：W 收、L 落选「与 {W13} 改同一处」（实得 {[l for l in lg13 if l.startswith(("收", "不收"))]}）',
+   W13 in tab13 and L13 not in tab13 and any(l.startswith('不收\t' + L13) and f'与 {W13} 改同一处' in l for l in lg13))
+ck(f'⑬ 第 14 列方向：M = load、W 空（实得 {[(k, v[13] if len(v) > 13 else None) for k, v in tab13.items()]}）',
+   len(tab13.get(M13, [])) == 14 and tab13[M13][13] == 'load' and len(tab13.get(W13, [])) == 14 and tab13[W13][13] == '')
 sys.exit(bad)
 EOF
 [ $bad = 0 ] && echo "✅ cpatch_test 全过" || { echo "🔴 cpatch_test 有不通项"; exit 1; }

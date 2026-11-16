@@ -96,6 +96,12 @@
     <string name="library_position">%1$d of %2$d</string>
     <string name="library_empty">No games yet</string>
     <string name="library_empty_hint">Install a game with S2Arm on your computer.</string>
+    <!-- Playtime line under the library card (Playtime.java): verbatim from launchers/shared/experience.v1.json library.playtime.*; {0} is the placeholder -->
+    <string name="library_playtime_minutes">Played {0} min</string>
+    <string name="library_playtime_hours">Played {0} h</string>
+    <string name="library_playtime_today">today</string>
+    <string name="library_playtime_yesterday">yesterday</string>
+    <string name="library_playtime_days_ago">{0} days ago</string>
     <string name="mods_title">Mods (asset replacement)</string>
     <string name="mods_for_game">For: %1$s</string>
     <string name="mods_no_game">Install a game first: mods are kept per game.</string>
