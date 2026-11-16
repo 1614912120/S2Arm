@@ -1042,7 +1042,7 @@ static void img_scan_report(void) {   // 主线程
     [a addAction:[UIAlertAction actionWithTitle:S2AL(@"common.gotIt") style:UIAlertActionStyleCancel handler:nil]];
     [lib_top() presentViewController:a animated:YES completion:nil];
 }
-// App 容器里属主不是 App 的条目（#569；jhz 11-15 定：不迁移、不驻留、不靠电脑）：App 改不了也删不掉，只有删除重装能清。
+// App 容器里属主不是 App 的条目（#569；维护者 11-15 定：不迁移、不驻留、不靠电脑）：App 改不了也删不掉，只有删除重装能清。
 //   每进程第一次扫之前清点一次（pack_apply.c s2a_foreign_scan），读数进日志 / 诊断；只在真有影响时对玩家说：占用 ≥ 2 GB 时在库上说一次占了多少、
 //   为什么删不掉、怎么办（先导出存档 → 删除重装 S2Arm → 导回存档）。写不进导致装不上 / 起不了的，由解包失败码 ios_install_dir_unwritable 那条说
 unsigned s2a_foreign_scan(const char *home, uint64_t *bytes, char *line, size_t n);   // pack_apply.c

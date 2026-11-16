@@ -817,7 +817,7 @@ int main(void) {
         CHECK(s2a_import_state_game_quick(P, "0100BBBB00000010") == 0, "⑮⑥ 游戏库快判读新位置：就绪");
         snprintf(c, sizeof c, "chmod -R u+w '%s' 2>/dev/null; rm -rf '%s'", base, base); sh(c);
     }
-        { // 容器内属主不是 App 的条目清点（#569 / jhz 11-15：不迁移、只清点 + 有影响才提示）。期望手写：
+        { // 容器内属主不是 App 的条目清点（#569 / 维护者 11-15：不迁移、只清点 + 有影响才提示）。期望手写：
       //   自己建的目录（3 个条目：目录 a、子目录 a/b、文件 a/b/f 4096 字节）按真 uid 数 → 0；把「自己」当成别的 uid 数 → 4 个（含根目录本身）、文件实占 ≥ 4096、
       //   最早一条读数行里带「属主 uid <真 uid>」
       char F[1200]; snprintf(F, sizeof F, "%s/foreign_home", T);
