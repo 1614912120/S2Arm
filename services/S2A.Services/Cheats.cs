@@ -258,9 +258,15 @@ namespace S2A.Services
             var sb = new StringBuilder();
             foreach (Item p in programs) sb.Append(p.Entry.Key).Append('\t').Append(p.Status).Append('\n');
             string path = Path.Combine(dir, "status.txt"), tmp = path + ".tmp";
+            // 目录写不进（D-QCTB：iPhone 上 cheats/ 归 root，UnauthorizedAccessException 没接住 → 整局 FailFast）：只记一行红、金手指照常执行，
+            //   状态显示缺了而已；目录归属由宿主起库时的游戏目录修复（runtime/src/pack_apply.c games_unwritable）迁走
             try { File.WriteAllText(tmp, sb.ToString()); File.Move(tmp, path, true); }
-            catch (IOException e) { Console.Error.WriteLine($"金手指：写 status.txt 失败 {e.Message}"); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                if (!_statusWarned) { _statusWarned = true; Console.Error.WriteLine($"【红】金手指：写 status.txt 失败 {e.GetType().Name}: {e.Message}（金手指照常执行，界面看不到状态）"); }
+            }
         }
+        private static bool _statusWarned;
 
         // 「main」区（Atmosphere 区号 0）：偏移按 Horizon 排布算——main 后面首尾相接 subsdk0..N、sdk（各自映像尾 4 KB 对齐），超出 main 的落进后面的模块；
         //   我们的模块按 2 MB 对齐各自摆放（runtime/src/loader.c），直接加 main 基址会写到别的模块的别处（11-13 实测：一款的帧率金手指写 main+0x24191F4，

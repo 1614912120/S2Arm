@@ -704,6 +704,15 @@ int main(void) {
           CHECK(r3 < 0 && !stat(sv, &st3) && st3.st_size == 2 && sh(c) != 0 && strstr(s2a_games_repair_detail(), "存档"),
                 "P1-180 存档读不到：不换树（返回 %d）、存档还在原处、没残留新树、原因写存档（「%s」）", r3, s2a_games_repair_detail());
           snprintf(c, sizeof c, "chmod 755 '%s'; chmod 644 '%s'; rm -rf '%s'", g3, sv, g3); sh(c); }
+        { // D-QCTB：每款目录本身写得进、只有下面的 cheats/ 写不进（玩家机上归 root），金手指写 status.txt 被拒。
+          //   期望手写：查得出（返回 1）、新 cheats/ 可写、里面的玩家文件 a.txt 内容「hi」照搬
+          char g4[600], ch[700], ct[760], buf4[8] = ""; snprintf(g4, sizeof g4, "%s/games/0100000000ABC000", base); snprintf(ch, sizeof ch, "%s/cheats", g4); snprintf(ct, sizeof ct, "%s/a.txt", ch);
+          snprintf(c, sizeof c, "mkdir -p '%s' && printf hi > '%s' && chmod 555 '%s'", ch, ct, ch);
+          CHECK(sh(c) == 0, "D-QCTB 造：每款下 cheats/ 写不进");
+          int r4 = s2a_games_repair(base);
+          FILE *f4 = fopen(ct, "r"); if (f4) { size_t k = fread(buf4, 1, sizeof buf4 - 1, f4); buf4[k] = 0; fclose(f4); }
+          CHECK(r4 == 1 && !access(ch, W_OK) && !strcmp(buf4, "hi"), "D-QCTB cheats/ 写不进 → 迁好：返回 1、新 cheats/ 可写、a.txt 内容一致（实际 %d / 内容「%s」）", r4, buf4);
+          snprintf(c, sizeof c, "chmod -R u+rw '%s'/.s2a-unwritable-* 2>/dev/null; rm -rf '%s'", base, g4); sh(c); }
 #endif
         chmod(root, 0755);
         snprintf(c, sizeof c, "chmod -R u+w '%s' 2>/dev/null; rm -rf '%s'", base, base); sh(c);
