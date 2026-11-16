@@ -127,6 +127,8 @@ class CheatsTests(unittest.TestCase):
         with mock.patch.object(cheats.urllib.request, "urlopen", side_effect=AssertionError("不该上传")):
             self.c.r = {"gameId": GID, "cheatsImport": [str(src)], "cheatsShare": False}
             self.assertEqual(community.save(self.c)["cheatsImported"], [{"name": "mine.txt", "shared": "off"}])
+            self.c.r = {"gameId": GID, "cheatsImport": [str(src)]}   # 没给勾选值 = 缺省（11-15 维护者「金手指分享缺省不勾」）：不上传
+            self.assertEqual(community.save(self.c)["cheatsImported"], [{"name": "mine.txt", "shared": "off"}])
         def down(req, timeout=0): raise OSError("网络不通")
         with mock.patch.object(cheats, "main_build", return_value=BID), mock.patch.object(cheats.urllib.request, "urlopen", down):
             self.c.r = {"gameId": GID, "cheatsImport": [str(src)], "cheatsShare": True}
