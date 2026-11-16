@@ -1915,7 +1915,7 @@ static id<MTLBuffer> g_ubs_buf; static size_t g_ubs_off, g_ubs_size;
 // made of them alone, latest first per byte (exactly what the GPU would read, whatever earlier frames still have in flight); when they cover only part of it, the rest comes from memory (ubp_get).
 // The real copies are encoded in order when the pass ends (rp_end), so later passes and the CPU see them as before. The pass still ends before a draw that would need more: a partly covered binding
 // whose rest memory cannot give, or a read of the deferred data through a vertex, index, indirect or storage buffer (ubd_conflict). Also on in TBDR mode (see ubd_on). DM_NVN_UB_DEFER=0 turns it off
-static size_t arena_alloc(size_t n, id<MTLBuffer> *buf); static inline void args_dirty_all(void); static void ubd_dirty(uint64_t lo, uint64_t hi);
+static size_t arena_alloc(size_t n, __strong id<MTLBuffer> *buf); static inline void args_dirty_all(void); static void ubd_dirty(uint64_t lo, uint64_t hi);
 typedef struct { uint64_t lo, hi, gpu; size_t off; __unsafe_unretained id<MTLBuffer> buf; uint32_t seq; } ubd_ent;   // data at buf + off (the ubs ring; a ring block replaced meanwhile lives until this submission completes); seq: order deferred
 enum { UBD_MAX = 512 };
 static ubd_ent g_ubd[UBD_MAX]; static int g_nubd;   // in the order deferred (ubd_flush lands them so)
@@ -8348,7 +8348,7 @@ static uint64_t g_arena_bytes, g_arena_seg, g_seg_fence_n, g_seg_done, g_arena_w
 static uint64_t arena_bytes(void) { return g_arena_bytes; }
 static uint64_t arena_waits(void) { return g_arena_waits; }
 static int arena_free(NvArena *it, size_t minimum) {
-    return it->buf.length >= minimum && ((it->fence && it->fence <= g_done) || (it->sfence && it->sfence <= g_seg_done));
+    return it->len >= minimum && ((it->fence && it->fence <= g_done) || (it->sfence && it->sfence <= g_seg_done));
 }
 static NvArena *arena_new(size_t minimum) {   // caller holds g_mu
     for (int waited = 0;; waited = 1) {
@@ -8375,7 +8375,9 @@ static uint64_t arena_cut(void) {   // sub_cut hands the segment to the GPU: its
 }
 static void sub_cut(void);   // hands the encoded part of the submission to the GPU (segmented submission, below)
 static void arena_seg_done(uint64_t sf) { pthread_mutex_lock(&g_mu); if (sf > g_seg_done) g_seg_done = sf; pthread_cond_broadcast(&g_cv); pthread_mutex_unlock(&g_mu); }
-static size_t arena_alloc(size_t n, id<MTLBuffer> *buf) {
+// buf is __strong: an unqualified id * out-parameter is __autoreleasing under ARC, which put the arena buffer in the autorelease pool at every call (a few per draw;
+// upstream (MIT) 5a81e13f: autorelease 2.63% -> 1.73% of replay time)
+static size_t arena_alloc(size_t n, __strong id<MTLBuffer> *buf) {
     n = (n + 255) & ~(size_t)255; g_arena_seg += n;
     if (!g_cur_arena || g_cur_arena->used + n > g_cur_arena->len) {
         pthread_mutex_lock(&g_mu); g_cur_arena = arena_new(n); pthread_mutex_unlock(&g_mu);
@@ -8385,14 +8387,14 @@ static size_t arena_alloc(size_t n, id<MTLBuffer> *buf) {
 }
 // Keep the logical vertex-zero pointer inside a real MTLBuffer. Only the payload
 // is populated; vertex_id still includes first/baseVertex and skips the prefix.
-static size_t arena_alloc_origin(size_t n, uint64_t prefix, id<MTLBuffer> *buf) {
+static size_t arena_alloc_origin(size_t n, uint64_t prefix, __strong id<MTLBuffer> *buf) {
     if (!m3_origin_on() || !prefix) return arena_alloc(n, buf);
     uint64_t limit = g_dev.maxBufferLength;
     if (prefix > SIZE_MAX - 255 || n > SIZE_MAX - 255) MDIE("buffer-origin scratch size overflow");
     size_t start = ((size_t)prefix + 255) & ~(size_t)255, size = (n + 255) & ~(size_t)255; g_arena_seg += size;
     if (start > limit || size > limit - start) MDIE("buffer-origin scratch exceeds Metal buffer limit (%llu + %zu > %llu)", (unsigned long long)prefix, n, (unsigned long long)limit);
     size_t off = g_cur_arena ? MAX(g_cur_arena->used, start) : start;
-    if (!g_cur_arena || off > g_cur_arena->buf.length || size > g_cur_arena->buf.length - off) {
+    if (!g_cur_arena || off > g_cur_arena->len || size > g_cur_arena->len - off) {
         pthread_mutex_lock(&g_mu); g_cur_arena = arena_new(start + size); pthread_mutex_unlock(&g_mu);
         [g_sub_arenas addObject:g_cur_arena]; off = start;
     }
