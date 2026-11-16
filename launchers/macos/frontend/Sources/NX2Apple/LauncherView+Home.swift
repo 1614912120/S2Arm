@@ -95,7 +95,7 @@ extension LauncherView {
                 Text(loc.backend(error)).font(.manrope(12)).foregroundStyle(LauncherPalette.danger).lineLimit(2)
             }
             HStack(spacing: 14) {
-                Button { homePrimary(game) } label: { Image(systemName: homePrimarySymbol(game)) }
+                Button { homePrimary(game) } label: { Label(homePrimaryTitle(game), systemImage: homePrimarySymbol(game)) }
                     .controllerButtonStyle(ConsolePlayButtonStyle()).disabled(model.cloudSyncing)
                     .keyboardShortcut(.return, modifiers: [])
                     .help(homePrimaryTitle(game)).accessibilityLabel(homePrimaryTitle(game))
@@ -106,7 +106,7 @@ extension LauncherView {
                 } label: {
                     fitLabel(txt("library.hero.selfSign"), "square.and.arrow.up")
                 }
-                .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.selfSign")
+                .controllerButtonStyle(ConsolePillButtonStyle()).controllerID("hero.selfSign")
                 .help(txt("library.hero.selfSign")).accessibilityLabel(txt("library.hero.selfSign"))
                 // 能直接导出的走手机槽（出包在跑也行，手机槽忙就排队）；要先出 iPhone 包的，主槽在跑非出包作业时等（出包在跑会排队）
                 .disabled(game.iphoneExportable ? model.phoneQueued(game.id) : model.mainBusy && model.session?.export == nil)
@@ -115,15 +115,10 @@ extension LauncherView {
                     Button { model.selfSigning = false; model.targetInstalledDevice(of: game); installFor = game.id } label: {
                         fitLabel(txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"), "iphone")
                     }
-                    .controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("hero.install")   // 只开装机窗：别的作业在跑，窗里点装机会排队
+                    .controllerButtonStyle(ConsolePillButtonStyle()).controllerID("hero.install")   // 只开装机窗：别的作业在跑，窗里点装机会排队
                     .help(txt(game.iphoneInstalledAt != nil && game.iphoneFree ? "library.hero.renew" : "library.hero.install"))
                 }
-                // 这款上次出包 / 装机 / 导出的结果页（主线游戏库「查看结果」）
-                if model.finishedExports[game.id] != nil, !(model.mainBusy && model.session?.gameID == game.id) {
-                    Button { model.viewingResult = model.finishedExports[game.id] } label: { Image(systemName: "checkmark.seal") }
-                        .controllerButtonStyle(ConsoleIconButtonStyle(size: 52)).controllerID("hero.results")
-                        .help(txt("library.hero.results")).accessibilityLabel(txt("library.hero.results"))
-                }
+                // 只留两个人人认得的圆钮（…、♡）；「查看出包结果」「启动设置」收进「…」菜单（11-16 维护者：三条横杠看不出是启动设置，一行三种形状不统一）
                 Button { moreFor = game.id } label: { Image(systemName: "ellipsis") }
                     .controllerButtonStyle(ConsoleIconButtonStyle(size: 52)).controllerID("hero.more")
                     .help(loc.t("home.details")).accessibilityLabel(loc.t("home.details"))
@@ -134,9 +129,6 @@ extension LauncherView {
                     .help(loc.t(home.favorites.contains(game.id) ? "home.unfavorite" : "home.favorite"))
                     .accessibilityLabel(loc.t(home.favorites.contains(game.id) ? "home.unfavorite" : "home.favorite"))
                     .accessibilityAddTraits(home.favorites.contains(game.id) ? .isSelected : [])
-                Button { displayFor = game.id } label: { Image(systemName: "slider.horizontal.3") }
-                    .controllerButtonStyle(ConsoleIconButtonStyle(size: 52)).controllerID("hero.settings")
-                    .help(txt("library.menu.launchSettings")).accessibilityLabel(txt("library.menu.launchSettings"))
             }.padding(.top, compact ? 4 : 10)
         }
         .frame(maxWidth: min(740, size.width * 0.64), alignment: .leading)
