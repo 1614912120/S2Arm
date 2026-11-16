@@ -43,13 +43,16 @@ def _build_id():   # 编好的库放哪：输出身份 + 编译器版本 + Windo
 def _build(out):
     tmp = tempfile.mkdtemp(prefix='spvc_', dir=os.path.dirname(out))
     try:
-        cc = [*_cxx(), *[f for f in FLAGS if not (WIN and f == '-fPIC')], '-I' + SRC]
+        # Windows 另带 -fmacro-prefix-map：MSVC 运行库的 assert 把 __FILE__ 编进库，检出路径不同字节就不同（见下 /Brepro 注）；不进 FLAGS（FLAGS 进输出身份，Mac 键不动）
+        cc = [*_cxx(), *[f for f in FLAGS if not (WIN and f == '-fPIC')], *(['-fmacro-prefix-map=' + ROOT + '=.'] if WIN else []), '-I' + SRC]
         procs = [subprocess.Popen([*cc, '-c', os.path.join(SRC, u + '.cpp'), '-o', os.path.join(tmp, u + '.o')]) for u in UNITS]
         procs.append(subprocess.Popen([*cc, '-I' + SHIM, '-include', os.path.join(SHIM, 'shim.h'), '-c', os.path.join(SRC, 'main.cpp'), '-o', os.path.join(tmp, 'main.o')]))
         procs.append(subprocess.Popen([*cc, '-c', os.path.join(SHIM, 'win' if WIN else '', 'shim.cpp'), '-o', os.path.join(tmp, 'shim.o')]))
         if any(p.wait() for p in procs): raise RuntimeError('spirv-cross 进程内库编译失败（见上方编译器输出）')
         lib = os.path.join(tmp, LIB)
-        subprocess.run([*_cxx(), '-shared' if WIN else '-dynamiclib', '-o', lib, *[os.path.join(tmp, f) for f in os.listdir(tmp) if f.endswith('.o')]], check=True)
+        # Windows 链接带 /Brepro：库整文件哈希进翻译键（dsh/batch/Build.cs LibFp，PE 不拆节），lld-link 缺省写链接时刻，同源每编一次字节不同、
+        #   Windows 出包机每份新检出全部着色器翻译缓存作废；/Brepro 时间戳取内容哈希。Mac 照旧（LibFp 按 Mach-O 节内容算，不看文件头）
+        subprocess.run([*_cxx(), *(['-shared', '-Wl,/Brepro'] if WIN else ['-dynamiclib']), '-o', lib, *[os.path.join(tmp, f) for f in os.listdir(tmp) if f.endswith('.o')]], check=True)
         os.replace(lib, out)
     finally: shutil.rmtree(tmp, ignore_errors=True)
 

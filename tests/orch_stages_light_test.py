@@ -708,12 +708,18 @@ class WindowsBashTest(unittest.TestCase):
         from pack.orch import stages as S
         stub_out = '\x00'.join('The attempted operation')
         for rc, out in ((1, stub_out), (0, stub_out)):
+            S._MACHINE_CFG.clear()   # 进程内缓存（同一进程同一项只问一次）：换模拟返回值前清掉
             with mock.patch.object(S, 'find_bash', return_value='bash'), \
                  mock.patch.object(S.subprocess, 'run', return_value=mock.Mock(returncode=rc, stdout=out)):
                 self.assertEqual(S.machine_cfg({}, 'S2A_COMMUNITY_DIR'), '')
+        S._MACHINE_CFG.clear()
         with mock.patch.object(S, 'find_bash', return_value='bash'), \
-             mock.patch.object(S.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout='/data\n')):
+             mock.patch.object(S.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout='/data\n')) as run:
             self.assertEqual(S.machine_cfg({}, 'S2A_COMMUNITY_DIR'), '/data')    # 正常值原样返回
+            self.assertEqual(S.machine_cfg({}, 'S2A_COMMUNITY_DIR'), '/data')    # 再问一次：读缓存
+            self.assertEqual(run.call_count, 1)                                     # 11-16：同一进程只起一次 bash
+            self.assertEqual(S.machine_cfg({'S2A_COMMUNITY_DIR': '/env'}, 'S2A_COMMUNITY_DIR'), '/env')   # 环境里给了就用环境的，不看缓存
+        S._MACHINE_CFG.clear()
 
 
 if __name__ == '__main__':
