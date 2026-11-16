@@ -3648,8 +3648,11 @@ static const uint8_t *tex_src(const tex_t *t, uint64_t n, uint8_t **part) {
     if (mem_readable(t->mem, n) >= n && nvn_be_addr((uint64_t)(uintptr_t)t->mem, n, &mb, &mo)) return t->mem;
     if (!(*part = calloc(1, n + 64))) MDIE("texture copy of %llu bytes failed", (unsigned long long)n);
     uint64_t rd = safe_copy(*part, t->mem, n);
-    if (rd < n) RED_ONCE(193, "texture ser=%llu %ux%u format %#x not readable from a memory pool buffer: only %llu of its %llu storage bytes are mapped; the rest is read as 0", (unsigned long long)t->serial,
-             t->d.width, t->d.height, t->d.format, (unsigned long long)rd, (unsigned long long)n);
+    // 地址四件（#8f2901：崩点 / 读不到的字节都落在某页最后一个字节，疑存储地址差 1）：存储地址、池基址、池大小、偏移，定是哪一项算错
+    if (rd < n) RED_ONCE(193, "texture ser=%llu %ux%u format %#x not readable from a memory pool buffer: only %llu of its %llu storage bytes are mapped; the rest is read as 0 "
+             "(storage %p = pool %p + offset %#llx, pool size %#llx, pool flags %#x)", (unsigned long long)t->serial,
+             t->d.width, t->d.height, t->d.format, (unsigned long long)rd, (unsigned long long)n,
+             (void *)t->mem, t->pool ? (void *)t->pool->mem : NULL, (unsigned long long)t->off, t->pool ? (unsigned long long)t->pool->size : 0ull, t->pool ? t->pool->flags : 0u);
     return *part;
 }
 static void page_span(const tex_t *t, size_t k, const uint8_t **lo, size_t *n) {   // the texture's bytes in host page k of its storage (pages counted from the one holding t->mem)
@@ -4072,7 +4075,9 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, id<MTLTexture
     if ((!unp || gdec) && !sparse && g_nvn_deswz_gpu) { up_begin(); upsrc = up_tex_src((uint64_t)t->mem, tex_rd_size(t), &mo); if (upsrc) mb = (__bridge void *)upsrc; }   // a pool that holds only textures stays out of the residency set (up_tex_src)
     int lin = (t->d.flags & (NVN_TEXTURE_FLAGS_LINEAR | NVN_TEXTURE_FLAGS_LINEAR_RENDER_TARGET)) != 0;   // 线性排布（tex_linear_needs_upload）只有 CPU 逐行拷，GPU 去混排不认
     int use_gpu = (!unp || gdec) && !sparse && g_nvn_deswz_gpu && !lin && (upsrc || nvn_be_addr((uint64_t)t->mem, tex_rd_size(t), &mb, &mo));   // 线性排布（tex_linear_needs_upload）只有 CPU 逐行拷，GPU 去混排不认   // a sparse pool's texture is gathered through its page table on the CPU
-    if (g_nvn_deswz_gpu && !use_gpu && !sparse && !lin && (!unp || gdec)) RED_ONCE(40, "swizzled texture storage is not in a memory pool; falling back to the CPU");
+    if (g_nvn_deswz_gpu && !use_gpu && !sparse && !lin && (!unp || gdec)) RED_ONCE(40, "swizzled texture storage is not in a memory pool; falling back to the CPU (ser=%llu %ux%u format %#x, storage %p = pool %p + offset %#llx, pool size %#llx, layout size %#llx)",
+        (unsigned long long)t->serial, t->d.width, t->d.height, t->d.format, (void *)t->mem, t->pool ? (void *)t->pool->mem : NULL, (unsigned long long)t->off,
+        t->pool ? (unsigned long long)t->pool->size : 0ull, (unsigned long long)t->L.size);
     if (use_gpu) {
         // The GPU reads the memory pool at execution time, which is closer to a real Switch than a snapshot at CPU upload time; the dirty-page stamp is still taken before encoding, and later writes still trigger a re-upload.
         // The batch was opened above (up_begin): opening it again here could flush it at UP_KEEP_CAP and retire upsrc before the copies that read it
