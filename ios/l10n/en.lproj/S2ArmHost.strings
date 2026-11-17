@@ -391,7 +391,8 @@
 "gfx.fpsLimit" = "Frame rate limit";
 "gfx.fpsLimit.none" = "Unlimited";
 "gfx.resolution" = "Render resolution";
-"iml.lost.body" = "Large games may run out of memory and quit or slow down. Reinstall with “Install on iPhone” in S2Arm on your computer (a free Apple ID keeps this permission too). If you sign it yourself, use Xcode or AltStore Classic v2.3; re-signing with SideStore 0.7.0 drops it. For an existing install, you can also add the permission to the App ID with GetMoreRam and reinstall.";
+"iml.lost.body" = "Large games may run out of memory and quit or slow down. Reinstall with “Install on iPhone” in S2Arm on your computer (a free Apple ID keeps this permission too). If you sign it yourself, use Xcode or AltStore Classic 2.2 or later; re-signing with SideStore 0.7.0 drops it. For an existing install, you can also add the permission to the App ID with GetMoreRam and reinstall.";
+"iml.lost.short" = "Large games may run out of memory and close. Tap “Learn more” to see how to sign S2Arm again with this permission.";
 "iml.lost.title" = "This install lost the “Increased Memory Limit” permission";
 "lan.denied.later" = "Not now";
 "lan.denied.message" = "The system hasn’t allowed “%@” to find devices on your local network, so multiplayer can’t find other players.\n\nGo to Settings › Privacy & Security › Local Network, turn on “%@”, then come back and join multiplayer again.";

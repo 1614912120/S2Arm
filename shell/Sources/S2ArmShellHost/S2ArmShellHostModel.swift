@@ -81,7 +81,7 @@ public final class S2ArmShellHostModel {
                 installPhase: ((String) -> (Int, Double?)?)? = nil, installFailure: ((String) -> String?)? = nil, installWait: (() -> Int32)? = nil,
                 now: @escaping () -> Date = Date.init, pickGameData: ((String) -> Void)? = nil, identityStore: GameIdentityStore = .live,
                 gamesRoot: URL = S2ArmContainer.gamesRoot(), packGamesRoot: URL? = nil,
-                imlNotice: (() -> String?)? = nil, installID: String = Bundle.main.bundlePath) {
+                imlNotice: (() -> String?)? = nil) {
         self.gamesRoot = gamesRoot
         self.packGamesRoot = packGamesRoot ?? Self.packGamesRoot(for: gamesRoot)
         self.stores = stores; self.layoutState = layoutState; bannerURLs = catalogue.bannerURLs
@@ -120,9 +120,8 @@ public final class S2ArmShellHostModel {
         for tile in catalogue.tiles { applyIdentity(tile.id) }
         for p in catalogue.problems { NSLog("S2Arm 游戏库：%@", p) }
         Self.sweepDeleting(gamesRoot)
-        self.installID = installID
         let json = imlNotice.map { $0() } ?? { guard let p = s2a_shell_iml_notice() else { return nil }; defer { free(p) }; return String(cString: p) }()
-        self.imlNotice = Self.imlNotice(json: json, closed: stores.app.string(forKey: Self.imlClosedKey), install: installID)
+        self.imlNotice = Self.imlNotice(json: json)
         refreshGameData()
         // 测试开关（真机自动化要 XCTest 触控 ID 授权、人不在时点不进去；同 diag.m S2A_OPEN_SETTINGS，环境变量只有 devicectl / Xcode 起 App 能给，玩家碰不到）：
         //   S2A_SHELL_OPEN_LAYOUT_EDITOR=<游戏号> 起来直接盖上这款的「调整位置」编辑页
@@ -515,18 +514,20 @@ public final class S2ArmShellHostModel {
     }
 
     /// 这次安装丢了「提高内存上限」权限（宿主 ios/iml_probe.m，确定丢了才给，读不到不报）：库顶上一条可关的提示，不拦开局。
-    ///   玩家关了，这次安装内不再出（按 App 包路径认「这次安装」：重装 / 更新后路径会变，换了装法仍丢就再提示）
+    ///   打开 App 就出（宿主启动即检测）；玩家关了只管这次打开，下次打开仍缺就再出；点「了解详情」看各装法怎么带上（11-16 维护者）
     public struct IMLNotice: Equatable, Sendable { public let title: String; public let body: String }
     public private(set) var imlNotice: IMLNotice?
-    @ObservationIgnored private var installID = ""
-    static let imlClosedKey = "S2AIMLNoticeClosedInstall"
-    nonisolated static func imlNotice(json: String?, closed: String?, install: String) -> IMLNotice? {
-        guard let json, closed != install,
+    /// 「了解详情」页（IMLGuideView）：按装法教怎么自签时带上这项权限
+    public var imlGuideOpen = false
+    nonisolated static func imlNotice(json: String?) -> IMLNotice? {
+        guard let json,
               let o = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
               let title = o["title"] as? String, let body = o["body"] as? String, !title.isEmpty else { return nil }
         return IMLNotice(title: title, body: body)
     }
-    public func closeIMLNotice() { stores.app.set(installID, forKey: Self.imlClosedKey); imlNotice = nil }
+    /// 关掉只管这次打开（11-16 维护者：下次打开仍缺就再出，别永久静默）
+    public func closeIMLNotice() { imlNotice = nil }
+    public func openIMLGuide() { imlGuideOpen = true }
 
     /// 待补文件（#8be819）：有的游戏把代码模块（NRO）藏在自有加密归档里，出包时取不到；第一次跑到那里宿主把游戏解开的整份存到
     ///   <文档根>/games/<号>/wire/<号大写>/nro/<SHA-256>.nro（runtime/src/loader.c s2a_nro_keep），这一局随后闪退。
