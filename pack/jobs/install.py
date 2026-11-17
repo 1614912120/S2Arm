@@ -810,7 +810,9 @@ def app_running(c, ident, bid):
     if rc:
         return None
     exe = [p.get("executable") or "" for p in (procs.get("result") or {}).get("runningProcesses") or [] if isinstance(p, dict)]
-    return any(e.startswith(u) for e in exe for u in urls)
+    # 只认 App 本身：安装目录下 PlugIns/ 里的扩展（主屏小组件 S2ArmWidget.appex，11-16 进壳）由系统常驻拉起，和玩家在不在玩无关——
+    #   原先也算「在跑」，phone_kept_pull 一直回 running=true，自动补件 / 提示更新从不发起（11-16 真机实测：App 早已退出，只有小组件进程在）
+    return any(e.startswith(u) and "/PlugIns/" not in e[len(u) - 1:] for e in exe for u in urls)
 
 
 def pull_kept_nros(c, ident, bid, gid, docs="Documents"):

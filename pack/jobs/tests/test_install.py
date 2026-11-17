@@ -1608,7 +1608,10 @@ class AssembleTests(unittest.TestCase):
         import diag
         cases = [(fake([url + "S2Arm"]), True), (fake(["file:///System/Library/CoreServices/SpringBoard.app/SpringBoard"]), False),
                  (fake([url + "S2Arm"], installed=False), False), (fake([], apps_rc=1), None), (fake([], ps_rc=1), None),
-                 (fake(["file:///private/var/containers/Bundle/Application/X/S2Arm.app2/S2Arm"]), False)]
+                 (fake(["file:///private/var/containers/Bundle/Application/X/S2Arm.app2/S2Arm"]), False),
+                 # 只有主屏小组件扩展进程在（App 已退出）：不算在玩（11-16 实测原先判 True，自动补件从不发起）
+                 (fake([url + "PlugIns/S2ArmWidget.appex/S2ArmWidget"]), False),
+                 (fake([url + "PlugIns/S2ArmWidget.appex/S2ArmWidget", url + "S2Arm"]), True)]
         for f, want in cases:
             with um.patch.object(diag, "devicectl", f):
                 self.assertEqual(install.app_running(self.c, "dev", "b"), want)
