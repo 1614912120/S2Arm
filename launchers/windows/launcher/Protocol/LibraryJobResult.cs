@@ -159,6 +159,8 @@ public sealed record LibraryCatalog(IReadOnlyList<LibraryGame> Games, bool KeysR
 {
     /// <summary>壳比本版旧的手机（游戏库顶栏「更新 iPhone 上的 S2Arm」按钮）；旧后端没有这个字段时为空。</summary>
     public IReadOnlyList<PhoneUpdate> PhoneUpdates { get; init; } = [];
+    /// <summary>这台电脑往几台手机装过游戏（catalog phoneDevices）：更新弹窗据此写「更新启动器和 iPhone App」；旧后端没有时为 0。</summary>
+    public int PhoneDevices { get; init; }
 
     public static LibraryCatalog Parse(JsonElement result)
     {
@@ -215,7 +217,11 @@ public sealed record LibraryCatalog(IReadOnlyList<LibraryGame> Games, bool KeysR
             }
             var keys = result.GetProperty("keys");
             return new(games.AsReadOnly(), keys.GetProperty("ready").GetBoolean(),
-                LibraryJobResult.Text(keys, "message", true)) { PhoneUpdates = PhoneUpdate.ParseList(result) };
+                LibraryJobResult.Text(keys, "message", true))
+            {
+                PhoneUpdates = PhoneUpdate.ParseList(result),
+                PhoneDevices = result.TryGetProperty("phoneDevices", out var pd) && pd.ValueKind == JsonValueKind.Number && pd.TryGetInt32(out var n) ? n : 0
+            };
         }
         catch (Exception error) when (error is InvalidOperationException or KeyNotFoundException)
         {

@@ -118,7 +118,11 @@ def _iml_device_hint(c, tgt, gid):
     ios_ver 取目标设备系统大版本；has_iml 按签名配置判（dev/adhoc 均带 IML，pack/app.entitlements 只有 IML）；
     addr_need.tsv 在产物根里（stage_rewrite.sh 生成，若不存在不报错）。读不到设备 / 表缺失不报错不中止。
     """
-    iml_check_path = Path(__file__).resolve().parents[1] / "iml_check.py"
+    # 按请求的引擎树找（同 install.widget_mod）：Mac App 里作业层在 Resources/Jobs、iml_check.py 在 Resources/Engine/pack，
+    #   原先按本文件往上一级找（= Resources），App 里永远找不到、提示悄悄不出；引擎树里没有时才退回源码树
+    iml_check_path = Path(c.engine) / "pack" / "iml_check.py"
+    if not iml_check_path.is_file():
+        iml_check_path = Path(__file__).resolve().parents[1] / "iml_check.py"
     if not iml_check_path.is_file():
         return
     has_iml = True   # dev 签名描述文件允许 IML = 有；adhoc 自签 app.entitlements 只带 IML = 有
@@ -370,10 +374,12 @@ def _build(c):
     pack_dir = out / (ipa.stem + "资源包")   # 同 pack/oneclick/oneclick.sh 的交付布局
     patches.record(c, gid, "ios", product_root(c, gid))   # 补丁打入结果（打上 / 没打上，完成页列；deliver 之前产物根还在，11-14）
     deliver(c, gid, product_root(c, gid), pack_dir, ipa)
-    import sgrade   # iPhone 设置页的 S 级状态底料（版本对照 / 满屏来源 / 出包时选不打入；手机上没有补丁库，开关与自动关由手机本机算）
-    sgrade.write_kit_state(c, gid, layout.ios_kit(c, gid))
+    finish_kit_state(c, gid)
+    if c.r.get("platform") == "tvos":   # Apple TV（11-15）：同一份改写产物派生（pack/jobs/tvos.py derive），要在清解包目录之前（ASTC 预转读 romfs）
+        import tvos
+        tvos.derive(c, gid, extraction)
     prune_unless_follow_up(c, gid)
-    cache_result = trim(c.work_root, current_gid=gid, **compiler_policy)
+    cache_result = trim(c.work_root, current_gid=gid, skip_scan_when_free=True, **compiler_policy)   # 盘不紧就不全量扫（一条都不会删）
     from cache_retention import engine_installed_at, prune_tool_keys
     prune_tool_keys(c.work_root, engine_installed_at(c.engine))   # 当前引擎用不到的工具缓存旧键（NativeAOT / libvpx / opus / dav1d）
     from cache_retention import trim_build_caches
@@ -383,9 +389,12 @@ def _build(c):
                      (cache_result['scanErrors'], cache_result['evictionErrors'], cache_result['diskErrors'],
                       cache_result['unscannedRoots'], cache_result['protectedLinks'], cache_result['changedEntries']),
                      code="compiler_cache_incomplete", severity="warning")
-    c.emit("message", "编库缓存保护最近 %d 款；已观察保留 %d 字节、淘汰 %d 条；盘余量 %s 字节，底线 %d 字节，仍低于底线：%s。逻辑字节不触发裁剪。" %  # 非玩家句
-           (cache_result['keepTitles'], cache_result['retainedBytes'], cache_result['removedEntries'],
-            cache_result['freeBytes'], cache_result['minFreeBytes'], cache_result['pressureRemaining']))
+    if not cache_result.get('scanned', True):
+        c.emit("message", "编库缓存：盘余量 %s 字节，不低于底线 %d 字节，不用清，没扫描。" % (cache_result['freeBytes'], cache_result['minFreeBytes']))  # 非玩家句
+    else:
+        c.emit("message", "编库缓存保护最近 %d 款；已观察保留 %d 字节、淘汰 %d 条；盘余量 %s 字节，底线 %d 字节，仍低于底线：%s。逻辑字节不触发裁剪。" %  # 非玩家句
+               (cache_result['keepTitles'], cache_result['retainedBytes'], cache_result['removedEntries'],
+                cache_result['freeBytes'], cache_result['minFreeBytes'], cache_result['pressureRemaining']))
     from library import _part_bytes
     image = layout.image_ios(c, gid)
     result = dict(compilerCache=cache_result, outputPath=str(image), ipa="", ipaBytes=0, packBytes=_part_bytes([image / layout.IOS_PACK]), buildId=res.get("build_id") or "", target=tgt, graphicsMode=res.get("graphics_mode") or "unknown",
@@ -438,7 +447,37 @@ def refresh_library_ipa(c):
     return layout.phone_ipa(c)
 
 
+# 出包与装机并行（11-16 维护者「出包时也能装别的游戏到 iPhone」）：两把库锁，全局取锁顺序 = 手机锁 → 各款程序锁（按游戏号排序），不会成环。
+#   程序锁（.program-<游戏号>.lock）：护住这款的程序件（kit）、资源包（.pack）与 game.json 的 ios 记录——出包只在交付换件那几秒拿；
+#     装机 / 导出在 refresh_ios（可能原地改别款的 kit）+ 组壳（读各款 kit）那段拿它要带的全部款；推资源包期间不拿。
+#   手机锁（.phone.lock）：装机类作业（装到 iPhone / 更新 / 装回上一版 / 从手机删 / 推导出包 / 出包早装）一次一个——默认位置根的 S2Arm.ipa、
+#     S2Arm.previous.ipa 全库一份、不分设备，两台手机并行会互相换掉
+PROGRAM_LOCK_WAIT_S, PHONE_LOCK_WAIT_S = 1800, 7200
+
+
+@contextlib.contextmanager
+def program_locks(c, games):
+    with contextlib.ExitStack() as stack:
+        for g in sorted({str(g).upper() for g in games if g}):
+            stack.enter_context(c.lock("program-" + g, wait=PROGRAM_LOCK_WAIT_S))
+        yield
+
+
+def phone_lock(c):
+    return c.lock("phone", wait=PHONE_LOCK_WAIT_S)
+
+
 CONTAINER_BUNDLE = "io.s2arm.games"   # 组装时的占位包名：Mac 装机换成团队专属的 io.s2arm.games.<团队>（install.container_bundle_id）；Windows 由 plumesign 按账号定
+
+
+def finish_kit_state(c, gid):
+    """出 iPhone 包收尾：iPhone 设置页的 S 级状态底料写进 kit（sgrade_state.json：版本对照 / 满屏来源 / 出包时选不打入；手机上没有补丁库，
+    开关与自动关由手机本机算），再把常驻配方重存一次——它在 deliver 存配方之后才写，不重存的话缓存清掉、按配方现建的 kit 缺它，
+    手机 S 级设置页没底料（11-16 Windows 实机按配方现建对比：37 / 38 同，只缺它）"""
+    import programs
+    import sgrade
+    sgrade.write_kit_state(c, gid, layout.ios_kit(c, gid))
+    programs.save_recipe(c, gid)
 
 
 def deliver(c, gid, root, pack_dir, ipa):
@@ -446,13 +485,24 @@ def deliver(c, gid, root, pack_dir, ipa):
     先存容器件、再换资源包、最后写 game.json：中途被打断时 game.json 还是上一版的，资源包号对不上就按「变了」补推，不会少推"""
     import host_update
     from library import save_container_kit, _rm
-    if root is None or save_container_kit(c, gid, root) is None:
+    with program_locks(c, [gid]):
+        kit = None if root is None else save_container_kit(c, gid, root)
+    if kit is None:
         raise Failure("一键出包结束了，但产物根里没有组装 iPhone 版要用的文件（main.npdm），请查看日志。", code="package_failed")
     to_img(c, gid, root, pack_dir)
     want = read(Path(pack_dir) / "manifest.json", {}).get("index_sha256")
     if not want:
         raise Failure(f"资源包缺清单或清单没有 index_sha256（{pack_dir}）：请重新打 iPhone 包。", code="package_failed")
+    with program_locks(c, [gid]):   # 换资源包 + 记 ios：装机正在推 / 读这款时等它那段做完
+        _swap_pack(c, gid, pack_dir, want)
+    Path(ipa).unlink(missing_ok=True)
+
+
+def _swap_pack(c, gid, pack_dir, want):
+    import host_update
+    from library import _rm
     image = layout.image_ios(c, gid)
+    image.mkdir(parents=True, exist_ok=True)   # 程序件改存专用文件夹（layout.program_store）后，image/ios 不再由存程序件时顺带建
     managed = layout.root_of(c, gid)
     dest, old = image / layout.IOS_PACK, image / (layout.IOS_PACK + ".old")
     if old.exists():
@@ -469,7 +519,6 @@ def deliver(c, gid, root, pack_dir, ipa):
     from rewrite_refresh import rewriter_id   # 这次的改写产物出自哪版改写器：改写器以后修了，更新手机时只核记号不同的款（rewrite_refresh.py）
     from sgrade_bf import BF_GEN   # 这次的直连库出自本引擎翻译器：可读瓦片版代数（S 级升级按它判要不要补 _bf，pack/jobs/sgrade_bf.py）
     layout.update_info(c, gid, ios=dict(shellId=current_shell_id(c), pack=want, rewriterId=rewriter_id(c), bfGen=BF_GEN, **compat))
-    Path(ipa).unlink(missing_ok=True)
 
 
 CONSUME_MARK = ".img_consume_inflight"   # 出包工作目录里：写 IMG 正在边写边删产物根 RomFS（#746），写成功才删
@@ -550,7 +599,7 @@ def usable_kit(c, gid, sid, failed=()):
     kit = layout.ios_kit(c, gid)
     if not (kit / "main.npdm").is_file():
         return None
-    ios = layout.game_info(c, gid).get("ios") or {}
+    ios = layout.program_info(c, gid)   # 游戏文件夹被删了也读得到（专用文件夹的那份）
     if ios.get("shellId") == sid:
         return resolve_path(kit)
     want = host_update.engine_compat(c)
@@ -671,7 +720,7 @@ def assemble(c, gid, others=(), *, failed=(), root=None, dest=None, agreed=None)
         roots[g] = usable_kit(c, g, sid, failed)
         if roots[g] is None:
             stale.append(names.get(g, g))
-            if not (layout.ios_kit(c, g) / "main.npdm").is_file():
+            if not layout.has_ios_kit(c, g):
                 missing.add(g)
     stale_ids = [g for g in roots if roots[g] is None]
     agreed = {a.upper() for a in ((agreed or {}).get(sid) or [])}

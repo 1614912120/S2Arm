@@ -24,6 +24,10 @@ class FakeContext:
     def __init__(self, private, request=None):
         self.private, self.r = Path(private), request or {}
 
+    def lock(self, *a, **k):   # 装机类作业的手机锁（ipa.phone_lock）
+        import contextlib
+        return contextlib.nullcontext()
+
 
 def game(*updates, gid=TITLE):
     pk = [dict(type="base", version=0, titleId=gid, sha256="b", display="1.0.0")]
@@ -362,9 +366,10 @@ class HostTest(unittest.TestCase):
         s = scheme(targets=dict(ios=dict(tool="t.py", hosts=["mac", "windows"])))
         self.assertEqual(ds.eligibility(s, game(), host="windows"), (True, ""))
 
-    def test_real_registry_is_mac_only_for_now(self):
+    def test_real_registry_opens_windows(self):
+        # 下游 v2.3.3 起做包不再要 C 编译器 / .NET / spirv-cross（壳里自带预编件，#1272），Windows 也能出：登记表放开
         real = ds.load()
-        self.assertEqual(ds.hosts(real["d2r-mobile"]), ["mac"])
+        self.assertEqual(ds.hosts(real["d2r-mobile"]), ["mac", "windows"])
 
 
 if __name__ == "__main__":

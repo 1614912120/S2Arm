@@ -103,5 +103,34 @@ class UpgradeMac(unittest.TestCase):
             self.assertFalse((rt / "shaders/direct.sgbf").exists(), "不留临时目录")
 
 
+class IosInputsImage(unittest.TestCase):
+    def test_romfs_segment_becomes_image_byte_for_byte(self):
+        # iPhone 款从 game.img 取材：标准 RomFS 段原样拷成临时产物根的 romfs.std（段内容按写进去的字节手写对比：不多不少），不展开成 romfs/ 散文件；
+        #   其余条目（aoc/…）照旧放回产物根
+        import os
+        import struct
+        with tempfile.TemporaryDirectory() as t:
+            t = Path(t); engine = Path(sgrade_bf.__file__).resolve().parents[2]
+            c = types.SimpleNamespace(engine=engine)
+            img = sgrade_bf._img(c)
+            seg, aoc = os.urandom(70001), b"dlc payload"
+            ro = img.PAGE; ao = img.up(ro + len(seg)); toc = img.toc_bytes([("aoc/1/data", ao, len(aoc))]); to = img.up(ao + len(aoc))
+            pack, kit, exefs = t / "pack", t / "kit", t / "exefs"
+            for d in (pack, kit, exefs): d.mkdir()
+            (exefs / "main").write_bytes(b"main")
+            with open(pack / "game.img", "wb") as f:
+                f.write(img.HDR.pack(img.MAGIC, img.FORMAT, 0, b"0100AAAA00000000", b"pk", ro, len(seg), to, len(toc), to + len(toc)))
+                f.seek(ro); f.write(seg); f.seek(ao); f.write(aoc); f.seek(to); f.write(toc)
+            fake_sgrade = types.SimpleNamespace(saved_program=lambda c, g: exefs)
+            with patch.object(sgrade_bf.layout, "ios_pack", return_value=pack), patch.object(sgrade_bf.layout, "ios_kit", return_value=kit), \
+                 patch.object(sgrade_bf.layout, "image_mac", return_value=t / "no-mac"), patch.dict("sys.modules", {"sgrade": fake_sgrade}):
+                root, how = sgrade_bf.ios_inputs(c, "0100AAAA00000000", t / "work")
+            self.assertEqual(how, "game.img")
+            self.assertEqual((root / "romfs.std").read_bytes(), seg, "镜像 = game.img 的 RomFS 段，逐字节相同")
+            self.assertFalse((root / "romfs").exists(), "不展开 romfs/")
+            self.assertEqual((root / "aoc/1/data").read_bytes(), aoc)
+            self.assertTrue(sgrade_bf._has_romfs(root))
+
+
 if __name__ == "__main__":
     unittest.main()

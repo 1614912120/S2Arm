@@ -673,6 +673,8 @@
       ".ts"
     ],
     "text_suffixes": [
+      ".ets",
+      ".json5",
       ".spvasm",
       ".svg",
       ".lock",

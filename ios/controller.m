@@ -2,6 +2,7 @@
 #import <GameController/GameController.h>
 #import "s2a_l10n.h"
 #import <CoreHaptics/CoreHaptics.h>
+#include "haptic_safe.h"
 #import "controller.h"
 #import <UIKit/UIGestureRecognizerSubclass.h>   // S2ATouchWatch 要改 state
 #include "native.h"
@@ -63,14 +64,16 @@ static pthread_mutex_t g_feedback_mu = PTHREAD_MUTEX_INITIALIZER;
 #define PHONE_SESSION_BASE 0x5350000000000000ull
 static dispatch_queue_t g_system_haptics_queue;
 static GCController *g_haptic_device; // 只在 g_system_haptics_queue 上访问
-static CHHapticEngine *g_haptic_engine;
-static id<CHHapticPatternPlayer> g_haptic_player;   // 能建循环播放器就用循环的；建不了（见 system_play_on_queue）用普通播放器，快到事件末尾时重起
-static BOOL g_haptic_loops;          // 当前播放器是循环的
+// 一路或两路（ios/haptic_retry.h s2a_hp_split，11-16）：手柄同时支持 LeftHandle / RightHandle 就左右各一个引擎（[0] 左、[1] 右），否则 [0] 两侧合成一路
+static int g_haptic_split = -1;      // -1 = 还没看过这只手柄，0 = 合成一路，1 = 左右两路（换手柄清掉）
+static CHHapticEngine *g_haptic_engine[2];
+static id<CHHapticPatternPlayer> g_haptic_player[2];   // 能建循环播放器就用循环的；建不了（见 system_play_on_queue）用普通播放器，快到事件末尾时重起
+static BOOL g_haptic_loops[2];       // 当前播放器是循环的
 static BOOL g_haptic_plain_only;     // 这只手柄建循环播放器失败过：之后只建普通播放器（换手柄清掉）
-static uint64_t g_haptic_started_ns; // 普通播放器这一轮的起播时刻
+static uint64_t g_haptic_started_ns[2]; // 普通播放器这一轮的起播时刻
 #define S2A_HAPTIC_RESTART_NS (20ull * NSEC_PER_SEC)
 static dispatch_source_t g_haptic_timer;
-static BOOL g_haptic_playing;
+static BOOL g_haptic_playing[2];
 static s2a_hp_state g_haptic_retry;   // 只在 g_system_haptics_queue 上访问：失败退避与判死（ios/haptic_retry.h）
 // 下列字段由 g_feedback_mu 保护，提交方只更新固定快照。
 static uint64_t g_system_epoch;
@@ -82,14 +85,12 @@ static s2a_pad_vibration g_phone_pair[2];
 
 static void system_stop_on_queue(void) {
     s2a_ea_rumble_stop();
-    if (g_haptic_player && g_haptic_playing) [g_haptic_player stopAtTime:CHHapticTimeImmediate error:nil];
-    g_haptic_playing = NO;
+    for (int k = 0; k < 2; k++) { if (g_haptic_player[k] && g_haptic_playing[k]) s2a_hp_stop(g_haptic_player[k]); g_haptic_playing[k] = NO; }
     if (g_haptic_timer) dispatch_source_set_timer(g_haptic_timer, DISPATCH_TIME_FOREVER, DISPATCH_TIME_FOREVER, 0);
 }
 static void system_reset_on_queue(void) {
     system_stop_on_queue();
-    [g_haptic_engine stopWithCompletionHandler:nil];
-    g_haptic_player = nil; g_haptic_engine = nil;
+    for (int k = 0; k < 2; k++) { s2a_hp_engine_stop(g_haptic_engine[k]); g_haptic_player[k] = nil; g_haptic_engine[k] = nil; }
 }
 void s2a_rumble_apply_settings(void);
 // 游戏震动的总开关和强度（设置页「按键显示与触感」）：提交前按倍率缩放振幅，手机马达 / 实体手柄 / NS2 Pro 共用
@@ -140,15 +141,65 @@ static void system_arm_stop_timer(void) {
     }
     dispatch_source_set_timer(g_haptic_timer, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), DISPATCH_TIME_FOREVER, 0);
 }
-static void system_play_on_queue(s2a_pad_vibration pair[2]) {
-    float amplitude = 0, weighted = 0, weights = 0;
-    for (int i = 0; i < 2; i++) {
-        float lo = finite_clamp(pair[i].low_amp, 0, 1), hi = finite_clamp(pair[i].high_amp, 0, 1);
-        amplitude = fmaxf(amplitude, fmaxf(lo, hi));
-        weighted += lo * finite_clamp(pair[i].low_hz, 0, 1250) + hi * finite_clamp(pair[i].high_hz, 0, 1250);
-        weights += lo + hi;
+// 第 k 路（locality）播 amplitude / sharpness：建引擎 → 建播放器 → 起播 → 更新强度。返回 NO：失败已归档（调用方复位），或 *again 置位要复位后整对重来
+static BOOL system_channel_on_queue(int k, GCHapticsLocality locality, float amplitude, float sharp, BOOL *again) {
+    NSError *error = nil;
+    if (!g_haptic_engine[k]) {
+        g_haptic_engine[k] = [g_haptic_device.haptics createEngineWithLocality:locality];
+        if (!g_haptic_engine[k]) {
+            if (g_haptic_split > 0) { LOG("系统手柄震动：分侧引擎建不出来，改两侧合成一路"); g_haptic_split = 0; *again = YES; return NO; }
+            system_fail_on_queue("无法创建引擎", nil); return NO; }
+        g_haptic_engine[k].playsHapticsOnly = YES;
+        // 回调不在本队列执行，且旧引擎的回调可能晚于设备切换。
+        __weak CHHapticEngine *weakEngine = g_haptic_engine[k];
+        void (^invalidate)(void) = ^{
+            CHHapticEngine *engine = weakEngine;
+            if (!engine) return;
+            dispatch_async(g_system_haptics_queue, ^{
+                if (g_haptic_engine[0] == engine || g_haptic_engine[1] == engine) system_reset_on_queue();
+            });
+        };
+        g_haptic_engine[k].resetHandler = ^{ invalidate(); };
+        g_haptic_engine[k].stoppedHandler = ^(CHHapticEngineStoppedReason reason) { (void)reason; invalidate(); };
     }
-    if (amplitude <= 0.001f) { system_stop_on_queue(); return; }
+    if (!g_haptic_player[k]) {
+        if (![g_haptic_engine[k] startAndReturnError:&error]) { system_fail_on_queue("启动引擎失败", error); return NO; }
+        CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[
+            [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1],
+            [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5]] relativeTime:0 duration:30];
+        CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
+        // 循环播放器在有的系统 / 手柄上建不出来（#584 iPad A16 / iPadOS 27.3 / 小鸡启明星：NSCocoaErrorDomain 4097；Mac 端 11-10
+        //   M1 Max / DualSense 同一个错，见 macos/front_mac.m rumbler_channel），同一台机器上普通播放器能建能播：退到普通播放器，
+        //   它不能循环，靠下面的重起接上。循环播放器建失败后这个引擎也废了（接着在它上面建普通播放器会报 Client not registered），
+        //   所以记下来、丢掉引擎、从头再来；这一下不算失败次数（判死只看普通播放器那条路也走不通）
+        if (pattern && !g_haptic_plain_only) {
+            id<CHHapticAdvancedPatternPlayer> advanced = [g_haptic_engine[k] createAdvancedPlayerWithPattern:pattern error:&error];
+            if (advanced) { advanced.loopEnabled = YES; g_haptic_player[k] = advanced; g_haptic_loops[k] = YES; }
+            else {
+                LOG("系统手柄震动：循环播放器建不了（%s/%ld），改用普通播放器", error.domain.UTF8String ?: "-", error ? (long)error.code : 0L);
+                g_haptic_plain_only = YES; *again = YES; return NO;
+            }
+        } else if (pattern) { g_haptic_player[k] = [g_haptic_engine[k] createPlayerWithPattern:pattern error:&error]; g_haptic_loops[k] = NO; }
+        if (!g_haptic_player[k]) { system_fail_on_queue("创建播放器失败", error); return NO; }
+    }
+    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    if (g_haptic_playing[k] && !g_haptic_loops[k] && now - g_haptic_started_ns[k] > S2A_HAPTIC_RESTART_NS) {   // 普通播放器：事件 30 秒，连着震到 20 秒就重起一轮
+        s2a_hp_stop(g_haptic_player[k]); g_haptic_playing[k] = NO;
+    }
+    if (!g_haptic_playing[k] && !s2a_hp_start(g_haptic_player[k], &error)) { system_fail_on_queue("播放失败", error); return NO; }
+    if (!g_haptic_playing[k]) g_haptic_started_ns[k] = now;
+    g_haptic_playing[k] = YES;
+    if (!s2a_hp_send(g_haptic_player[k], @[
+        [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:amplitude relativeTime:0],
+        [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharp - 0.5f relativeTime:0]], &error)) {
+        system_fail_on_queue("更新强度失败", error); return NO;
+    }
+    return YES;
+}
+static void system_play_on_queue(s2a_pad_vibration pair[2]) {
+    float lo[2] = {pair[0].low_amp, pair[1].low_amp}, hi[2] = {pair[0].high_amp, pair[1].high_amp}, lz[2] = {pair[0].low_hz, pair[1].low_hz}, hz[2] = {pair[0].high_hz, pair[1].high_hz};
+    float all = 0, all_sharp = 0; s2a_hp_mix(2, lo, hi, lz, hz, &all, &all_sharp);
+    if (all <= 0.001f) { system_stop_on_queue(); return; }
     // 走配件协议的手柄（#462）：左右两侧振幅直接发给手柄马达；Core Haptics 会把这只手柄的震动送到机身，不走它
     if (s2a_ea_rumble_active()) {
         s2a_ea_rumble_set(fmaxf(finite_clamp(pair[0].low_amp, 0, 1), finite_clamp(pair[0].high_amp, 0, 1)),
@@ -157,70 +208,26 @@ static void system_play_on_queue(s2a_pad_vibration pair[2]) {
     }
     // 退避期 / 已判死：一个 CoreHaptics 调用都不碰。游戏每秒提交约 29 次震动，这条路径必须廉价。
     if (s2a_hp_should_try(&g_haptic_retry, clock_gettime_nsec_np(CLOCK_UPTIME_RAW)) == S2A_HP_SKIP) return;
-    float hz = weights > 0 ? weighted / weights : 160;
-    float sharp = finite_clamp((hz - 160) / 160 * 0.5f + 0.3f, 0, 1);
-    NSError *error = nil;
-    if (!g_haptic_engine) {
-        g_haptic_engine = [g_haptic_device.haptics createEngineWithLocality:GCHapticsLocalityDefault];
-        if (!g_haptic_engine) { system_fail_on_queue("无法创建引擎", nil); return; }
-        g_haptic_engine.playsHapticsOnly = YES;
-        // 回调不在本队列执行，且旧引擎的回调可能晚于设备切换。
-        __weak CHHapticEngine *weakEngine = g_haptic_engine;
-        void (^invalidate)(void) = ^{
-            CHHapticEngine *engine = weakEngine;
-            if (!engine) return;
-            dispatch_async(g_system_haptics_queue, ^{
-                if (g_haptic_engine == engine) system_reset_on_queue();
-            });
-        };
-        g_haptic_engine.resetHandler = ^{ invalidate(); };
-        g_haptic_engine.stoppedHandler = ^(CHHapticEngineStoppedReason reason) { (void)reason; invalidate(); };
-        // 只打一次：下一次真机日志用这一行就能区分「引擎没建起来」「玩家关了手柄震动」「locality 不对」。
+    if (g_haptic_split < 0) {
+        NSSet<GCHapticsLocality> *localities = g_haptic_device.haptics.supportedLocalities;
+        g_haptic_split = s2a_hp_split([localities containsObject:GCHapticsLocalityLeftHandle], [localities containsObject:GCHapticsLocalityRightHandle]);
+        // 只打一次：下一次真机日志用这一行就能区分「引擎没建起来」「玩家关了手柄震动」「locality 不对」「分没分左右」。
         if (!g_haptic_retry.diagnosed) {
             g_haptic_retry.diagnosed = YES;
-            NSArray *localities = g_haptic_device.haptics.supportedLocalities.allObjects;
-            LOG("系统手柄震动：引擎已建（locality Default；手柄 %s 支持 %lu 个 locality：%s）",
-                g_haptic_device.vendorName.UTF8String ?: "?",
-                (unsigned long)localities.count,
-                [localities componentsJoinedByString:@","].UTF8String ?: "");
+            LOG("系统手柄震动：%s（手柄 %s 支持 %lu 个 locality：%s）", g_haptic_split ? "左右马达分开震" : "两侧合成一路",
+                g_haptic_device.vendorName.UTF8String ?: "?", (unsigned long)localities.count,
+                [localities.allObjects componentsJoinedByString:@","].UTF8String ?: "");
         }
     }
-    if (!g_haptic_player) {
-        if (![g_haptic_engine startAndReturnError:&error]) { system_fail_on_queue("启动引擎失败", error); system_reset_on_queue(); return; }
-        CHHapticEvent *event = [[CHHapticEvent alloc] initWithEventType:CHHapticEventTypeHapticContinuous parameters:@[
-            [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticIntensity value:1],
-            [[CHHapticEventParameter alloc] initWithParameterID:CHHapticEventParameterIDHapticSharpness value:0.5]] relativeTime:0 duration:30];
-        CHHapticPattern *pattern = [[CHHapticPattern alloc] initWithEvents:@[event] parameters:@[] error:&error];
-        // 循环播放器在有的系统 / 手柄上建不出来（#584 iPad A16 / iPadOS 27.3 / 小鸡启明星：NSCocoaErrorDomain 4097；Mac 端 11-10
-        //   M1 Max / DualSense 同一个错，见 macos/front_mac.m rumble_play_on_queue），同一台机器上普通播放器能建能播：退到普通播放器，
-        //   它不能循环，靠下面的重起接上。循环播放器建失败后这个引擎也废了（接着在它上面建普通播放器会报 Client not registered），
-        //   所以记下来、丢掉引擎、从头再来；这一下不算失败次数（判死只看普通播放器那条路也走不通）
-        if (pattern && !g_haptic_plain_only) {
-            id<CHHapticAdvancedPatternPlayer> advanced = [g_haptic_engine createAdvancedPlayerWithPattern:pattern error:&error];
-            if (advanced) { advanced.loopEnabled = YES; g_haptic_player = advanced; g_haptic_loops = YES; }
-            else {
-                LOG("系统手柄震动：循环播放器建不了（%s/%ld），改用普通播放器", error.domain.UTF8String ?: "-", error ? (long)error.code : 0L);
-                g_haptic_plain_only = YES; system_reset_on_queue(); system_play_on_queue(pair); return;
-            }
-        } else if (pattern) { g_haptic_player = [g_haptic_engine createPlayerWithPattern:pattern error:&error]; g_haptic_loops = NO; }
-        if (!g_haptic_player) { system_fail_on_queue("创建播放器失败", error); system_reset_on_queue(); return; }
-    }
-    uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
-    if (g_haptic_playing && !g_haptic_loops && now - g_haptic_started_ns > S2A_HAPTIC_RESTART_NS) {   // 普通播放器：事件 30 秒，连着震到 20 秒就重起一轮
-        [g_haptic_player stopAtTime:CHHapticTimeImmediate error:nil]; g_haptic_playing = NO;
-    }
-    if (!g_haptic_playing && ![g_haptic_player startAtTime:CHHapticTimeImmediate error:&error]) {
-        system_fail_on_queue("播放失败", error); system_reset_on_queue(); return;
-    }
-    if (!g_haptic_playing) g_haptic_started_ns = now;
-    g_haptic_playing = YES;
-    if (![g_haptic_player sendParameters:@[
-        [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:amplitude relativeTime:0],
-        [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharp - 0.5f relativeTime:0]] atTime:CHHapticTimeImmediate error:&error]) {
-        system_fail_on_queue("更新强度失败", error); system_reset_on_queue(); return;
+    float amp[2] = {all, 0}, sharp[2] = {all_sharp, 0.3f}; int n = g_haptic_split > 0 ? 2 : 1;
+    if (n == 2) for (int k = 0; k < 2; k++) s2a_hp_mix(1, &lo[k], &hi[k], &lz[k], &hz[k], &amp[k], &sharp[k]);
+    for (int k = 0; k < n; k++) {
+        GCHapticsLocality locality = n == 1 ? GCHapticsLocalityDefault : k == 0 ? GCHapticsLocalityLeftHandle : GCHapticsLocalityRightHandle;
+        BOOL again = NO;
+        if (!system_channel_on_queue(k, locality, amp[k], sharp[k], &again)) { system_reset_on_queue(); if (again) system_play_on_queue(pair); return; }
     }
     s2a_hp_on_ok(&g_haptic_retry);   // 真正播起来了才清零连续失败
-    static BOOL logged; if (!logged) { logged = YES; LOG("系统手柄震动：播放 强度 %.2f 锐度 %.2f（%s播放器）", amplitude, sharp, g_haptic_loops ? "循环" : "普通"); }
+    static BOOL logged; if (!logged) { logged = YES; LOG("系统手柄震动：播放 %s 强度 %.2f / %.2f 锐度 %.2f / %.2f（%s播放器）", n == 2 ? "左 / 右" : "合成", amp[0], amp[1], sharp[0], sharp[1], g_haptic_loops[0] ? "循环" : "普通"); }
     system_arm_stop_timer();
 }
 
@@ -231,7 +238,7 @@ static void system_select_device(GCController *device) {
     uint64_t epoch = ++g_system_epoch; g_system_pending = NO; g_system_transition = YES;
     memset(g_system_pair, 0, sizeof g_system_pair);
     dispatch_async(g_system_haptics_queue, ^{
-        system_reset_on_queue(); g_haptic_device = device; g_haptic_plain_only = NO;
+        system_reset_on_queue(); g_haptic_device = device; g_haptic_plain_only = NO; g_haptic_split = -1;
         s2a_hp_rearm(&g_haptic_retry);   // 换手柄 / 重新接入 = 新机会；已经报过的红不再刷屏
         pthread_mutex_lock(&g_feedback_mu);
         if (epoch == g_system_epoch) g_system_transition = NO;
@@ -576,6 +583,12 @@ static void pad_face_sync(void) {
     uint32_t buttons = 0; int32_t axes[4] = {0};
     GCExtendedGamepad *pad = _slotOwner[slot].extendedGamepad;
     if (pad && atomic_load(&g_slots_active)) { sample_extended(pad, &buttons, axes); buttons &= 0xffffu; }   // Home 扩展位只给玩家 1 开菜单用
+    {   // #1224 取证：玩家 2–4 每槽第一次采到按键记一行（分槽了却按不动：看是回调没来、前台标记关着，还是服务层没读）
+        static _Atomic uint32_t said; uint32_t bit = 1u << slot;
+        if (buttons && !(atomic_fetch_or(&said, bit) & bit)) LOG("系统手柄：玩家 %d（%s）第一次采到按键 0x%x", slot + 1, _slotOwner[slot].vendorName.UTF8String ?: "GameController", buttons);
+        else if (!pad || !atomic_load(&g_slots_active)) { static _Atomic uint32_t idle; uint32_t ib = 1u << slot;
+            if (_slotOwner[slot] && !(atomic_fetch_or(&idle, ib) & ib)) LOG("系统手柄：玩家 %d 的回调来了但没采样（%s）", slot + 1, !pad ? "手柄没有扩展手柄档" : "前台标记关着"); }
+    }
     for (int i = 0; i < 4; i++) atomic_store(&g_slot_sticks[slot][i], axes[i]);
     atomic_store(&g_slot_buttons[slot], buttons);
 }
@@ -923,6 +936,8 @@ __attribute__((visibility("default"), used)) uint32_t s2a_vpad_read_pad(int inde
     if (index < 1 || index >= S2A_IOS_MAX_PADS) { for (int i = 0; i < 4; i++) sticks[i] = 0; return 0; }
     uint32_t buttons = atomic_load(&g_slot_buttons[index]);
     for (int i = 0; i < 4; i++) sticks[i] = atomic_load(&g_slot_sticks[index][i]);
+    { static _Atomic uint32_t said; uint32_t bit = 1u << index;   // #1224 取证：服务层第一次从这个槽读到非零按键
+      if (buttons && !(atomic_fetch_or(&said, bit) & bit)) LOG("系统手柄：服务层第一次从玩家 %d 读到按键 0x%x", index + 1, buttons); }
     return buttons;
 }
 

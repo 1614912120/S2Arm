@@ -270,7 +270,7 @@ def atomic(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
     try:
-        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as f:   # 一律 UTF-8（#514：不靠 UTF-8 模式）
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666), "w", encoding="utf-8") as f:   # 一律 UTF-8（#514：不靠 UTF-8 模式）；权限用系统缺省（11-16 不再自设）
             json.dump(value, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
@@ -577,7 +577,7 @@ def record_sources(sources):
 PROBES = ("catalog", "installCheck", "targetDevice", "locations", "patchMatch")
 JOURNAL_PROGRESS_S = 5.0   # 进度事件最多隔这么久重写一次任务记录（剃刀 H5：原先每条事件都原子重写 + fsync）；阶段、诊断、终态每次都写并 fsync
 LOCK_WAIT_S = 30   # 短作业排队等游戏库锁的上限（秒）：出包这类长任务占着时，过了上限就如实报「在等谁」，不无限挂着
-OPERATION_NAMES = {"build": "出包", "ipa": "打 iPhone 包", "import": "导入游戏", "install": "装到 iPhone", "installUpdate": "更新 iPhone 上的 S2Arm",
+OPERATION_NAMES = {"build": "出包", "ipa": "打 iPhone 包", "import": "导入游戏", "install": "装到 iPhone", "installUpdate": "更新 iPhone 上的 S2Arm", "installUpdatePrepare": "准备更新 iPhone 上的 S2Arm",
                    "installRemove": "从 iPhone 删除", "installRestore": "恢复 iPhone 上的上一版", "catalog": "刷新游戏库", "customize": "改游戏名或封面",
                    "remove": "移出游戏库", "delete": "删除游戏", "clean": "清理空间", "spaceFree": "释放空间", "launch": "开始游戏",
                    "moveGame": "移动游戏", "relinkGame": "重新关联原件", "forgetGame": "忘掉游戏", "setup": "设置游戏库", "keys": "导入密钥",
@@ -608,8 +608,7 @@ class Context:
             raise Failure("无效的任务标识。")
         self.operation = request["operation"]
         self.private = Path(request["privateRoot"]).expanduser().resolve()
-        self.private.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self.private, 0o700)
+        self.private.mkdir(parents=True, exist_ok=True)   # 系统缺省权限（~/Library、%LOCALAPPDATA% 本来就只归当前用户；11-16 不再自设）
         self.engine = Path(request.get("engineDir") or ".").expanduser().resolve()
         self.library = resolve_library_path(request.get("library") or self.private / "unconfigured")
         import layout
@@ -631,7 +630,6 @@ class Context:
         self.last_journal = 0.0
         self.jobpath = self.logs / "jobs" / (self.task + ".json")
         self.events = self.logs / "jobs" / (self.task + ".events.jsonl")
-        self.events_private = False
         self.requestpath = self.logs / "jobs" / (self.task + ".request.json")
         layout.follow_task(self)   # 索引表第一项核成默认库位置；同一任务上次跑在库建好之前（记录在私有目录）：先把它的记录搬过来，续跑的次数、阶段接得上
         if not self.recorded:
@@ -639,10 +637,9 @@ class Context:
                             state="running", started=time.time(), diagnostics=[], pid=os.getpid(), attemptNo=1)
             return
         # Keep the request next to the journal so `resume` can run the same task again after a kill without the caller having to keep the
-        # request file around (J10). 0600 like the request itself: it holds player paths, never keys.
+        # request file around (J10).
         if not self.requestpath.exists():
             atomic(self.requestpath, request)
-            os.chmod(self.requestpath, 0o600)
         # The journal of a previous run of this same task: an attempt that never wrote a terminal state (killed, power loss, frontend gone) is the
         # only thing that can tell a restart apart from a first run, so keep what it reached instead of overwriting it silently (J10 / #186).
         previous = read(self.jobpath) or {}
@@ -722,6 +719,8 @@ class Context:
         return read(self.library / "catalog.json", {"schema": 1, "games": []})
 
     def game(self):
+        if not self.r.get("gameId"):   # 要游戏的作业请求里没带游戏号：前端不再按名单拦（自己人之间不设允许清单），这里说清
+            raise Failure("请求里没有游戏号：这项任务要指定是哪款游戏。")   # 非玩家句
         game = next((g for g in self.catalog()["games"] if g["id"] == self.r.get("gameId")), None)
         if not game:
             raise Failure("游戏未登记在当前游戏库中。")
@@ -781,16 +780,11 @@ class Context:
                     if durable or now - self.last_journal >= JOURNAL_PROGRESS_S:
                         atomic(self.jobpath, self.job)
                         self.last_journal = now
-                    # 0o600 在创建时给（O_CREAT 的 mode），不再每条事件 chmod：Windows 上那是一次额外的按路径改属性，
-                    #   撞上占用同样报「拒绝访问」、整局判 journal_write_failed（#561）；旧版留下的宽权限文件本进程第一次写时收紧一次
-                    with os.fdopen(os.open(self.events, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o600), "a", encoding="utf-8") as f:
+                    with os.fdopen(os.open(self.events, os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0), 0o666), "a", encoding="utf-8") as f:
                         f.write(line + "\n")
                         if durable:
                             f.flush()
                             os.fsync(f.fileno())   # a killed worker must not take its own last stage line with it (J10 journal)
-                    if not self.events_private:
-                        os.chmod(self.events, 0o600)
-                        self.events_private = True
             except OSError as error:
                 # A full or failing disk used to let the job finish "successfully" with its record missing: whoever looks for it later finds
                 # nothing, or finds it stuck at an old stage. Say so and fail the job instead (J10).
@@ -1002,7 +996,6 @@ class Context:
         target = self.logs / f"{self.task}-rewrite-gaps.log"
         try:
             write_rewrite_digest(Path(match.group(1)), target)
-            target.chmod(0o600)
         except OSError:
             pass
 
@@ -1013,7 +1006,6 @@ class Context:
             self.last_log = self.logs / (self.task + "-failure.log")
             self.last_log.parent.mkdir(parents=True, exist_ok=True)
             self.last_log.write_text(self.redact(failure) + "\n" + (self.redact(failure.internal) + "\n" if getattr(failure, "internal", "") else ""))
-            self.last_log.chmod(0o600)
         records = self.job["diagnostics"]
         previous = records[-1] if records else None
         if (previous and previous["severity"] == "error" and previous["code"] == failure.code
@@ -1421,7 +1413,7 @@ def pid_start(pid):
     return result.stdout.strip()
 
 
-WIN_RUNTIME_PATH = ["python", r"python\Scripts", "dotnet", r"git\usr\bin", "zstd"]   # 同 bundle_runtime_win.env_cmd 的 PATH（tests 核两处一致）
+WIN_RUNTIME_PATH = ["python", r"python\Scripts", r"git\usr\bin", "zstd"]   # 同 bundle_runtime_win.env_cmd 的 PATH（tests 核两处一致）
 
 
 def win_metal_dir(environ):
@@ -1434,12 +1426,12 @@ def win_metal_dir(environ):
 
 
 def win_runtime_env(runtime, engine, system_root):
-    """Windows 出包作业的环境（同随包 s2arm_env.cmd）：只用随包 Python / .NET 运行时 / bash / zstd + 系统目录，预编件在引擎 Binaries/Prepare（同 Mac）"""
+    """Windows 出包作业的环境（同随包 s2arm_env.cmd）：只用随包 Python / bash / zstd + 系统目录（不带 .NET：C# 件是 NativeAOT 单文件），预编件在引擎 Binaries/Prepare（同 Mac）"""
     import ntpath
     rt = str(runtime)
     paths = [ntpath.join(rt, d) for d in WIN_RUNTIME_PATH] + [ntpath.join(system_root, "system32"), system_root,
                                                                ntpath.join(system_root, r"System32\WindowsPowerShell\v1.0")]
-    return dict(PATH=";".join(paths), DOTNET_ROOT=ntpath.join(rt, "dotnet"), DOTNET_MULTILEVEL_LOOKUP="0",
+    return dict(PATH=";".join(paths),
                 S2A_BASH=ntpath.join(rt, r"git\usr\bin\bash.exe"), PYTHONHOME=ntpath.join(rt, "python"), PYTHONUTF8="1",
                 LC_ALL="C.UTF-8",   # 机器上设了 LANG=C / en_US 时 cygpath -m 在第一个中文字符处截断路径（#85：D:/浏览器下载/… → D:/）；与 MSYS 无语言变量时的缺省相同
                 S2A_PREBUILT_TOOLS=ntpath.join(str(engine), r"Binaries\Prepare"),
