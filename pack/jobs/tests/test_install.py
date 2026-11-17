@@ -1,5 +1,6 @@
 """装到 iPhone（pack/jobs/install.py，10-26）：选团队、包名、报错分类、整条流程（签名 / 装机 / 拷资源包打桩，IPA 夹具用 ditto 真解）。期望按规则手写"""
 import json, os, plistlib, shutil, subprocess, sys, tempfile, time, types, unittest, zipfile
+import jobcase  # noqa: E402（作业上下文替身统一工厂 jobcase.fake_context）
 import unittest.mock as um
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -2286,7 +2287,7 @@ class DropRestampTests(unittest.TestCase):
                 if f.is_file(): z.write(f, f.relative_to(t / "build").as_posix())
         self.assertEqual(packer.ipa_digest(ipa), full)
         lib = t / "lib"; lib.mkdir()
-        c = types.SimpleNamespace(library=lib, logs=t, task="drop", engine=Path(packer.__file__).resolve().parents[2],
+        c = jobcase.fake_context(lib.parent, library=lib, logs=t, task="drop", engine=Path(packer.__file__).resolve().parents[2],
                                   env=lambda: dict(os.environ), run=lambda args, log, env, **kw: subprocess.run([str(a) for a in args], check=True, capture_output=True))
         def zip_app(c, a, out, log):   # 写 ipa 的完整校验（app_bundle write_ipa）不在这里核：照原样打包
             with zipfile.ZipFile(out, "w") as z:
@@ -2773,7 +2774,7 @@ class UpdatePrepareTests(unittest.TestCase):
             @contextlib.contextmanager
             def lock(name, wait=None):
                 held.append(name); yield; held.remove(name)
-            c = types.SimpleNamespace(library=lib, catalog=lambda: {"games": [{"id": self.A}, {"id": self.B}]}, begin=lambda *a: None, lock=lock)
+            c = jobcase.fake_context(lib.parent, library=lib, catalog=lambda: {"games": [{"id": self.A}, {"id": self.B}]}, begin=lambda *a: None, lock=lock)
             def refresh(cc, games):
                 calls.append((list(games), list(held))); return [g for g in games if g == self.B]
             def no_phone(cc):

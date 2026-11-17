@@ -103,6 +103,49 @@ def as_windows(*modules, **override):
         stack.enter_context(unittest.mock.patch.object(m, "os", OsView(**override)))
     return stack
 
+def fake_context(root, **override):
+    """作业上下文替身的唯一工厂（替代各用例手写 types.SimpleNamespace）：字段与 core.Context 对齐（test_fake_context_covers_context 核：
+    产品代码里用到的 c.<名> 凡是 Context 有的，这里都得有），各用例只覆盖自己关心的。
+    11-16：手写的替身缺 env，put_game 新加的收回 NRO 走到 c.env()，discover 顺序全量跑时 test_win_jobs 3 红（单跑因为 push_pack 导入不到碰巧绕过）。
+    普通字段给合理缺省；lock / idle 用真文件锁；emit / begin / diagnostic 记下来（events / stages / diagnostics）；
+    有副作用的（run / catalog / game / finish / stop）缺省响亮报错——用到了就在用例里显式给，别让替身悄悄冒充"""
+    import contextlib, threading, types
+    import filelock
+    root = Path(root)
+    c = types.SimpleNamespace()
+    c.events, c.stages, c.diagnostics = [], [], []
+    def loud(name):
+        def f(*a, **k):
+            raise AssertionError(f"测试替身的 c.{name} 没配：这条路径会用到它，请在用例里 fake_context(..., {name}=...) 显式给")
+        return f
+    @contextlib.contextmanager
+    def lock(name="catalog", wait=None, root=None):
+        lib = Path(root or c.library); lib.mkdir(parents=True, exist_ok=True)
+        with filelock.held(lib / f".{name}.lock", wait_s=60 if wait is None else wait):
+            yield
+    @contextlib.contextmanager
+    def idle(name="execution"):
+        yield True
+    def diagnostic(message, code="job_failed", severity="error", **kw):
+        d = dict(message=message, code=code, severity=severity, **kw); c.diagnostics.append(d); return d
+    c.__dict__.update(
+        r={}, operation="test", task="t", number=1, count=1,
+        library=root / "library", private=root / "private", logs=root / "logs", engine=root / "engine", work_root=root / "work",
+        keys=root / "private/keys/prod.keys", cancelled=False, guard=threading.RLock(), last_log=None, last_rc=None,
+        job=dict(schema=1, id="t", diagnostics=[]), jobpath=root / "logs/jobs/t.json",
+        check=lambda: None, require_source=lambda: None, require_library=lambda: None,
+        lock=lock, idle=idle, lock_holder=lambda: dict(taskId="t"),
+        emit=lambda kind="progress", message="", *a, **k: c.events.append((kind, message)),
+        begin=lambda stage, number=1, count=1, key=None, keychain=False: c.stages.append(stage),
+        progress=lambda done, total: None, redact=lambda value, **k: value,
+        diagnostic=diagnostic, describe_failure=lambda error, *a, **k: dict(message=str(error)), report_failure=lambda error: None,
+        fonts_dir=lambda: None, env=lambda: dict(os.environ),
+        run=loud("run"), catalog=loud("catalog"), game=loud("game"), finish=loud("finish"), stop=loud("stop"),
+    )
+    c.__dict__.update(override)
+    return c
+
+
 class JobCase(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="s2arm-g01 ")
