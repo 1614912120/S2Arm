@@ -16,12 +16,28 @@ extension S2ArmLauncherModel {
     var updateAlsoPhone: Bool { phoneDevices > 0 && Self.autoUpdatePhoneOn() && !selfSignChosen }
 
     /// 启动后一次（refresh 的 startup）：有要更新的手机就后台准备，横幅跟着变
+    /// 自动更新的后台作业失败不静默（0.5.0 候选验收）：每次失败写一行 <私有目录>/logs/phone-auto-update.log（诊断包收 logs/），带「连续第几次」；成功一次归零。同 Windows PhoneAutoUpdate.cs
+    func notePhoneAuto(_ operation: String, _ failure: String?) {
+        guard let failure else { phoneAutoFails[operation] = nil; return }
+        let n = (phoneAutoFails[operation] ?? 0) + 1
+        phoneAutoFails[operation] = n
+        let dir = provider.client.environment.privateRoot.appendingPathComponent("logs")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appendingPathComponent("phone-auto-update.log")
+        let stamp = ISO8601DateFormatter.string(from: Date(), timeZone: .current, formatOptions: [.withInternetDateTime])
+        let line = Data("\(stamp) \(operation) 失败（连续第 \(n) 次）：\(failure)\n".utf8)
+        if let h = try? FileHandle(forWritingTo: file) { _ = try? h.seekToEnd(); try? h.write(contentsOf: line); try? h.close() }
+        else { try? line.write(to: file) }
+    }
+
     func preparePhoneUpdate() {
         guard !phoneUpdates.isEmpty, Self.autoUpdatePhoneOn(), !selfSignChosen, phoneBanner == nil else { return }   // 选了导出自签：不准备、不出横幅
         phoneBanner = .preparing
         Task { [weak self] in
             guard let self else { return }
-            let ok = (try? await self.provider.client.perform("installUpdatePrepare")) != nil
+            var ok = false
+            do { _ = try await self.provider.client.perform("installUpdatePrepare"); ok = true; self.notePhoneAuto("installUpdatePrepare", nil) }
+            catch { self.notePhoneAuto("installUpdatePrepare", String(describing: error)) }
             if self.phoneBanner == .preparing { self.phoneBanner = ok ? .ready : .onConnect }
         }
     }

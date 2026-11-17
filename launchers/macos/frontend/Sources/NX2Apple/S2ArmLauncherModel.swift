@@ -446,7 +446,11 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// keptModulesLoop 的一次（单测直接调）：→ 这次有没有发起「更新 iPhone」
     @discardableResult func keptModulesTick() async -> Bool {
         if busy || selfSignChosen { return false }   // 出包页选了「出完之后导出自签」：不走启动器装机，自动装到手机也不做（玩家选择优先）
-        guard let r = try? await provider.client.perform("phoneKeptPull").result else { return false }
+        let r: [String: Any]
+        do {
+            r = try await provider.client.perform("phoneKeptPull").result
+            notePhoneAuto("phoneKeptPull", nil)
+        } catch { notePhoneAuto("phoneKeptPull", String(describing: error)); return false }
         let kept = (r["kept"] as? [String]) ?? [], device = r["device"] as? String ?? ""
         // 启动器升级顺带更新 iPhone App（11-16 维护者「点一次完成整个流程」）：连着的这台壳比本版旧、且没有要按新版重出包的款（shellUpdate），
         //   开关开着（缺省开）就同样自动更新；要重出的款照旧留给顶栏按钮问
@@ -1101,6 +1105,7 @@ public final class S2ArmLauncherModel: ObservableObject {
     var lastUpdateArgs: UpdateArgs?
     var sgradeMacFlag = false
     var keptLoopStarted = false, keptAutoTried: Set<String> = []   // keptModulesLoop（#8be819）
+    var phoneAutoFails: [String: Int] = [:]   // 自动更新后台作业连续失败次数（notePhoneAuto，+PhoneBanner.swift）
     /// Apple TV（tvOS 版，S2ArmLauncherModel+AppleTV）：配对过的电视、出包页选的那台、存档自动备份循环起没起
     @Published var appleTVs: [[String: Any]] = []
     @Published var appleTVChoice: String?

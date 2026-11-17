@@ -722,6 +722,8 @@ class Context:
         return read(self.library / "catalog.json", {"schema": 1, "games": []})
 
     def game(self):
+        if not self.r.get("gameId"):   # 要游戏的作业请求里没带游戏号：前端不再按名单拦（自己人之间不设允许清单），这里说清
+            raise Failure("请求里没有游戏号：这项任务要指定是哪款游戏。")   # 非玩家句
         game = next((g for g in self.catalog()["games"] if g["id"] == self.r.get("gameId")), None)
         if not game:
             raise Failure("游戏未登记在当前游戏库中。")
