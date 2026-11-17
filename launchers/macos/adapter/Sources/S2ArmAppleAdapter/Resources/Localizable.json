@@ -9836,14 +9836,6 @@
   "en": "\"{0}\" includes {0} code patch(es): they take effect after you re-pack this game (or run the S-grade upgrade)"
  },
  {
-  "source": "显卡卡住了，S2Arm 把这局安全停下了。",
-  "en": "The GPU hung, so S2Arm stopped this session safely."
- },
- {
-  "source": "再开一次一般能接着玩（存档停在游戏上次保存的地方）；同一处反复这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上。",
-  "en": "Starting again usually lets you keep playing (your save is as of the last time the game saved). If it keeps happening at the same spot, export a diagnostics package from Environment Check and attach it to a GitHub issue."
- },
- {
   "source": "在游戏库里长按这款，选「删除游戏…」，再把电脑上导出的这款 .img 重新放进「放这里导入」。",
   "en": "In the library, press and hold this game and choose “Delete game…”, then put this game's .img exported on the computer into Import Here again."
  },
@@ -9910,5 +9902,13 @@
  {
   "source": "没写构建号：文件名改成「<16 位构建号>.txt」或首行加 BID=<构建号> 才能编进 iPhone 包。",
   "en": "No build ID: rename the file to “<16-digit build ID>.txt” or add BID=<build ID> as the first line so it can go into the iPhone package."
+ },
+ {
+  "source": "游戏卡住了，S2Arm 把这局安全停下了。",
+  "en": "The game got stuck, so S2Arm stopped this session safely."
+ },
+ {
+  "source": "点「再启动一次」一般能接着玩，存档停在游戏上次保存的地方。",
+  "en": "Click “Start again” and you can usually keep playing; your save is as of the last time the game saved."
  }
 ]
