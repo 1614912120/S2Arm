@@ -1193,6 +1193,42 @@ def _dec_raw(word, addr):
     return rd, wr, kind, t
 
 
+def nop_stale(im, text_end, words, limit=64):
+    """补丁把原版指令改成 nop 后，那条指令原本要写的寄存器在后面（顺序往下、到下次写入前，同一基本块内）被读，而且这个寄存器此前最近一次是被
+    函数调用改写的（调用把 x0–x18 改成被调用方留下的值）→ (改动点, 读的点, 寄存器)；没有 → None。
+    残值来自游戏自己的普通指令（前面 ldr / mov 写的）时真机和我们一样、是补丁作者有意利用的（「关动态分辨率」nop 掉 bl 后接着读前面 ldr 出的 x0），不挡；
+    来自调用时取决于被调用方内部，我们的实现和真机不一定一样——11-16 帖子 3 台 / 4 次 Mac 崩：画质补丁 nop 掉取名字地址的 adrp/add，x8 是前面 bl 留下的值，
+    被当名字指针读 0x8。被删的是 bl：返回值 x0 也算它写的。往下走到跳转 / 调用以外的块尾、往回走到块尾就停，判不了的不挡（宁可少挡）。
+    读写判定用 _dec（按操作数位置自己判，判不准按既读又写）"""
+    word = lambda a: int.from_bytes(bytes(words[a]), 'little') if a in words else int.from_bytes(im[a:a + 4], 'little')
+    def by_call(r, w0):
+        a = w0 - 4
+        while a >= 0 and a > w0 - 4 * limit:
+            _, wr, kind, _ = _dec(word(a), a)
+            if kind == 'call': return r <= 18
+            if r in wr: return False
+            if kind in ('b', 'end'): return False
+            a -= 4
+        return False
+    for w0 in sorted(words):
+        orig = int.from_bytes(im[w0:w0 + 4], 'little')
+        if word(w0) != 0xD503201F or orig == 0xD503201F or w0 + 4 > text_end: continue
+        _, wr0, kind0, _ = _dec(orig, w0)
+        live = {r for r in wr0 if r != _FLAGS and r != 30} | ({0} if kind0 == 'call' else set())
+        a = w0 + 4
+        while live and a + 4 <= text_end and a < w0 + 4 + 4 * limit:
+            rd, wr, kind, _ = _dec(word(a), a)
+            hit = live & (set(range(8)) if kind == 'call' else rd)
+            for r in sorted(hit):
+                if by_call(r, w0): return w0, a, _rname(r)
+            live -= hit
+            if kind == 'call': live -= set(range(19)); a += 4; continue
+            live -= wr
+            if kind != 'seq': break
+            a += 4
+    return None
+
+
 def _branch_pairs(text):
     """原版代码段里所有直接跳转（b / bl / b.cond / cbz / cbnz / tbz / tbnz）→ (目标, 来源) 按目标排好的两列；每模块算一次"""
     try:
@@ -1608,6 +1644,8 @@ def plan(root, default_on, index_dirs):
             if r: log.append(f'改值\t{uid}\t{mod}\t渲染尺寸按手机口径：{r}')
         if not why and uid.startswith(('widescreen:', 'wsauto:')) and (wh := _upres([int.from_bytes(bytes(nb), 'little') for nb in words.values()])):   # tools/patch_index.py upres：索引不收，这里再挡一道（玩家机上的旧快照 / 本地补丁）
             why = f'改了内部渲染分辨率（{wh[0]}x{wh[1]}），不进满屏：渲染目标放大、游戏堆放不下会崩（#b824d1 / D-Q3QJ）'
+        if not why and not cheat and (st := nop_stale(im, text_end, words)):   # 见 nop_stale；金手指另有规则
+            why = f'把 {mod}+{st[0]:#x} 改成空指令后，它原本要写的 {st[2]} 在 {mod}+{st[1]:#x} 被读：读到的是残值，可能被当指针读而崩'
         if not why and any(fill(im, o) for o, k in marks.items() if k == 'kv'): why = f'取值点 {mod}+{min(o for o, k in marks.items() if k == "kv" and fill(im, o)):#x} 落在填充区（填充区常写，没有原路可分）'
         if not why:
             for o, n, k in adata:

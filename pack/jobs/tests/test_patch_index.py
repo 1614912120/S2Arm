@@ -105,7 +105,7 @@ class PatchIndexTests(unittest.TestCase):
         with unittest.mock.patch.dict(patch_index.KNOWN_BAD, {hashlib.sha256(bad).hexdigest()[:16]: "测试"}):
             got = {r["sha256"] for r in patch_index.dedupe(patch_index.scan(str(self.m))) if "0100000000010000" in r["gids"]}
         self.assertEqual(got, {hashlib.sha256(good).hexdigest()})
-        self.assertEqual(set(patch_index.KNOWN_BAD), {"e8b51176ead1bcd3", "7a1aa34f90ab0756"})
+        self.assertEqual(set(patch_index.KNOWN_BAD), {"e8b51176ead1bcd3"})
 
     def test_cheat_libraries_are_not_indexed_twice(self):
         os.rename(self.m / "orig__mods", self.m / "ChanseyIsTheBest__NX-60FPS-RES-GFX-Cheats")
