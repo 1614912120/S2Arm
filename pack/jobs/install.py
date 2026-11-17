@@ -810,9 +810,26 @@ def app_running(c, ident, bid):
     if rc:
         return None
     exe = [p.get("executable") or "" for p in (procs.get("result") or {}).get("runningProcesses") or [] if isinstance(p, dict)]
-    # 只认 App 本身：安装目录下 PlugIns/ 里的扩展（主屏小组件 S2ArmWidget.appex，11-16 进壳）由系统常驻拉起，和玩家在不在玩无关——
-    #   原先也算「在跑」，phone_kept_pull 一直回 running=true，自动补件 / 提示更新从不发起（11-16 真机实测：App 早已退出，只有小组件进程在）
-    return any(e.startswith(u) and "/PlugIns/" not in e[len(u) - 1:] for e in exe for u in urls)
+    # 只认主程序本身：<安装目录>/<CFBundleExecutable>。安装目录下还有系统常驻拉起的扩展进程（主屏小组件 PlugIns/S2ArmWidget.appex，11-16 进壳），
+    #   和玩家在不在玩无关——原先「落在安装目录下」就算在跑，phone_kept_pull 一直回 running=true，自动补件 / 提示更新从不发起
+    #   （11-16 真机实测：App 已退出，只剩小组件进程）。按主程序全路径比，以后再加扩展（Live Activity 等）也不会算进来
+    main = main_executable(c)
+    return any(e == u + main for e in exe for u in urls)
+
+
+def main_executable(c):
+    """装到手机上的容器 App 的主程序文件名：游戏库根 S2Arm.ipa（layout.phone_ipa，装机时组装的那份）里 Info.plist 的 CFBundleExecutable；
+    读不到（还没装过 / 文件坏）→ 壳的缺省名 S2Arm"""
+    import zipfile
+    try:
+        with zipfile.ZipFile(layout.phone_ipa(c)) as z:
+            name = next(n for n in z.namelist() if re.fullmatch(r"Payload/[^/]+\.app/Info\.plist", n))
+            exe = plistlib.loads(z.read(name)).get("CFBundleExecutable")
+            if isinstance(exe, str) and exe and "/" not in exe:
+                return exe
+    except (OSError, StopIteration, ValueError, KeyError, zipfile.BadZipFile, plistlib.InvalidFileException):
+        pass
+    return "S2Arm"
 
 
 def pull_kept_nros(c, ident, bid, gid, docs="Documents"):
