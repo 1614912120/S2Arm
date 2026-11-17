@@ -729,6 +729,17 @@ class PlayerSummary(unittest.TestCase):
 
 
 class RecoveryCoverage(unittest.TestCase):
+    def test_library_busy_covers_dead_worker_on_mounted_drive(self):
+        source = RECOVERY["library_busy"]
+        self.assertIn("重新连接或重新挂载", source)
+        self.assertIn("不要手动删除锁文件", source)
+        translations = json.loads((ROOT / "launchers/macOS/adapter/Sources/S2ArmAppleAdapter/Resources/Localizable.json").read_text())
+        self.assertTrue(next(i["en"] for i in translations if i.get("source") == source))
+        spec = json.loads((ROOT / "launchers/shared/experience.v1.json").read_text())
+        error = next(i for i in spec["errors"]["items"] if i["code"] == "library_busy")
+        self.assertIn("重新挂载", error["detail"]["zh-Hans"])
+        self.assertIn("remount", error["detail"]["en"].lower())
+
     def test_real_lap_names_are_all_mapped_and_unknown_names_fail(self):
         source = (ROOT / "pack/oneclick/oneclick.sh").read_text()
         self.assertEqual(set(oneclick_stages(source)), set(ipa.ONECLICK_PHASES))

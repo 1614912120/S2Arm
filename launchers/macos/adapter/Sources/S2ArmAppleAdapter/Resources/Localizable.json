@@ -6996,8 +6996,8 @@
   "en": "Connect the iPhone or iPad to this computer with a cable, or put it on the same Wi-Fi; unlock it and tap Trust."
  },
  {
-  "source": "等正在用游戏库的那个任务结束（或在任务列表里取消它）再重试；什么都没有改动。",
-  "en": "Wait for the task that is using the library to finish (or cancel it in the task list), then try again. Nothing was changed."
+  "source": "如果任务列表里还有正在运行的作业，等它结束或取消后重试；如果列表显示已中断而仍报锁占用，重新连接或重新挂载游戏库所在磁盘后再试。不要手动删除锁文件；本次没有改动游戏文件。",
+  "en": "If a task is still running, wait for it or cancel it, then retry. If it is marked interrupted but the lock remains, reconnect or remount the library drive before retrying. Do not delete the lock file; no game files were changed."
  },
  {
   "source": "Apple ID 登录已过期，请重新登录后再装：在装机页点「打开 Impactor」→「设置」，选中你的 Apple ID 点「移除账号」，再点「添加账号」用同一个 Apple ID 重新登录（邮箱、密码、手机上的验证码，输入前切到英文输入法），然后回来再点一次「装到 iPhone」。密码只在 Impactor 里输，S2Arm 不经手。",
