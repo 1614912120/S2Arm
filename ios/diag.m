@@ -483,7 +483,7 @@ int s2a_iml_lost(void) __attribute__((weak_import));   // iml_probe.m：这次�
 // 弱链接[lab]：s2a_ios_note_up
 int s2a_iml_claim(void) __attribute__((weak_import));  // iml_probe.m：这次打开还没别处说过「丢了权限」→ 取到 1 由这里说（每次打开只说一处）
 int s2a_ios_note_up(void) __attribute__((weak_import)); // app.m：宿主提示页（自检「仍要启动」那页等）正显示着
-// 上次没正常退出、这次要问诊断（启动时定，问过 / 不问了就清）：库顶与游戏里的「丢了权限」提示条让给这次询问说，免得提示条和询问框同时在屏幕上（iml_probe.m）
+// 上次没正常退出、这次要问诊断（进游戏画面 s2a_diag_attach 时定，问过 / 不问了就清）：游戏里的「丢了权限」提示条让给这次询问说，免得提示条和询问框同时在屏幕上（iml_probe.m）
 static BOOL g_will_ask;
 int s2a_diag_will_ask(void) { return g_will_ask; }
 // 「把上次的诊断发给我们？」正显示着（app.m 出提示页前看：等它收起再出，不叠在一起）
@@ -607,7 +607,7 @@ void s2a_diag_attach(UIViewController *vc) {
     //   标记在这里先读后写：读到的是上一局留下的，然后标成本局「前台」；进后台 / 回前台由 app.m 改写，优雅退出（lifecycle.c）删掉
     { uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW); int prev = s2a_sesmark_prev(docs().fileSystemRepresentation); s2a_sesmark_set(docs().fileSystemRepresentation, S2A_SESMARK_FG);
       LOG("诊断包：上次会话标记 %s（主线程 %.2f ms，不读日志）→ %s", prev == S2A_SESMARK_FG ? "前台未收尾" : prev == S2A_SESMARK_BG ? "后台" : "无（正常收尾）", (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0) / 1e6, prev == S2A_SESMARK_FG ? "提示导出" : "不提示");
-      g_will_ask = prev == S2A_SESMARK_FG && !getenv("S2A_OPEN_SETTINGS") && !s2a_unattended();   // 同步定：游戏库建好前（取库顶提示条时）就要知道
+      g_will_ask = prev == S2A_SESMARK_FG && !getenv("S2A_OPEN_SETTINGS") && !s2a_unattended();   // 同步定：游戏里提示条（iml_probe.m，起局 3 秒后）到点时要看
       dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         check_toggle();
         // 真机自动化（S2A_OPEN_SETTINGS 测试开关在）每局都是被强杀收尾的，上次异常退出的提示会挡住要截的设置页：只在这时不问（玩家给不了这个环境变量）

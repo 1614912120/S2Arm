@@ -45,7 +45,7 @@ int s2a_iml_lost(void) { return iml_ent() == 0; }
 //   谁先真显示谁说（s2a_iml_claim 取到 1 才说，取到 0 说明别处已说过）；只在真要显示时取，取了没显示出来就两处都不说
 static int g_iml_told;
 int s2a_iml_claim(void) { return s2a_iml_lost() && !__atomic_exchange_n(&g_iml_told, 1, __ATOMIC_SEQ_CST); }
-// 诊断询问这次会问（diag.m，上次没正常退出）：由它说，库顶提示条与游戏里提示条让给它，免得提示条和询问框同时在屏幕上
+// 诊断询问这次会问（diag.m，上次没正常退出；进游戏画面时定）：由它说，游戏里提示条让给它，免得提示条和询问框同时在屏幕上
 int s2a_diag_will_ask(void) __attribute__((weak_import));
 static int diag_will_ask(void) { return s2a_diag_will_ask && s2a_diag_will_ask(); }
 // 游戏库顶上的提示（S2ArmShellHostModel，s2a_shell.h）：确定丢了、这次还没别处说过才给标题与一句短正文（详情在库里的「了解详情」页），调用方 free。
@@ -53,7 +53,7 @@ static int diag_will_ask(void) { return s2a_diag_will_ask && s2a_diag_will_ask()
 void s2a_shell_iml_notice_seen(void) { __atomic_store_n(&g_iml_told, 1, __ATOMIC_SEQ_CST); }
 char *s2a_shell_iml_notice(void) {
     @autoreleasepool {
-        if (!s2a_iml_lost() || __atomic_load_n(&g_iml_told, __ATOMIC_SEQ_CST) || diag_will_ask()) return NULL;
+        if (!s2a_iml_lost() || __atomic_load_n(&g_iml_told, __ATOMIC_SEQ_CST)) return NULL;
         NSData *d = [NSJSONSerialization dataWithJSONObject:@{@"title": S2AL(@"iml.lost.title"), @"body": S2AL(@"iml.lost.short")} options:0 error:nil];
         if (!d) return NULL;
         char *p = malloc(d.length + 1); if (!p) return NULL;
