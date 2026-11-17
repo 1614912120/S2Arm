@@ -1,7 +1,7 @@
 // 游戏原始输入解包（底本旧库 tools/nx_unpack @497552d；出包第一步，零配置新游戏从这里进）：
 //   nx_unpack <prod.keys> <输出目录> [--nacp-only | --aoc-only] <xci / nsp 文件…>
 // 直接读卡带 / 安装包（不先把 NCA 拷出来），按内容清单（cnmt）认基础程序、最新更新、追加内容（DLC），一遍解密写出：
-//   <输出目录>/exefs/（main、sdk、subsdk*、main.npdm、rtld）、romfs/（更新叠加后的资源分区；S2A_ROMFS_IMAGE=1 时改出 romfs.std 标准 RomFS 镜像、不写散文件）、aoc/<序号>/（每个 DLC 的数据分区）、
+//   <输出目录>/exefs/（main、sdk、subsdk*、main.npdm、rtld）、romfs.std（更新叠加后的资源分区，标准 RomFS 镜像、不写散文件；S2A_ROMFS_IMAGE=0 时照旧出 romfs/ 散文件）、aoc/<序号>/（每个 DLC 的数据分区）、
 //   ctl/control.nacp（取最新更新的控制分区；服务层 am / ns / acc 读）、icon.jpg、unpack.tsv（程序号、名称、显示版本、构建号、DLC 序号）。
 // 源文件按内容认格式（不看扩展名）：0x100 处魔数 HEAD = 卡带镜像（xci，及其压缩版 xcz），否则按安装包（nsp / nsz 的 PFS0）开；
 //   里面的 .ncz（nsz / xcz 的压缩 NCA）由 Ncz.cs 还原成原 NCA 再交 LibHac。
@@ -207,6 +207,10 @@ static partial class P {
         Copies.Clear();
     }
     static int Run(string[] a) {
+        if (a.Length == 2 && a[0] == "--test-romfs-publish") {
+            try { RomfsExtraction.TestPublish(a[1]); return 0; }
+            catch (Exception e) { Console.Error.WriteLine("🔴 " + e.Message); return 1; }
+        }
         // 单测注入（tests/nx_unpack_fail_test.sh）：造并行读包那种 AggregateException——第一条普通异常、第二条缺密钥，走真实的兜底路径
         if (Environment.GetEnvironmentVariable("S2A_NXUNPACK_TEST_THROW") == "agg-key")
             throw new AggregateException(new Exception("并行任务一：普通异常"), new LibHac.Common.Keys.MissingKeyException("单测：缺密钥", "titlekek_10", LibHac.Common.Keys.KeyType.Common));
@@ -224,7 +228,11 @@ static partial class P {
             catch (Exception e) when (e is InvalidDataException or IOException or UnauthorizedAccessException) { Console.Error.WriteLine($"🔴 {e.Message}"); return 1; }
         }
         if (a.Length >= 3 && a[1] == "--inspect") return Inspect(a);
-        if (a.Length < 3) { Console.Error.WriteLine("用法：nx_unpack <prod.keys> <输出目录> [--nacp-only | --aoc-only | --exefs-only] [--aoc-index] [--title-id=<16 hex>] [--program-index=<0..15>] [--title-keys=<title.keys>] <xci/nsp…>"); return 2; }
+        if (a.Length < 3) {
+            Console.Error.WriteLine("用法：nx_unpack <prod.keys> <输出目录> [--nacp-only | --aoc-only | --exefs-only] [--aoc-index] [--title-id=<16 hex>] [--program-index=<0..15>] [--title-keys=<title.keys>] <xci/nsp…>");
+            Console.Error.WriteLine("测试专用：nx_unpack --test-romfs-publish <尚不存在的测试目录>");
+            return 2;
+        }
         var t0 = DateTime.UtcNow;
         Ks = ExternalKeyReader.ReadKeyFile(a[0]); string D = a[1]; OutDir = D; bool nacpOnly = false, aocOnly = false, aocIndex = false, exefsOnly = false;
         // 单测注入（tests/nx_unpack_fail_test.sh，#792）：Windows 目录改名被拦的原样异常（IOException + E_ACCESSDENIED），被拒路径在输出目录里 / 外
@@ -388,9 +396,9 @@ static partial class P {
             var fs = new RomFsFileSystem(opener()); Walk(fs, "/", root, dst, opener, items);
         }
         RomfsExtraction.Result romfsResult = null;
-        // 镜像形态（S2A_ROMFS_IMAGE=1）：资源分区不拆散文件，直接出 <输出目录>/romfs.std（标准 RomFS，RomfsExtraction.ExtractImage）；缺省照旧出 romfs/。
-        //   读取方全迁到镜像之前只给对照 / 测试开；DLC（aoc/）不受影响
-        bool romfsImage = Environment.GetEnvironmentVariable("S2A_ROMFS_IMAGE") == "1";
+        // 镜像形态（缺省；S2A_ROMFS_IMAGE=0 回旧路径出 romfs/ 散文件）：资源分区不拆散文件，直接出 <输出目录>/romfs.std（标准 RomFS，RomfsExtraction.ExtractImage）。
+        //   下游各阶段入口目录 / 镜像都认（graphics/nvn/tools/romfs_list.py image_of）；DLC（aoc/）不受影响
+        bool romfsImage = Environment.GetEnvironmentVariable("S2A_ROMFS_IMAGE") != "0";
         string romfsImagePath = Path.Combine(D, RomfsExtraction.ImageName);
         // 程序 NCA 没有资源段（第 1 段）的款（#620，数据全在 exefs 里的小游戏）：没有 RomFS，产出空 romfs 目录（空 RomFS 的下游同 #578），
         //   原先照开第 1 段，抛「NCA section 1 does not exist」整次解包失败。只看本体：更新的资源段要叠在本体那段上，本体没有就无从叠

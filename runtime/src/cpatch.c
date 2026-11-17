@@ -530,7 +530,9 @@ static void fps_link(int on) {   // on = 选中档高于 60（开高刷）；包
     LOG("社区补丁：帧率补丁目标 %d 帧，%s", g_fps_target, on ? "出图链放开到 60–120 Hz、出图节拍跟到补丁目标（补丁优先，盖过我方 60 帧）" : "关了，出图链与出图节拍回 60 Hz");
 }
 // 选档（11-13 维护者：60 / 120 都带进去，玩家自己切）：能开的各份里，玩家选了档（S2A_FPS_PICK / s2a_cpatch_fps_pick）就取它，没有这一档取不超过它的最高一档；
-//   没选取不超过屏幕最高刷新率的最高一档（120 Hz 屏开 120、60 Hz 屏开 60）；都超过就取最低一档。取不到目标的（0）当 60 档。→ 选中的目标帧率；没有能开的 → 0
+//   没选（自动）取不超过 60 的最高一档（屏幕不到 60 Hz 按屏幕）；都超过就取最低一档。取不到目标的（0）当 60 档。→ 选中的目标帧率；没有能开的 → 0
+//   自动不上 120（11-16 #1285）：原先自动取「不超过屏幕刷新率的最高一档」，120 Hz 的 iPhone 上织梦岛自动开了 120 帧补丁（作者标 WIP），
+//   游戏逻辑按 120 帧推进、机器只跑得到 59.5 帧，玩家看到的是半速慢动作。120 档要机器真跑得满 120，交给玩家自己选
 __attribute__((weak)) int front_screen_max_fps(void) { return 0; }   // macos/front_mac.m 强定义（只 Mac 宿主有）；单测 / iOS 用这个弱的（0 = 不知道，按 60）
 #if defined(__APPLE__) && TARGET_OS_IPHONE
 int s2a_ios_screen_max_fps(void);
@@ -546,7 +548,7 @@ static int tgt(const struct cp_fu *u) { return u->target > 0 ? u->target : 60; }
 static int fps_pick(void) {
     int want = g_fps_want;
     if (!want) { const char *e = getenv("S2A_FPS_PICK"); want = e ? atoi(e) : 0; }
-    int cap = want > 0 ? want : screen_max_hz(), best = 0, low = 0;
+    int scr = screen_max_hz(), cap = want > 0 ? want : scr < 60 ? scr : 60, best = 0, low = 0;
     for (int i = 0; i < g_nfu; i++) {
         if (!g_fu[i].allow || !g_fu[i].slot) continue;
         int t = tgt(&g_fu[i]);
@@ -606,7 +608,7 @@ void s2a_cpatch_fps_follow(int on) {
     // 60 帧开关开着、包里却没有可用的帧率补丁（11-15 #934：日志「本局 60 帧开」只说明开关，玩家据此以为在 60 帧）：写明实际怎么跑
     if (!g_nfu && on) { static int said; const char *fi = getenv("DM_PRESENT_FI");
         if (!said++) LOG("社区补丁：60 帧开关开着，但包里没有可用的帧率补丁——%s", fi && !strcmp(fi, "1") ? "改用补帧（画面插帧到 60，游戏逻辑仍按原帧率）" : "按游戏原帧率跑"); }
-    if (g_nfu && on && pick) LOG("社区补丁：帧率档 %d 帧（%s；屏幕最高 %d Hz）", pick, g_fps_want || getenv("S2A_FPS_PICK") ? "玩家选的" : "默认：不超过屏幕刷新率的最高一档", screen_max_hz());
+    if (g_nfu && on && pick) LOG("社区补丁：帧率档 %d 帧（%s；屏幕最高 %d Hz）", pick, g_fps_want || getenv("S2A_FPS_PICK") ? "玩家选的" : "自动：不超过 60 帧的最高一档（120 档要玩家自己选）", screen_max_hz());
     if (g_nfu && on && pick && grp) LOG("社区补丁：这一档只开一组（组 %s，同档别的上游补丁不叠开）", grp);
     pthread_mutex_lock(&g_st_lock); int any = 0;
     for (int j = 0; j < g_nst; j++) if (!strncmp(g_st[j].id, "fps:", 4) && strcmp(g_st[j].st, "不配套") && strcmp(g_st[j].st, "表不认")) {

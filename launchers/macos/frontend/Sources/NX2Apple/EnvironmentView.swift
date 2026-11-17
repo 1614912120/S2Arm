@@ -78,6 +78,15 @@ struct EnvironmentView: View {
                         }
                     }
                     InstallModeCard(model: model)   // 装到 iPhone 的方式（v0.3.0：签名 / 安装入口收在这一处）
+                    // 主屏小组件（11-16）：装到 iPhone / 更新 / 导出时带不带 iPhone 桌面的游戏机小组件；缺省开，关掉后请求里带 widget: false
+                    CardGroup(loc.t("s2arm.env.widget.group")) {
+                        CardRow(loc.t("s2arm.env.widget.title"), detail: model.homeWidgetError.map(loc.backend) ?? loc.t("s2arm.env.widget.detail")) {
+                            Toggle("", isOn: Binding(get: { model.homeWidget }, set: { model.setHomeWidget($0) }))
+                                .toggleStyle(LauncherSwitchStyle()).labelsHidden()
+                                .accessibilityLabel(loc.t("s2arm.env.widget.title"))
+                                .accessibilityIdentifier("env.homeWidget")
+                        }
+                    }
                     let failing = model.checks.filter { !$0.ok }
                     ForEach(ordered(failing), id: \.self) { group in
                         let items = failing.filter { groupOf($0) == group }

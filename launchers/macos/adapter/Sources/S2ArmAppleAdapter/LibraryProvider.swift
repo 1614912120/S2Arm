@@ -79,6 +79,8 @@ public struct GameSummary: Identifiable, Equatable {
     public let iphoneFree: Bool
     /// 上次装的那台设备（设备记录键，UDID）：「续签」装回当初那台，不换别的（pack/jobs/layout.py install_record 的 deviceKey）
     public var iphoneInstallDevice: String? = nil
+    /// Apple TV 版已出好（catalog appleTvReady：image/tvos 的容器件 + 资源包都在）：出包页给「装到 Apple TV」
+    public var appleTvReady = false
     /// 「导出自签包」能直接导出：iPhone 包就绪且是单一 IMG 资源包（catalog iphoneExportable）；不能就先重出 iPhone 包再导出
     public var iphoneExportable = false
     /// 设备记录里装在某台手机上（catalog onPhone）：删除确认框多写一句「下次往这台手机装游戏时，手机上的这款会打不开」
@@ -123,6 +125,7 @@ public struct GameSummary: Identifiable, Equatable {
                   sizes: GameSizes(catalog: g["sizes"] as? [String: Any] ?? [:]))
         self.iphoneInstallDevice = (g["iphoneInstall"] as? [String: Any])?["deviceKey"] as? String
         self.iphoneExportable = g["iphoneExportable"] as? Bool ?? false
+        self.appleTvReady = g["appleTvReady"] as? Bool ?? false
         self.onPhone = g["onPhone"] as? Bool ?? false
         self.sgrade = g["sgrade"] as? Bool ?? false
         self.playtime = GamePlaytime(catalog: g["playtime"] as? [String: Any])
@@ -165,17 +168,21 @@ public final class LibraryProvider {
     private let lock = NSLock()
     private var keys: Bool?
     private var updates: [PhoneUpdate] = []
+    private var devices = 0
     /// 上次读游戏库时 prod.keys 齐没齐（catalog 的 keys.ready）；还没读过为 nil。
     public var keysReady: Bool? { lock.withLock { keys } }
     /// 上次读游戏库时，壳比本版旧的手机（catalog 的 phoneUpdates，只按本机设备记录判）：游戏库右上角「更新 iPhone 上的 S2Arm」
     public var phoneUpdates: [PhoneUpdate] { lock.withLock { updates } }
+    /// 上次读游戏库时，这台电脑往几台手机装过游戏（catalog 的 phoneDevices）：启动器更新弹窗据此写「更新启动器和 iPhone App」
+    public var phoneDevices: Int { lock.withLock { devices } }
 
     public init(client: JobClient) { self.client = client }
 
     private func remember(_ result: [String: Any]) {
         let ready = (result["keys"] as? [String: Any])?["ready"] as? Bool
         let phones = (result["phoneUpdates"] as? [[String: Any]] ?? []).map(PhoneUpdate.init(catalog:))
-        lock.withLock { keys = ready; updates = phones }
+        let count = (result["phoneDevices"] as? NSNumber)?.intValue ?? 0
+        lock.withLock { keys = ready; updates = phones; devices = count }
     }
 
     private var snapshotFile: URL { client.environment.privateRoot.appendingPathComponent("library-snapshot.json") }

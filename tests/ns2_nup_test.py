@@ -329,8 +329,8 @@ with tempfile.TemporaryDirectory() as t:
         got = ns2_nup._clone(src, dst)
     chk('⑩ 非 macOS：真拷、不调 ctypes', (got == dst, open(dst, 'rb').read(), cdll.called), (True, b'content', False))
 
-# ⑪ 镜像形态（S2A_ROMFS_IMAGE=1，pack/ns2_nup.py + pack/ns2_dump.py + nx_unpack --romfs-image）：
-#   期望 = 缺省形态（照旧展开散文件）出的 romfs/ 交 services/romfs_index.sh --std（旧路径的建镜像工具）建的镜像；镜像形态的 romfs.std 与它逐字节相同，
+# ⑪ 镜像形态（缺省；S2A_ROMFS_IMAGE=1 同，pack/ns2_nup.py + pack/ns2_dump.py + nx_unpack --romfs-image）：
+#   期望 = 目录形态（S2A_ROMFS_IMAGE=0，照旧展开散文件）出的 romfs/ 交 services/romfs_index.sh --std（旧路径的建镜像工具）建的镜像；镜像形态的 romfs.std 与它逐字节相同，
 #   其余产物（exefs / ctl / aoc / unpack.tsv）逐字节相同、文件集合相同；展开目录里没有 romfs 散文件（只有 romfs.nupmap）；
 #   全量更新 / 差量更新 / 无本体三种都核；容器里 romfs 文件的数据坏一个字节 → 报红、不留产物（SHA-256 在 nx_unpack 写镜像时核）。
 #   要真 nx_unpack 与 romfs_index：tests/ns2_nup_test.sh 编好后经 S2A_TEST_NXU / S2A_TEST_ROMFS_INDEX 给；没给 = 不通（不静默跳过）
@@ -347,11 +347,11 @@ else:
                     out[rel] = hashlib.sha256(rd(os.path.join(dp, f))).hexdigest()[:16]
         return out
 
-    def extract(src, out, image):
+    def extract(src, out, image):   # image：True = S2A_ROMFS_IMAGE=1，False = 0（目录形态），None = 不设（缺省）
         env = {k: v for k, v in os.environ.items() if k != 'S2A_ROMFS_IMAGE'}
         env['S2A_NX_UNPACK'] = NXU
-        if image:
-            env['S2A_ROMFS_IMAGE'] = '1'
+        if image is not None:
+            env['S2A_ROMFS_IMAGE'] = '1' if image else '0'
         return subprocess.run([PY, NUP, '--to-extract', src, out], capture_output=True, text=True, env=env)
 
     with tempfile.TemporaryDirectory() as t:
@@ -375,6 +375,9 @@ else:
             chk(f'⑪ {name}：romfs.std 与「romfs/ + romfs_index --std」逐字节相同', rd(os.path.join(b, 'romfs.std')) == rd(ref), True)
             chk(f'⑪ {name}：镜像形态没有 romfs/ 散文件', os.path.exists(os.path.join(b, 'romfs')), False)
             chk(f'⑪ {name}：其余产物逐字节相同', tree(b, 'romfs.std'), tree(a, 'romfs' + os.sep))
+            c = os.path.join(t, name + '-default')   # 缺省（不设开关）= 镜像形态，与 =1 那份逐字节相同
+            rc_ = extract(s, c, None)
+            chk(f'⑪ {name}：缺省是镜像形态（romfs.std 同 =1、没有 romfs/）', (rc_.returncode, rd(os.path.join(c, 'romfs.std')) == rd(os.path.join(b, 'romfs.std')), os.path.exists(os.path.join(c, 'romfs'))), (0, True, False))
         # 展开这一步不写 romfs 散文件：只出清单（全量容器：本体 + 最新更新各一份 romfs.nupmap）
         dump = os.path.join(t, 'dump-img')
         env = dict(os.environ, S2A_ROMFS_IMAGE='1')

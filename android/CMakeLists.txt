@@ -310,6 +310,11 @@ else()
     target_compile_options(dguard_android_test PRIVATE -Wall -Wextra -Werror)
     target_link_libraries(dguard_android_test PRIVATE pthread)
     add_test(NAME android_dguard_android COMMAND dguard_android_test)
+    # 停帧救场「这款下次也关」：起局读 S2A_DOCS/cpatch_stall_off → S2A_FPS60=0（docs_android.c s2a_android_stall_off_apply）
+    add_executable(stall_off_test tests/stall_off_test.c native/docs_android.c)
+    target_include_directories(stall_off_test PRIVATE native)
+    target_compile_options(stall_off_test PRIVATE -Wall -Wextra -Werror)
+    add_test(NAME android_stall_off COMMAND stall_off_test)
     find_package(Threads REQUIRED)
     # Linux errno/fd/filesystem contracts; reached by linux_ctest.sh, including
     # Darwin's Linux VM route. These are not Android device durability evidence.
@@ -354,6 +359,15 @@ else()
             COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/core-link/test_startup_roots.py"
                 --cc "${CMAKE_C_COMPILER}" --linker "${CMAKE_LINKER}"
                 --nm "${CMAKE_NM}" --readelf "${CMAKE_READELF}" --ar "${CMAKE_AR}")
+    endif()
+    # #528 第 15 项：会话标记（原生优雅收尾走完才删 end）单独成一项。run_lifecycle.py 整组挂在 threaded_host_suites.sh 末尾，
+    #   macOS 跳过、Linux 上常被前面的 Runtime.Tests 挡住；组内又排在 hang 等断言后面。这里只跑标记那组（同一夹具、同一编译命令）。
+    #   只在 Linux：夹具要 GNU ld 的 --wrap。android/linux_ctest.sh（colima）与 Linux 上 android/test.sh 的原生段 ctest 都会跑到。
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        add_test(NAME android_session_marker
+            COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/native/runtime/platform/tests/run_lifecycle.py"
+                --session-marker-only --out "${CMAKE_CURRENT_BINARY_DIR}/session-marker")
+        set_tests_properties(android_session_marker PROPERTIES ENVIRONMENT "CC=${CMAKE_C_COMPILER}")
     endif()
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         add_executable(memory_test tests/memory_test.c)

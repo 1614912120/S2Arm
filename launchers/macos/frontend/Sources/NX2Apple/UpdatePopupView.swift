@@ -83,7 +83,7 @@ struct UpdatePopupView: View {
                 Spacer()
                 Button(t("update.popup.later")) { model.closeUpdatePopup() }.controllerButtonStyle(LauncherSecondaryButtonStyle())
                     .keyboardShortcut(.cancelAction).accessibilityIdentifier("update.popup.later").controllerShortcut(.back)
-                Button(t("update.popup.now")) { model.restartToUpdate() }   // 没下就先下、下好接着换（玩家点了才下，#1283）
+                Button(t("update.popup.now")) { model.restartToUpdate() }   // 没下就先下、下好接着换（玩家点了才下，#1283）；手动更新（11-16）：启动器升级不再顺带装手机，按钮不再写「和 iPhone App」
                     .controllerButtonStyle(LauncherPrimaryButtonStyle()).disabled({ if case .working = model.updateState { return true } else { return false } }())
                     .accessibilityIdentifier("update.popup.now").controllerShortcut(.rightTrigger)
             }

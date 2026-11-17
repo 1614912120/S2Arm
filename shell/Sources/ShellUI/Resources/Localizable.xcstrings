@@ -20887,6 +20887,64 @@
         }
       }
     },
+    "Connect a controller in Bluetooth settings.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Verbinde einen Controller in den Bluetooth-Einstellungen."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect a controller in Bluetooth settings."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conecta un mando en los ajustes de Bluetooth."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connectez une manette dans les réglages Bluetooth."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Collega un controller nelle impostazioni Bluetooth."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bluetooth 設定でコントローラーを接続してください。"
+          }
+        },
+        "sv": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Anslut en handkontroll i Bluetooth-inställningarna."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在蓝牙设置中连接手柄。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在藍牙設定中連線手把。"
+          }
+        }
+      }
+    },
     "Language": {
       "localizations": {
         "en": {
@@ -21083,6 +21141,646 @@
           "stringUnit": {
             "state": "translated",
             "value": "只對這款遊戲；開始遊戲時生效"
+          }
+        }
+      }
+    },
+    "%@ needs one more file": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ needs one more file"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ necesita un archivo más"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ a besoin d’un fichier supplémentaire"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ に追加のファイルが1つ必要です"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 需要补一个文件"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 需要補一個檔案"
+          }
+        }
+      }
+    },
+    "%lld games need one more file: %@": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld games need one more file: %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld juegos necesitan un archivo más: %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld jeux ont besoin d’un fichier supplémentaire : %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 本のゲームに追加のファイルが必要です：%@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 款游戏需要补文件：%@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 款遊戲需要補檔案：%@"
+          }
+        }
+      }
+    },
+    "Connect your phone to your computer, open the S2Arm launcher and click “Update S2Arm on iPhone”. That adds the file. Until then, the game will close again at the same point.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connect your phone to your computer, open the S2Arm launcher and click “Update S2Arm on iPhone”. That adds the file. Until then, the game will close again at the same point."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conecta el teléfono al ordenador, abre el lanzador de S2Arm y haz clic en «Actualizar S2Arm en el iPhone» para añadir el archivo. Hasta entonces, el juego se volverá a cerrar en el mismo punto."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Branchez votre téléphone à l’ordinateur, ouvrez le lanceur S2Arm et cliquez sur « Mettre à jour S2Arm sur l'iPhone » pour ajouter le fichier. D’ici là, le jeu se fermera de nouveau au même endroit."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "スマートフォンをコンピュータに接続して S2Arm ランチャーを開き、「iPhone の S2Arm を更新」をクリックすると追加されます。それまでは、同じところでゲームがまた終了します。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "把手机连上电脑、打开 S2Arm 启动器，点「更新 iPhone 上的 S2Arm」就能补上。补好之前，游戏跑到同一处还会闪退。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "把手機連上電腦、打開 S2Arm 啟動器，點「更新 iPhone 上的 S2Arm」就能補上。補好之前，遊戲跑到同一處還會閃退。"
+          }
+        }
+      }
+    },
+    "Learn more": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Learn more"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Más información"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En savoir plus"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "詳しく見る"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "了解详情"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "了解詳情"
+          }
+        }
+      }
+    },
+    "Keep “Increased Memory Limit” when signing": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep “Increased Memory Limit” when signing"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conservar «Límite de memoria aumentado» al firmar"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Conserver « Limite de mémoire augmentée » à la signature"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "署名時に「メモリ上限の引き上げ」を残す"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自签时带上「提高内存上限」"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "自行簽署時帶上「提高記憶體上限」"
+          }
+        }
+      }
+    },
+    "S2Arm needs the “Increased Memory Limit” permission. Without it, large games can run out of memory and close. Whether your copy keeps it depends on how S2Arm was signed.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S2Arm needs the “Increased Memory Limit” permission. Without it, large games can run out of memory and close. Whether your copy keeps it depends on how S2Arm was signed."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S2Arm necesita el permiso «Límite de memoria aumentado». Sin él, los juegos grandes pueden quedarse sin memoria y cerrarse. Que tu copia lo conserve depende de cómo se firmó S2Arm."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S2Arm a besoin du droit « Limite de mémoire augmentée ». Sans lui, les jeux volumineux peuvent manquer de mémoire et se fermer. Votre copie le conserve ou non selon la façon dont S2Arm a été signé."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S2Arm には「メモリ上限の引き上げ」の権限が必要です。ないと大容量ゲームがメモリ不足で終了することがあります。この権限が残るかどうかは、S2Arm をどう署名してインストールしたかで決まります。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S2Arm 需要「提高内存上限」权限，没有它大游戏可能内存不够闪退。这项权限在不在，取决于 S2Arm 是怎么签名安装的。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S2Arm 需要「提高記憶體上限」權限，沒有它大型遊戲可能記憶體不足而閃退。這項權限在不在，取決於 S2Arm 是怎麼簽署安裝的。"
+          }
+        }
+      }
+    },
+    "S2Arm launcher (recommended)": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S2Arm launcher (recommended)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lanzador de S2Arm (recomendado)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lanceur S2Arm (recommandé)"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S2Arm ランチャー（おすすめ）"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S2Arm 启动器（推荐）"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "S2Arm 啟動器（推薦）"
+          }
+        }
+      }
+    },
+    "On a Mac, click “Install on iPhone”. It signs with the Apple ID you added in Xcode and keeps this permission, even with a free Apple ID. On Windows, the launcher signs with Impactor 2.7.2, which keeps it too.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On a Mac, click “Install on iPhone”. It signs with the Apple ID you added in Xcode and keeps this permission, even with a free Apple ID. On Windows, the launcher signs with Impactor 2.7.2, which keeps it too."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En un Mac, haz clic en «Instalar en el iPhone». Firma con el Apple ID que añadiste en Xcode y conserva este permiso, incluso con un Apple ID gratuito. En Windows, el lanzador firma con Impactor 2.7.2, que también lo conserva."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sur Mac, cliquez sur « Installer sur l'iPhone ». La signature utilise l'identifiant Apple ajouté dans Xcode et conserve ce droit, même avec un identifiant gratuit. Sous Windows, le lanceur signe avec Impactor 2.7.2, qui le conserve aussi."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mac では「iPhone にインストール」をクリックします。Xcode に追加した Apple ID で署名され、無料の Apple ID でもこの権限が付きます。Windows ではランチャーが Impactor 2.7.2 で署名し、同じく権限が付きます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Mac 上点「装到 iPhone」，用你在 Xcode 里登录的 Apple ID 签名，会带上这项权限，免费 Apple ID 也行。Windows 上启动器用 Impactor 2.7.2 签名，同样会带上。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在 Mac 上點「裝到 iPhone」，用你在 Xcode 裡登入的 Apple ID 簽署，會帶上這項權限，免費 Apple ID 也可以。Windows 上啟動器用 Impactor 2.7.2 簽署，同樣會帶上。"
+          }
+        }
+      }
+    },
+    "Use AltStore Classic 2.2 or later and install S2Arm again (a refresh is not enough). A free Apple ID works.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use AltStore Classic 2.2 or later and install S2Arm again (a refresh is not enough). A free Apple ID works."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Usa AltStore Classic 2.2 o posterior y vuelve a instalar S2Arm (no basta con renovar). Funciona con un Apple ID gratuito."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Utilisez AltStore Classic 2.2 ou ultérieur et réinstallez S2Arm (une simple actualisation ne suffit pas). Un identifiant Apple gratuit fonctionne."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AltStore Classic 2.2 以降を使い、S2Arm をインストールし直してください（更新だけでは足りません）。無料の Apple ID でも使えます。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用 AltStore Classic 2.2 或更新版，重新安装 S2Arm（只续签不够）。免费 Apple ID 也行。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "用 AltStore Classic 2.2 或更新版，重新安裝 S2Arm（只續簽不夠）。免費 Apple ID 也可以。"
+          }
+        }
+      }
+    },
+    "SideStore (0.7.0 and earlier) drops this permission when it signs. Add it with GetMoreRam below, then install S2Arm again in SideStore.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SideStore (0.7.0 and earlier) drops this permission when it signs. Add it with GetMoreRam below, then install S2Arm again in SideStore."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SideStore (0.7.0 y anteriores) elimina este permiso al firmar. Añádelo con GetMoreRam (abajo) y vuelve a instalar S2Arm en SideStore."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SideStore (0.7.0 et versions antérieures) supprime ce droit en signant. Ajoutez-le avec GetMoreRam ci-dessous, puis réinstallez S2Arm dans SideStore."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SideStore（0.7.0 以前）は署名時にこの権限を外してしまいます。下の GetMoreRam で追加してから、SideStore で S2Arm をインストールし直してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SideStore（0.7.0 及更早）签名时会丢掉这项权限。先用下面的 GetMoreRam 补上，再在 SideStore 里重新安装 S2Arm。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SideStore（0.7.0 及更早）簽署時會遺失這項權限。先用下面的 GetMoreRam 補上，再在 SideStore 裡重新安裝 S2Arm。"
+          }
+        }
+      }
+    },
+    "Not supported for now: Sideloadly doesn’t say it keeps this permission with a free Apple ID. Its custom entitlement option needs a paid Apple Developer account.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not supported for now: Sideloadly doesn’t say it keeps this permission with a free Apple ID. Its custom entitlement option needs a paid Apple Developer account."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sin soporte por ahora: Sideloadly no indica que conserve este permiso con un Apple ID gratuito. Su opción de permisos personalizados necesita una cuenta de pago de Apple Developer."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non pris en charge pour l'instant : Sideloadly n'indique pas conserver ce droit avec un identifiant Apple gratuit. Son option de droits personnalisés exige un compte Apple Developer payant."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在は非対応：Sideloadly は無料の Apple ID でこの権限が残るとは明記していません。カスタム権限のオプションには有料の Apple Developer アカウントが必要です。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂不支持：Sideloadly 没有说明用免费 Apple ID 签名会保留这项权限；它的「自定义权限」选项要付费的 Apple 开发者账号。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暫不支援：Sideloadly 沒有說明用免費 Apple ID 簽署會保留這項權限；它的「自訂權限」選項需要付費的 Apple 開發者帳號。"
+          }
+        }
+      }
+    },
+    "Already installed? Install GetMoreRam, sign in with the Apple ID you used for S2Arm, open App IDs and tap Refresh, choose S2Arm, tap “Add Increased Memory Limit”, then install S2Arm again with the same tool.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Already installed? Install GetMoreRam, sign in with the Apple ID you used for S2Arm, open App IDs and tap Refresh, choose S2Arm, tap “Add Increased Memory Limit”, then install S2Arm again with the same tool."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "¿Ya está instalado? Instala GetMoreRam, inicia sesión con el Apple ID que usaste para S2Arm, abre «App IDs» y toca «Refresh», elige S2Arm, toca «Add Increased Memory Limit» y vuelve a instalar S2Arm con la misma herramienta."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Déjà installé ? Installez GetMoreRam, connectez-vous avec l'identifiant Apple utilisé pour S2Arm, ouvrez « App IDs » et touchez « Refresh », choisissez S2Arm, touchez « Add Increased Memory Limit », puis réinstallez S2Arm avec le même outil."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "インストール済みの場合：GetMoreRam を入れ、S2Arm の署名に使った Apple ID でサインインし、「App IDs」で「Refresh」をタップ、S2Arm を選んで「Add Increased Memory Limit」をタップしてから、同じツールで S2Arm をインストールし直してください。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已经装好了？装上 GetMoreRam，登录签 S2Arm 用的那个 Apple ID，进「App IDs」点「Refresh」，选 S2Arm，点「Add Increased Memory Limit」，再用原来的工具重新安装 S2Arm。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已經裝好了？裝上 GetMoreRam，登入簽署 S2Arm 用的那個 Apple ID，進「App IDs」點「Refresh」，選 S2Arm，點「Add Increased Memory Limit」，再用原來的工具重新安裝 S2Arm。"
+          }
+        }
+      }
+    },
+    "Keeps it": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keeps it"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lo conserva"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le conserve"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "残る"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "能带上"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "能帶上"
+          }
+        }
+      }
+    },
+    "Drops it": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drops it"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lo elimina"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le supprime"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "外れる"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "会丢"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "會遺失"
+          }
+        }
+      }
+    },
+    "Not supported for now": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not supported for now"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sin soporte por ahora"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non pris en charge pour l'instant"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "現在は非対応"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂不支持"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暫不支援"
+          }
+        }
+      }
+    },
+    "Adds it back": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Adds it back"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lo añade"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Le rajoute"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "追加できる"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "能补上"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "能補上"
           }
         }
       }

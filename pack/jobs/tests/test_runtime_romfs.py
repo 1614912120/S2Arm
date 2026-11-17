@@ -2,6 +2,7 @@
 # Copyright 2026 S2Arm contributors
 """Mac 运行包必须包含独立 RomFS；共享存储链接不能漏拷或逃逸。"""
 import errno
+import jobcase  # noqa: E402（作业上下文替身统一工厂 jobcase.fake_context）
 import importlib.util
 import json
 import os
@@ -32,7 +33,7 @@ class RuntimeRomfs(unittest.TestCase):
         (self.source / "romfs").symlink_to("../.romfs_store/game/input-v1")
         self.dest = self.base / "library/games/game/releases/new.partial"
         self.dest.mkdir(parents=True)
-        self.c = types.SimpleNamespace(library=self.base / "library", check=lambda: None, progress=lambda *a: None)
+        self.c = jobcase.fake_context(self.base, library=self.base / "library", check=lambda: None, progress=lambda *a: None)
 
     def test_store_link_materializes_independent_readonly_files(self):
         (self.store / "data.bin").chmod(0o444)
@@ -47,6 +48,17 @@ class RuntimeRomfs(unittest.TestCase):
         self.store.chmod(0o755)
         shutil.rmtree(self.store)
         self.assertEqual((self.dest / "romfs/data.bin").read_bytes(), b"synthetic resource\x00")
+
+    def test_image_only_root_clones_the_image_itself(self):
+        # 产物根只有 RomFS 镜像 romfs.std（没有 romfs/）：照样准备，镜像原样克隆成一个文件（字节相同、不多不少），不展开、不建 romfs/
+        (self.source / "romfs").unlink()
+        blob = os.urandom(70000)
+        (self.source / "romfs.std").write_bytes(blob)
+        (self.source / "exefs").mkdir(); (self.source / "exefs/main").write_bytes(b"main")
+        build.clone_tree(self.c, self.source, self.dest, materialize_romfs=True)
+        self.assertEqual((self.dest / "romfs.std").read_bytes(), blob)
+        self.assertFalse((self.dest / "romfs").exists())
+        self.assertEqual(sorted(p.relative_to(self.dest).as_posix() for p in self.dest.rglob("*") if p.is_file()), ["exefs/main", "romfs.std"])
 
     def test_reports_whether_every_file_was_cloned(self):
         # #329：返回值决定 Mac 出包后解包目录留不留——整棵都是真克隆（同一克隆族、不另占盘）才 True；有一个退成普通复制（跨卷 / 非 APFS / Windows）就 False

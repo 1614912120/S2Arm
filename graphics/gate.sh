@@ -416,6 +416,7 @@ py_items() {
   job bnsh_slice timeout 60 "$PYV" graphics/tools/shbake/tests/t_bnsh_slice.py
   job whole_zstd_scan timeout 60 "$PYV" graphics/tools/shbake/tests/t_whole_zstd_scan.py
   job mmap_contains timeout 60 "$PYV" graphics/tools/shbake/tests/t_mmap_contains.py
+  job zstd_frame_nocopy timeout 60 "$PYV" graphics/tools/shbake/tests/t_zstd_frame_nocopy.py
   job zsdict_heads timeout 60 "$PYV" graphics/tools/shbake/tests/t_zsdict_heads.py
   job container_b timeout 60 "$PYV" -B graphics/tools/shbake/tests/t_container_b.py
   job wwise_skip timeout 120 "$PYV" graphics/tools/shbake/tests/t_wwise_skip.py

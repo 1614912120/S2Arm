@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import time
@@ -90,6 +91,7 @@ def parse(text):
 
 
 SHORT = {"bad1dea/NXCheats": "nxcheats", "HamletDuFromage/switch-cheats-db": "cheatsdb", "ChanseyIsTheBest/NX-60FPS-RES-GFX-Cheats": "gfx",
+         "tomvita/MyNXCheats": "tomvita", "WerWolv/EdiZon_CheatsConfigsAndScripts": "edizon",   # 11-16 加（社区补丁候选第一轮）：补丁库只取它们的 cheats/<构建号>.txt
          "s2arm/player-cheats": "player"}   # 玩家分享：<构建号>.player.txt，iPhone 金手指面板按文件名认「玩家分享、未验证」（ios/vpad_cheats.m）   # 文件名里的库简名（同 11-12 起的文件名，玩家已开的开关键不变）
 
 
@@ -218,7 +220,10 @@ def listing(c, game):
         fbid, entries = parse(f.read_text(encoding="utf-8", errors="replace"))
         stem_bid = f.name.split(".")[0].upper()
         want = fbid or (stem_bid if re.fullmatch(r"[0-9A-F]{16}", stem_bid) else "")
-        ok = not want or not bid or want == bid
+        # 没写构建号（#1321）：Mac 本机运行时照常认（services/S2A.Services/Cheats.cs BuildMatches 不核），出 iPhone 包时核不了版本、整份不收（pack/cpatch.py scan_cheats）。
+        #   Windows 上只能出 iPhone 包：列成用不了并写原因，不让玩家以为开了能用；Mac 照常可开，导出 iPhone 时结果页另列「没写构建号」
+        nobid = not want and os.name == "nt"
+        ok = (not want or not bid or want == bid) and not nobid
         s = src.get(f.name) or {"from": "player"}
         if not ok and s.get("from") == "library":
             continue   # 公开库里别的版本（没解过包时各版本都取了）：不列；玩家导入的版本不对照列、写原因
@@ -229,7 +234,8 @@ def listing(c, game):
             items.append(dict(key=key, file=f.name, name=name, enabled=key in enabled, status=STATUS.get(status.get(key, ""), status.get(key, "")),
                               **{"from": s.get("from", "player")}, repo=s.get("repo", ""), author=s.get("author", ""), license=s.get("license", ""),
                               shared=s.get("repo", "") == PLAYER_REPO or f.name.endswith(".player.txt"),   # 玩家分享、未验证：开之前提示一句可能坏存档（不拦）
-                              ok=ok, fixed=fixed, reason="" if ok else f"版本不对：金手指是 {want}，这份游戏是 {bid}。"))
+                              ok=ok, fixed=fixed, reason="" if ok else "没写构建号：文件名改成「<16 位构建号>.txt」或首行加 BID=<构建号> 才能编进 iPhone 包。" if nobid
+                              else f"版本不对：金手指是 {want}，这份游戏是 {bid}。"))
     return dict(items=items, reason="" if items else "这个版本没有现成的金手指。")
 
 

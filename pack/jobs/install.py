@@ -292,8 +292,8 @@ def game_docs(gid):
 
 DOCS_GAMES = "Documents/games"
 PACK_GAMES = "Library/Application Support/S2Arm/games"   # 每款资源包放 <PACK_GAMES>/<游戏号>/资源包（设备侧宿主同口径）
-# 备用位置（v0.3.3）：iOS 27 玩家机上 Library/Application Support/S2Arm 整条归 root、App 写不进，新壳把资源包搬到 Library/S2Arm/games（runtime/src/pack_apply.c
-#   repair_pack_base）；手机上有它就一律推它（宿主同一判据：s2a_docs.h s2a_pack_base_rel 看 Library/S2Arm/games 在不在）
+# 备用位置（v0.3.3）：iOS 27 玩家机上 Library/Application Support/S2Arm 整条归 root、App 写不进，当时的壳把资源包搬到 Library/S2Arm/games
+#   （那段迁移 11-15 已撤，存量手机上可能还留着这个目录）；手机上有它就一律推它（宿主同一判据：s2a_docs.h s2a_pack_base_rel 看 Library/S2Arm/games 在不在）
 PACK_GAMES_ALT = "Library/S2Arm/games"
 
 
@@ -614,7 +614,7 @@ def classify(text, default="signing_failed"):
 
 def ios_pack(c, gid):
     """这款的资源包（image/ios/.pack）；还没出 iPhone 版 / 没有资源包就不装、不报成功（审计 18:00 P1-58：原先照装、启动器写死「资源包也拷好了」，打开游戏才进缺资源页）"""
-    if not (layout.ios_kit(c, gid) / "main.npdm").is_file():
+    if not layout.has_ios_kit(c, gid):
         raise Failure("这款游戏还没出 iPhone 包：先点「打 iPhone 包」。", code="job_failed")
     pack = layout.ios_pack(c, gid)
     if not (pack / "manifest.json").is_file():
@@ -810,38 +810,108 @@ def app_running(c, ident, bid):
     if rc:
         return None
     exe = [p.get("executable") or "" for p in (procs.get("result") or {}).get("runningProcesses") or [] if isinstance(p, dict)]
-    return any(e.startswith(u) for e in exe for u in urls)
+    # 只认主程序本身：<安装目录>/<CFBundleExecutable>。安装目录下还有系统常驻拉起的扩展进程（主屏小组件 PlugIns/S2ArmWidget.appex，11-16 进壳），
+    #   和玩家在不在玩无关——原先「落在安装目录下」就算在跑，phone_kept_pull 一直回 running=true，自动补件 / 提示更新从不发起
+    #   （11-16 真机实测：App 已退出，只剩小组件进程）。按主程序全路径比，以后再加扩展（Live Activity 等）也不会算进来
+    main = main_executable(c)
+    return any(e == u + main for e in exe for u in urls)
+
+
+def main_executable(c):
+    """装到手机上的容器 App 的主程序文件名：游戏库根 S2Arm.ipa（layout.phone_ipa，装机时组装的那份）里 Info.plist 的 CFBundleExecutable；
+    读不到（还没装过 / 文件坏）→ 壳的缺省名 S2Arm"""
+    import zipfile
+    try:
+        with zipfile.ZipFile(layout.phone_ipa(c)) as z:
+            name = next(n for n in z.namelist() if re.fullmatch(r"Payload/[^/]+\.app/Info\.plist", n))
+            exe = plistlib.loads(z.read(name)).get("CFBundleExecutable")
+            if isinstance(exe, str) and exe and "/" not in exe:
+                return exe
+    except (OSError, StopIteration, ValueError, KeyError, zipfile.BadZipFile, plistlib.InvalidFileException):
+        pass
+    return "S2Arm"
 
 
 def pull_kept_nros(c, ident, bid, gid, docs="Documents"):
     """装之前把这台设备上宿主留下的 NRO（runtime/src/loader.c s2a_nro_keep：包里没有改写映像、游戏解开的整份，Documents/wire/<号>/nro/<SHA-256>.nro）
-    拉回游戏库 games/<号>/nro_kept/，下次准备这款时改写进包（#8be819）。机上没有 / 列不出 / 拉不到都不算错；只收文件名 = 内容 SHA-256 的。→ 新收的个数"""
-    import hashlib
+    拉回游戏库 games/<号>/nro_kept/，下次准备这款时改写进包（#8be819）。机上没有 / 列不出 / 拉不到都不算错；只收文件名 = 内容 SHA-256 的。→ 新收的个数
+    Mac：devicectl 列 / 拉；Windows 走 s2a-devpush（WinPhone.pull_kept），收文件这段共用 keep_nros"""
     from diag import devicectl
-    rc, data, _ = devicectl(c, "device", "info", "files", "--device", ident, "--domain-type", "appDataContainer", "--domain-identifier", bid,
+    rc, data, err = devicectl(c, "device", "info", "files", "--device", ident, "--domain-type", "appDataContainer", "--domain-identifier", bid,
                             "--subdirectory", f"{docs}/wire/{gid.upper()}/nro", timeout=120)
     if rc:
+        if not dir_missing(err):   # 目录不在 = 这款没留下 NRO（常态）；别的列不出要看得见，不然真问题被吞成「收 0 个」
+            note(c, f"收回 {gid} 留下的 NRO：列不出手机上的目录（{(err or '').strip().splitlines()[-1:] or rc}），这次没收")  # 非玩家句
         return 0
-    names = sorted({p.rsplit("/", 1)[-1] for p in (f.get("relativePath") or f.get("path") for f in ((data.get("result") or {}).get("files") or [])
-                                                   if isinstance(f, dict) and not (f.get("resources") or {}).get("isDirectory")) if p})
+    names = {p.rsplit("/", 1)[-1] for p in (f.get("relativePath") or f.get("path") for f in ((data.get("result") or {}).get("files") or [])
+                                            if isinstance(f, dict) and not (f.get("resources") or {}).get("isDirectory")) if p}
+    def fetch(name, dst):
+        rc, _, _ = devicectl(c, "device", "copy", "from", "--device", ident, "--domain-type", "appDataContainer", "--domain-identifier", bid,
+                             "--source", f"{docs}/wire/{gid.upper()}/nro/{name}", "--destination", dst, timeout=300)
+        return rc == 0
+    return keep_nros(c, gid, names, fetch)
+
+
+def keep_nros(c, gid, names, fetch):
+    """机上列出的名字里，文件名 = 内容 SHA-256 的 NRO 逐个拉到临时文件（fetch(名字, 本地路径) → 成功?）、核过摘要收进 games/<号>/nro_kept/；
+    已收过的不再拉。→ 新收的个数"""
+    import hashlib
     new = 0
-    for name in names:
+    for name in sorted(set(names)):
         if not re.fullmatch(r"[0-9a-f]{64}\.nro", name):
             continue
         dest = layout.nro_kept(c, gid, create=True) / name
         if dest.is_file():
             continue
         with tempfile.TemporaryDirectory(dir=c.private) as d:
-            rc, _, _ = devicectl(c, "device", "copy", "from", "--device", ident, "--domain-type", "appDataContainer", "--domain-identifier", bid,
-                                 "--source", f"{docs}/wire/{gid.upper()}/nro/{name}", "--destination", f"{d}/n", timeout=300)
             got = Path(d, "n")
-            if rc or not got.is_file() or hashlib.sha256(got.read_bytes()).hexdigest() != name[:64]:
+            if not fetch(name, str(got)) or not got.is_file():
+                note(c, f"收回 {gid} 留下的 NRO {name}：拉不回来，这次没收")  # 非玩家句
+                continue
+            if hashlib.sha256(got.read_bytes()).hexdigest() != name[:64]:
+                note(c, f"收回 {gid} 留下的 NRO {name}：内容摘要与文件名不符，丢掉")  # 非玩家句
                 continue
             dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(got, dest); new += 1
+            part = dest.with_name(f"{dest.name}.{os.getpid()}.partial")   # 临时文件 + 改名：补件（rewrite_refresh.add_kept_nros）同时在读也读不到半个
+            shutil.copyfile(got, part); os.replace(part, dest); new += 1
     if new:
         c.emit("message", f"这款游戏有 {new} 个代码模块要在运行中才能取到，已经从 iPhone 收回，这次装机一并补上")
     return new
+
+
+def in_pack_kept(c, gid):
+    """游戏库收回过、已进这款 iPhone 程序件（nro_modules.tsv 有这条摘要）的 NRO 文件名；程序件里还没有的不算（rewrite_refresh.kept_todo）"""
+    import rewrite_refresh
+    kept = layout.nro_kept(c, gid)
+    if not kept.is_dir():
+        return []
+    todo = {p.name for p in rewrite_refresh.kept_todo(c, gid, layout.ios_kit(c, gid))}
+    return [p.name for p in sorted(kept.glob("*.nro")) if re.fullmatch(r"[0-9a-f]{64}\.nro", p.name) and p.name not in todo]
+
+
+def clear_kept(c, ph, games):
+    """装好之后：这次已带进包的 NRO 从手机上 <文档根>/wire/<号>/nro/ 删掉（#8be819）。手机上这个目录里还有 .nro = 这款还没补好
+    （游戏库提示 / 闪退弹窗按这个判）：装机失败、旧启动器不删，提示照旧；新包还缺的，宿主下次跑到会再存，提示自己回来。
+    只删本机认得、确实进了包的名字；删不掉记一行，不挡装机"""
+    drop = getattr(ph, "drop_kept", None)
+    if drop is None:
+        return
+    for g in games:
+        try:
+            names = in_pack_kept(c, g)
+            if names:
+                drop(g, names)
+        except (Failure, OSError, ImportError) as e:
+            note(c, f"装好后删手机上 {g} 已补进包的 NRO 失败（{e}），游戏库会照旧提示要补，下次装机再删")  # 非玩家句
+
+
+def rm_kept(c, dp, gid, names):
+    """经 s2a-devpush 删手机上这款留下的这几个 NRO（已不在算成功）"""
+    rel = f"{game_docs(gid)}/wire/{gid.upper()}/nro"
+    for name in names:
+        ok, out = dp.rm(f"{rel}/{name}")
+        if not ok:
+            note(c, f"删手机上 {gid} 已补进包的 NRO {name} 没成（{out.splitlines()[-1:] or '失败'}），下次装机再删")  # 非玩家句
 
 
 SAVE_REL = "S2A/ryujinx/bis/user/save"   # 文档根下的存档目录（Ryujinx 数据根 = <文档根>/S2A/ryujinx）
@@ -1307,7 +1377,7 @@ def export_phone(c, gid=None):
         if g == gid or g in hidden:
             continue
         pack = layout.ios_pack(c, g)
-        if not (layout.ios_kit(c, g) / "main.npdm").is_file() or not (pack / "manifest.json").is_file():
+        if not layout.has_ios_kit(c, g) or not (pack / "manifest.json").is_file():
             continue   # 没出过 iPhone 版：本来就不在手机上，不算跳过
         if packer.usable_kit(c, g, sid) is None or not img_pack(pack):
             skipped.append(names[g])
@@ -1339,7 +1409,11 @@ def export_phone(c, gid=None):
         ipa, games, _ = packer.assemble(c, gid, others, dest=work / "assemble")
         out = work / "out"
         out.mkdir()
-        os.replace(ipa, out / "S2Arm.ipa")
+        # 玩家在设置里关了主屏小组件（widget: false）：导出的 ipa 去掉扩展再交（侧载工具按壳里有什么签什么）；没关照原样
+        if c.r.get("widget") is False and ipa_strip_widget(ipa, out / "S2Arm.ipa"):
+            Path(ipa).unlink()
+        else:
+            os.replace(ipa, out / "S2Arm.ipa")
         shutil.rmtree(work / "assemble", ignore_errors=True)
         c.begin("写各款游戏的 .img（含着色器库）与着色器更新包", 3, 4)
         used, listed, fresh, unwritten = set(), [], [], []
@@ -1502,13 +1576,16 @@ def sign_and_install(c, ipa, team, dev, udid, bid, games, steps=True):
             pl["CFBundleDisplayName"] = shown
         info.write_bytes(plistlib.dumps(pl))
         check_shell_sdk(c, app, dev)
+        # 主屏小组件扩展（PlugIns/S2ArmWidget.appex，11-16）：扩展包名跟着主包名（<主包名>.widget）。玩家在设置里关了（widget: false）→ 去掉；
+        #   玩家自己的证书只有主程序一份描述文件 → 去掉并提示；Apple ID 签名带上（sign_with_apple_id 申请两份描述文件，哪步不成就去掉重签，绝不因小组件装不上）
+        widget = widget_prepare(c, app, bid, devcert=devcert.active(c))
         if devcert.active(c):   # 玩家自己的开发者证书（v0.2.4）：rcodesign 直接读 p12 签，不申请描述文件、不要 Xcode 账号
             if steps: c.begin("用你的开发者证书签名", 4, 6)
             devcert.sign_app(c, app, log)
             devcert.export_ipa(c, stage / "Payload")
         else:
             from diag import is_vision
-            sign_with_apple_id(c, app, team, bid, ents, udid, log, steps, vision=is_vision(dev))
+            sign_with_apple_id(c, app, team, bid, ents, udid, log, steps, vision=is_vision(dev), widget=widget)
         if steps: c.begin("装到 iPhone", 5, 6)
         from diag import devicectl
         for g in games:
@@ -1524,10 +1601,79 @@ def sign_and_install(c, ipa, team, dev, udid, bid, games, steps=True):
         shutil.rmtree(stage, ignore_errors=True)
 
 
-def sign_with_apple_id(c, app, team, bid, ents, udid, log, steps, vision=False):
+WIDGET_QUOTA = "这个免费 Apple ID 7 天内注册的包名已满 10 个，小组件要多注册一个（App 照常装上，额度恢复后再装一次就带上）"
+
+
+def ipa_strip_widget(src, dst):
+    """另存一份去掉小组件扩展（Payload/*.app/PlugIns/）的 ipa → 原包里有没有扩展。没有就不写 dst"""
+    import zipfile
+    with zipfile.ZipFile(src) as z:
+        names = z.infolist()
+        drop = [i for i in names if re.match(r"Payload/[^/]+\.app/PlugIns/", i.filename)]
+        if not drop:
+            return False
+        with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED) as o:
+            for i in names:
+                if i not in drop:
+                    o.writestr(i, z.read(i), compress_type=i.compress_type)
+    return True
+
+
+def widget_mod(c):
+    """pack/widget_ext.py（出壳 / 组装 / 装机同一份包名与去扩展规则）：按请求给的引擎树（c.engine，同本文件取 tools / pack/orch）导入。
+    原先按本文件位置往上两级找：源码树里是仓库根，对；Mac App 里作业层在 Contents/Resources/Jobs、引擎在 Resources/Engine，
+    往上两级是 Contents、没有 pack，装到 iPhone 一律 ModuleNotFoundError（0.5.0 正式候选 667ccdb92，11-16 维护者）。
+    引擎树里没有这份时（单测给的空引擎）才退回本文件所在的源码树"""
+    root = Path(c.engine)
+    if not (root / "pack" / "widget_ext.py").is_file():
+        root = Path(__file__).resolve().parents[2]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from pack import widget_ext
+    return widget_ext
+
+
+def widget_group(team_id):
+    """小组件与主程序共用的 App Group：全苹果唯一，按团队号区分（壳里写的 group.s2arm.widget 是给侧载工具改名用的占位；运行时按前缀认）"""
+    return f"group.s2arm.widget.{team_id}"
+
+
+def widget_prepare(c, app, bid, devcert=False):
+    """装机前处理小组件扩展 → 还带不带（True = 交给签名带上）。没有扩展（单款包 / 旧壳）→ False"""
+    if not (Path(app) / "PlugIns").is_dir():
+        return False
+    W = widget_mod(c)
+    if not W.appexes(app):
+        return False
+    W.retarget(app, bid)
+    if c.r.get("widget") is False:   # 玩家在设置里关了「装到 iPhone 时带主屏小组件」：不提示
+        W.strip(app)
+        return False
+    if devcert:
+        widget_skip(c, app, "用你自己的开发者证书签名只有主程序一份描述文件，签不了小组件")
+        return False
+    return True
+
+
+def widget_skip(c, app, why):
+    """去掉小组件扩展、照常装 App，黄字说明这次为什么没带（玩家决定要不要换签名方式 / 等额度）"""
+    widget_mod(c).strip(app)
+    c.diagnostic(f"这次没装小组件：{why}", code="widget_skipped", severity="warning")
+
+
+def sign_with_apple_id(c, app, team, bid, ents, udid, log, steps, vision=False, widget=False):
     """Apple ID 模式：按玩家 Xcode 账号申请开发描述文件（ensure_profile.sh）再用钥匙串身份签（dev_sign.py）。
     vision：目标是 Apple Vision Pro（按 iPad 兼容装）——申请描述文件的目标写 id=<UDID>，让 Xcode 自己认平台与「Designed for iPad」变体、登记这台设备
-    （原样写 platform=iOS 会找不到这台；理论支持、未真机验证）"""
+    （原样写 platform=iOS 会找不到这台；理论支持、未真机验证）。
+    widget：带主屏小组件扩展——主程序与扩展各申请一份描述文件（扩展包名 <主包名>.widget，两边都带共享组 group.s2arm.widget.<团队号>），
+    先签扩展再签主程序；其中任何一步不成（免费账号包名额度 9120、个人团队不给共享组等）→ 去掉扩展、按原来的权限重签，黄字说原因"""
+    if widget:
+        try:
+            return sign_with_widget(c, app, team, bid, ents, udid, log, steps, vision)
+        except Failure as e:
+            if e.code in ("keychain_prompt",):   # 钥匙串框没人点：去掉扩展也一样要签，照原样报
+                raise
+            widget_skip(c, app, WIDGET_QUOTA if e.code == "free_appid_limit" else str(e).removeprefix("签名没成：") or e.code)  # 非玩家句（去前缀用）
     if steps: c.begin("申请开发描述文件（第一次要几十秒）", 3, 6, keychain=True)   # 用 Xcode 账号申请：可能弹钥匙串授权
     try:
         env = dict(c.env(), S2A_PROFILE_DEST=f"id={udid}") if vision and udid else None
@@ -1541,6 +1687,34 @@ def sign_with_apple_id(c, app, team, bid, ents, udid, log, steps, vision=False):
         text = log.read_text(errors="replace")[-8000:] if log.is_file() else ""
         code = classify(text)
         raise Failure("签名没成：" + tool_reason(log) + "；" + recovery(code, packaged=bool(c.r.get("engineBundle"))), code=code) from e  # 非玩家句
+
+
+def sign_with_widget(c, app, team, bid, ents, udid, log, steps, vision):
+    """sign_with_apple_id 带小组件的那一支：权限文件临时写（主程序 = 原权限 + 共享组；扩展 = 只有共享组），扩展先签（dev_sign --extension 不核内存上限）"""
+    W = widget_mod(c)
+    group = widget_group(team["id"])
+    wbid = W.bundle_id(bid)
+    with tempfile.TemporaryDirectory(dir=c.private) as t:
+        main_ents = Path(t) / "app.entitlements"
+        pl = plistlib.loads(Path(ents).read_bytes()); pl["com.apple.security.application-groups"] = [group]
+        main_ents.write_bytes(plistlib.dumps(pl))
+        ext_ents = Path(t) / "widget.entitlements"
+        ext_ents.write_bytes(plistlib.dumps({"com.apple.security.application-groups": [group]}))
+        if steps: c.begin("申请开发描述文件（第一次要几十秒）", 3, 6, keychain=True)
+        try:
+            env = dict(c.env(), S2A_PROFILE_DEST=f"id={udid}") if vision and udid else None
+            for b, e in ((bid, main_ents), (wbid, ext_ents)):
+                c.run(["bash", c.engine / "pack/ensure_profile.sh", b, team["id"], e] + ([udid] if udid else []), log, env)
+            if steps: c.begin("用你的 Apple ID 签名", 4, 6, keychain=True)
+            for x in W.appexes(app):
+                c.run([sys.executable, c.engine / "pack/dev_sign.py", x, wbid, team["id"], ext_ents, "--extension"], log)
+            c.run([sys.executable, c.engine / "pack/dev_sign.py", app, bid, team["id"], main_ents], log)
+        except Failure as e:
+            if e.code != "tool_exit":
+                raise
+            from errors import tool_reason
+            text = log.read_text(errors="replace")[-8000:] if log.is_file() else ""
+            raise Failure("签名没成：" + tool_reason(log), code=classify(text)) from e  # 非玩家句
 
 
 def win_install_mod(c):   # Windows 签名装机 + 推包（pack/orch/install_win.py：玩家自装的 Impactor 同版 plumesign + s2a-devpush）
@@ -1677,6 +1851,14 @@ class MacPhone:
                 print(f"[s2a] 收回 {g} 留下的 NRO 失败：{e}", file=sys.stderr)
         return n
 
+    def drop_kept(self, g, names):
+        """装好后删手机上这款已补进包的 NRO（clear_kept）：devicectl 不能删 App 容器里的文件，走 s2a-devpush（两端都随发版带）"""
+        if not (self.udid and self.bid):
+            note(self.c, f"没有设备序列号 / 包名，删不了手机上 {g} 已补进包的 NRO，下次装机再删")  # 非玩家句
+            return
+        with tempfile.TemporaryDirectory(dir=self.c.private) as work:
+            rm_kept(self.c, devpush_client(self.c, self.udid, self.bid, work), g, names)
+
     def backup(self, g):
         backup_saves(self.c, self.dev["id"], self.bid, g, docs=game_docs(g))
 
@@ -1759,11 +1941,52 @@ class WinPhone:
         self.info = dict(device=self.udid, deviceName="", deviceKind=kind)
         self.pending = None   # 资源传完但没拉起 App 解开时的那句（put_game 带进结果 unpackPending）
 
-    def pull_kept(self, games):   # 留下的 NRO（#8be819）：Windows 没有 devicectl，先不收（后续项：经 s2a-devpush 列 / 拉 Documents 文件）
-        return 0
+    def pull_kept(self, games):
+        """这几款在手机上留下的 NRO 都收回游戏库（#8be819，同 Mac pull_kept_nros）：Windows 没有 devicectl，经 s2a-devpush 列目录、逐个拉回，
+        收文件共用 keep_nros。→ 新收的个数；没记过包名 / 连不上 / 列不出（目录还没建、锁屏）都按 0，不挡装机"""
+        if not self.bid:
+            return 0
+        n = 0
+        with tempfile.TemporaryDirectory(dir=self.c.private) as work:
+            try:
+                dp = self.client(work)
+            except (Failure, OSError, ImportError) as e:   # 装机前也调（put_game）：收不到绝不挡装机，但要看得见（工具缺 / 起不来不能静默当「没留下」）
+                note(self.c, f"收回留下的 NRO：s2a-devpush 起不来（{e}），这次没收")  # 非玩家句
+                return 0
+            for g in games:
+                rel = f"{game_docs(g)}/wire/{g.upper()}/nro"
+                try:
+                    rc, out = dp.call("ls", rel)
+                    if rc:
+                        if not dir_missing(out):   # 目录不在 = 这款没留下（常态）；锁屏 / 断开等列不出的记一行
+                            note(self.c, f"收回 {g} 留下的 NRO：列不出手机上的目录（{out.splitlines()[-1:] or rc}），这次没收")  # 非玩家句
+                        continue
+                    n += keep_nros(self.c, g, out.splitlines(), lambda name, dst, rel=rel: dp.get(f"{rel}/{name}", dst))
+                except OSError as e:
+                    note(self.c, f"收回 {g} 留下的 NRO 失败：{e}")  # 非玩家句
+        return n
 
-    def app_running(self):   # 查不清（Windows 没有 devicectl）：自动推送不发起
+    def drop_kept(self, g, names):
+        """装好后删手机上这款已补进包的 NRO（clear_kept）"""
+        if not self.bid:
+            return
+        with tempfile.TemporaryDirectory(dir=self.c.private) as work:
+            rm_kept(self.c, self.client(work), g, names)
+
+    def app_running(self):   # 查不了进程（Windows 没有 devicectl）：调用方改用 playing（游玩时间心跳）
         return None
+
+    def playing(self, games):
+        """按游玩时间心跳判手机上是不是正在玩（playing_by_heartbeat）：True 在玩 / False 没在玩 / None 查不清"""
+        if not self.bid:
+            return None
+        import tempfile
+        with tempfile.TemporaryDirectory(prefix="s2a-hb-") as work:
+            try:
+                client = self.client(work)
+            except Failure:
+                return None
+            return playing_by_heartbeat(client, games, work)
 
     def client(self, work):
         return devpush_client(self.c, self.udid, self.bid, work)
@@ -1805,11 +2028,27 @@ class WinPhone:
         if steps: self.c.begin("签名并装到 iPhone（Impactor 官方命令行 plumesign）", 3, 6)
         log = self.c.logs / (self.c.task + "-install.log")
         self.c.last_log = log
-        ns = argparse.Namespace(ipa=str(ipa), udid=self.udid, name=None, plumesign=b.get("plumesign"), log=str(log), bundle=self.bundle_for_signing())
-        try:
-            self.bid = self.W.install_app(ns, say=lambda m: self.c.emit("message", m))
-        except self.W.Fail as e:
-            raise win_install_failure(e) from e
+        # 主屏小组件扩展（11-16）：plumesign 自己给扩展注册包名与共享组。玩家关了 → 去掉再交；带着签不成（免费账号包名额度 9120 等）→ 去掉重来一次，黄字说原因
+        with tempfile.TemporaryDirectory(dir=self.c.private) as t:
+            plain = Path(t) / "S2Arm.ipa"
+            had = ipa_strip_widget(ipa, plain)
+            if had and self.c.r.get("widget") is False:
+                ipa, had = plain, False
+            ns = argparse.Namespace(ipa=str(ipa), udid=self.udid, name=None, plumesign=b.get("plumesign"), log=str(log), bundle=self.bundle_for_signing())
+            try:
+                self.bid = self.W.install_app(ns, say=lambda m: self.c.emit("message", m))
+            except self.W.Fail as e:
+                if not had:
+                    raise win_install_failure(e) from e
+                first = win_install_failure(e)
+                print(f"[装机] 带小组件签名装机没成（{e.err or ''}：{e}），去掉小组件重来", file=sys.stderr, flush=True)  # 非玩家句
+                ns.ipa = str(plain)
+                try:
+                    self.bid = self.W.install_app(ns, say=lambda m: self.c.emit("message", m))
+                except self.W.Fail as e2:
+                    raise win_install_failure(e2) from e2
+                why = WIDGET_QUOTA if e.err == "free_appid_limit" else str(first)
+                self.c.diagnostic(f"这次没装小组件：{why}", code="widget_skipped", severity="warning")
         rec = layout.load_device(self.c, self.key)
         layout.save_device(self.c, self.key, dict(rec, bundleId=self.bid))
 
@@ -1826,6 +2065,7 @@ class WinPhone:
             app = next((stage / "Payload").glob("*.app"), None)
             if not app:
                 raise Failure("解不开 iPhone 包：" + str(ipa), code="job_failed")  # 非玩家句
+            widget_prepare(c, app, devcert.state(c)["bundleId"], devcert=True)   # 自己的证书只有主程序一份描述文件：去掉小组件扩展（玩家关了不提示）
             if steps: c.begin("用你的开发者证书签名", 3, 6)
             bid, _ = devcert.sign_app(c, app, log)
             devcert.export_ipa(c, stage / "Payload")
@@ -2116,6 +2356,7 @@ def put_game(c, gid, ph, steps=True, others=None, skipped=()):
                                            deleted=[g for g in rec.get("deleted") or [] if g not in games], shellId=sid, bundleId=ph.bid or rec.get("bundleId", ""), at=time.time(),
                                            staleAgreed={sid: left_out} if left_out else {}, **signed))
     packer.commit_phone_ipa(c, ipa, sid)
+    clear_kept(c, ph, games)   # 已补进包的 NRO 从手机上删掉：手机上不再有 = 补好了（#8be819 提示的判据）
     # 资源传完但电脑没拉起 App 解开（manual_unpack_required，11-09 #336）：不算「已装好」，结果带上还差的一步，两端前端据此显示「还差最后一步」而不是「已装到 iPhone」
     extra = dict(unpackPending=ph.pending) if ph.pending else {}
     if img: extra["openToFinish"] = True   # 两端成功页写「已传到 iPhone，打开 S2Arm 会自动完成安装」（机上解开由 App 打开时游戏库完成）
@@ -2187,20 +2428,109 @@ def phone_updates(c):
     return out
 
 
+PLAYING_WINDOW_S = 45   # 游玩时间心跳：游戏在前台时每 10 秒写一次 playtime.json（runtime/src/playtime.c，平台壳 10 秒定时器）；最近 45 秒内写过 = 正在玩
+
+
+def playing_by_heartbeat(client, games, work, now=None):
+    """手机上各款的游玩时间心跳（<容器>/Documents/games/<程序号>/playtime.json 的 lastPlayed，手机写入时的时刻）：
+    任一款在 PLAYING_WINDOW_S 秒内写过 → True（正在玩，装 App 会杀掉这局）；都没有 / 文件不在（没玩过）→ False；
+    一个都读不了（锁屏、断开）→ None（查不清）。Windows 没有 devicectl 查进程，靠它判（11-16 定的判据）"""
+    import time as _t
+    now = _t.time() if now is None else now
+    got_any, stale = False, True
+    for g in games:
+        dst = Path(work) / f"playtime-{g}.json"
+        try:
+            ok = client.get(f"{game_docs(g)}/playtime.json", str(dst), 20)
+        except Exception as e:   # 进不了容器（锁屏 / 断开 / 没装）：这一款查不清
+            print(f"[s2a] 读 {g} 的游玩心跳失败：{e}", file=sys.stderr)
+            continue
+        got_any = True
+        if not ok:
+            continue   # 文件不在：这款没玩过，不算在玩
+        try:
+            last = int(json.loads(dst.read_text(encoding="utf-8")).get("lastPlayed") or 0)
+        except (OSError, ValueError, TypeError):
+            continue
+        if now - last < PLAYING_WINDOW_S:
+            return True
+    return False if got_any or not games else None
+
+
 def phone_kept_pull(c):
     """「手机插着、启动器开着」时启动器隔一阵调一次（phoneKeptPull 作业）：连着的那台手机上，宿主留下的 NRO（#8be819）拉回游戏库。
-    → {device, new: 新收的个数, kept: 还没补进 iPhone 件的款, running: 手机上 S2Arm 正在跑或查不清}；有 kept 且 running 为假时启动器自动发起「更新 iPhone」
+    → {device, new: 新收的个数, kept: 还没补进 iPhone 件的款, shellUpdate: 壳比本版旧且不用问玩家, stale: 壳旧了但要重出包的款,
+       running: 手机上 S2Arm 正在跑或查不清（有要更新的才查）}；(kept 或 shellUpdate) 且 running 为假时启动器自动发起「更新 iPhone」
     只推程序（正在玩就不推：装 App 会杀掉这局，等它退了下一轮再推）。没连手机 / 没装过 = new 0、不报错"""
     try:
         ph = phone_for(c)
-    except Failure:
-        return dict(device="", new=0, kept=[], running=False)
+    except Failure as e:
+        if e.code == "device_required" and not (c.r.get("device") or "").strip():
+            return _kept_pull_many(c)
+        return _kept_pull_none()
+    return _kept_pull_on(c, ph)
+
+
+def _kept_pull_none():   # 没连手机 / 都问不到：每次一份新的（列表不共用）
+    return dict(device="", new=0, kept=[], shellUpdate=False, stale=[], running=False)
+
+
+def _kept_pull_many(c):
+    """多台手机同时连着、请求没说哪台（phone_for 报 device_required）：按游戏库里有设备记录的逐台问
+    （11-16 候选验收：Mac 插着两部 iPhone，启动器的 2 分钟循环每次都拿到 device=""，自动更新永远不触发）。
+    带上设备号建手机对象，认到的不是这台就跳过（这台没连着时选机会退到唯一连着的那台，那不是这条记录）；
+    有事要做（收回了 NRO / 有没补进的款 / 壳要更新）且没在玩的那台先返回，其次是有事但在玩的；都没事返回第一台问到的；一台都问不到 → 空结果。
+    启动器每轮只装返回的那台，下一轮再问时它已经是新版，就轮到下一台。请求里的 device 问完还原"""
+    had, old = "device" in c.r, c.r.get("device")
+    busy = idle = None
+    try:
+        for key, _ in layout.devices(c):
+            c.r["device"] = key
+            try:
+                ph = phone_for(c)
+            except Failure:
+                continue
+            if ph.key != key:
+                continue
+            r = _kept_pull_on(c, ph)
+            if r["new"] or r["kept"] or r["shellUpdate"]:
+                if not r["running"]:
+                    return r
+                busy = busy or r
+            idle = idle or r
+    finally:
+        if had:
+            c.r["device"] = old
+        else:
+            c.r.pop("device", None)
+    return busy or idle or _kept_pull_none()
+
+
+def _kept_pull_on(c, ph):
     rec = layout.load_device(c, ph.key)
     games = [g for g in rec.get("games") or [] if isinstance(g, str)]
-    new = ph.pull_kept(games)
+    # 只和真冲突互斥（维护者「只按真冲突互斥」）：同一台手机上的装机 / 推包 / 续签（ipa.phone_lock）。手机在用就这一轮不收、下一轮再来；
+    #   别的作业（出包、升级首启的程序件迁移……）照跑——原先前端「有任何作业在跑就整轮跳过」，升级首启迁移几分钟，拉回拖到第 360 秒（11-16 候选验收）。
+    #   同一款程序件的迁移 / 现建由 programs-migrate 锁串行（ios_kit 里），收件写 nro_kept 是临时文件 + 改名（keep_nros），读的一方不会读到半个
+    with c.idle("phone") as free:
+        if not free:
+            return _kept_pull_none()
+        new = ph.pull_kept(games)
     import rewrite_refresh
     kept = [g for g in games if rewrite_refresh.kept_todo(c, g, layout.ios_kit(c, g))]   # 没补进的款（手动按钮兜底同 phone_updates）
-    return dict(device=ph.key, new=new, kept=kept, running=bool(kept) and ph.app_running() is not False)
+    # 这台手机上的 S2Arm 壳比本版旧（启动器升级了）：shellUpdate = 可以不问玩家直接更新（没有要按新版重新出包的款）；
+    #   有要重出的款 → shellUpdate 为假、stale 列出来，留给游戏库顶栏「更新 iPhone」按钮问（11-16 启动器升级顺带更新 iPhone App）
+    import ipa as packer
+    st = shell_outdated(c, rec, packer.current_shell_id(c))
+    stale = [s["gameId"] for s in (st or {}).get("stale", [])]
+    shell_update = bool(st) and not stale
+    running = False
+    if kept or shell_update:
+        running = ph.app_running()
+        if running is None and hasattr(ph, "playing"):   # 查不了进程（Windows）：按游玩时间心跳判
+            running = ph.playing(games)
+        running = running is not False
+    return dict(device=ph.key, new=new, kept=kept, shellUpdate=shell_update, stale=stale, running=running)
 
 
 def online_devices(c):

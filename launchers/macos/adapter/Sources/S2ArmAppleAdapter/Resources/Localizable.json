@@ -7000,6 +7000,10 @@
   "en": "Wait for the task that is using the library to finish (or cancel it in the task list), then try again. Nothing was changed."
  },
  {
+  "source": "原任务进程已不在，但游戏库的锁仍被占用。重新连接或重新挂载游戏库所在磁盘后再试；不要手动删除锁文件。本次没有改动游戏文件。",
+  "en": "The original task process is gone, but the library lock is still held. Reconnect or remount the library drive and retry. Do not delete the lock file; no game files were changed."
+ },
+ {
   "source": "Apple ID 登录已过期，请重新登录后再装：在装机页点「打开 Impactor」→「设置」，选中你的 Apple ID 点「移除账号」，再点「添加账号」用同一个 Apple ID 重新登录（邮箱、密码、手机上的验证码，输入前切到英文输入法），然后回来再点一次「装到 iPhone」。密码只在 Impactor 里输，S2Arm 不经手。",
   "en": "Your Apple ID sign-in has expired. Sign in again, then install: on the install page click Open Impactor → Settings, select your Apple ID and click Remove Account, then Add Account and sign in with the same Apple ID (email, password and the code on your devices; switch the keyboard to English first). Come back and click Install to iPhone again. You enter the password only in Impactor; S2Arm never sees it."
  },
@@ -7074,10 +7078,6 @@
  {
   "source": "从电脑重新装到 iPhone，会接着已传的部分续传。",
   "en": "Install to iPhone from the computer again; it resumes from what was already sent."
- },
- {
-  "source": "在游戏库里长按这款，选「删除游戏…」，再把电脑上导出的这款 .img 重新放进「放这里导入」。",
-  "en": "In the library, press and hold this game and choose “Delete game…”, then put this game's .img exported on the computer into Import Here again."
  },
  {
   "source": "重新连电脑推送，会自动补齐。",
@@ -7878,6 +7878,10 @@
  {
   "source": "请选择独立的游戏库文件夹，不能直接用整个盘或用户文件夹。",
   "en": "Choose a dedicated folder for the library, not a whole drive or your user folder."
+ },
+ {
+  "source": "选的密钥文件找不到了（可能被移动、删除，或还在 iCloud 里没下载到本机）：请重新选择 prod.keys。",
+  "en": "The key file you chose can't be found (it may have been moved or deleted, or it's still in iCloud and not downloaded). Choose prod.keys again."
  },
  {
   "source": "密钥文件过大。",
@@ -9384,10 +9388,6 @@
   "en": "Update S2Arm on iPhone"
  },
  {
-  "source": "准备更新 iPhone 上的 S2Arm",
-  "en": "Preparing the S2Arm update for iPhone"
- },
- {
   "source": "这台 Mac 没装 Xcode 的设备组件（CoreDevice），读不到连着的设备：打开一次 Xcode、按提示装附加组件后再试；也可以在出包页直接选机型",
   "en": "This Mac doesn't have Xcode's device components (CoreDevice), so connected devices can't be read. Open Xcode once and install the additional components when prompted, then try again; or pick the model directly on the build page"
  },
@@ -9732,18 +9732,6 @@
   "en": "This archive is larger than 16 GB when extracted: {0}"
  },
  {
-  "source": "「{0}」里没找到 mod：资源替换要带 romfs/（如 atmosphere/contents/{0}/romfs），代码补丁要带 exefs/ 里的 pchtxt / IPS（或 atmosphere/exefs_patches/<名字>/）。",
-  "en": "No mod found in \"{0}\": asset mods need a romfs/ folder (for example atmosphere/contents/{0}/romfs); code mods need pchtxt / IPS files in exefs/ (or atmosphere/exefs_patches/<name>/)."
- },
- {
-  "source": "「{0}」是空的，没收",
-  "en": "\"{0}\" is empty, skipped"
- },
- {
-  "source": "「{0}」带 {0} 份代码补丁：重新打包这款（或 S 级优化升级）后生效",
-  "en": "\"{0}\" includes {0} code patch(es): they take effect after you re-pack this game (or run the S-grade upgrade)"
- },
- {
   "source": "NUP 程序号 {0} 与游戏库 {0} 不一致",
   "en": "The NUP's title ID {0} doesn't match the library's {0}"
  },
@@ -9756,12 +9744,108 @@
   "en": "Retrying won’t help: export your saves from the game menu (Manage saves) to a place outside the S2Arm folder, such as iCloud Drive, delete and reinstall S2Arm, then import the saves again."
  },
  {
+  "source": "Apple TV 版的两项权限（提高内存上限、扩展虚拟寻址）只有付费 Apple 开发者账号签得了：在 Xcode「设置 → 账户」登录付费开发者账号或选付费团队，再装到 Apple TV。",
+  "en": "The Apple TV version's two capabilities (Increased Memory Limit and Extended Virtual Addressing) can only be signed by a paid Apple Developer account: sign in to a paid developer account in Xcode Settings → Accounts or pick a paid team, then install on Apple TV again."
+ },
+ {
+  "source": "Apple TV 版要付费开发者账号",
+  "en": "Apple TV needs a paid developer account"
+ },
+ {
+  "source": "Apple TV 版要的两项权限只有付费 Apple 开发者账号签得了；具体原因见本任务的错误摘要。",
+  "en": "The two capabilities the Apple TV version needs can only be signed by a paid Apple Developer account. See this job’s error summary for the specific reason."
+ },
+ {
+  "source": "没看到 Apple TV：让 Apple TV 开着、和这台 Mac 连同一个网络，并在 Xcode 的「Devices and Simulators」窗口里和它配对过一次（Apple TV 上打开「设置 → 遥控器与设备 → 遥控器 App 与设备」会显示配对码），再试一次。",
+  "en": "No Apple TV found: keep the Apple TV on and on the same network as this Mac, and pair it once in Xcode's Devices and Simulators window (on the Apple TV, Settings → Remotes and Devices → Remote App and Devices shows the pairing code), then try again."
+ },
+ {
+  "source": "这台 Mac 看得到不止一台 Apple TV：{0}。在装机页选要装的那一台再装。",
+  "en": "This Mac can see more than one Apple TV: {0}. Pick the one to install on, then install."
+ },
+ {
+  "source": "{0}这次没放进 Apple TV 上的 S2Arm（要按新版重新出 Apple TV 包）；电视上它们的存档和资源都还在，重新出包再装就回来。",
+  "en": "{0} were left out of S2Arm on the Apple TV this time (they need a new Apple TV build); their saves and data are still on the TV and come back after you build and install them again."
+ },
+ {
+  "source": "Apple TV 版要付费的 Apple 开发者账号：tvOS 上「提高内存上限」和「扩展虚拟寻址」两项权限只有付费开发者账号签得了，免费账号签出来会被系统丢掉、大游戏开不了。在 Xcode 的「设置 → 账户」里登录付费开发者账号（或在团队里选付费团队），再装一次。",
+  "en": "The Apple TV version needs a paid Apple Developer account: on tvOS, the Increased Memory Limit and Extended Virtual Addressing capabilities can only be signed by a paid developer account; a free account's signature has them dropped by the system and large games won't open. Sign in to a paid developer account in Xcode Settings → Accounts (or pick a paid team), then install again."
+ },
+ {
+  "source": "申请 Apple TV 开发描述文件（第一次要几十秒）",
+  "en": "Requesting the Apple TV development provisioning profile (the first time takes tens of seconds)"
+ },
+ {
+  "source": "找签名账号与 Apple TV",
+  "en": "Finding the signing account and Apple TV"
+ },
+ {
+  "source": "把这款放进 Apple TV 上的 S2Arm",
+  "en": "Adding this game to S2Arm on the Apple TV"
+ },
+ {
+  "source": "把游戏推进 Apple TV（只推变了的文件；第一次大游戏要几分钟）",
+  "en": "Sending the game to the Apple TV (only changed files; a large game takes a few minutes the first time)"
+ },
+ {
+  "source": "这台电脑上还没有 Apple TV 版的预编壳：先给这款出一次 Apple TV 包，再装到 Apple TV。",
+  "en": "This computer doesn't have the prebuilt Apple TV shell yet: build this game for Apple TV once, then install on Apple TV."
+ },
+ {
+  "source": "这款的 Apple TV 版不是这一版 S2Arm 出的（或还没出）：先出 Apple TV 包，再装到 Apple TV。",
+  "en": "This game's Apple TV build wasn't made by this version of S2Arm (or hasn't been made yet): build it for Apple TV first, then install on Apple TV."
+ },
+ {
+  "source": "这个 S2Arm 安装包不完整（缺 Apple TV 签名权限文件），请重新下载 S2Arm。",
+  "en": "This S2Arm installation is incomplete (the Apple TV signing entitlements file is missing). Download S2Arm again."
+ },
+ {
+  "source": "这款游戏还没出 Apple TV 包：先在出包页勾上「Apple TV」出一次包。",
+  "en": "This game hasn't been built for Apple TV yet: tick Apple TV on the build page and build it once."
+ },
+ {
+  "source": "没找到这款的 Apple TV 资源包（{0}），没有装。请重新出 Apple TV 包后再装。",
+  "en": "Couldn't find this game's Apple TV resource pack ({0}), so nothing was installed. Build it for Apple TV again, then install."
+ },
+ {
+  "source": "装到 Apple TV",
+  "en": "Install on Apple TV"
+ },
+ {
+  "source": "iPhone 版没出好，Apple TV 包从它派生：先看上面 iPhone 那一步的报错。",
+  "en": "The iPhone build didn't finish, and the Apple TV build is derived from it: check the iPhone step's error above."
+ },
+ {
+  "source": "把贴图预转成 Apple TV 能直接用的格式（BC → ASTC，只做一次）",
+  "en": "Converting textures to a format the Apple TV can use directly (BC → ASTC, done once)"
+ },
+ {
+  "source": "这款没有 RomFS，Apple TV 包不用预转贴图",
+  "en": "This game has no RomFS, so no texture conversion is needed for Apple TV"
+ },
+ {
+  "source": "「{0}」里没找到 mod：资源替换要带 romfs/（如 atmosphere/contents/{0}/romfs），代码补丁要带 exefs/ 里的 pchtxt / IPS（或 atmosphere/exefs_patches/<名字>/）。",
+  "en": "No mod found in \"{0}\": asset mods need a romfs/ folder (for example atmosphere/contents/{0}/romfs); code mods need pchtxt / IPS files in exefs/ (or atmosphere/exefs_patches/<name>/)."
+ },
+ {
+  "source": "「{0}」是空的，没收",
+  "en": "\"{0}\" is empty, skipped"
+ },
+ {
+  "source": "「{0}」带 {0} 份代码补丁：重新打包这款（或 S 级优化升级）后生效",
+  "en": "\"{0}\" includes {0} code patch(es): they take effect after you re-pack this game (or run the S-grade upgrade)"
+ },
+ {
   "source": "显卡卡住了，S2Arm 把这局安全停下了。",
   "en": "The GPU hung, so S2Arm stopped this session safely."
  },
  {
   "source": "再开一次一般能接着玩（存档停在游戏上次保存的地方）；同一处反复这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上。",
   "en": "Starting again usually lets you keep playing (your save is as of the last time the game saved). If it keeps happening at the same spot, export a diagnostics package from Environment Check and attach it to a GitHub issue."
+ },
+ {
+  "source": "在游戏库里长按这款，选「删除游戏…」，再把电脑上导出的这款 .img 重新放进「放这里导入」。",
+  "en": "In the library, press and hold this game and choose “Delete game…”, then put this game's .img exported on the computer into Import Here again."
  },
  {
   "source": "读不到 Impactor 当前选中的 Apple ID：在 Impactor 里登录并选中你的 Apple ID 后再装。",
@@ -9794,5 +9878,37 @@
  {
   "source": "在电脑上的 S2Arm 点「装到 iPhone」重新安装（免费 Apple ID 也会带上这项权限）；自己签名的话用 Xcode 或 AltStore Classic v2.3，SideStore 0.7.0 重签会丢；已经装好的也可以用 GetMoreRam 给 App ID 补上权限后重装。",
   "en": "Reinstall with “Install on iPhone” in S2Arm on your computer (a free Apple ID keeps this permission too). If you sign it yourself, use Xcode or AltStore Classic v2.3; re-signing with SideStore 0.7.0 drops it. For an existing install, you can also add the permission to the App ID with GetMoreRam and reinstall."
+ },
+ {
+  "source": "准备更新 iPhone 上的 S2Arm",
+  "en": "Preparing the S2Arm update for iPhone"
+ },
+ {
+  "source": "App 已装好、游戏照常玩。想要主屏小组件：用 Apple ID 签名（不是自己的开发者证书）再装一次；免费 Apple ID 包名额度满了就等几天再装。",
+  "en": "The app is installed and games play as usual. For the Home Screen widget, install again with Apple ID signing (not your own developer certificate); if a free Apple ID has used up its app ID quota, wait a few days and install again."
+ },
+ {
+  "source": "这次没装主屏小组件",
+  "en": "Home Screen widget not installed this time"
+ },
+ {
+  "source": "S2Arm 已照常装好，只是这次没带主屏小组件，原因见上。",
+  "en": "S2Arm is installed as usual; only the Home Screen widget was left out this time. The reason is shown above."
+ },
+ {
+  "source": "这个免费 Apple ID 7 天内注册的包名已满 10 个，小组件要多注册一个（App 照常装上，额度恢复后再装一次就带上）",
+  "en": "This free Apple ID has registered 10 app IDs in the last 7 days; the widget needs one more (the app is installed as usual; install again after the quota recovers to get the widget)"
+ },
+ {
+  "source": "这次没装小组件：{0}",
+  "en": "Home Screen widget not installed this time: {0}"
+ },
+ {
+  "source": "用你自己的开发者证书签名只有主程序一份描述文件，签不了小组件",
+  "en": "Signing with your own developer certificate has a provisioning profile for the main app only, so the widget can't be signed"
+ },
+ {
+  "source": "没写构建号：文件名改成「<16 位构建号>.txt」或首行加 BID=<构建号> 才能编进 iPhone 包。",
+  "en": "No build ID: rename the file to “<16-digit build ID>.txt” or add BID=<build ID> as the first line so it can go into the iPhone package."
  }
 ]

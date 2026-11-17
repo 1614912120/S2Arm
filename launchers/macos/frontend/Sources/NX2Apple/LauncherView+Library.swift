@@ -91,6 +91,9 @@ extension LauncherView {
             }
             .padding(.horizontal, 10).padding(.vertical, 6)
             Divider().opacity(0.3).padding(.vertical, 4)
+            if model.finishedExports[game.id] != nil, !(model.mainBusy && model.session?.gameID == game.id) {   // 这款上次出包 / 装机 / 导出的结果页（原首页圆钮）
+                moreRow(txt("library.hero.results"), "checkmark.seal") { model.viewingResult = model.finishedExports[game.id] }
+            }
             moreRow(loc.t("s2arm.export.action"), "shippingbox") { model.exportFor = game.id }
                 .controllerShortcut(.rightTrigger)
             moreRow(loc.t("s2arm.action.freeSpace"), "externaldrive") { spaceFor = game.id }
@@ -105,7 +108,8 @@ extension LauncherView {
     }
 
     private func moreRow(_ title: String, _ symbol: String, danger: Bool = false, action: @escaping () -> Void) -> some View {
-        Button { moreFor = nil; action() } label: {
+        let activate = { moreFor = nil; action() }
+        return Button(action: activate) {
             // 图标放固定宽度的框里、和文字按中线对齐：Label 的图标宽度跟着符号走，各行文字起点会错开（11-09 维护者截图）
             HStack(alignment: .center, spacing: 10) {
                 Image(systemName: symbol).font(.system(size: 14, weight: .medium)).frame(width: 20, height: 20, alignment: .center)
@@ -114,7 +118,8 @@ extension LauncherView {
             .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10).padding(.vertical, 8).contentShape(Rectangle())
             .foregroundStyle(danger ? LauncherPalette.danger : Color.primary)
         }
-        .controllerButtonStyle(.plain)
+        .buttonStyle(.plain)
+        .controllerControl(activate: activate)
     }
 
     /// 游戏卡片右键菜单（游戏库结构 v3）：开始游戏、出包、启动设置、在访达中显示、移动到其他位置、清除缓存、删除

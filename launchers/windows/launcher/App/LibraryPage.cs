@@ -35,6 +35,7 @@ public sealed partial class EnvironmentWindow
         sgradeOpen = false;     // 也离开「S 级优化升级」页
         cheatsFor = null;       // 和「金手指」页
         modsFor = null;         // 和「Mod」页
+        if (destination == "settings" && page != "settings") settingsFrom = page;   // 设置页左上「返回」回到这里（出包页点「更改」进来就回出包页）
         page = destination;
         if (destination != "library") welcomeHome = false;   // 品牌名带去的欢迎页只管这一次回首页，去了别的页就回到平常
         // 环境检查页每次打开读一次装到 iPhone 的方式和开发者证书（InstallModePage.cs / DevCertPage.cs）
@@ -70,12 +71,13 @@ public sealed partial class EnvironmentWindow
 
     private async void CloseLibraryAsync(object? sender, WindowClosingEventArgs args)
     {
-        if (!libraryBusy) return;
+        if (!libraryBusy || closeAnyway) return;
         args.Cancel = true;
-        if (closingLibrary) return;
+        if (closingLibrary) return;   // 第一次进来的那份在等，等完它自己再关
         closingLibrary = true;
-        CancelJob(JobKind.Library);
-        if (libraryOperation is { } operation) await operation;
+        CloseLog("关窗口：游戏库作业在跑，先取消、等它收尾再关");
+        await WaitJobsEndAsync(JobKind.Library);
+        closingLibrary = false;
         Close();
     }
 
@@ -151,6 +153,32 @@ public sealed partial class EnvironmentWindow
         return wordmarkBitmap = Bitmap.DecodeToWidth(stream, 480);
     }
 
+    /// <summary>顶部选中游戏的主操作（有横图的大图叠加、无横图的封面卡片两分支共用）：装到 iPhone（iPhone 版做好才有）+ 导出自签包 + 出包。
+    /// 走和下面列表卡片同一套流程（Navigate("install") / OpenBuild），列表上的按钮留作次要入口。</summary>
+    private StackPanel HeroActions(LibraryGame hero)
+    {
+        // 大卡的主操作（11-14 体验梳理，开发甲定：照 Mac 大卡，两端一套体验；Windows 没有「开始游戏」）
+        var heroActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Margin = new Thickness(0, 6, 0, 0) };
+        var heroBusy = BusyFor(hero) || hero.LocationState is "missing" or "offline";
+        if (hero.IphoneReady)
+        {
+            var install = Primary(T("library.hero.install"),
+                () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; readinessFor = null; if (!installBusy) installExport = false; Navigate("install"); }, !PhoneBlockedFor(hero));   // 出包在跑也能去装（装机页里排队）
+            AutomationId(install, "library.hero.install");
+            heroActions.Children.Add(install);
+        }
+        // 导出自签包（11-15 维护者：导出不是装法，常驻一个看得见的次按钮；没出过包的点了先出包再导出）
+        var selfSign = Action("library.hero.selfSign", () => ExportSelfSign(hero),   // 能直接导出的走手机作业（出包在跑也行）；要先出包的照旧
+            hero.IphoneExportable ? !PhoneBlockedFor(hero) && hero.LocationState is not ("missing" or "offline") : !heroBusy && !installBusy);
+        selfSign.VerticalAlignment = VerticalAlignment.Center;
+        AutomationId(selfSign, "library.hero.selfSign");
+        heroActions.Children.Add(selfSign);
+        var build = Action("nav.build", () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; OpenBuild(); }, !heroBusy);
+        build.VerticalAlignment = VerticalAlignment.Center;
+        heroActions.Children.Add(build);
+        return heroActions;
+    }
+
     private void RenderLibrary(StackPanel body)
     {
         body.Children.Add(Label(T("library.title"), 23));
@@ -195,6 +223,7 @@ public sealed partial class EnvironmentWindow
             overlay.Children.Add(Muted(T(selectedGame is null ? "library.title" : "library.selected"), 14));
             overlay.Children.Add(Label(hero.Name, 32));
             overlay.Children.Add(Muted(T("library.version") + " · " + hero.Version, 14));
+            overlay.Children.Add(HeroActions(hero));   // 有横图时按钮也叠在底部渐变上（v0.4.5 修：说明写着「常驻」，之前只画了大图）
             art.Children.Add(overlay);
             body.Children.Add(new Border { CornerRadius = new CornerRadius(16), ClipToBounds = true, Child = art });
         }
@@ -206,27 +235,7 @@ public sealed partial class EnvironmentWindow
             title.Children.Add(Label(T(selectedGame is null ? "library.title" : "library.selected")));
             title.Children.Add(Label(hero.Name, 28));
             title.Children.Add(Label(T("library.version") + " · " + hero.Version));
-            // 大卡的主操作（11-14 体验梳理，开发甲定：照 Mac 大卡，两端一套体验；Windows 没有「开始游戏」）：装到 iPhone（iPhone 版做好才有）+ 出包。
-            //   走和下面列表卡片同一套流程（Navigate("install") / OpenBuild），列表上的按钮留作次要入口
-            var heroActions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10, Margin = new Thickness(0, 6, 0, 0) };
-            var heroBusy = BusyFor(hero) || hero.LocationState is "missing" or "offline";
-            if (hero.IphoneReady)
-            {
-                var install = Primary(T("library.hero.install"),
-                    () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; readinessFor = null; if (!installBusy) installExport = false; Navigate("install"); }, !PhoneBlockedFor(hero));   // 出包在跑也能去装（装机页里排队）
-                AutomationId(install, "library.hero.install");
-                heroActions.Children.Add(install);
-            }
-            // 导出自签包（11-15 维护者：导出不是装法，常驻一个看得见的次按钮；没出过包的点了先出包再导出）
-            var selfSign = Action("library.hero.selfSign", () => ExportSelfSign(hero),   // 能直接导出的走手机作业（出包在跑也行）；要先出包的照旧
-                hero.IphoneExportable ? !PhoneBlockedFor(hero) && hero.LocationState is not ("missing" or "offline") : !heroBusy && !installBusy);
-            selfSign.VerticalAlignment = VerticalAlignment.Center;
-            AutomationId(selfSign, "library.hero.selfSign");
-            heroActions.Children.Add(selfSign);
-            var build = Action("nav.build", () => { libraryFolder = libraryFolderBox.Text ?? libraryFolder; selectedGame = hero.Id; OpenBuild(); }, !heroBusy);
-            build.VerticalAlignment = VerticalAlignment.Center;
-            heroActions.Children.Add(build);
-            title.Children.Add(heroActions);
+            title.Children.Add(HeroActions(hero));
             Grid.SetColumn(title, 1); banner.Children.Add(title); body.Children.Add(Card(banner, 20));
         }
 
@@ -747,7 +756,8 @@ public sealed partial class EnvironmentWindow
         }
         if (connectedFolder is null) return;
         try { PrivateJobRequest.EnsurePrivateRoot(privateRoot); File.WriteAllText(LibraryPreference, folder); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { importError = error.Message; Render(); }
+        catch (UnauthorizedAccessException error) { importError = NoWrite(error, connectedFolder ?? libraryFolder); Render(); }
+        catch (IOException error) { importError = error.Message; Render(); }
     }
 
     /// <summary>设置页「导入密钥」（游戏原件统一走顶栏「添加游戏」）</summary>
@@ -812,6 +822,7 @@ public sealed partial class EnvironmentWindow
             catalog = LibraryCatalog.Parse(listing.Report.Result); ClearCovers();
             if (!catalog.Games.Any(g => g.Id == selectedGame && !g.Hidden)) selectedGame = null;
             librarySummary = "library.completed";
+            _ = PreparePhoneUpdateAsync();   // 新版启动器头一次读到要更新的手机：后台准备 iPhone App 更新（PhoneAutoUpdate.cs）
         }
         catch (LibraryProtocolException error)
         { librarySummary = "library.invalid_result"; libraryDiagnostics += "\n" + error.Message; }

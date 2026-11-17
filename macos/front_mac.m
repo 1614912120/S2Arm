@@ -43,6 +43,7 @@ __attribute__((constructor)) static void cheats_register_host(void) { void (*f)(
 //   总是开发区域，判不出玩家语言，所以按系统首选语言以 zh 开头判（目前 Mac 上没有显示路径用到它）
 int s2a_ui_zh(void) { return [NSLocale.preferredLanguages.firstObject hasPrefix:@"zh"]; }
 #include "../ios/haptic_retry.h"
+#include "../ios/haptic_safe.h"
 int s2a_screen_fit(int pw, int ph);   // runtime/src/widen.c：按窗口像素跟屏
 
 void s2a_host_shutdown(const char *why);
@@ -632,13 +633,13 @@ static float rumble_scale(void) {
 static BOOL rumble_off(void) { const char *e = getenv("S2A_RUMBLE"); return e && !strcmp(e, "0"); }
 static void rumbler_stop(S2ARumbler *r) {
     if (!r) return;
-    for (int k = 0; k < 2; k++) { if (r->player[k] && r->playing[k]) [r->player[k] stopAtTime:CHHapticTimeImmediate error:nil]; r->playing[k] = NO; }
+    for (int k = 0; k < 2; k++) { if (r->player[k] && r->playing[k]) s2a_hp_stop(r->player[k]); r->playing[k] = NO; }
     if (r->timer) dispatch_source_set_timer(r->timer, DISPATCH_TIME_FOREVER, DISPATCH_TIME_FOREVER, 0);
 }
 static void rumbler_reset(S2ARumbler *r) {
     if (!r) return;
     rumbler_stop(r);
-    for (int k = 0; k < 2; k++) { [r->engine[k] stopWithCompletionHandler:nil]; r->player[k] = nil; r->engine[k] = nil; }
+    for (int k = 0; k < 2; k++) { s2a_hp_engine_stop(r->engine[k]); r->player[k] = nil; r->engine[k] = nil; }
 }
 static void rumbler_fail(S2ARumbler *r, const char *what, NSError *error) {
     BOOL died = s2a_hp_on_fail(&r->retry, clock_gettime_nsec_np(CLOCK_UPTIME_RAW));
@@ -696,14 +697,14 @@ static BOOL rumbler_channel(S2ARumbler *r, int k, GCHapticsLocality locality, fl
     }
     uint64_t now = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
     if (r->playing[k] && !r->loops[k] && now - r->startedNs[k] > MAC_RUMBLE_RESTART_NS) {   // 普通播放器：事件 30 秒，连着震到 20 秒就重起一轮
-        [r->player[k] stopAtTime:CHHapticTimeImmediate error:nil]; r->playing[k] = NO;
+        s2a_hp_stop(r->player[k]); r->playing[k] = NO;
     }
-    if (!r->playing[k] && ![r->player[k] startAtTime:CHHapticTimeImmediate error:&error]) { rumbler_fail(r, "播放失败", error); return NO; }
+    if (!r->playing[k] && !s2a_hp_start(r->player[k], &error)) { rumbler_fail(r, "播放失败", error); return NO; }
     if (!r->playing[k]) r->startedNs[k] = now;
     r->playing[k] = YES;
-    if (![r->player[k] sendParameters:@[
+    if (!s2a_hp_send(r->player[k], @[
         [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticIntensityControl value:amplitude relativeTime:0],
-        [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharp - 0.5f relativeTime:0]] atTime:CHHapticTimeImmediate error:&error]) {
+        [[CHHapticDynamicParameter alloc] initWithParameterID:CHHapticDynamicParameterIDHapticSharpnessControl value:sharp - 0.5f relativeTime:0]], &error)) {
         rumbler_fail(r, "更新强度失败", error); return NO;
     }
     return YES;
@@ -1365,14 +1366,14 @@ static void sample_input(void) {
         if (n >= S2A_LIVE_MAX) break;
         live_ids[n] = (__bridge const void *)c; live_pads[n] = p; live_ctrls[n] = c; live_ble[n] = -1; n++;
     }
-    // 兜底手柄（macos/hid_pad.m，#934）：GameController 认不出的 Switch 样式 HID 手柄，排在系统手柄后面；系统已枚举到同名手柄就跳过（不变成两个玩家）。
-    //   分配玩家里同系统手柄（按名字 + 第几只认）
+    // 兜底手柄（macos/hid_pad.m，#934）：GameController 认不出的 HID 手柄，排在系统手柄后面；占不占位按 s2a_hidg_route（hid_generic.h）：
+    //   系统已枚举到同名手柄就让位（不变成两个玩家，后被认出也照判）；通用手柄另让原生厂商、系统说认得的先等 2 秒。分配玩家里同系统手柄（按名字 + 第几只认）
     static s2a_hid_pad hid[S2A_HID_PAD_MAX];
     int nh = s2a_mac_hid_pad_read(hid);
     for (int h = 0; h < nh && n < S2A_LIVE_MAX; h++) {
         BOOL seen = NO;
         for (GCController *c in GCController.controllers) if ([c.vendorName isEqualToString:@(hid[h].name)]) { seen = YES; break; }
-        if (seen) continue;
+        if (s2a_hidg_route(hid[h].pro, hid[h].vid, hid[h].gc_hint, seen, hid[h].age_us) != S2A_HIDG_TAKE) continue;
         live_ids[n] = hid[h].id; live_pads[n] = nil; live_ctrls[n] = nil; live_ble[n] = -1; live_hid[n] = &hid[h]; n++;
     }
     // 分配玩家：照顺序表排（表里的在前、没列的照原顺序接着），分配时没登记的系统手柄不进槽位；表一换就清槽位表重排

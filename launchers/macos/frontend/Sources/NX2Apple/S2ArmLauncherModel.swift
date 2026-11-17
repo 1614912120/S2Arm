@@ -66,7 +66,7 @@ enum ExportBlocker: Equatable {
 /// 正在跑 / 刚结束的一个作业（一局、出包、准备运行、装到 iPhone、导入、一键处理环境、换游戏库）。同一时刻只有一个（同旧启动器「执行位」互斥）。
 struct JobSession: Equatable {
     enum Kind: String, CaseIterable { case play, export, prepare, install, installRemove, installRestore, installUpdate, importGames = "import", downloadMetal, downloadIosPlatform, installDotnet, setupLibrary = "setup",
-                        keys, delete, diagnostics, moveGame, clearCache }
+                        keys, delete, diagnostics, moveGame, clearCache, installTV = "tvInstall" }
     enum Phase: Equatable { case running, stopping, finished(JobOutcome.State) }
     let kind: Kind
     let gameID: String?
@@ -203,7 +203,7 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published private(set) var actionError: String?
     private(set) var actionErrorGameID: String?
     func actionError(for gameID: String?) -> String? { actionErrorGameID == nil || actionErrorGameID == gameID ? actionError : nil }
-    private func failAction(_ text: String?, game: String?) { actionErrorGameID = game; actionError = text }
+    func failAction(_ text: String?, game: String?) { actionErrorGameID = game; actionError = text }
     // 环境检查
     @Published private(set) var checks: [ToolCheck] = []
     @Published private(set) var checking = false
@@ -212,6 +212,8 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// 装到 iPhone 的方式（环境检查「装到 iPhone 的方式」卡，installMode 作业）与壳比本版旧的手机（catalog phoneUpdates，库页右上角按钮）
     @Published var installMode = InstallModeInfo()
     @Published var phoneUpdates: [PhoneUpdate] = []
+    @Published var phoneDevices = 0   // catalog phoneDevices：这台电脑往几台手机装过游戏（更新弹窗按钮写「更新启动器和 iPhone App」）
+    @Published var phoneBanner: PhoneBanner?   // 新版启动器首次启动后的「iPhone 版 S2Arm」横幅（S2ArmLauncherModel+PhoneBanner.swift）
     /// 点了更新、有要重新出包的款：三选一弹框；选「更新并重新出这几款」时更新完把它们排进批量出包（只出 iPhone），批次出完逐款装上
     @Published var updateConfirm: PhoneUpdate?
     /// 「S 级优化升级」页开着（v0.4.0；SGradeUpgradeView）
@@ -221,6 +223,15 @@ public final class S2ArmLauncherModel: ObservableObject {
     var installAfterQueue: [String] = []
     /// 「导出自签包」点在没出过包的款上：这几款出完 iPhone 包接着导出（不是装机）
     var selfSignAfterPack: Set<String> = []
+    /// 出包页选了「出完装到 iPhone」的款：iPhone 包出好就接着装（同 selfSignAfterPack 走 installAfterQueue）
+    var installAfterPack: Set<String> = []
+    /// 出包页「出完之后」玩家选的那条路（11-16 维护者：一个出包入口，装机 / 自签导出两条分叉各自一步走完）：install / export，记住到下次；
+    ///   「更新 iPhone 上的 S2Arm」也按它走（选了自签 = 不连手机、直接导出更新后的自签包）
+    @Published var iosAfterPack: String = UserDefaults.standard.string(forKey: "S2AIosAfterPack") ?? "install" {
+        didSet { UserDefaults.standard.set(iosAfterPack, forKey: "S2AIosAfterPack") }
+    }
+    /// 玩家选了「出完导出自签 IPA」：自动装到手机（连上就更新、新版首启横幅）一律跳过，玩家自己签名安装
+    var selfSignChosen: Bool { iosAfterPack == "export" }
     /// 这次装机会话是导出自签包（进度 / 结局页照导出写；完成后看结局里的导出文件夹）
     @Published var selfSigning = false
     /// 添加游戏 / 放密钥弹窗（ImportSheet）：这两个作业的进度和失败原因都留在弹窗里，不换页。
@@ -362,6 +373,9 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// 刚导入的游戏要等下一次别的刷新才出现）。nil = 没有要补的
     private var refreshAgain: [() -> Void]?
     private var startupCatalogSent = false
+    /// 启动后的后台循环（自动拉回 / 首启准备 / Apple TV 备份 / Mac S 级）是否已开：按「第一次读库成功」开，不跟 startup 那一次读绑死——
+    ///   那一次读失败（首次使用还没选游戏库、外置游戏库没挂上）时原先整个启动器开着期间都不开（11-16 第 3 份候选 Mac 整链：等 6 分钟一单 phoneKeptPull 都没发）
+    private(set) var startupLoopsStarted = false
     private var controllerGameStarted = false
     /// 导入后排着等准备的游戏（同旧启动器：放进来就自动准备，维护者 10-23 不让玩家选）。
     private static let logLimit = 200
@@ -412,6 +426,11 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
     }
 
+    /// 「自动更新 iPhone 上的 S2Arm」开关（缺省开；存的是「关」，玩家没碰过就是开）：启动器升级后手机连上、没在玩就自动换新版 App
+    static let autoUpdatePhoneOffKey = "S2AAutoUpdatePhoneOff"
+    static func autoUpdatePhoneOn(_ defaults: UserDefaults = .standard) -> Bool { !defaults.bool(forKey: autoUpdatePhoneOffKey) }
+    static func setAutoUpdatePhone(_ on: Bool, _ defaults: UserDefaults = .standard) { defaults.set(!on, forKey: autoUpdatePhoneOffKey) }
+
     /// 手机插着、启动器开着时（#8be819）：每 2 分钟把手机上宿主留下的代码模块（游戏运行中才取到的 NRO）拉回游戏库（phoneKeptPull 作业），
     ///   有还没补进 iPhone 件的就自动发起「更新 iPhone」：只改程序、只推程序部分，玩家不用判断要重出什么。同一批只自动发起一次，
     ///   没成（要确认 / 失败）就留给游戏库右上角的「更新 iPhone」按钮（phoneUpdates 列着这台）。有局 / 任务在跑、装法是导出时不发起
@@ -429,17 +448,25 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     /// keptModulesLoop 的一次（单测直接调）：→ 这次有没有发起「更新 iPhone」
     @discardableResult func keptModulesTick() async -> Bool {
-        if busy { return false }
-        guard let r = try? await provider.client.perform("phoneKeptPull").result else { return false }
+        // 只按真冲突跳过：手机正被装机 / 推包占着（phoneBusy）；出包等别的作业在跑照样收（升级首启迁移几分钟，原先 busy 整轮跳过拖到第 360 秒）
+        if phoneBusy || selfSignChosen { return false }   // 出包页选了「出完之后导出自签」：不走启动器装机，自动装到手机也不做（玩家选择优先）
+        let r: [String: Any]
+        do {
+            r = try await provider.client.perform("phoneKeptPull").result
+            notePhoneAuto("phoneKeptPull", nil)
+        } catch { notePhoneAuto("phoneKeptPull", String(describing: error)); return false }
         let kept = (r["kept"] as? [String]) ?? [], device = r["device"] as? String ?? ""
-        if kept.isEmpty || device.isEmpty { return false }
+        // 启动器升级顺带更新 iPhone App（11-16 维护者「点一次完成整个流程」）：连着的这台壳比本版旧、且没有要按新版重出包的款（shellUpdate），
+        //   开关开着（缺省开）就同样自动更新；要重出的款照旧留给顶栏按钮问
+        let shellUpdate = (r["shellUpdate"] as? Bool ?? false) && Self.autoUpdatePhoneOn()
+        if (kept.isEmpty && !shellUpdate) || device.isEmpty { return false }
         if r["running"] as? Bool != false { return false }   // 手机上 S2Arm 正在跑（或查不清）：装 App 会杀掉玩家这一局，等它退了下一轮再推（这一批不记已试）
-        let batch = device + ":" + kept.sorted().joined(separator: ",")
-        if keptAutoTried.contains(batch) || busy { return false }
+        // 只发现、不装（11-16 维护者：「改成更稳妥的手动更新吧，启动器和移动端都是」）：重读游戏库，顶栏按 phoneUpdates 亮「更新 iPhone」，玩家点了才装
+        let batch = device + ":" + kept.sorted().joined(separator: ",") + (shellUpdate ? ":shell" : "")
+        if keptAutoTried.contains(batch) || phoneBusy { return false }
         keptAutoTried.insert(batch)
-        let language = provider.client.environment.uiLanguage ?? "zh-Hans"
-        refresh { [weak self] in self?.updatePhone(acceptStale: false, repack: [], language: language, device: device, ask: false) }
-        return true
+        refresh {}
+        return false
     }
 
     public func refresh(_ done: (() -> Void)? = nil) {
@@ -463,7 +490,8 @@ public final class S2ArmLauncherModel: ObservableObject {
             case .success(let games):
                 self.games = games; self.libraryError = nil; self.showingSnapshot = false
                 self.phoneUpdates = self.provider.library.phoneUpdates
-                if startup { self.sgradeMacInBackground(); self.keptModulesLoop() }
+                self.phoneDevices = self.provider.library.phoneDevices
+                if !self.startupLoopsStarted { self.startupLoopsStarted = true; self.sgradeMacInBackground(); self.keptModulesLoop(); self.preparePhoneUpdate(); self.appleTVBackupLoop() }
                 if self.selectedID == nil || !games.contains(where: { $0.id == self.selectedID }) { self.selectedID = games.first?.id }
             case .failure(let error):
                 self.libraryError = error.message
@@ -868,8 +896,8 @@ public final class S2ArmLauncherModel: ObservableObject {
                                                              sgrade: SGradeOutcome(o["boost"] as? [String: Any] ?? [:])))
                 // 「导出自签包」点在没出过包的款上：iPhone 包出好就接着导出（D-9ZF9：原先出完包停在完成页，导出要再点一次）。
                 //   导出不连手机、不签名，没有副作用；排进 installAfterQueue，这次出包会话结束后由 pumpQueue 接着跑（installNextQueued 按 selfSignAfterPack 走导出）
-                if platform == .ios, state == .completed, let gid = self.session?.gameID, self.selfSignAfterPack.contains(gid), !self.batchRunning,
-                   !self.installAfterQueue.contains(gid) { self.installAfterQueue.append(gid) }
+                if platform == .ios, state == .completed, let gid = self.session?.gameID, self.selfSignAfterPack.contains(gid) || self.installAfterPack.contains(gid),
+                   !self.batchRunning, !self.installAfterQueue.contains(gid) { self.installAfterQueue.append(gid) }   // 选了「装到 iPhone」的同样接着装
                 if self.batchRunning { self.batchStepEnded() }
             default:
                 sink.emit(event)
@@ -1081,6 +1109,12 @@ public final class S2ArmLauncherModel: ObservableObject {
     var lastUpdateArgs: UpdateArgs?
     var sgradeMacFlag = false
     var keptLoopStarted = false, keptAutoTried: Set<String> = []   // keptModulesLoop（#8be819）
+    var phoneAutoFails: [String: Int] = [:]   // 自动更新后台作业连续失败次数（notePhoneAuto，+PhoneBanner.swift）
+    var phonePrepareStarted = false   // 首启在电脑侧准备 iPhone 更新只做一次（准备期间不出横幅，不能再靠横幅状态挡重复）
+    /// Apple TV（tvOS 版，S2ArmLauncherModel+AppleTV）：配对过的电视、出包页选的那台、存档自动备份循环起没起
+    @Published var appleTVs: [[String: Any]] = []
+    @Published var appleTVChoice: String?
+    var tvBackupStarted = false
     func retryPhoneUpdate() {
         guard let a = lastUpdateArgs else { return }
         updatePhone(acceptStale: a.acceptStale, repack: a.repack, language: a.language, device: a.device, accept: a.accept, mode: a.mode, sgradeUpgrade: a.sgradeUpgrade)   // 已确认过的照带
@@ -1464,6 +1498,17 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
     }
 
+    // ---- 装到 iPhone 时带主屏小组件（11-16，缺省开；设置写 launch-settings.json 的 homeWidget）----
+
+    @Published private(set) var homeWidgetError: String?
+    var homeWidget: Bool { provider.settings.homeWidget }
+
+    func setHomeWidget(_ on: Bool) {
+        homeWidgetError = nil
+        objectWillChange.send()
+        do { try provider.settings.setHomeWidget(on) } catch { homeWidgetError = error.localizedDescription }
+    }
+
     // ---- 允许 AI 操作 S2Arm（本机控制口，见 S2ArmControl）----
 
     /// 开关状态（--control / S2ARM_CONTROL=1 启动时恒为开）。
@@ -1610,7 +1655,7 @@ public final class S2ArmLauncherModel: ObservableObject {
         if session.kind == .installUpdate { phoneUpdateEnded(completed: state == .completed) }
         // 「导出自签包」点在没出过包的款上：出包没成（起不来 / 失败 / 取消）就没排进 installAfterQueue，标记清掉——
         //   否则这款以后正常出包会被画成导出、批量「更新并重新出」排进来的装机会误走导出
-        if session.kind == .export, let gid = session.gameID, !installAfterQueue.contains(gid) { selfSignAfterPack.remove(gid) }
+        if session.kind == .export, let gid = session.gameID, !installAfterQueue.contains(gid) { selfSignAfterPack.remove(gid); installAfterPack.remove(gid) }
         if session.isPhoneJob || (session.kind == .export && !installAfterQueue.isEmpty) { Task { pumpQueue() } }   // 手机作业结束：排着的装机 / 等它的出包接上   // 导出模式出完包排了导出（runExport / exportSink）
         if [.delete, .clearCache].contains(session.kind), let n = libraryNotice, n.kind == .running {   // 删除 / 清缓存的结果写进游戏库页顶部那条提示
             libraryNotice = LibraryNotice(kind: state == .completed ? .done : .failed, key: n.key, name: n.name,

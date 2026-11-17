@@ -269,7 +269,8 @@ void nvn_gpu_bind(nvn_gpu_cmd c, nvn_gpu_stage st, const nvn_gpu_binding *b, uin
 void nvn_gpu_draw(nvn_gpu_cmd c, const nvn_gpu_draw_args *a) { (void)c; g_gdraws++; g_last_da = *a; if (!g_pass_open) g_draw_outside++; }
 static uint32_t g_caps_remove;
 static uint32_t g_caps_extra;   // 用例临时打开的能力位（如间接计数多绘）
-void nvn_gpu_caps_get(nvn_gpu_caps *out) { memset(out, 0, sizeof *out); out->min_ubo_align = 64; out->caps = (NVN_GPU_CAP_BLIT_SCALED | g_caps_extra) & ~g_caps_remove; }
+static uint32_t g_caps_min_ssbo; static uint64_t g_caps_max_ssbo;   // 用例临时设的 minStorageBufferOffsetAlignment / maxStorageBufferRange（0 = 不报，其余用例的口径）
+void nvn_gpu_caps_get(nvn_gpu_caps *out) { memset(out, 0, sizeof *out); out->min_ubo_align = 64; out->caps = (NVN_GPU_CAP_BLIT_SCALED | g_caps_extra) & ~g_caps_remove; out->min_ssbo_align = g_caps_min_ssbo; out->max_ssbo_range = g_caps_max_ssbo; }
 static int g_arena697_fail;
 nvn_gpu_rc nvn_gpu_arena_alloc(nvn_gpu_cmd c, uint64_t bytes, uint32_t align, nvn_gpu_slice *out, nvn_gpu_err *err) { (void)c; (void)err;
     if(g_arena697_fail) { memset(out,0,sizeof *out);memset(err,0,sizeof *err);
@@ -586,15 +587,20 @@ static void t_pools(void) {
 // ---------- 池查找的线程内备忘（rp_entry.c pool_find_memo，#974 问 3）----------
 // 契约：答案与「候选 = 起点不超过地址的最后一个池、装得下才算」逐位一致（rp_pool_find 与 nvn_be_addr 两个入口都对）；
 // 重复的查找真的命中备忘；池表一变（加池 / 删池 / 同起点换大小）旧记录整张作废；开关关着时不命中也不计数。
-// 参考答案由用例自己登记的池直接线性扫出，不经被测实现。池彼此不重叠（真实的 NVN 内存池在客户机地址空间里不会重叠）。
+// 参考答案由用例自己登记的池直接线性扫出，不经被测实现。池区间允许嵌套：一个池的存储可能落在另一个池的区间里，
+// 命中的是「起点不超过地址、且真正覆盖 [addr, addr+len) 的池里起点最大的那个」（更具体的池优先）。
 int rp_pool_find(uint64_t addr, uint64_t len, const uint8_t **mem, uint64_t *size);   // rp_entry.c（rp_draw.c 也是就地声明）
 typedef struct { uint64_t a, n; int live; } pm_ref_t;
 enum { PM_SLOTS = 24 };
 static pm_ref_t g_pmr[PM_SLOTS]; static uint8_t g_pm_arena[0x10000];
 static int pm_ref_find(uint64_t addr, uint64_t len, uint64_t *a, uint64_t *n) {
     int cand = -1;
-    for (int i = 0; i < PM_SLOTS; i++) if (g_pmr[i].live && g_pmr[i].a <= addr && (cand < 0 || g_pmr[i].a > g_pmr[cand].a)) cand = i;
-    if (cand < 0 || addr - g_pmr[cand].a > g_pmr[cand].n || len > g_pmr[cand].n - (addr - g_pmr[cand].a)) return 0;
+    for (int i = 0; i < PM_SLOTS; i++) {
+        if (!g_pmr[i].live || g_pmr[i].a > addr) continue;
+        if (addr - g_pmr[i].a > g_pmr[i].n || len > g_pmr[i].n - (addr - g_pmr[i].a)) continue;
+        if (cand < 0 || g_pmr[i].a > g_pmr[cand].a) cand = i;   // 嵌套时更具体的池优先
+    }
+    if (cand < 0) return 0;
     *a = g_pmr[cand].a; *n = g_pmr[cand].n; return 1;
 }
 static void pm_add(int slot, uint64_t off, uint64_t size) { nvn_be_pool_add(g_pm_arena + off, size); g_pmr[slot] = (pm_ref_t){(uint64_t)(uintptr_t)(g_pm_arena + off), size, 1}; }
@@ -681,6 +687,65 @@ static void t_pool_memo(void) {
     }
     for (int i = 0; i < PM_SLOTS; i++) if (g_pmr[i].live) pm_del(i);
     pm_flag(1);
+    CHECK(rp_pool_count() == n0);
+}
+
+// ---------- 嵌套池：一个池的存储落在另一个池的区间里（#1345） ----------
+// 契约：命中的是「起点不超过地址、且真正覆盖 [addr, addr+len) 的池里起点最大的那个」。
+// 旧实现只取「起点不超过地址的最后一个池」，候选装不下就返回 0——大池会被区间内的小池遮蔽。
+static uint8_t g_pn_arena[1 << 20] __attribute__((aligned(16)));
+static void t_pool_nested(void) {
+    const uint64_t B = (uint64_t)(uintptr_t)g_pn_arena;
+    const uint64_t BIG = 1u << 20, SMALL = 0x2000, SMALL_OFF = 0x10000;
+    const int n0 = rp_pool_count();
+    const uint8_t *m = NULL; uint64_t n = 0; void *buf = NULL; uint64_t off = 0;
+    // ① 先加 1 MiB 大池，再在其 +0x10000 处加 8 KB 小池
+    nvn_be_pool_add(g_pn_arena, BIG);
+    nvn_be_pool_add(g_pn_arena + SMALL_OFF, SMALL);
+    CHECK(rp_pool_count() == n0 + 2);
+    // ② 小池内地址 → 小池
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x10, 0x20, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B + SMALL_OFF && n == SMALL);
+    buf = NULL; off = 0;
+    CHECK(nvn_be_addr(B + SMALL_OFF + 0x10, 0x20, &buf, &off) == 1 && (uint64_t)(uintptr_t)buf == B + SMALL_OFF && off == 0x10);
+    // ③ 大池内、小池之外（小池之后的地址，旧实现会被小池遮蔽返回 0）→ 大池
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x4000, 0x20, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B && n == BIG);
+    // ④ 起点在小池内、长度跨过小池尾但没出大池 → 大池
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x1ff0, 0x100, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B && n == BIG);
+    // ⑤ 先查大池内地址（让快路/备忘发布大池），再查小池内地址 → 仍必须是小池
+    //    备忘先关掉：备忘里若已经有小池记录，会先于快路答出，就测不到快路的上界（lim）了
+    pm_flag(0);
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x4000, 0x20, NULL, NULL) == 1);
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x20, 0x40, NULL, NULL) == 1);
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x20, 0x40, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B + SMALL_OFF && n == SMALL);
+    pm_flag(1);
+    // ⑥ 同一小池内地址连查 3 次（覆盖备忘与快路）：每次都要与锁内结论一致
+    for (int i = 0; i < 3; i++) {
+        m = NULL; n = 0;
+        CHECK(rp_pool_find(B + SMALL_OFF + 0x30, 0x10, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B + SMALL_OFF && n == SMALL);
+    }
+    // ⑦ 删掉小池：小池内地址回落到大池
+    nvn_be_pool_del(g_pn_arena + SMALL_OFF);
+    CHECK(rp_pool_count() == n0 + 1);
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x10, 0x20, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B && n == BIG);
+    // ⑧ 两个入口（rp_pool_find / nvn_be_addr）同一地址答案一致
+    {
+        static const uint64_t qo[5] = { 0x10, SMALL_OFF + 0x10, SMALL_OFF + 0x4000, BIG - 0x10, BIG };
+        static const uint64_t ql[5] = { 0x20, 0x20, 0x40, 0x20, 0x10 };
+        for (int i = 0; i < 5; i++) {
+            const uint8_t *mm = NULL; uint64_t nn = 0;
+            void *bb = NULL; uint64_t oo = 0;
+            const int h1 = rp_pool_find(B + qo[i], ql[i], &mm, &nn);
+            const int h2 = nvn_be_addr(B + qo[i], ql[i], &bb, &oo);
+            CHECK(h1 == h2);
+            if (h1 && h2) CHECK(mm == (const uint8_t *)bb && oo == B + qo[i] - (uint64_t)(uintptr_t)mm && nn == BIG);
+        }
+    }
+    nvn_be_pool_del(g_pn_arena);
     CHECK(rp_pool_count() == n0);
 }
 
@@ -1513,6 +1578,30 @@ static void t_buf_mirror(void) {   // 池镜像：首次使用建一份、按页
     nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK);
 }
 
+static void t_buf_multi_tail(void) {
+    nvn_be_sub_begin(); nvn_be_shutdown_session();
+    memset(g_pg_gen, 0, sizeof g_pg_gen); g_pg_tracked = 1; g_dirty_now = 100; g_nbw = 0;
+    nvn_be_pool_add(g_pmem, sizeof g_pmem);
+    uint64_t base = (uint64_t)(uintptr_t)g_pmem;
+    const int counts[] = {0, 1, 16, 17, 64, 65};
+    for (unsigned c = 0; c < sizeof counts / sizeof counts[0]; c++) {
+        uint64_t addr[66], len[66], off[66]; nvn_gpu_buf buf[66]; unsigned char ok[66];
+        memset(ok, 0xa5, sizeof ok); memset(buf, 0, sizeof buf); memset(off, 0xff, sizeof off);
+        for (int i = 0; i < 66; i++) { addr[i] = base + (uint64_t)i * 16; len[i] = 8; }
+        // Valid, zero-length and pool-tail failures on both sides of a chunk boundary.
+        len[15] = len[31] = 0;
+        addr[16] = addr[48] = base + sizeof g_pmem - 4;
+        CHECK(rp_buf_resolve_multi(counts[c], addr, len, buf, off, ok) == 1);
+        for (int i = 0; i < counts[c]; i++) {
+            int valid = i != 15 && i != 16 && i != 31 && i != 48;
+            CHECK(ok[i] == valid);
+            if (valid) CHECK(buf[i] != NULL && off[i] == (uint64_t)i * 16);
+        }
+        CHECK(ok[counts[c]] == 0xa5);
+    }
+    nvn_be_pool_del(g_pmem); nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK);
+}
+
 static void t_buf_ops(void) {   // 缓冲类命令只改游戏内存；GPU 顺序由使用点同步保证：先用的看到旧内容，后用的看到新内容
     nvn_be_shutdown_session(); nvn_unimpl_reset(); memset(g_pg_gen, 0, sizeof g_pg_gen); g_nbw = 0; g_dirty_now = 100; memset(g_pmem, 0, sizeof g_pmem);
     uint64_t base = (uint64_t)(uintptr_t)g_pmem; nvn_be_pool_add(g_pmem, sizeof g_pmem);
@@ -2089,7 +2178,6 @@ static void t_storage_sync_before_pass(void) {
     CHECK(nvn_unimpl_count("draw", "storage_buffer_unresolved") == 0);
     g_pg_tracked = tracked; pass_fresh();
 }
-
 // A buffer texture reads the registered pool range directly, with no sampler.
 // A second untracked use must synchronize before its render pass is reopened.
 static void t_tbuf_replay(void) {
@@ -2165,6 +2253,63 @@ static void t_tbuf_replay(void) {
     CHECK(g_ndisp == n + 3 && nvn_unimpl_count("draw", "tbuf_texture_unresolved") == 1);
     nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK);
     g_pg_tracked = tracked; nvn_be_pool_del(g_pmem); pass_fresh();
+}
+// 存储缓冲的绑定窗口（同 Ryujinx AlignDown(基址, 宿主对齐)）：基址不对齐时窗口从 基址 & −对齐 起、长度补余数（着色器按这个起点取数）；
+// 长度夹到 maxStorageBufferRange，被夹短时具名记账、照画。图形（开通道前解析）与计算（发绑定时解析）两条路；UBOP 来源起点不动。
+static void sbuf_case(int stage, int kind, uint64_t addr, uint64_t size, uint32_t align, uint64_t range) {
+    g_caps_min_ssbo = align; g_caps_max_ssbo = range; rp_draw_reset(); g_arena_used = 0;   // 能力表是缓存的：改了替身值就重开一次
+    stream s = {0};
+    if (stage == 5) {
+        g_cresolves = g_cresolve_rc = g_cpipe_gets = g_ndisp = g_cbinds = 0; g_ncb = 0;
+        memset(&g_cprog, 0, sizeof g_cprog); g_cprog.is_compute = 1; g_cprog.sh[0] = &g_fsh[0];
+        g_cprog.nent[0] = 1; g_cprog.ent[0][0].cls = NVN_GPU_RES_SSBO; g_cprog.ent[0][0].src_kind = (uint8_t)kind; g_cprog.ent[0][0].src_reg = 1; g_cprog.ent[0][0].access = NVN_GPU_ACC_R;
+        p_bind_buf *b = put(&s, kind == NVN_RB_UBOP ? OP_BIND_UBO : OP_BIND_SSBO, sizeof *b); b->stage = 5; b->index = 1; b->addr = addr; b->size = size;
+        p_dispatch *dp = put(&s, OP_DISPATCH, sizeof *dp); dp->x = dp->y = dp->z = 1;
+    } else {
+        q_env(&s);
+        g_fprog.nent[1] = 1; g_fprog.ent[1][0].cls = NVN_GPU_RES_SSBO; g_fprog.ent[1][0].src_kind = NVN_RB_SBUFP; g_fprog.ent[1][0].src_reg = 0; g_fprog.ent[1][0].access = NVN_GPU_ACC_R;
+        p_bind_buf *b = put(&s, OP_BIND_SSBO, sizeof *b); b->stage = 1; b->index = 0; b->addr = addr; b->size = size;
+        q_draw(&s);
+    }
+    end(&s); submit1(&s); fake_complete(NVN_GPU_DONE_OK);
+}
+static void t_sbuf_window(void) {
+    pass_fresh(); g_gdraws = g_resolves = g_resolve_rc = 0; g_arena_used = 0; memset(g_nfb, 0, sizeof g_nfb);
+    memset(g_pmem, 0, sizeof g_pmem); nvn_be_pool_add(g_pmem, sizeof g_pmem);
+    const uint64_t base = (uint64_t)(uintptr_t)g_pmem;
+    const uint64_t cl0 = nvn_unimpl_count("draw", "storage_buffer_window_clamped");
+    struct { uint64_t off, size; uint32_t align; uint64_t range; uint64_t want_off, want_len; int clamped; } g[] = {
+        {2 * PG + 0x40, 64,     256, 0,      2 * PG, 0x80,   0},   // 不对齐：起点下取整、长度补余数
+        {2 * PG,        64,     256, 0,      2 * PG, 64,     0},   // 负对照：已对齐，原样
+        {2 * PG + 0x40, 64,     0,   0,      2 * PG + 0x40, 64, 0}, // 负对照：设备没报对齐，原样
+        {PG,            0x3000, 0,   0x1000, PG,     0x1000, 1},   // 超范围上限：夹短、具名、照画
+        {PG + 0x40,     0x3000, 256, 0x1000, PG,     0x1000, 1},   // 两样都有
+        {PG,            0x1000, 0,   0x1000, PG,     0x1000, 0},   // 负对照：正好等于上限，不记账
+    };
+    uint64_t want_cl = cl0;
+    for (unsigned k = 0; k < sizeof g / sizeof g[0]; k++) {
+        int d0 = g_gdraws;
+        sbuf_case(1, NVN_RB_SBUFP, base + g[k].off, g[k].size, g[k].align, g[k].range);
+        want_cl += (uint64_t)g[k].clamped;
+        CHECK(g_gdraws == d0 + 1 && g_nfb[1] == 1 && g_fb[1][0].cls == NVN_GPU_RES_SSBO);
+        CHECK(g_fb[1][0].u.b.off == g[k].want_off && g_fb[1][0].u.b.len == g[k].want_len);
+        CHECK(nvn_unimpl_count("draw", "storage_buffer_window_clamped") == want_cl);
+    }
+    // 计算阶段：发绑定时自己解析，同一个窗口
+    sbuf_case(5, NVN_RB_SBUFP, base + 2 * PG + 0x40, 64, 256, 0);
+    CHECK(g_ndisp == 1 && g_ncb == 1 && g_cb[0].u.b.off == 2 * PG && g_cb[0].u.b.len == 0x80);
+    // UBOP 着色器按原基址取数：无法合法移动不对齐的窗口，应具名拒绝，而不是向 Vulkan 交非法偏移。
+    const uint64_t unaligned0 = nvn_unimpl_count("draw", "storage_buffer_offset_unaligned");
+    sbuf_case(5, NVN_RB_UBOP, base + 2 * PG + 0x40, 64, 256, 0);
+    CHECK(g_ndisp == 0 && nvn_unimpl_count("draw", "storage_buffer_offset_unaligned") == unaligned0 + 1);
+    // 已对齐的 UBOP 仍按原基址绑定。
+    sbuf_case(5, NVN_RB_UBOP, base + 2 * PG, 64, 256, 0);
+    CHECK(g_ndisp == 1 && g_ncb == 1 && g_cb[0].u.b.off == 2 * PG && g_cb[0].u.b.len == 64);
+    sbuf_case(5, NVN_RB_UBOP, base + PG, 0x3000, 0, 0x1000);
+    CHECK(g_ndisp == 1 && g_ncb == 1 && g_cb[0].u.b.off == PG && g_cb[0].u.b.len == 0x1000);
+    CHECK(nvn_unimpl_count("draw", "storage_buffer_window_clamped") == want_cl + 1);
+    CHECK(nvn_unimpl_count("draw", "storage_buffer_unresolved") == 0 && nvn_unimpl_count("draw", "storage_buffer_offset_unaligned") == unaligned0 + 1);
+    g_caps_min_ssbo = 0; g_caps_max_ssbo = 0; rp_draw_reset(); pass_fresh();
 }
 static void q_counter(stream *s, uint32_t op, uint64_t type, uint64_t *dst) { uint8_t *r = put(s, op, 16); uint64_t ad = (uint64_t)(uintptr_t)dst; memcpy(r, &type, 8); memcpy(r + 8, &ad, 8); }
 
@@ -3010,6 +3155,13 @@ static void t_compute_sources(void) {
     CHECK(nvn_unimpl_count("draw", "storage_buffer_outside_pools") == 0);
     CHECK(nvn_unimpl_count("draw", "storage_buffer_indirect_empty") == 0);
     CHECK(g_ndisp == 1 && nvn_unimpl_count("draw", "compute_storage_indirect_writable_unknown") == 1);
+    // 间接来源的真实指针相对池偏移 64：设备要求 256 时不能交非法描述符。
+    const uint64_t unaligned0 = nvn_unimpl_count("draw", "storage_buffer_offset_unaligned");
+    g_caps_min_ssbo = 256; rp_draw_reset(); g_cprog.ent[0][1].access = NVN_GPU_ACC_R;
+    { stream t = {0}; p_bind_buf *u4 = put(&t, OP_BIND_UBO, sizeof *u4); *u4 = *ub;
+      p_dispatch *d4 = put(&t, OP_DISPATCH, sizeof *d4); d4->x = 1; d4->y = 1; d4->z = 1; end(&t); submit1(&t); }
+    CHECK(g_ndisp == 1 && nvn_unimpl_count("draw", "storage_buffer_offset_unaligned") == unaligned0 + 1);
+    g_caps_min_ssbo = 0; rp_draw_reset();
     g_buf_cpu_fake = NULL; nvn_be_pool_del(g_pmem);
 }
 
@@ -3744,7 +3896,39 @@ static void t_invalidated_attachment_pin(void) {
     res_fresh();
 }
 
+static void t_sync_reuse_after_gpu_write(void) {
+    g_flag_sync_lag = 1; g_buf_cpu_auto = 1;
+    memset(g_pmem, 0x11, sizeof g_pmem);
+    uint64_t addr = (uint64_t)(uintptr_t)g_pmem;
+    nvn_be_pool_add(g_pmem, sizeof g_pmem); nvn_be_sub_begin();
+    nvn_gpu_buf b = NULL; uint64_t off = 0;
+    CHECK(rp_buf_resolve(&g_fake_cmd, addr, 16, &b, &off));
+    CHECK(rp_post_gpu_write(addr, 16)); memset(b->cpu + off, 0x22, 16);
+    nvn_be_sub_commit(); uint64_t f = nvn_be_last_fence();
+    // A successful wait grants CPU reuse. GPU writeback must have landed first.
+    CHECK(nvn_be_wait(f, 0) == 0);
+    fake_complete(NVN_GPU_DONE_OK);
+    CHECK(nvn_be_wait(f, 0) == 1 && g_pmem[0] == 0x22);
+    memset(g_pmem, 0x33, 16);
+    // A later read-only submission can retain the existing overlap path.
+    nvn_be_sub_begin(); nvn_be_sub_commit();
+    CHECK(nvn_be_wait(nvn_be_last_fence(), 0) == 1);
+    fake_complete(NVN_GPU_DONE_OK); CHECK(g_pmem[0] == 0x33);
+    // A queued event is also observable CPU memory, not a read-only submission.
+    volatile uint32_t ev = 0; stream a = {0};
+    uint8_t *r = put(&a, OP_SIGNAL_EVENT, 16); volatile uint32_t *pv = &ev; uint32_t mode = 0, value = 7;
+    memcpy(r, &pv, 8); memcpy(r+8, &mode, 4); memcpy(r+12, &value, 4); end(&a);
+    submit1(&a); CHECK(nvn_be_wait(nvn_be_last_fence(), 0) == 0);
+    fake_complete(NVN_GPU_DONE_OK); CHECK(ev == 7);
+    uint64_t ts[2] = {0, 0}; stream t = {0}; g_tick = 7777;
+    q_counter(&t, OP_REPORT_COUNTER, NVN_COUNTER_TYPE_TIMESTAMP, ts); end(&t);
+    submit1(&t); CHECK(nvn_be_wait(nvn_be_last_fence(), 0) == 0);
+    fake_complete(NVN_GPU_DONE_OK); CHECK(ts[1] == 7777);
+    nvn_be_pool_del(g_pmem); g_buf_cpu_auto = 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--sync-reuse")) { t_sync_reuse_after_gpu_write(); printf("sync reuse: %d checks, %d failures\n", g_checks, g_fail); return g_fail != 0; }
     t_invalidated_attachment_pin();
     t_registered_view_pin();
     t_state_persists();
@@ -3761,6 +3945,7 @@ int main(int argc, char **argv) {
     // 一行一个调用：外部各支都往这里加用例，挤在一行时每两支必冲突
     t_pools();
     t_pool_memo();
+    t_pool_nested();
     t_tex_init_registers_only();
     t_alias();
     t_alias_take_over();
@@ -3775,6 +3960,7 @@ int main(int argc, char **argv) {
     t_decl_view();
     t_buf_mirror();
     t_buf_mirror_fail_once();
+    t_buf_multi_tail();
     t_buf_ops();
     t_copy_b2t();
     t_pass_clear_fold();
@@ -3813,7 +3999,7 @@ int main(int argc, char **argv) {
     t_arena697_detail();
     t_logic_op_accounting();
     t_gs_dirty_and_topology();
-    t_gs_bind(); t_storage_null_binding(); t_storage_sync_before_pass(); t_stage_dropped_clears_binds();
+    t_gs_bind(); t_storage_null_binding(); t_storage_sync_before_pass(); t_stage_dropped_clears_binds(); t_sbuf_window();
     t_tbuf_replay();
     t_decl_sampling();
     t_separate_sampler();

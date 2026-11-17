@@ -10,7 +10,7 @@ NUP 是公开的打包格式（https://github.com/a55uka/nup ，SPEC.md v1）：
     <输出>/updates/<版本号>/exefs|romfs/...         只写最新那一版更新（ns2_dump 只用最新更新 + 本体判全量 / 差量）
     <输出>/updates/<版本号>/control.nacp、icon_AmericanEnglish.dat   该包带了控制分区才写（ns2_dump 认作原件；没带就由它按目录名合成）
     <输出>/dlc/<DLC 标题号>/0/romfs/...             每个 DLC
-镜像形态（S2A_ROMFS_IMAGE=1）：本体 / 更新的 romfs 不展开成散文件，改写一份清单 <版本目录>/romfs.nupmap（每个文件在容器里的位置、编码、SHA-256，
+镜像形态（缺省，S2A_ROMFS_IMAGE=0 回散文件）：本体 / 更新的 romfs 不展开成散文件，改写一份清单 <版本目录>/romfs.nupmap（每个文件在容器里的位置、编码、SHA-256，
 格式即 nx_unpack --romfs-image 的清单），由 ns2_dump 选好全量 / 差量后交 nx_unpack 直接从容器建 romfs.std；DLC 照旧展开。
 后面的程序号判定、全量 / 差量、控制分区、unpack.tsv 都由 ns2_dump 照原样做，这里不重复。
 没有本体的容器（SPEC §3.1.2 的 standalone_update，或本体记录没有文件）：把最新更新同时写成 base/，即把更新当整款
@@ -417,8 +417,8 @@ def write_control(n, k, base, dst):
     return False
 
 
-def image_mode():   # 镜像形态开关（同 nx_unpack / ns2_dump）：读取方全迁到 romfs.std 之前只给对照 / 测试开
-    return os.environ.get('S2A_ROMFS_IMAGE') == '1'
+def image_mode():   # 镜像形态开关（同 nx_unpack / ns2_dump）：缺省开，S2A_ROMFS_IMAGE=0 回旧路径（展开散文件）
+    return os.environ.get('S2A_ROMFS_IMAGE') != '0'
 
 
 def key_of(n):

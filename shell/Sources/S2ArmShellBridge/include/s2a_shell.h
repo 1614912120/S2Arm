@@ -34,7 +34,7 @@ void *s2a_shell_library_vc(const char *catalogue_json_path);
 int s2a_shell_game_install_state(const char *game_id);
 int s2a_shell_install_game(const char *game_id);
 int s2a_shell_install_progress(const char *game_id, int *done, int *total);
-// 库起解包被拒（s2a_shell_install_game 返回 0）时为什么：1 另一款正在解（同时只解一款）/ 2 正在整理游戏目录（#569 迁移）/ 0 没有在等的事。
+// 库起解包被拒（s2a_shell_install_game 返回 0）时为什么：1 另一款正在解（同时只解一款）/ 2 正在整理游戏目录（首次清点容器、资源包挪位，ios/app.m img_scan_bg）/ 0 没有在等的事。
 //   库据此在卡片上说「等另一款装完」「正在整理游戏目录」，不再只写「安装中」（iOS 装机剃刀 #46 / #47）。主线程；弱缺省 0
 int s2a_shell_install_wait(void);
 // 库界面第一次出现（启动打点「游戏库界面可操作」）；弱定义缺省什么都不做
@@ -48,6 +48,8 @@ const char *s2a_shell_install_failure(const char *game_id);
 int s2a_shell_take_open_settings(void);
 // 这次安装确定丢了「提高内存上限」权限（ios/iml_probe.m，读不到不算）：返回 {"title","body"}（已按 App 语言）的 JSON，调用方 free；没丢 / 读不到返回 NULL。主线程
 char *s2a_shell_iml_notice(void);
+/* 游戏库真画出了这条提示：记下，进游戏后起局提示不再重复弹（ios/iml_probe.m） */
+void s2a_shell_iml_notice_seen(void);
 void s2a_shell_pick_game_data(const char *game_id);
 // 宿主让库界面重判各款资源包（说明里「重新检查」后调）。库界面建好时登记；没登记时 s2a_shell_refresh 什么都不做
 typedef void (*s2a_shell_refresh_fn)(void *ctx);

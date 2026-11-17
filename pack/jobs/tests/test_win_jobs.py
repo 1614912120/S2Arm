@@ -18,6 +18,7 @@ sys.path.insert(0, str(JOBS))
 import core
 import toolchain
 from jobcase import OsView, as_windows, ios_fixture
+import jobcase  # noqa: E402（作业上下文替身统一工厂 jobcase.fake_context）
 import layout
 
 
@@ -133,7 +134,10 @@ class RuntimeEnv(unittest.TestCase):
             self.assertEqual(ow.metal_exe(dict(stale, S2A_METAL_PICKED=str(Path(d, "手选后删了"))), reg=([str(fresh.parent)], [])), fresh)   # 选过的被删了：照常往下找
             rows = ow.metal_search(stale, reg=([], [str(Path(d, "没装"))]))
             self.assertEqual([r[0] for r in rows], ["启动器启动时的 PATH", "注册表里现在的 PATH", "官方安装器登记的安装目录", "官方安装器登记的安装目录", "官方默认目录", "官方默认目录"])
-            self.assertFalse(any(ok for _, _, ok in rows))
+            # 最后那条写死的 C:\Program Files\Metal Developer Tools 查的是这台机器真的系统目录：装了 Metal 工具的 Windows 上会找到（11-16 原生 Windows 上红），
+            #   不算在「夹具里各处都没有」里
+            sysdef = r"c:\program files\metal developer tools"
+            self.assertFalse(any(ok for _, path, ok in rows if not str(path).lower().startswith(sysdef)))
             text = ow.metal_search_text(rows)
             self.assertIn("启动器启动时的 PATH：里面没有 metal.exe", text)
             self.assertIn(str(Path(d, "没装", "ios", "bin", "metal.exe")) + " → 没有", text)
@@ -316,12 +320,15 @@ class WinInstall(unittest.TestCase):
         self.m = install
         self.t = Path(tempfile.mkdtemp()); self.addCleanup(lambda: __import__("shutil").rmtree(self.t, ignore_errors=True))
         p = patch.object(install, "phone_games", lambda c, ph: set()); p.start(); self.addCleanup(p.stop)   # 读手机游戏清单另有用例
+        # 读手机账本另有用例（test_install）：不打桩时它走 devpush_client 调 c.env()，本替身没有 env——单跑时推送工具导入失败被当「读不到账本」，
+        #   全量跑时前面的用例已导入过 push_pack（模块缓存），这里就撞上 AttributeError（11 个 WinInstall 用例只在全量 discover 时红）
+        p = patch.object(install, "phone_removed", lambda c, ph: None); p.start(); self.addCleanup(p.stop)
         p = patch.object(install, "pick_pack_root", lambda c, ph, g: f"Library/Application Support/S2Arm/games/{g}/资源包"); p.start(); self.addCleanup(p.stop)   # 选哪处另有用例（test_install）
         (self.t / "lib").mkdir(); (self.t / "logs").mkdir()
         self.gid = "0100000000000047"
         self.progress_events = []   # 作业计数事件 (done, total, unit)
         emit = lambda *a, **k: self.progress_events.append((k.get("done"), k.get("total"), k.get("unit"))) if k.get("unit") else None
-        self.c = types.SimpleNamespace(r={"gameId": self.gid}, library=self.t / "lib", private=self.t, logs=self.t / "logs", task="k", engine=self.t, emit=emit,
+        self.c = jobcase.fake_context(self.t, r={"gameId": self.gid}, library=self.t / "lib", work_root=self.t / "work", private=self.t, logs=self.t / "logs", task="k", engine=self.t, emit=emit,
                                        begin=lambda *a, **k: None, last_log=None, catalog=lambda: {"schema": 1, "games": []},
                                        lock=lambda *a, **k: contextlib.nullcontext())   # 装机类作业的手机锁 / 程序锁（ipa.phone_lock / program_locks）
         ios_fixture(self.c, self.gid)   # 出好的 iPhone 版：image/ios/kit + image/ios/pack
@@ -495,8 +502,11 @@ class WinInstall(unittest.TestCase):
             seen["push"] = (udid, bid, Path(pack).name, devpush, full)
             progress(4 << 30, 8 << 30, 4, 8)   # Windows 推送进度回调 → 作业字节计数（#266 / #308）
             return (0, 0)
+        # 玩家 Impactor 里选中的团队（impactor.selected_team，读真机 %APPDATA% 的 Impactor 账号存储）：登录过 Impactor 的 Windows 上能读到，
+        #   装机就会带 --custom-identifier <容器包名>（install_win.sign_install 的设计）。这里按 11-06 那次「没读到团队」的期望测，带包名的另有用例
         with patch.object(W, "plumesign_path", return_value="C:/Impactor/plumesign.exe"), \
              patch.object(W, "mux_devices", return_value=[("U1", "Network", 9), ("U1", "USB", 7)]), \
+             patch.object(W.impactor, "selected_team", lambda *a, **k: None), \
              patch.object(W.subprocess, "run", fake_run), patch.object(W, "push_pack", fake_push):
             res = self.go(W)
         cmd = seen["cmd"]
@@ -527,7 +537,8 @@ class WinInstall(unittest.TestCase):
         login = r["items"][2]
         self.assertEqual((login["ok"], login["action"], login["url"]), (False, "openImpactor", None)); self.assertTrue(r["ready"])
         (d / impactor.PLUMESIGN_EXE).unlink()
-        with patch.object(self.m, "win_install_mod", return_value=w):
+        # 随包不全时会接着找玩家自己装的 Impactor（卸载登记、桌面 / 下载）：真装了 Impactor 的 Windows 上会找到，这里按「没装」测
+        with patch.object(self.m, "win_install_mod", return_value=w), patch.object(impactor, "candidates", lambda: iter(())):
             r = self.m.readiness_windows(self.c, self.gid)
         imp = r["items"][1]
         self.assertFalse(imp["ok"]); self.assertTrue(r["ready"])   # 随包不全就接着认玩家自己装的；认不出也只提示
@@ -632,7 +643,7 @@ class WinPreflight(unittest.TestCase):
     # 环境检查在 Windows 上 = winenv（子进程、作业环境）：清单与 ready 原样转给启动器；winenv 没给 JSON → win_check_failed，不当成就绪
     def setUp(self):
         self.t = Path(tempfile.mkdtemp()); self.addCleanup(lambda: __import__("shutil").rmtree(self.t, ignore_errors=True))
-        self.c = types.SimpleNamespace(r={"resources": str(self.t)}, private=self.t, engine=ROOT, library=self.t / "lib",
+        self.c = jobcase.fake_context(self.t, r={"resources": str(self.t)}, private=self.t, engine=ROOT, library=self.t / "lib",
                                        env=lambda: {"PATH": "x"}, fonts_dir=lambda: self.t / "Fonts")
 
     def run_with(self, stdout):
@@ -731,5 +742,17 @@ class SealedRomfsPrune(unittest.TestCase):
                 pass
             else:
                 self.skipTest("当前令牌不受拒写 ACL 约束（提权管理员），封存复现不了；用普通令牌跑")
+            library._rmtree(Path(d, "work"))
+            self.assertFalse(Path(d, "work").exists())
+
+    def test_rmtree_removes_readonly_attribute_files(self):
+        # 11-16 维护者：只读位（别的来源放进来的只读文件）os.unlink 不认、报 WinError 5；library._rmtree 要去掉只读位后删干净。期望手写：整棵删掉
+        import stat
+        import library
+        with tempfile.TemporaryDirectory() as d:
+            sub = Path(d, "work", "sub"); sub.mkdir(parents=True); (sub / "a.bin").write_bytes(b"a")
+            os.chmod(sub / "a.bin", stat.S_IREAD)
+            with self.assertRaises(PermissionError):
+                os.unlink(sub / "a.bin")
             library._rmtree(Path(d, "work"))
             self.assertFalse(Path(d, "work").exists())

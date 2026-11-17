@@ -203,6 +203,10 @@ namespace S2A.Dsh
                 if (stage == "cs") j["tensor_mma_count"] = DshTensor.Count(code);
                 // 计算阶段的驱动常量在 c[0] 里按程序排（推送常量字数 +0xa9，uniform / storage / 纹理项数 +0xb1..+0xb3，分离纹理 / 分离采样器项数 +0xb4 / +0xb5（图像在它们之后，上游参考实现（MIT）67f1d0055），大小 +0xba），翻译器按它映射（InstEmitAmpere.cs AMapC0）
                 if (stage == "cs") j["nvn2_cs"] = new JsonArray(ctl[0xb1], ctl[0xb2], ctl[0xb3], BitConverter.ToUInt16(ctl, 0xba), ctl[0xa9] * 4, ctl[0xb4], ctl[0xb5]);
+                // 早期深度（NVN2）：像素着色器控制段 +0x5b（NVN1 在 +0x718，见上）。原先 NVN2 不读，Switch 2 款里该先测深度再着色的像素着色器（先写内存、后测深度）全部晚测，
+                //   被遮挡的像素也整片着色。搬 nxnative a888e668（MIT）：NVN2 驱动按单字节读 +0x58..+0x62 的片元标志，+0x5b 即早测；对方读数（一款第三方 Switch 2 游戏，M4 Pro）GPU 19.0 → 16.6 ms、
+                //   p95 64 → 26 ms；040074A01BF12000 的 13546 支像素着色器里 2855 支、0400486024DEC000 的 22352 支里 746 支带它。自己写深度的（SPH 字 19 位 1，OmapDepth）不提前：先测的深度不是它算出的那个
+                if (stage == "ps" && ctl.Length > 0x5b && ctl[0x5b] != 0 && !(code.Length >= 0x50 && (BitConverter.ToUInt32(code, 19 * 4) & 2) != 0)) j["early_z"] = true;
                 if (stage == "ds") j["tess_mode"] = (long)Nvn2.TessMode(ctl);
                 if (stage == "hs") j["tess_mode"] = T.TessModes.Count > 0 ? (long)T.TessModes.First().Value : 1L;
                 j["debug"] = stage is "gs" or "cs"; j["reduced"] = true;
