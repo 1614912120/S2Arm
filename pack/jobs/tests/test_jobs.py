@@ -2220,6 +2220,21 @@ class JobsTests(unittest.TestCase):
             holder.stdin.write("release\n"); holder.stdin.flush()
             holder.communicate(timeout=5)
 
+    def test_proven_dead_lock_holder_uses_stuck_code(self):
+        import filelock
+        self.c.require_library()
+        self.c.lock_wait = 0
+        lockf = self.c.library / ".catalog.lock"
+        info = dict(taskId="old-task", operation="ipa", gameId="0100000000010000", pid=1,
+                    startedAt=1.0, host="this-host")
+        with filelock.held(lockf, holder=info), patch("filelock.holder_is_stale", return_value=True):
+            with self.assertRaises(Failure) as raised:
+                with self.c.lock():
+                    pass
+        self.assertEqual(raised.exception.code, "library_lock_stuck")
+        self.assertEqual(raised.exception.holder, info)
+        self.assertIn("不要手动删除锁文件", str(raised.exception))
+
     def test_direct_small_batch_progress_replaces_finished_translation(self):
         progress = self.root / "progress.tsv"
         progress.write_text("1\t直连库·翻译着色器\t30\t30\n2\t直连库·已生成库文件\t1\t3\n", encoding="utf-8")

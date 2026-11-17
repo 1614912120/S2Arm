@@ -64,7 +64,8 @@ RECOVERY = {
     "fat32_file_too_large": "在出包页「存放位置」换到 NTFS 格式的盘（上面列出了这台电脑上可用的），再出包；游戏原件放在哪都行。",
     "library_move_failed": "游戏库还在原来的位置，什么都没有丢：按上面的原因处理后再搬一次。",
     "batch_record_failed": "批次记录（数据目录下的 batch.json）写不进：检查数据目录所在磁盘的空间与权限，处理后在批量出包页点「继续」；已出好的包都在。",
-    "library_busy": "如果任务列表里还有正在运行的作业，等它结束或取消后重试；如果列表显示已中断而仍报锁占用，重新连接或重新挂载游戏库所在磁盘后再试。不要手动删除锁文件；本次没有改动游戏文件。",
+    "library_busy": "另一个任务正在使用游戏库，请稍后重试。",
+    "library_lock_stuck": "原任务进程已不在，但游戏库的锁仍被占用。重新连接或重新挂载游戏库所在磁盘后再试；不要手动删除锁文件。本次没有改动游戏文件。",
     "downstream_ineligible": "这个下游方案只支持某一版更新（上面写了是哪一版）：导入那一版更新后再导出；不换更新就在确认页选「仍用原版方案」。",
     "downstream_export_unsupported": "这款选的下游方案是独立 App，资源要由电脑推进去：连上手机后点「装到 iPhone」；想导出自签包就在确认页改选「仍用原版方案」。",
     "download_failed": "检查这台电脑的网络（能打开 s2arm.com）后再点一次；下了一半的不会被当成好的用。",
@@ -212,6 +213,15 @@ class Failure(Exception):
         self.internal = internal
         self.holder = holder   # library_busy：占着游戏库锁的任务（filelock 旁挂文件里记的那份），其余为 None
         self.facts = facts     # 机读的失败事实（cause_facts：改写失败的模块 / 缺口数 / 缺口类别），前端按字段显示，不解析中文；没有为 None
+
+
+def library_lock_failure(holder, message, internal=""):
+    """Keep ordinary lock contention unchanged; specialize only a locally proven dead/reused owner."""
+    import filelock
+    if filelock.holder_is_stale(holder) is True:
+        return Failure("原任务进程已不在，但游戏库的锁仍被占用。重新连接或重新挂载游戏库所在磁盘后再试；不要手动删除锁文件。本次没有改动游戏文件。",
+                       code="library_lock_stuck", holder=holder, internal=internal)
+    return Failure(message, code="library_busy", holder=holder, internal=internal)
 
 
 def _under(path, roots):

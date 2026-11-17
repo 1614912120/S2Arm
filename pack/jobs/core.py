@@ -18,6 +18,7 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import socket
 import stat
 import subprocess
 import sys
@@ -25,7 +26,7 @@ import threading
 import time
 import uuid
 from progress_activity import BatchActivity
-from errors import Failure, explain, failure_summary, last_output_lines, recovery
+from errors import Failure, explain, failure_summary, last_output_lines, recovery, library_lock_failure
 
 
 def default_developer_dir():
@@ -682,7 +683,8 @@ class Context:
     def lock_holder(self):
         """写进锁旁挂文件的「我是谁」：别的任务据此说清在等谁"""
         return dict(taskId=getattr(self, "task", None), operation=getattr(self, "operation", None),
-                    gameId=(getattr(self, "r", None) or {}).get("gameId"), pid=os.getpid(), startedAt=round(time.time(), 3))
+                    gameId=(getattr(self, "r", None) or {}).get("gameId"), pid=os.getpid(),
+                    host=socket.gethostname(), startedAt=round(time.time(), 3))
 
     @contextlib.contextmanager
     def lock(self, name="catalog", wait=None, root=None):
@@ -702,8 +704,8 @@ class Context:
             with filelock.held(Path(root or self.library) / ("." + name + ".lock"), wait_s=wait, holder=self.lock_holder(), on_wait=waiting):
                 yield
         except filelock.Busy as busy:
-            raise Failure("另一个任务正在使用游戏库，请稍后重试。", code="library_busy", holder=busy.holder,
-                          internal=f"等了 {wait:g} 秒，游戏库{name}锁仍被占：{describe_holder(busy.holder)}（{json.dumps(busy.holder, ensure_ascii=False)}）") from None  # 非玩家句
+            detail = f"等了 {wait:g} 秒，游戏库{name}锁仍被占：{describe_holder(busy.holder)}（{json.dumps(busy.holder, ensure_ascii=False)}）"
+            raise library_lock_failure(busy.holder, "另一个任务正在使用游戏库，请稍后重试。", detail) from None  # 非玩家句
 
     @contextlib.contextmanager
     def idle(self, name="execution"):
