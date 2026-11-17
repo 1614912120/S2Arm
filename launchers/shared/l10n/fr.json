@@ -402,7 +402,6 @@
   "update.popup.noNotes": "Cette version n'a pas de notes de version.",
   "update.popup.later": "Plus tard",
   "update.popup.now": "Mettre à jour et redémarrer",
-  "update.launcher_and_phone": "Mettre à jour et redémarrer",
   "phone.update.banner.preparing": "Mise à jour de S2Arm pour iPhone…",
   "phone.update.banner.progress": "Mise à jour de S2Arm pour iPhone… ({0} %)",
   "phone.update.banner.ready": "Une nouvelle version de S2Arm pour iPhone est prête. Branchez votre iPhone, puis cliquez ici pour la mettre à jour.",

@@ -1117,7 +1117,6 @@
       {"id": "update.popup.noNotes", "zh-Hans": "这一版没有附更新说明", "en": "This version has no release notes"},
       {"id": "update.popup.later", "zh-Hans": "以后再说", "en": "Later"},
       {"id": "update.popup.now", "zh-Hans": "现在更新并重启", "en": "Update and restart"},
-      {"id": "update.launcher_and_phone", "zh-Hans": "现在更新并重启", "en": "Update and restart"},
       {"id": "phone.update.banner.preparing", "zh-Hans": "正在更新 iPhone 版 S2Arm…", "en": "Updating S2Arm for iPhone…"},
       {"id": "phone.update.banner.progress", "zh-Hans": "正在更新 iPhone 版 S2Arm…（{0}%）", "en": "Updating S2Arm for iPhone… ({0}%)"},
       {"id": "phone.update.banner.ready", "zh-Hans": "iPhone 版 S2Arm 有新版：连上手机后，点这里更新", "en": "A new S2Arm for iPhone is ready. Connect your iPhone, then click here to update."},

@@ -402,7 +402,6 @@
   "update.popup.noNotes": "このバージョンにはリリースノートがありません。",
   "update.popup.later": "後で",
   "update.popup.now": "アップデートして再起動",
-  "update.launcher_and_phone": "アップデートして再起動",
   "phone.update.banner.preparing": "iPhone 版 S2Arm を更新しています…",
   "phone.update.banner.progress": "iPhone 版 S2Arm を更新しています…（{0}%）",
   "phone.update.banner.ready": "iPhone 版 S2Arm の新しいバージョンがあります。iPhone をつないでから、ここをクリックして更新します",
