@@ -1,14 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 S2Arm contributors
-// 手机连着、启动器开着时自动更新 iPhone 上的 S2Arm（同 Mac S2ArmLauncherModel.keptModulesLoop / keptModulesTick）。
-//   每 2 分钟跑一次 phoneKeptPull 作业：手机上宿主留下的代码模块拉回游戏库；有还没补进 iPhone 件的款（kept），
-//   或连着的这台壳比本版旧、且没有要按新版重出包的款（shellUpdate，11-16 维护者「启动器升级并更新 IPA，点一次完成整个流程」），
-//   就自动发起一次「更新 iPhone」。手机上正在玩（Windows 读不到进程，作业层按游玩心跳判）或查不清时不发起，下一轮再看。
-//   同一批只自动发起一次，没成（要确认 / 失败）就留给顶栏「更新 iPhone」按钮。有作业在跑时跳过这一轮。
-//   开关：privateRoot/auto-update-phone.off 存在 = 玩家关了壳自动更新（缺省开，存的是「关」，同 Mac S2AAutoUpdatePhoneOff）。
-// 启动器升级顺带更新 iPhone App（同 Mac S2ArmLauncherModel+PhoneBanner.swift）：更新弹窗按钮写「更新启动器和 iPhone App」（UpdateAlsoPhone）；
-//   新版启动器头一次读到要更新的手机 → 后台 installUpdatePrepare（不连手机），顶部横幅「正在更新 iPhone 版 S2Arm…」→「已准备好，连上手机后自动装」，
-//   作业不在 / 失败 →「手机连上时会自动更新」；自动 / 手动更新 iPhone 时横幅显示进度；装完 phoneUpdates 空了横幅自己收起。
+// iPhone 上 S2Arm 的更新：手动更新（11-16 维护者「那改成更稳妥的手动更新吧 启动器和移动端都是」；同 Mac S2ArmLauncherModel.keptModulesTick / +PhoneBanner.swift）。
+//   每 2 分钟跑一次 phoneKeptPull 作业：手机上宿主留下的代码模块拉回游戏库；查到要更新（kept / 壳旧了）只重读游戏库，顶栏亮「更新 iPhone」，不自动装。
+//   新版启动器头一次读到要更新的手机 → 后台 installUpdatePrepare（不碰手机，点了以后装得快），准备期间不出横幅；准备完出横幅「有新版，点这里更新」，
+//   点了 = 顶栏「更新 iPhone」；玩家点了更新后横幅显示进度，装完 phoneUpdates 空了横幅自己收起。
+//   开关：privateRoot/auto-update-phone.off 存在 = 玩家关了（缺省开，存的是「关」，同 Mac S2AAutoUpdatePhoneOff）：不准备、不出横幅。
 using System.Text.Json;
 using Avalonia;
 using Avalonia.Controls;
@@ -46,14 +42,12 @@ public sealed partial class EnvironmentWindow
     private bool phonePrepareTried;
 
     /// <summary>更新弹窗主按钮写「更新启动器和 iPhone App」：装过 iPhone、且没关自动更新 iPhone App</summary>
-    private bool UpdateAlsoPhone => (catalog?.PhoneDevices ?? 0) > 0 && AutoUpdatePhoneOn && !IosAfterPackIsExport;
 
     /// <summary>这次启动头一次读到要更新的手机：后台准备一次</summary>
     private async Task PreparePhoneUpdateAsync()
     {
         if (phonePrepareTried || IosAfterPackIsExport || catalog is not { PhoneUpdates.Count: > 0 } || !AutoUpdatePhoneOn || connectedFolder is null || libraryId is null) return;
         phonePrepareTried = true;
-        phoneBanner = "preparing"; Render();
         var ok = false;
         try
         {
@@ -63,7 +57,7 @@ public sealed partial class EnvironmentWindow
         }
         catch (Exception error) when (error is LibraryProtocolException or IOException or UnauthorizedAccessException or ArgumentException or
             InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception) { NotePhoneAuto("installUpdatePrepare", error.GetType().Name + "：" + error.Message); }
-        if (phoneBanner == "preparing") { phoneBanner = ok ? "ready" : "onConnect"; Render(); }
+        if (phoneBanner.Length == 0) { phoneBanner = ok ? "ready" : "onConnect"; Render(); }   // 准备期间不出横幅（「正在更新 iPhone」只给玩家点了之后的装机）
     }
 
     /// <summary>横幅这一刻的文案键（Percent 非空 = 进行中、不给 ×）：在更新 iPhone → 正在更新；否则按准备结果；手机已是本版 → null</summary>
@@ -82,7 +76,14 @@ public sealed partial class EnvironmentWindow
         var text = new TextBlock { Text = T(line.Key), FontSize = 13, FontWeight = FontWeight.SemiBold,
             Foreground = Ink, TextWrapping = TextWrapping.Wrap, VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center };
         Avalonia.Automation.AutomationProperties.SetAutomationId(text, "notice.phoneUpdate");
-        row.Children.Add(text);
+        if (line.Percent is null && phoneBanner != "preparing" && !phoneUpdating)
+        {   // 手动更新（11-16）：横幅文字点了 = 顶栏「更新 iPhone」（RequestPhoneUpdateAsync），玩家点了才装
+            var open = new Button { Content = text, Padding = new Thickness(0), Background = Brushes.Transparent, BorderThickness = new Thickness(0) };
+            Avalonia.Automation.AutomationProperties.SetAutomationId(open, "notice.phoneUpdate.open");
+            open.Click += (_, _) => _ = RequestPhoneUpdateAsync();
+            row.Children.Add(open);
+        }
+        else row.Children.Add(text);
         if (line.Percent is null)
         {
             var close = new Button { Content = "✕", Padding = new Thickness(8, 4), Background = Brushes.Transparent, Foreground = Ink };

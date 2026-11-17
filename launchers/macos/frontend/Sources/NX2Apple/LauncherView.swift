@@ -184,8 +184,12 @@ struct LauncherView: View {
             HStack(spacing: 10) {
                 if line.percent != nil || model.phoneBanner == .preparing { ProgressView().controlSize(.small) }
                 else { Image(systemName: "iphone.and.arrow.forward").foregroundStyle(LauncherPalette.cream) }
-                Text(txt(line.key).replacingOccurrences(of: "{0}", with: "\(line.percent ?? 0)")).font(.manrope(13, .semibold)).monospacedDigit()
+                let label = Text(txt(line.key).replacingOccurrences(of: "{0}", with: "\(line.percent ?? 0)")).font(.manrope(13, .semibold)).monospacedDigit()
                     .fixedSize(horizontal: false, vertical: true)
+                if line.percent == nil && model.phoneBanner != .preparing {   // 手动更新（11-16）：横幅文字点了 = 顶栏「更新 iPhone」，玩家点了才装
+                    Button { model.requestPhoneUpdate(language: model.provider.client.environment.uiLanguage ?? "zh-Hans") } label: { label }
+                        .controllerButtonStyle(.plain).accessibilityIdentifier("notice.phoneUpdate.open")
+                } else { label }
                 Spacer(minLength: 8)
                 if line.percent == nil {
                     Button { model.phoneBanner = nil } label: { Image(systemName: "xmark") }.controllerButtonStyle(.plain).foregroundStyle(.secondary)
