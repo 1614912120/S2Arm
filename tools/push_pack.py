@@ -192,7 +192,7 @@ class Devpush:
         ok, why = self.rm(rel)
         if not ok:
             return 1, (f"手机上的 {rel} 写不进也删不掉（{first.splitlines()[-1] if first else DENIED}；删除：{why.splitlines()[-1] if why else '失败'}）。"
-                       "在手机上打开一次 S2Arm（它会把写不进的目录搬到能写的位置），再点「装到 iPhone」")
+                       "重试没用：先在游戏菜单「存档管理」里导出存档（存到 S2Arm 文件夹以外，比如 iCloud 云盘），再删除并重新安装 S2Arm，装好后导回存档")
         return self.call("put", src, rel)
 
     def ls(self, rel):
