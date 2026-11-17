@@ -204,6 +204,15 @@ public static class PackCases
             catch (ArgumentException e) { why = e.Message; }
             check(body is not null && (string?)body["operation"] == op && !body.ContainsKey("gameId"), $"request: {op} needs no game and is sent ({why})");
         }
+        // 手动更新（11-16 维护者：「改成更稳妥的手动更新吧，启动器和移动端都是」）：2 分钟循环（App/PhoneAutoUpdate.cs PhoneAutoUpdateTickAsync）
+        //   手机在线、有更新、跑多少轮都只发现、重读游戏库亮「更新 iPhone」，不发起装机——循环方法体里不许出现装机调用（原实现在这里 UpdatePhoneAsync）
+        {
+            var src = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "AppSource", "PhoneAutoUpdate.cs"));
+            var tickAt = src.IndexOf("Task<bool> PhoneAutoUpdateTickAsync()", StringComparison.Ordinal);
+            var body = tickAt < 0 ? "" : src[tickAt..];
+            check(tickAt >= 0 && !body.Contains("UpdatePhoneAsync(") && !body.Contains("\"installUpdate\"") && body.Contains("RefreshLibraryAsync()"),
+                "phone auto tick: finds updates and refreshes the library, never starts an iPhone install (manual update)");
+        }
         // 客户端不判要不要游戏号（自己人之间不设允许清单，#1149）：以后新增一种不带游戏号的作业不用改客户端；
         //   要游戏的作业空着游戏号也照样发出去，由作业层报「请求里没有游戏号」（pack/jobs/core.py Context.game）
         foreach (var op in new[] { "someFutureMachineJob", "ipa" })
