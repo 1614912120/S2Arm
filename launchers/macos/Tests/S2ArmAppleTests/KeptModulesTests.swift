@@ -72,8 +72,8 @@ import S2ArmAppleAdapter
         XCTAssertTrue(S2ArmLauncherModel.autoUpdatePhoneOn(UserDefaults(suiteName: "s2arm-fresh-" + UUID().uuidString)!), "没碰过开关：缺省开")
     }
 
-    // 新版启动器首次读到游戏库（11-16「启动器升级并更新 IPA」）：有要更新的手机 → 后台 installUpdatePrepare 一次，横幅 准备好 / 准备不了 → 连上自动更新；
-    //   开关关 → 不准备、不显示、更新弹窗按钮照旧；装过手机 → 更新弹窗按钮写「更新启动器和 iPhone App」
+    // 新版启动器首次读到游戏库：有要更新的手机 → 后台 installUpdatePrepare 一次（不碰手机），准备完出横幅 准备好 / 没准备成（都是「点这里更新」，手动更新 11-16）；
+    //   开关关 → 不准备、不显示
     func testPrepareBannerAfterLauncherUpdate() async throws {
         _ = NSApplication.shared
         let key = S2ArmLauncherModel.autoUpdatePhoneOffKey, before = UserDefaults.standard.object(forKey: key)
@@ -90,19 +90,13 @@ import S2ArmAppleAdapter
             let model = S2ArmLauncherModel(client: JobClient(environment: JobEnvironment(
                 privateRoot: root, resources: root, library: root.appendingPathComponent("lib").path, libraryId: "fixture"), runner: runner))
             model.refresh()
-            for _ in 0..<300 where !model.libraryLoaded || model.phoneBanner == .preparing { try? await Task.sleep(for: .milliseconds(10)) }
+            for _ in 0..<300 where !model.libraryLoaded || (on && model.phoneBanner == nil) { try? await Task.sleep(for: .milliseconds(10)) }
             return (model, runner)
         }
         let (ok, okRunner) = try await run(fails: false, on: true)
         XCTAssertEqual(okRunner.prepared, 1, "有要更新的手机：准备一次")
         XCTAssertEqual(ok.phoneBanner, .ready)
         XCTAssertEqual(ok.phoneBannerLine?.key, "phone.update.banner.ready")
-        XCTAssertTrue(ok.updateAlsoPhone, "装过手机、开关开：更新弹窗写「更新启动器和 iPhone App」")
-        let after = UserDefaults.standard.object(forKey: "S2AIosAfterPack")
-        ok.iosAfterPack = "export"
-        XCTAssertFalse(ok.updateAlsoPhone, "选了导出自签：更新弹窗按钮照旧")
-        ok.iosAfterPack = "install"
-        UserDefaults.standard.set(after, forKey: "S2AIosAfterPack")
         ok.phoneUpdates = []
         XCTAssertNil(ok.phoneBannerLine, "手机已是本版：横幅收起")
         let (bad, _) = try await run(fails: true, on: true)
@@ -110,7 +104,6 @@ import S2ArmAppleAdapter
         let (off, offRunner) = try await run(fails: false, on: false)
         XCTAssertEqual(offRunner.prepared, 0, "开关关：不准备")
         XCTAssertNil(off.phoneBannerLine)
-        XCTAssertFalse(off.updateAlsoPhone, "开关关：更新弹窗按钮照旧")
     }
 }
 

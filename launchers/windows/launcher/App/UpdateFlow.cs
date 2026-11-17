@@ -152,7 +152,7 @@ public sealed partial class EnvironmentWindow
         {
             buttons.Children.Add(Action("update.popup.later", CloseUpdatePopup));
             // 装过 iPhone、自动更新开着：写「更新启动器和 iPhone App」，新版启动后自动把 iPhone App 也更新（PhoneAutoUpdate.cs）；自动化 id 照旧
-            var now = Action(UpdateAlsoPhone ? "update.launcher_and_phone" : "update.popup.now", RestartToUpdate, updateReady is not null || availableUpdate is not null);   // 没下也能点：点了才下、下完接着装
+            var now = Action("update.popup.now", RestartToUpdate, updateReady is not null || availableUpdate is not null);   // 没下也能点：点了才下、下完接着装；手动更新（11-16）：启动器升级不再顺带装手机，按钮不再写「和 iPhone App」
             Avalonia.Automation.AutomationProperties.SetAutomationId(now, "update.popup.now");
             buttons.Children.Add(now);
         }
