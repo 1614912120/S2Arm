@@ -1356,7 +1356,14 @@ void rp_dispatch(nvn_gpu_cmd c, const p_dispatch *dp, const void *rec) {
             tex_t snap; view_t view; int has_view;
             if (!rp_tex_snap_by_id((int)(h & 0xFFFFF), &snap, &view, &has_view)) { skip("compute_image_unresolved", rec); goto done; }
             uint32_t format = has_view && view.set_format ? (uint32_t)view.format : (uint32_t)snap.d.format;
-            if (!(snap.d.flags & NVN_TEXTURE_FLAGS_IMAGE) || !(nvn_gpu_format_caps(format) & NVN_GPU_FMT_STORAGE)) { skip("compute_image_storage_unsupported", rec); goto done; }
+            if (!(snap.d.flags & NVN_TEXTURE_FLAGS_IMAGE) || !(nvn_gpu_format_caps(format) & NVN_GPU_FMT_STORAGE)) {
+                // 两种成因分不开就没法修：前 4 次把格式与两个条件打出来（贴图没带图像标志 / 后端这个格式不能当存储图像）
+                static int said;
+                if (said < 4) { said++; char b[200]; snprintf(b, sizeof b, "计算图像不可写：贴图 %d 格式 %#x（视图改过格式 %d）、带图像标志 %d、后端可存储 %d",
+                    (int)(h & 0xFFFFF), format, has_view && view.set_format, !!(snap.d.flags & NVN_TEXTURE_FLAGS_IMAGE), !!(nvn_gpu_format_caps(format) & NVN_GPU_FMT_STORAGE));
+                    nvn_plat_log(NVN_PLAT_LOG_RED, "draw", b); }
+                skip("compute_image_storage_unsupported", rec); goto done;
+            }
             uint32_t levels = has_view && view.set_levels ? (view.nlevels ? view.nlevels : 1) : (snap.d.levels ? snap.d.levels : 1);
             int swizzled = 0;
             for (int ch = 0; ch < 4; ch++) {
