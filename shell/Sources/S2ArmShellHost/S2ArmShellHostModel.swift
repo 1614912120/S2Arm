@@ -530,16 +530,29 @@ public final class S2ArmShellHostModel {
 
     /// 待补文件（#8be819）：有的游戏把代码模块（NRO）藏在自有加密归档里，出包时取不到；第一次跑到那里宿主把游戏解开的整份存到
     ///   <文档根>/games/<号>/wire/<号大写>/nro/<SHA-256>.nro（runtime/src/loader.c s2a_nro_keep），这一局随后闪退。
-    ///   手机连上电脑、启动器开着时，装机作业把它拉回、补进包，装好后删掉手机上这几份（pack/jobs/install.py pull_kept_nros）。
-    ///   所以「目录里还有这几份」= 还没补好：库顶提示一条：连电脑开启动器、点「更新 iPhone 上的 S2Arm」补上（11-16 起启动器与手机都手动更新，不会自动补）；不拦开局，关了这次打开 App 内不再出，补好前下次打开还会出
+    ///   玩家连电脑点「更新 iPhone 上的 S2Arm」时，装机作业把它拉回、补进包（pack/jobs/install.py pull_kept_nros），装好后删掉手机上这几份（11-16 起启动器与手机都手动更新，不会自动补）。
+    ///   补好没按包里的表判（nroPending）：存下的哈希不在这款 nro_modules.tsv 里 = 还缺：库顶提示一条（不拦开局；关了这次打开 App 内不再出，补好前下次打开还会出）
     public private(set) var nroNotice: IMLNotice?
     @ObservationIgnored private var nroPendingIDs: [String] = []
     @ObservationIgnored private var nroNoticeClosed = false
-    nonisolated static func nroPending(gamesRoot: URL, ids: [String]) -> [String] {
+    /// 判据（11-16 开发乙定）：手机上存下的 <sha>.nro，哈希不在这款模块目录 <App 包>/Games/<号>/nro_modules.tsv 第二列里 = 还缺。
+    ///   直接看包里有没有（同 runtime/src/loader.c nro_table 读的那张表），不靠「装好后删手机副本」：删失败（断开 / 锁屏）也不误报；
+    ///   表里没有这张表 = 这款包里一个 NRO 都没有，存下的都算缺。写到一半的 .<pid>.tmp 不算
+    nonisolated static func nroPending(gamesRoot: URL, ids: [String], modulesRoot: URL = Bundle.main.bundleURL.appendingPathComponent("Games", isDirectory: true)) -> [String] {
         let fm = FileManager.default
         return ids.filter { id in
             let dir = gamesRoot.appendingPathComponent(id, isDirectory: true).appendingPathComponent("wire/\(id.uppercased())/nro", isDirectory: true)
-            return ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).contains { $0.range(of: #"^[0-9a-f]{64}\.nro$"#, options: .regularExpression) != nil }
+            let kept = ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).compactMap { name -> String? in
+                name.range(of: #"^[0-9a-f]{64}\.nro$"#, options: .regularExpression) == nil ? nil : String(name.prefix(64))
+            }
+            guard !kept.isEmpty else { return false }
+            let table = (try? String(contentsOf: modulesRoot.appendingPathComponent(id, isDirectory: true).appendingPathComponent("nro_modules.tsv"), encoding: .utf8)) ?? ""
+            let packed = Set(table.split(whereSeparator: \.isNewline).compactMap { line -> String? in
+                let f = line.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                guard !line.hasPrefix("#"), f.count >= 2, f[1].count == 64 else { return nil }
+                return f[1].lowercased()
+            })
+            return kept.contains { !packed.contains($0) }
         }
     }
     nonisolated static func nroNotice(names: [String]) -> IMLNotice? {

@@ -26,7 +26,25 @@ struct NROPendingTests {
         try keep(r, "0100000000010000", "\(sha).nro.123.tmp")      // 宿主写到一半的临时文件不算
         try FileManager.default.createDirectory(at: r.appendingPathComponent("0100000000020000/wire/0100000000020000/nro"), withIntermediateDirectories: true)   // 补好后删空的目录
         let ids = ["0100c9c00e25c000", "0100000000010000", "0100000000020000", "0100000000030000"]
-        #expect(S2ArmShellHostModel.nroPending(gamesRoot: r, ids: ids) == ["0100c9c00e25c000"])
+        #expect(S2ArmShellHostModel.nroPending(gamesRoot: r, ids: ids, modulesRoot: r.appendingPathComponent("Games")) == ["0100c9c00e25c000"])
+    }
+
+    // 开发乙口径：包里那张 nro_modules.tsv（名字 SHA-256 大小 bss，空格分隔、# 开头注释）第二列有这份哈希 = 已补好；
+    //   不靠手机副本被删，删失败也不误报
+    @Test func aKeptNROAlreadyInThePackageIsNotPending() throws {
+        let r = try root(); defer { try? FileManager.default.removeItem(at: r) }
+        let modules = r.appendingPathComponent("Games", isDirectory: true)
+        let other = String(repeating: "cd", count: 32)
+        try keep(r, "0100000000010000", "\(sha).nro")   // 已补进包、手机副本没删掉
+        try keep(r, "0100000000020000", "\(sha).nro")   // 包里只有别的 NRO
+        try keep(r, "0100000000030000", "\(sha).nro")   // 包里没有这张表
+        for (id, h) in [("0100000000010000", sha.uppercased()), ("0100000000020000", other)] {
+            let d = modules.appendingPathComponent(id, isDirectory: true)
+            try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+            try "# name sha size bss\nEOSSDK \(h) 1a2b 0\n".write(to: d.appendingPathComponent("nro_modules.tsv"), atomically: true, encoding: .utf8)
+        }
+        let ids = ["0100000000010000", "0100000000020000", "0100000000030000"]
+        #expect(S2ArmShellHostModel.nroPending(gamesRoot: r, ids: ids, modulesRoot: modules) == ["0100000000020000", "0100000000030000"])
     }
 
     @Test func noticeNamesTheGamesAndSaysHowToFixIt() throws {
