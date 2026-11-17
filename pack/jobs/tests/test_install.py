@@ -1610,8 +1610,12 @@ class AssembleTests(unittest.TestCase):
                  (fake([url + "S2Arm"], installed=False), False), (fake([], apps_rc=1), None), (fake([], ps_rc=1), None),
                  (fake(["file:///private/var/containers/Bundle/Application/X/S2Arm.app2/S2Arm"]), False),
                  # 只有主屏小组件扩展进程在（App 已退出）：不算在玩（11-16 实测原先判 True，自动补件从不发起）
+                 # 11-16 真机：App 已退出、只剩主屏小组件扩展进程 → 不算在玩；只有主程序 / 两个都在 → 在玩；安装目录下别的可执行文件也不算
                  (fake([url + "PlugIns/S2ArmWidget.appex/S2ArmWidget"]), False),
-                 (fake([url + "PlugIns/S2ArmWidget.appex/S2ArmWidget", url + "S2Arm"]), True)]
+                 (fake([url + "S2Arm"]), True),
+                 (fake([url + "PlugIns/S2ArmWidget.appex/S2ArmWidget", url + "S2Arm"]), True),
+                 (fake([url + "Frameworks/Helper.framework/Helper"]), False),
+                 (fake([url + "S2ArmHelper"]), False)]
         for f, want in cases:
             with um.patch.object(diag, "devicectl", f):
                 self.assertEqual(install.app_running(self.c, "dev", "b"), want)
