@@ -197,7 +197,7 @@ int nvn_be_shutdown_session(void) {
     os_unfair_lock_unlock(&g_shader_lock);
     NSMutableSet<NSString *> *cached_prefetch = [NSMutableSet set];
     int depth_zero = atomic_load(&g_depth_zero);
-    pthread_mutex_lock(&g_rmu);
+    os_unfair_lock_lock(&g_rmu);
     for (NvShader *sh in shaders.allValues) {
         sh->wsh = 0; sh->s_rec = 0;
         if (sh->size_abi) { sh->ab_buf = nil; sh->ab_gpu = sh->ab_size_sub = 0; }
@@ -210,7 +210,7 @@ int nvn_be_shutdown_session(void) {
         if (st >= 0 && st != 2 && shaders[shader_identity(key, st, 0, depth_zero)] == sh)
             [cached_prefetch addObject:hash];
     }
-    pthread_mutex_unlock(&g_rmu);
+    os_unfair_lock_unlock(&g_rmu);
     os_unfair_lock_lock(&g_shpre_mu);
     // Previously skipped cold keys may now be available. Already cached
     // libraries need no second background load just because a run restarted.

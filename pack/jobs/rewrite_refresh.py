@@ -34,7 +34,7 @@ import layout
 from core import Failure
 
 MODULE = re.compile(r"(main|sdk|subsdk[0-9])")
-SGRADE_TABLES = ("cpatch.tsv",)   # 随包表（runtime/src/cpatch.c 读）；另有 cheat-src.*（金手指原文随包）
+SGRADE_TABLES = ("cpatch.tsv", "cpatch_rows.tsv", "cpatch_excluded.tsv")   # 随包表（runtime/src/cpatch.c 读 cpatch.tsv）+ 改写用的补丁行表：一起换，kit 里的配方才与产物一致（按配方现建 kit 要用它，11-16）；另有 cheat-src.*（金手指原文随包）
 OUTPUTS = ("patched.bin", "fixups.tsv", "gates.tsv", "sites.tsv", "gaps.tsv", "widen.tsv", "code_patch.tsv")
 AFFECTED = re.compile(r"'x18_spdyn':\s*(\d+)")
 
@@ -196,10 +196,15 @@ def _original_nup_exefs(c, game, packages, work):
 
 def rewrite_env(c, kit, exefs, target):   # exefs None：不带随包代码补丁（补丁按主程序构建号认，只改 exefs 模块）
     env = dict(c.env(), S2A_TARGET=target, S2A_REWRITE_SPIN=os.environ.get("S2A_REWRITE_SPIN", "1"))
-    for k in ("S2A_FPS_TSV", "S2A_CPATCH_TSV", "S2A_CODE_PATCH", "S2A_CODE_BUILD"):
+    for k in ("S2A_FPS_TSV", "S2A_CPATCH_TSV", "S2A_CODE_PATCH", "S2A_CODE_BUILD", "S2A_FIX_TSV"):
         env.pop(k, None)
     if (kit / "fps.tsv").is_file():
         env["S2A_FPS_TSV"] = str(kit / "fps.tsv")
+    # 游戏缺陷修补表：同 stage_rewrite.sh（引擎里的 runtime/fix/<main 构建号前 16 位>.tsv）
+    if exefs is not None and (exefs / "main").is_file():
+        fix = Path(c.engine) / "runtime/fix" / ((exefs / "main").read_bytes()[0x40:0x48].hex() + ".tsv")
+        if fix.is_file():
+            env["S2A_FIX_TSV"] = str(fix)
     # 随包代码补丁：同 stage_rewrite.sh（S2A_PATCH_DIR/<程序号>/patch.tsv，构建号 = main 头 0x40 起 16 字节）
     pdir = env.get("S2A_PATCH_DIR")
     if pdir and exefs is not None:
@@ -501,7 +506,11 @@ def refresh_ios(c, games):
     """组容器前：这几款的 iPhone 容器件按本引擎改写器核一遍（见文件头），再补缺的可读瓦片版着色器（pack/jobs/sgrade_bf.py）。→ 换了改写产物 / 资源包的款"""
     if not games:
         return []
-    return sorted(set(_refresh_code_ios(c, games)) | set(_refresh_bf_ios(c, games)))
+    changed = sorted(set(_refresh_code_ios(c, games)) | set(_refresh_bf_ios(c, games)))
+    import programs
+    for g in changed:   # kit 改过（补进的表、运行时收回的模块）：常驻配方跟着重存（pack/jobs/programs.py），之后按配方现建的 kit 与这份一致
+        programs.save_recipe(c, g)
+    return changed
 
 
 def _refresh_bf_ios(c, games):

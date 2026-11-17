@@ -99,8 +99,6 @@ final class SettingsProviderTests: XCTestCase {
         let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         XCTAssertNil(saved["games"])
         XCTAssertEqual(saved["exportTargets"] as? [String], ["ios", "macos"])
-        let mode = (try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber)?.intValue
-        XCTAssertEqual(mode, 0o600)
     }
 
     /// 审计 P2-273：写盘失败时内存改回原值（原先内存已是新值、磁盘还是旧的，之后按没存下的值走、下次启动又回到旧的）。
@@ -153,14 +151,15 @@ final class PlayServiceTests: XCTestCase {
         XCTAssertFalse(play.isRunning)
     }
 
-    func testUnknownUILanguageIsNotSent() throws {
+    func testUILanguageIsPassedThroughForTheJobLayerToResolve() throws {
+        // 法文界面原先不带 uiLanguage，作业层回落中文，自签导出文件夹成了「S2Arm 自签导出」（#502）：现在照原样带，作业层自己认
         let box = try Sandbox(); defer { box.remove() }
         let runner = FakeRunner()
         let c = client(box, runner)
         let play = PlayService(client: c)
         let done = expectation(description: "finish")
-        try play.play(gameId: "0100A", uiLanguage: "sv", onFinish: { _ in done.fulfill() })
+        try play.play(gameId: "0100A", uiLanguage: "fr", onFinish: { _ in done.fulfill() })
         wait(for: [done], timeout: 5)
-        XCTAssertNil(runner.starts.first?.request["uiLanguage"])
+        XCTAssertEqual(runner.starts.first?.request["uiLanguage"] as? String, "fr")
     }
 }

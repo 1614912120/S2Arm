@@ -586,15 +586,20 @@ static void t_pools(void) {
 // ---------- 池查找的线程内备忘（rp_entry.c pool_find_memo，#974 问 3）----------
 // 契约：答案与「候选 = 起点不超过地址的最后一个池、装得下才算」逐位一致（rp_pool_find 与 nvn_be_addr 两个入口都对）；
 // 重复的查找真的命中备忘；池表一变（加池 / 删池 / 同起点换大小）旧记录整张作废；开关关着时不命中也不计数。
-// 参考答案由用例自己登记的池直接线性扫出，不经被测实现。池彼此不重叠（真实的 NVN 内存池在客户机地址空间里不会重叠）。
+// 参考答案由用例自己登记的池直接线性扫出，不经被测实现。池区间允许嵌套：一个池的存储可能落在另一个池的区间里，
+// 命中的是「起点不超过地址、且真正覆盖 [addr, addr+len) 的池里起点最大的那个」（更具体的池优先）。
 int rp_pool_find(uint64_t addr, uint64_t len, const uint8_t **mem, uint64_t *size);   // rp_entry.c（rp_draw.c 也是就地声明）
 typedef struct { uint64_t a, n; int live; } pm_ref_t;
 enum { PM_SLOTS = 24 };
 static pm_ref_t g_pmr[PM_SLOTS]; static uint8_t g_pm_arena[0x10000];
 static int pm_ref_find(uint64_t addr, uint64_t len, uint64_t *a, uint64_t *n) {
     int cand = -1;
-    for (int i = 0; i < PM_SLOTS; i++) if (g_pmr[i].live && g_pmr[i].a <= addr && (cand < 0 || g_pmr[i].a > g_pmr[cand].a)) cand = i;
-    if (cand < 0 || addr - g_pmr[cand].a > g_pmr[cand].n || len > g_pmr[cand].n - (addr - g_pmr[cand].a)) return 0;
+    for (int i = 0; i < PM_SLOTS; i++) {
+        if (!g_pmr[i].live || g_pmr[i].a > addr) continue;
+        if (addr - g_pmr[i].a > g_pmr[i].n || len > g_pmr[i].n - (addr - g_pmr[i].a)) continue;
+        if (cand < 0 || g_pmr[i].a > g_pmr[cand].a) cand = i;   // 嵌套时更具体的池优先
+    }
+    if (cand < 0) return 0;
     *a = g_pmr[cand].a; *n = g_pmr[cand].n; return 1;
 }
 static void pm_add(int slot, uint64_t off, uint64_t size) { nvn_be_pool_add(g_pm_arena + off, size); g_pmr[slot] = (pm_ref_t){(uint64_t)(uintptr_t)(g_pm_arena + off), size, 1}; }
@@ -681,6 +686,65 @@ static void t_pool_memo(void) {
     }
     for (int i = 0; i < PM_SLOTS; i++) if (g_pmr[i].live) pm_del(i);
     pm_flag(1);
+    CHECK(rp_pool_count() == n0);
+}
+
+// ---------- 嵌套池：一个池的存储落在另一个池的区间里（#1345） ----------
+// 契约：命中的是「起点不超过地址、且真正覆盖 [addr, addr+len) 的池里起点最大的那个」。
+// 旧实现只取「起点不超过地址的最后一个池」，候选装不下就返回 0——大池会被区间内的小池遮蔽。
+static uint8_t g_pn_arena[1 << 20] __attribute__((aligned(16)));
+static void t_pool_nested(void) {
+    const uint64_t B = (uint64_t)(uintptr_t)g_pn_arena;
+    const uint64_t BIG = 1u << 20, SMALL = 0x2000, SMALL_OFF = 0x10000;
+    const int n0 = rp_pool_count();
+    const uint8_t *m = NULL; uint64_t n = 0; void *buf = NULL; uint64_t off = 0;
+    // ① 先加 1 MiB 大池，再在其 +0x10000 处加 8 KB 小池
+    nvn_be_pool_add(g_pn_arena, BIG);
+    nvn_be_pool_add(g_pn_arena + SMALL_OFF, SMALL);
+    CHECK(rp_pool_count() == n0 + 2);
+    // ② 小池内地址 → 小池
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x10, 0x20, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B + SMALL_OFF && n == SMALL);
+    buf = NULL; off = 0;
+    CHECK(nvn_be_addr(B + SMALL_OFF + 0x10, 0x20, &buf, &off) == 1 && (uint64_t)(uintptr_t)buf == B + SMALL_OFF && off == 0x10);
+    // ③ 大池内、小池之外（小池之后的地址，旧实现会被小池遮蔽返回 0）→ 大池
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x4000, 0x20, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B && n == BIG);
+    // ④ 起点在小池内、长度跨过小池尾但没出大池 → 大池
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x1ff0, 0x100, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B && n == BIG);
+    // ⑤ 先查大池内地址（让快路/备忘发布大池），再查小池内地址 → 仍必须是小池
+    //    备忘先关掉：备忘里若已经有小池记录，会先于快路答出，就测不到快路的上界（lim）了
+    pm_flag(0);
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x4000, 0x20, NULL, NULL) == 1);
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x20, 0x40, NULL, NULL) == 1);
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x20, 0x40, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B + SMALL_OFF && n == SMALL);
+    pm_flag(1);
+    // ⑥ 同一小池内地址连查 3 次（覆盖备忘与快路）：每次都要与锁内结论一致
+    for (int i = 0; i < 3; i++) {
+        m = NULL; n = 0;
+        CHECK(rp_pool_find(B + SMALL_OFF + 0x30, 0x10, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B + SMALL_OFF && n == SMALL);
+    }
+    // ⑦ 删掉小池：小池内地址回落到大池
+    nvn_be_pool_del(g_pn_arena + SMALL_OFF);
+    CHECK(rp_pool_count() == n0 + 1);
+    m = NULL; n = 0;
+    CHECK(rp_pool_find(B + SMALL_OFF + 0x10, 0x20, &m, &n) == 1 && (uint64_t)(uintptr_t)m == B && n == BIG);
+    // ⑧ 两个入口（rp_pool_find / nvn_be_addr）同一地址答案一致
+    {
+        static const uint64_t qo[5] = { 0x10, SMALL_OFF + 0x10, SMALL_OFF + 0x4000, BIG - 0x10, BIG };
+        static const uint64_t ql[5] = { 0x20, 0x20, 0x40, 0x20, 0x10 };
+        for (int i = 0; i < 5; i++) {
+            const uint8_t *mm = NULL; uint64_t nn = 0;
+            void *bb = NULL; uint64_t oo = 0;
+            const int h1 = rp_pool_find(B + qo[i], ql[i], &mm, &nn);
+            const int h2 = nvn_be_addr(B + qo[i], ql[i], &bb, &oo);
+            CHECK(h1 == h2);
+            if (h1 && h2) CHECK(mm == (const uint8_t *)bb && oo == B + qo[i] - (uint64_t)(uintptr_t)mm && nn == BIG);
+        }
+    }
+    nvn_be_pool_del(g_pn_arena);
     CHECK(rp_pool_count() == n0);
 }
 
@@ -1511,6 +1575,30 @@ static void t_buf_mirror(void) {   // 池镜像：首次使用建一份、按页
     nvn_be_pool_del(g_pmem);
     CHECK(g_buf_releases - r0 == 1 && rp_buf_mirrors() == 0);       // 池销毁：镜像放掉
     nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK);
+}
+
+static void t_buf_multi_tail(void) {
+    nvn_be_sub_begin(); nvn_be_shutdown_session();
+    memset(g_pg_gen, 0, sizeof g_pg_gen); g_pg_tracked = 1; g_dirty_now = 100; g_nbw = 0;
+    nvn_be_pool_add(g_pmem, sizeof g_pmem);
+    uint64_t base = (uint64_t)(uintptr_t)g_pmem;
+    const int counts[] = {0, 1, 16, 17, 64, 65};
+    for (unsigned c = 0; c < sizeof counts / sizeof counts[0]; c++) {
+        uint64_t addr[66], len[66], off[66]; nvn_gpu_buf buf[66]; unsigned char ok[66];
+        memset(ok, 0xa5, sizeof ok); memset(buf, 0, sizeof buf); memset(off, 0xff, sizeof off);
+        for (int i = 0; i < 66; i++) { addr[i] = base + (uint64_t)i * 16; len[i] = 8; }
+        // Valid, zero-length and pool-tail failures on both sides of a chunk boundary.
+        len[15] = len[31] = 0;
+        addr[16] = addr[48] = base + sizeof g_pmem - 4;
+        CHECK(rp_buf_resolve_multi(counts[c], addr, len, buf, off, ok) == 1);
+        for (int i = 0; i < counts[c]; i++) {
+            int valid = i != 15 && i != 16 && i != 31 && i != 48;
+            CHECK(ok[i] == valid);
+            if (valid) CHECK(buf[i] != NULL && off[i] == (uint64_t)i * 16);
+        }
+        CHECK(ok[counts[c]] == 0xa5);
+    }
+    nvn_be_pool_del(g_pmem); nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK);
 }
 
 static void t_buf_ops(void) {   // 缓冲类命令只改游戏内存；GPU 顺序由使用点同步保证：先用的看到旧内容，后用的看到新内容
@@ -2921,6 +3009,52 @@ static void t_compute_tex_from_image(void) {
     nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK); rp_S.img[5][0] = 0; rp_S.tex[5][32] = 0; pass_fresh();
 }
 
+// 着色器把驱动句柄表 c2 当常量缓冲读（NVN_RB_DRV2）：按完整驱动表 0xA00 填（同 iOS nvn_mtl.m DRV2）——
+//   组合槽 r → 0x20 + 8r；r ≥ 32 与图像表同址，只在绑了该组合槽、同址图像槽没绑时写；图像槽 r → 0x120 + 8r；
+//   分离贴图槽 r → 0x168 + 8r；分离采样器槽 r → 0x568 + 8r；句柄只占每项低 4 字节，其余为 0。图形（片元）与计算各验一次。
+static void drv2_fill(int st) {
+    memset(rp_S.tex[st], 0, sizeof rp_S.tex[st]); memset(rp_S.img[st], 0, sizeof rp_S.img[st]); memset(rp_S.samp[st], 0, sizeof rp_S.samp[st]);
+    rp_S.tex[st][3] = 0x00300007; rp_S.tex[st][33] = 0x55; rp_S.tex[st][34] = 0x66; rp_S.img[st][2] = 0x77; rp_S.img[st][0] = 0x88;
+    rp_S.tex[st][128 + 5] = 0x99; rp_S.samp[st][4] = 6u << 20;
+}
+static int drv2_ok(const uint8_t *d, uint64_t len, char *why, size_t n) {
+    static const struct { uint32_t off, want; } w[] = {
+        {0x20 + 8 * 3, 0x00300007}, {0x20 + 8 * 33, 0x55}, {0x20 + 8 * 34, 0x77},   // 槽 34 与图像槽 2 同址：图像绑着 → 图像的句柄
+        {0x120, 0x88}, {0x168 + 8 * 5, 0x99}, {0x568 + 8 * 4, 6u << 20}, {0x24 + 8 * 3, 0}, {0x568 + 8 * 127, 0}, {0x9FC, 0} };
+    if (len != 0xA00) { snprintf(why, n, "len %llu", (unsigned long long)len); return 0; }
+    for (unsigned i = 0; i < sizeof w / sizeof w[0]; i++) { uint32_t v; memcpy(&v, d + w[i].off, 4); if (v != w[i].want) { snprintf(why, n, "0x%x = 0x%x, want 0x%x", w[i].off, v, w[i].want); return 0; } }
+    return 1;
+}
+static void t_drv2_table(void) {
+    char why[96] = "";
+    // 计算
+    pass_fresh(); res_fresh(); g_arena_used = 0; g_cresolve_rc = 0;
+    memset(&g_cprog, 0, sizeof g_cprog); g_cprog.is_compute = 1; g_cprog.sh[0] = &g_fsh[0]; g_cprog.nent[0] = 1;
+    g_cprog.ent[0][0].cls = NVN_GPU_RES_UBO; g_cprog.ent[0][0].src_kind = NVN_RB_DRV2; g_cprog.ent[0][0].src_reg2 = UINT16_MAX;
+    drv2_fill(5);
+    p_dispatch dp = {.x = 1, .y = 1, .z = 1}; int n = g_ndisp;
+    nvn_be_sub_begin(); rp_dispatch(&g_fake_cmd, &dp, NULL);
+    int cok = g_ndisp == n + 1 && g_ncb == 1 && g_cb[0].u.b.buf == &g_arena_buf && drv2_ok(g_arena + g_cb[0].u.b.off, g_cb[0].u.b.len, why, sizeof why);
+    if (!cok) printf("  compute DRV2: %s\n", why);
+    CHECK(cok);
+    nvn_be_sub_commit(); fake_complete(NVN_GPU_DONE_OK);
+    // 图形（片元阶段）
+    pass_fresh(); g_arena_used = 0; g_resolve_rc = 0;
+    stream s = {0}; q_env(&s);
+    g_fprog.nent[1] = 1; g_fprog.ent[1][0].cls = NVN_GPU_RES_UBO; g_fprog.ent[1][0].src_kind = NVN_RB_DRV2;
+    q_draw(&s); end(&s);
+    drv2_fill(1); memset(g_nfb, 0, sizeof g_nfb);
+    submit1(&s);
+    why[0] = 0;
+    int gok = g_nfb[1] == 1 && g_fb[1][0].u.b.buf == &g_arena_buf && drv2_ok(g_arena + g_fb[1][0].u.b.off, g_fb[1][0].u.b.len, why, sizeof why);
+    if (!gok) printf("  graphics DRV2: nfb=%u %s\n", g_nfb[1], why);
+    CHECK(gok);
+    fake_complete(NVN_GPU_DONE_OK);
+    memset(rp_S.tex[1], 0, sizeof rp_S.tex[1]); memset(rp_S.img[1], 0, sizeof rp_S.img[1]); memset(rp_S.samp[1], 0, sizeof rp_S.samp[1]);
+    memset(rp_S.tex[5], 0, sizeof rp_S.tex[5]); memset(rp_S.img[5], 0, sizeof rp_S.img[5]); memset(rp_S.samp[5], 0, sizeof rp_S.samp[5]);
+    pass_fresh();
+}
+
 // 贴图 → 贴图的拷贝：同尺寸同格式的逐层直接拷，各按自己视图的级与起始层；缩放 / 换格式 / 镜像 / 多重采样解析分开记账；目标从此以 GPU 为准。
 static p_copy_t2t *put_t2t(stream *s, const tex_t *src, const tex_t *dst) {
     p_copy_t2t *o = put(s, OP_COPY_T2T, sizeof *o + 2 * sizeof(tex_t)); tex_t *sn = (tex_t *)(o + 1); sn[0] = *src; sn[1] = *dst; o->src = &sn[0]; o->dst = &sn[1]; return o;
@@ -3698,7 +3832,39 @@ static void t_invalidated_attachment_pin(void) {
     res_fresh();
 }
 
+static void t_sync_reuse_after_gpu_write(void) {
+    g_flag_sync_lag = 1; g_buf_cpu_auto = 1;
+    memset(g_pmem, 0x11, sizeof g_pmem);
+    uint64_t addr = (uint64_t)(uintptr_t)g_pmem;
+    nvn_be_pool_add(g_pmem, sizeof g_pmem); nvn_be_sub_begin();
+    nvn_gpu_buf b = NULL; uint64_t off = 0;
+    CHECK(rp_buf_resolve(&g_fake_cmd, addr, 16, &b, &off));
+    CHECK(rp_post_gpu_write(addr, 16)); memset(b->cpu + off, 0x22, 16);
+    nvn_be_sub_commit(); uint64_t f = nvn_be_last_fence();
+    // A successful wait grants CPU reuse. GPU writeback must have landed first.
+    CHECK(nvn_be_wait(f, 0) == 0);
+    fake_complete(NVN_GPU_DONE_OK);
+    CHECK(nvn_be_wait(f, 0) == 1 && g_pmem[0] == 0x22);
+    memset(g_pmem, 0x33, 16);
+    // A later read-only submission can retain the existing overlap path.
+    nvn_be_sub_begin(); nvn_be_sub_commit();
+    CHECK(nvn_be_wait(nvn_be_last_fence(), 0) == 1);
+    fake_complete(NVN_GPU_DONE_OK); CHECK(g_pmem[0] == 0x33);
+    // A queued event is also observable CPU memory, not a read-only submission.
+    volatile uint32_t ev = 0; stream a = {0};
+    uint8_t *r = put(&a, OP_SIGNAL_EVENT, 16); volatile uint32_t *pv = &ev; uint32_t mode = 0, value = 7;
+    memcpy(r, &pv, 8); memcpy(r+8, &mode, 4); memcpy(r+12, &value, 4); end(&a);
+    submit1(&a); CHECK(nvn_be_wait(nvn_be_last_fence(), 0) == 0);
+    fake_complete(NVN_GPU_DONE_OK); CHECK(ev == 7);
+    uint64_t ts[2] = {0, 0}; stream t = {0}; g_tick = 7777;
+    q_counter(&t, OP_REPORT_COUNTER, NVN_COUNTER_TYPE_TIMESTAMP, ts); end(&t);
+    submit1(&t); CHECK(nvn_be_wait(nvn_be_last_fence(), 0) == 0);
+    fake_complete(NVN_GPU_DONE_OK); CHECK(ts[1] == 7777);
+    nvn_be_pool_del(g_pmem); g_buf_cpu_auto = 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--sync-reuse")) { t_sync_reuse_after_gpu_write(); printf("sync reuse: %d checks, %d failures\n", g_checks, g_fail); return g_fail != 0; }
     t_invalidated_attachment_pin();
     t_registered_view_pin();
     t_state_persists();
@@ -3715,6 +3881,7 @@ int main(int argc, char **argv) {
     // 一行一个调用：外部各支都往这里加用例，挤在一行时每两支必冲突
     t_pools();
     t_pool_memo();
+    t_pool_nested();
     t_tex_init_registers_only();
     t_alias();
     t_alias_take_over();
@@ -3729,6 +3896,7 @@ int main(int argc, char **argv) {
     t_decl_view();
     t_buf_mirror();
     t_buf_mirror_fail_once();
+    t_buf_multi_tail();
     t_buf_ops();
     t_copy_b2t();
     t_pass_clear_fold();
@@ -3760,6 +3928,7 @@ int main(int argc, char **argv) {
     t_dispatch_ubop_ro_skip();
     t_compute_image();
     t_compute_tex_from_image();
+    t_drv2_table();
     t_compute_sources();
     t_depth_copy_scaled(); t_front_origin_matrix(); t_color_copy_mirror(); t_copy_t2t();
     t_draw();

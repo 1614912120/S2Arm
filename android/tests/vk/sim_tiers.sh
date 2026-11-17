@@ -10,6 +10,8 @@
 # 环境：
 #   S2A_VK_PROFILE_LAYER_DIR  已构建好的 profiles 层目录（含 VkLayer_khronos_profiles.json）；不给就按下面钉的版本构建
 #   S2A_VK_PROFILES_CACHE     构建目录（默认 ${XDG_CACHE_HOME:-~/.cache}/s2arm/vk-profiles-<版本>）
+#   S2A_SIM_SHARD             k/n：只跑第 k 片（档在全表里的序号 % n == k；基线只在第 0 片跑）。CI 按片并行，
+#                             每档都要整套 run.sh，单个 job 串行十几档会超 30 分钟时限。
 # 退出码：0 全部符合期望；1 有档不符（测试失败）；75 环境不齐（缺系统包 / 层构建不出来），不记成测试失败。
 set -euo pipefail
 
@@ -19,11 +21,25 @@ tiers_json="$repo/android/tests/vk/profiles/s2a_sim_tiers.json"
 profiles_sha=b502e9b0d7508e06e6300af272548cf0ee32f380
 profiles_url=https://github.com/KhronosGroup/Vulkan-Profiles.git
 
-all=(no_bc no_d24 no_vertex_stores no_clip_distance no_dual_src_blend no_calibrated_timestamps no_mirror_clamp no_exact16 no_depth_clamp no_vertex_divisor no_custom_border)
+all=(no_bc no_d24 no_vertex_stores no_clip_distance no_dual_src_blend no_calibrated_timestamps no_mirror_clamp no_exact16 no_depth_clamp no_vertex_divisor no_custom_border no_minmax)
 want=("$@"); [ ${#want[@]} -gt 0 ] || want=("${all[@]}")
 for t in "${want[@]}"; do
     case " ${all[*]} " in *" $t "*) ;; *) echo "未知档：${t}（可用：${all[*]}）" >&2; exit 64 ;; esac
 done
+run_baseline=1
+# 一轮十几次 run.sh 共用一份 TBUF 编译链产物（第一次缺了就出，之后复用；run.sh 只在这个变量下复用）
+export S2A_TBUF_REUSE=1
+if [ -n "${S2A_SIM_SHARD:-}" ]; then
+    shard_k=${S2A_SIM_SHARD%/*}; shard_n=${S2A_SIM_SHARD#*/}
+    if ! [[ "$shard_k" =~ ^[0-9]+$ && "$shard_n" =~ ^[1-9][0-9]*$ ]] || [ "$shard_k" -ge "$shard_n" ]; then
+        echo "S2A_SIM_SHARD 要写成 k/n（0 <= k < n）：${S2A_SIM_SHARD}" >&2; exit 64
+    fi
+    picked=()
+    for i in "${!want[@]}"; do [ $((i % shard_n)) -ne "$shard_k" ] || picked+=("${want[$i]}"); done
+    want=("${picked[@]}")
+    [ "$shard_k" -eq 0 ] || run_baseline=0
+    echo "分片 ${shard_k}/${shard_n}：基线$([ "$run_baseline" -eq 1 ] && echo 跑 || echo 不跑)，档 ${want[*]:-（无）}"
+fi
 
 env_missing() { echo "【环境不齐】$*" >&2; exit 75; }
 
@@ -161,6 +177,11 @@ check_tier() {
             [ "$rc" -eq 0 ] || red no_custom_border "run.sh rc=${rc}，期望契约绿"
             has "$log" "C976b 自定义边框色：设备 custom_border=0" || red no_custom_border "层没去掉 VK_EXT_custom_border_color"
             has "$log" "C976b 没有扩展：自定义边框色建采样器 rc=-1002（sampler_border_color_custom：" || red no_custom_border "缺扩展时自定义边框色没回 UNSUPPORTED（#976：不静默换成不透明黑）" ;;
+        no_minmax)
+            run_tier no_minmax "$log" VK_KHRONOS_PROFILES_EXCLUDE_DEVICE_EXTENSIONS=VK_EXT_sampler_filter_minmax || rc=$?
+            [ "$rc" -eq 0 ] || red no_minmax "run.sh rc=$rc"
+            has "$log" "vk sampler minmax: enabled=0" || red no_minmax "层没去掉 VK_EXT_sampler_filter_minmax"
+            has "$log" "C976r 没有扩展：min 归约建采样器 rc=-1002（sampler_reduction_min：" || red no_minmax "C976r 没在缺扩展的设备上具名报 UNSUPPORTED" ;;
         no_depth_clamp)
             run_tier no_depth_clamp "$log" || rc=$?
             [ "$rc" -ne 0 ] || red no_depth_clamp "负对照竟然绿了：缺硬门槛 depthClamp 应建设备失败"
@@ -172,17 +193,19 @@ check_tier() {
 }
 
 
-start=$SECONDS; before=$fails
-rc=0; run_tier "" "$out/baseline.log" || rc=$?
-if [ "$rc" -eq 2 ] && grep -q "找不到" "$out/baseline.log"; then
-    cat "$out/baseline.log" >&2; env_missing "run.sh 找不到依赖（见上）"
+if [ "$run_baseline" -eq 1 ]; then
+    start=$SECONDS; before=$fails
+    rc=0; run_tier "" "$out/baseline.log" || rc=$?
+    if [ "$rc" -eq 2 ] && grep -q "找不到" "$out/baseline.log"; then
+        cat "$out/baseline.log" >&2; env_missing "run.sh 找不到依赖（见上）"
+    fi
+    if [ "$rc" -ne 0 ]; then red 基线 "run.sh rc=$rc"; tail -40 "$out/baseline.log" >&2; else echo "【绿】基线（不挂层，$((SECONDS - start))s）"; fi
 fi
-if [ "$rc" -ne 0 ]; then red 基线 "run.sh rc=$rc"; tail -40 "$out/baseline.log" >&2; else echo "【绿】基线（不挂层，$((SECONDS - start))s）"; fi
 
-for tier in "${want[@]}"; do
+for tier in ${want[@]+"${want[@]}"}; do
     start=$SECONDS; before=$fails
     check_tier "$tier"
 done
 
 if [ "$fails" -ne 0 ]; then echo "【红】模拟机型档：$fails 处不符" >&2; exit 1; fi
-echo "【绿】模拟机型档：基线 + ${want[*]} 全部符合期望（profiles 层 ${profiles_sha:0:12}）"
+echo "【绿】模拟机型档：$([ "$run_baseline" -eq 1 ] && echo '基线 + ')${want[*]:-（本片无档）} 全部符合期望（profiles 层 ${profiles_sha:0:12}）"

@@ -19,6 +19,7 @@ REPO = Path(__file__).resolve().parents[3]
 class Ctx:
     def __init__(self, root):
         self.library, self.engine, self.private, self.r = root / "lib", root / "engine", root / "priv", {"gameId": GID}
+        self.work_root = root / "work"   # 程序缓存 cache/programs（pack/jobs/programs.py）
         table = self.engine / community.SETTINGS_TABLE   # 定义表用仓库里的真表
         table.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(REPO / community.SETTINGS_TABLE, table)
     def begin(self, *a): pass
@@ -62,6 +63,23 @@ class CommunityTests(unittest.TestCase):
         self.c.r = {"gameId": GID, "graphics": {"other:ee": True}}
         community.save(self.c)
         self.assertEqual(community.launch_env(self.c, GID)["S2A_CPATCH_ON"], "gfx:bb,other:ee,widescreen:aa")
+
+    def test_load_direction_default_off(self):
+        # 11-16 维护者：降负载的画面补丁（表第 14 列方向 load）没选过 = 关、玩家可手动开；玩家开过的照旧开；提画质（quality）/ 没写方向的画面补丁照旧缺省开。期望手写：
+        #   aa 宽屏开、bb 没方向开、qq 提画质开、ll 降负载没选过关、kk 降负载玩家开过开 → 起局列表 gfx:bb,gfx:kk,gfx:qq,widescreen:aa
+        write(layout.image_mac(self.c, GID) / "cpatch.tsv", "编号\t模块\t位\t类别\t段名\t许可\t来源\t数据写入\t缺省开\t目标帧率\t画幅\t模式\t组\t方向\n"
+              "widescreen:aa\tmain\t0\twidescreen\t21:9\tMIT\tx.pchtxt\t\t0\t\t\t\t\t\ngfx:bb\tmain\t1\tgfx\tLOD\t\ty.pchtxt\t\t0\t\t\t\t\t\n"
+              "gfx:qq\tmain\t2\tgfx\t4K\t\tq.pchtxt\t\t0\t\t\t\t\tquality\ngfx:ll\tmain\t3\tgfx\tDisable DOF\t\tl.pchtxt\t\t0\t\t\t\t\tload\n"
+              "gfx:kk\tmain\t4\tgfx\tNo Shadows\t\tk.pchtxt\t\t0\t\t\t\t\tload\n")
+        self.c.r = {"gameId": GID, "graphics": {"gfx:kk": True}}
+        community.save(self.c)
+        g = {it["id"]: it["enabled"] for it in community.listing(self.c)["graphics"]}
+        self.assertEqual(g, {"widescreen:aa": True, "gfx:bb": True, "gfx:qq": True, "gfx:ll": False, "gfx:kk": True})
+        self.assertEqual(community.launch_env(self.c, GID)["S2A_CPATCH_ON"], "gfx:bb,gfx:kk,gfx:qq,widescreen:aa")
+        # 玩家再手动开 ll、关 qq：照玩家的 → gfx:bb,gfx:kk,gfx:ll,widescreen:aa
+        self.c.r = {"gameId": GID, "graphics": {"gfx:ll": True, "gfx:qq": False}}
+        community.save(self.c)
+        self.assertEqual(community.launch_env(self.c, GID)["S2A_CPATCH_ON"], "gfx:bb,gfx:kk,gfx:ll,widescreen:aa")
 
     def test_reclassified_keeps_player_choice(self):
         # 11-15 升级改正分类：原先误判成画面、默认开着的去声音补丁（gfx:ff，没选过）重编后成 other:ff → 关；
@@ -155,9 +173,9 @@ class CommunityTests(unittest.TestCase):
         values = [o["value"] for o in item["options"]]
         ios = re.search(r"s2a_ios_game_languages\(void\) \{\s*return @\[(.*?)\];", (REPO / "ios/settings.m").read_text(encoding="utf-8"), re.S).group(1)
         self.assertEqual(re.findall(r'@"(\w+)"', ios), values)
-        menu = (REPO / "ios/app_settings.m").read_text(encoding="utf-8")
-        labels = re.search(r"labels = @\[S2AL\(@\"settings.gameLanguage.system\"\),(.*?)\];", menu, re.S).group(1)
-        self.assertEqual(len(re.findall(r'@"[^"]+"\)?', labels)) + 1, len(values))   # 字面量与 S2AL(@"键") 各算一项
+        # 给玩家看的名字：游戏内设置页与游戏库每款设置页共用 settings.m s2a_ios_game_language_label（#1252），除「跟随系统」外每个值都要有名字
+        label = re.search(r"NSString \*s2a_ios_game_language_label\(NSString \*value\) \{(.*?)\n\}", (REPO / "ios/settings.m").read_text(encoding="utf-8"), re.S).group(1)
+        self.assertEqual(sorted(re.findall(r'@"(\w+)": ', label)), sorted(values[1:]))
         enum = (REPO / "compat/tree/src/Ryujinx.HLE/HOS/SystemState/SystemLanguage.cs").read_text(encoding="utf-8")
         self.assertEqual([v for v in values[1:] if not re.search(r"\b%s,?\s" % v, enum)], [])
         self.assertIn("ios", item["platforms"])

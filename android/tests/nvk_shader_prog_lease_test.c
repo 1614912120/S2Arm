@@ -119,6 +119,14 @@ int s2a_program_cache_load(const char *dir, const uint8_t identity[32], uint8_t 
     *len = sizeof g_payload;
     return 0;
 }
+// 结果合并（#1355）读头：这个夹具没有缓存目录，永远「没有可合并的」；结果合并本身由 nvk_shader_alias_test 覆盖。
+int s2a_program_cache_probe(const char *dir, const uint8_t identity[32], uint8_t result_sha[32], uint64_t *len,
+                            char *why, size_t why_size) {
+    (void)dir; (void)identity; (void)why; (void)why_size;
+    if (result_sha) memset(result_sha, 0, 32);
+    if (len) *len = 0;
+    return -1;
+}
 int s2a_offline_library_fetch(const char *revision_root, const struct s2a_offline_request *request,
                               struct s2a_offline_program *out, char *why, size_t why_size) {
     (void)revision_root; (void)request; (void)why; (void)why_size;

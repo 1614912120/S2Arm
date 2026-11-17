@@ -1,10 +1,12 @@
-// 兜底手柄（#934）：GameController 认不出的 Switch 样式 HID 手柄。
+// 兜底手柄（#934）：GameController 认不出的 HID 手柄。
 //   起因：授权第三方「… Pro Controller」（蓝牙 HID，厂商 / 产品号报 0x0 / 0x0）在系统里有设备、GameController 不枚举它，
 //   游戏里完全没反应。GameController 靠厂商 / 产品号认手柄，号是 0 的永远认不出，所以这里按 HID 元素直读。
-//   只接名字带「Pro Controller」的手柄（Switch 简易 HID 模式的键号含义是确定的；别的通用手柄键号各家不同，硬套会按错键）；
-//   GameController 已认出的同名手柄由 front_mac.m 跳过，不会变成两个玩家；任天堂原厂的不按厂商号排除（macOS 27 上原厂一代 Pro 手柄系统也认不出，#934 11-15）。
+//   两支：名字带「Pro Controller」的走 Switch Pro 协议（切 0x30 完整报告、读校准与体感，下面 report_cb）；其余通用手柄（谷歌 Stadia 蓝牙、
+//   八位堂 D-input 等）按位置映射直读（hid_generic.h，照参考实现 nxnative（MIT）），不发任何输出报告。
+//   占不占玩家位由 front_mac.m 每拍按 s2a_hidg_route 判：GameController 已列出同名就让位，不会变成两个玩家。
 #import <Foundation/Foundation.h>
 #import <IOKit/hid/IOHIDManager.h>
+#import <GameController/GameController.h>
 #include "hid_pad.h"
 #include <pthread.h>
 #include <string.h>
@@ -13,10 +15,6 @@ enum { B_EAST = 1u << 0, B_SOUTH = 1u << 1, B_NORTH = 1u << 2, B_WEST = 1u << 3,
        B_L = 1u << 6, B_R = 1u << 7, B_ZL = 1u << 8, B_ZR = 1u << 9, B_PLUS = 1u << 10, B_MINUS = 1u << 11,
        B_LEFT = 1u << 12, B_UP = 1u << 13, B_RIGHT = 1u << 14, B_DOWN = 1u << 15 };
 
-int s2a_hid_pad_wants(const char *name, int vid) {
-    (void)vid;   // 不按厂商号排除（见 hid_pad.h）：任天堂原厂的也接，系统认出时由 front_mac.m 按名字让位
-    return name && strcasestr(name, "Pro Controller") != NULL;
-}
 uint32_t s2a_hid_pad_switch_button_bit(int usage) {
     static const uint32_t map[] = {0, B_SOUTH, B_EAST, B_WEST, B_NORTH, B_L, B_R, B_ZL, B_ZR, B_MINUS, B_PLUS, B_LSTICK, B_RSTICK};
     return usage > 0 && usage < (int)(sizeof map / sizeof *map) ? map[usage] : 0;   // 13 Home、14 截图不进游戏键位
@@ -66,7 +64,9 @@ int s2a_pro_parse(const uint8_t *r, size_t n, const s2a_pro_cal *l, const s2a_pr
 uint8_t s2a_pro_player_lights(int slot) { return slot < 0 ? 0x1 : slot >= 3 ? 0xF : (uint8_t)((1u << (slot + 1)) - 1); }
 
 typedef struct { IOHIDDeviceRef dev; uint32_t buttons, hat; int16_t ax[4]; char name[96];
-    int full; uint8_t cnt, rep[64]; s2a_pro_cal cl, cr; } hp_dev;   // full：已收到 0x30 报告（之后不再用 HID 元素那一路）；cnt：子命令包序号
+    int pro, vid, gc_hint, joined; uint64_t entry, attach_us; s2a_hidg g;   // pro：走 Switch Pro 协议那一支；g：通用手柄的状态（hid_generic.h）；joined：通用手柄按过键
+    int full; uint8_t cnt, rep[64]; s2a_pro_cal cl, cr;
+    s2a_pad_motion motion; uint64_t motion_us; int imu_said; uint32_t logged; } hp_dev;   // motion：0x30 报告里的最后一组 IMU（motion_us = 收到时刻，0 = 没有）   // full：已收到 0x30 报告（之后不再用 HID 元素那一路）；cnt：子命令包序号
 static hp_dev g_dev[S2A_HID_PAD_MAX];
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 
@@ -91,6 +91,46 @@ static void value_cb(void *ctx, IOReturn r, void *sender, IOHIDValueRef value) {
     pthread_mutex_unlock(&g_mu);
 }
 
+static int g_hid_log;   // S2A_HID_LOG=1（开发用）：每次按下都记；缺省每颗键只记第一次（进诊断，玩家不用设变量）
+// 通用手柄（hid_generic.h）：按位置映射，首次按下才算加入（joined，front_mac.m 才给它玩家位）
+static void generic_value_cb(void *ctx, IOReturn r, void *sender, IOHIDValueRef value) {
+    (void)sender;
+    if (r != kIOReturnSuccess) return;
+    IOHIDElementRef e = IOHIDValueGetElement(value);
+    uint32_t page = IOHIDElementGetUsagePage(e), usage = IOHIDElementGetUsage(e);
+    long v = IOHIDValueGetIntegerValue(value), min = IOHIDElementGetLogicalMin(e), max = IOHIDElementGetLogicalMax(e);
+    pthread_mutex_lock(&g_mu);
+    hp_dev *d = ctx;
+    if (d->dev && !d->pro) {
+        uint32_t was = d->g.held;
+        s2a_hidg_value(&d->g, page, usage, v, min, max);
+        if (page == kHIDPage_Button && usage >= 1 && usage <= 32 && (d->g.held & ~was)) {   // 每颗键第一次按下记一行（量小、缺省就进诊断）：按键号 → 映射到的 Switch 键，按错键时照这行改按键设置
+            uint32_t bit = 1u << (usage - 1);
+            if (g_hid_log || !(d->logged & bit)) { d->logged |= bit; static const char *const nm[S2A_HIDG_BUTTONS] = {"A", "B", "X", "Y", "左摇杆按下", "右摇杆按下", "L", "R", "ZL", "ZR", "+", "−", "左", "上", "右", "下"};
+                const char *to = "没映射"; for (int b = 0; b < S2A_HIDG_BUTTONS; b++) if (d->g.map[b] == usage) { to = nm[b]; break; }
+                fprintf(stderr, "[输入] 通用手柄 %s：按下 HID 按键号 %u → Switch %s\n", d->name, usage, to); }
+        }
+        int joined = s2a_hidg_joined(d->joined, 0, s2a_hidg_buttons(&d->g));
+        if (joined && !d->joined) fprintf(stderr, "[输入] 通用手柄 %s：第一次按键，加入玩家\n", d->name);
+        d->joined = joined;
+    }
+    pthread_mutex_unlock(&g_mu);
+}
+
+static int16_t rd16le(const uint8_t *p) { return (int16_t)(p[0] | p[1] << 8); }
+// 0x30 完整报告：报告号 + 计时 + 电量 + 按键 3 + 摇杆 6 + 振动 1 = 13 字节后是 3 组 IMU（每组 12 字节：加速度 xyz、角速度 xyz，5 ms 一组），取最后一组。
+//   量程同一代 Pro 出厂（±8 g、±2000 度/秒）：加速度 0.000244 g / 计数、角速度 0.06103 度/秒 / 计数；轴向同 joycon_imu.m 的 Pro（参考 SDL3 hidapi_switch.c，zlib）
+int s2a_pro_imu(const uint8_t *r, size_t n, s2a_pad_motion *out) {
+    if (!r || n < 13 + 36 || r[0] != 0x30) return 0;
+    const uint8_t *s = r + 13 + 24;
+    float ax = rd16le(s + 0) * 0.000244f, ay = rd16le(s + 2) * 0.000244f, az = rd16le(s + 4) * 0.000244f;
+    float gx = rd16le(s + 6) * 0.06103f, gy = rd16le(s + 8) * 0.06103f, gz = rd16le(s + 10) * 0.06103f;
+    out->acceleration_x = -ay; out->acceleration_y = ax; out->acceleration_z = az;
+    out->gyro_x = -gy; out->gyro_y = gx; out->gyro_z = gz;
+    return 1;
+}
+static uint64_t hp_now_us(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000; }
+
 // 原始输入报告（报告号在首字节）：0x30 = 完整报告（按键 + 12 位摇杆）；0x21 = 子命令应答（同样带按键摇杆，SPI 读应答带校准数据）
 static void report_cb(void *ctx, IOReturn r, void *sender, IOHIDReportType type, uint32_t id, uint8_t *rep, CFIndex n) {
     (void)r; (void)sender; (void)type;
@@ -108,6 +148,10 @@ static void report_cb(void *ctx, IOReturn r, void *sender, IOHIDReportType type,
         if (s2a_pro_parse(b, m, &d->cl, &d->cr, &bt, ax)) {
             if (id == 0x30 && !d->full) { d->full = 1; d->hat = 0; fprintf(stderr, "[输入] 兜底手柄 %s：收到完整报告 0x30，改按 Switch Pro 协议读（摇杆 12 位、按校准换算）\n", d->name); }
             if (d->full) { d->buttons = bt; memcpy(d->ax, ax, sizeof ax); } }
+        s2a_pad_motion mo;
+        if (id == 0x30 && s2a_pro_imu(b, m, &mo) && (mo.acceleration_x != 0 || mo.acceleration_y != 0 || mo.acceleration_z != 0)) {   // 全 0 = 手柄没开 IMU / 不带陀螺仪
+            mo.host_timestamp_us = hp_now_us(); d->motion = mo; d->motion_us = mo.host_timestamp_us;
+            if (!d->imu_said) { d->imu_said = 1; fprintf(stderr, "[输入] 兜底手柄 %s：报告里有六轴（陀螺仪 / 加速度），按玩家体感交给游戏\n", d->name); } }
     }
     pthread_mutex_unlock(&g_mu);
 }
@@ -131,14 +175,33 @@ static void attach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
     int vid = 0, pid = 0; CFNumberRef n;
     if ((n = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDVendorIDKey)))) CFNumberGetValue(n, kCFNumberIntType, &vid);
     if ((n = IOHIDDeviceGetProperty(dev, CFSTR(kIOHIDProductIDKey)))) CFNumberGetValue(n, kCFNumberIntType, &pid);
-    if (!s2a_hid_pad_wants(name, vid)) return;
+    int pro = s2a_hidg_is_pro(name);
+    // 微软 / 索尼 / 任天堂的通用手柄系统自己认（名字未必等于 HID 产品名，按名字让位认不出同一只），这里不接；记一行便于诊断（#1276）
+    if (!pro && s2a_hidg_native_vendor(vid)) { fprintf(stderr, "[输入] HID 游戏手柄：%s（厂商 / 产品号 0x%x / 0x%x）是系统原生认得的厂商，交给 GameController\n", name[0] ? name : "（没名字）", vid, pid); return; }
+    // IOHIDManager 按每条匹配条件各给一次、每次是新的 IOHIDDeviceRef：按 I/O Registry 条目认同一只（同参考实现），不变成两个玩家
+    uint64_t entry = 0; IORegistryEntryGetRegistryEntryID(IOHIDDeviceGetService(dev), &entry);
+    int gc_hint = [GCController supportsHIDDevice:dev];   // 每只只问一次（调用不便宜）
     pthread_mutex_lock(&g_mu);
     hp_dev *d = NULL;
-    for (int i = 0; i < S2A_HID_PAD_MAX; i++) if (g_dev[i].dev == dev) { pthread_mutex_unlock(&g_mu); return; }
+    for (int i = 0; i < S2A_HID_PAD_MAX; i++) if (g_dev[i].dev && (g_dev[i].dev == dev || (entry && g_dev[i].entry == entry))) { pthread_mutex_unlock(&g_mu); return; }
     for (int i = 0; i < S2A_HID_PAD_MAX && !d; i++) if (!g_dev[i].dev) d = &g_dev[i];
     if (!d) { pthread_mutex_unlock(&g_mu); fprintf(stderr, "[输入] 兜底手柄：已满 %d 只，%s 不接\n", S2A_HID_PAD_MAX, name); return; }
     memset(d, 0, sizeof *d); d->dev = dev; snprintf(d->name, sizeof d->name, "%s", name);
+    d->pro = pro; d->vid = vid; d->gc_hint = gc_hint; d->entry = entry; d->attach_us = hp_now_us();
+    if (!pro) {
+        const char *map = getenv("S2A_HID_MAP"); if (!map) map = getenv("DM_HID_MAP");   // 也认参考实现的变量名
+        s2a_hidg_init(&d->g, map);
+        NSArray *els = CFBridgingRelease(IOHIDDeviceCopyMatchingElements(dev, NULL, kIOHIDOptionsTypeNone));
+        for (id o in els) { IOHIDElementRef e = (__bridge IOHIDElementRef)o; int a = s2a_hidg_axis_of(IOHIDElementGetUsagePage(e), IOHIDElementGetUsage(e)); if (a >= 0) d->g.has[a] = 1; }
+    }
     pthread_mutex_unlock(&g_mu);
+    if (!pro) {
+        IOHIDDeviceRegisterInputValueCallback(dev, generic_value_cb, d);
+        fprintf(stderr, "[输入] 通用手柄：接上 %s（厂商 / 产品号 0x%x / 0x%x，系统%s认得）：按位置映射直读（缺省八位堂 D-input 编号%s），第一次按键才占玩家位；"
+                "键位不对在启动器的按键设置里改（每颗键第一次按下会记一行它的编号和映射到哪个键）\n", name[0] ? name : "（没名字）", vid, pid, gc_hint ? "说" : "不",
+                getenv("S2A_HID_MAP") || getenv("DM_HID_MAP") ? "，已按 S2A_HID_MAP 覆盖（开发 / 对照用：玩家从启动器起游戏时这个变量带不进来）" : "");
+        return;
+    }
     s2a_pro_cal_default(&d->cl); s2a_pro_cal_default(&d->cr);
     IOHIDDeviceRegisterInputValueCallback(dev, value_cb, d);
     IOHIDDeviceRegisterInputReportCallback(dev, d->rep, sizeof d->rep, report_cb, d);
@@ -148,6 +211,7 @@ static void attach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
     static const uint8_t spi[] = {0x3D, 0x60, 0x00, 0x00, 18};
     pro_subcmd_later(d, dev, 0x10, spi, sizeof spi, 0);
     pro_subcmd_later(d, dev, 0x03, (const uint8_t[]){0x30}, 1, 50);
+    pro_subcmd_later(d, dev, 0x40, (const uint8_t[]){0x01}, 1, 150);   // 打开 IMU（第三方 Switch 模式手柄带陀螺仪的才有读数；不带的照样回全 0，上面按全 0 不收）
     pro_subcmd_later(d, dev, 0x30, (const uint8_t[]){s2a_pro_player_lights(slot)}, 1, 100);
 }
 static void detach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
@@ -163,6 +227,7 @@ static void detach(void *ctx, IOReturn r, void *sender, IOHIDDeviceRef dev) {
 
 void s2a_mac_hid_pad_start(void) {
     static int started; if (started) return; started = 1;
+    const char *lg = getenv("S2A_HID_LOG"); if (!lg) lg = getenv("DM_HID_LOG"); g_hid_log = lg && atoi(lg);
     IOHIDManagerRef m = IOHIDManagerCreate(kCFAllocatorDefault, kIOHIDOptionsTypeNone);
     NSArray *match = @[@{@kIOHIDDeviceUsagePageKey: @(kHIDPage_GenericDesktop), @kIOHIDDeviceUsageKey: @(kHIDUsage_GD_GamePad)},
                        @{@kIOHIDDeviceUsagePageKey: @(kHIDPage_GenericDesktop), @kIOHIDDeviceUsageKey: @(kHIDUsage_GD_Joystick)}];
@@ -179,11 +244,26 @@ int s2a_mac_hid_pad_read(s2a_hid_pad out[S2A_HID_PAD_MAX]) {
     int n = 0;
     pthread_mutex_lock(&g_mu);
     for (int i = 0; i < S2A_HID_PAD_MAX; i++) {
-        hp_dev *d = &g_dev[i]; if (!d->dev) continue;
+        hp_dev *d = &g_dev[i]; if (!d->dev || !s2a_hidg_joined(d->joined, d->pro, 0)) continue;   // 通用手柄没按过键：不列（不占玩家位）
         s2a_hid_pad *o = &out[n++];
-        o->buttons = d->buttons | d->hat; o->lx = d->ax[0]; o->ly = d->ax[1]; o->rx = d->ax[2]; o->ry = d->ax[3];
+        if (d->pro) { o->buttons = d->buttons | d->hat; o->lx = d->ax[0]; o->ly = d->ax[1]; o->rx = d->ax[2]; o->ry = d->ax[3]; }
+        else { int16_t st[4]; s2a_hidg_sticks(&d->g, st); o->buttons = s2a_hidg_buttons(&d->g); o->lx = st[0]; o->ly = st[1]; o->rx = st[2]; o->ry = st[3]; }
         o->id = &g_dev[i]; snprintf(o->name, sizeof o->name, "%s", d->name);
+        o->pro = d->pro; o->vid = d->vid; o->gc_hint = d->gc_hint; o->age_us = hp_now_us() - d->attach_us;
     }
     pthread_mutex_unlock(&g_mu);
     return n;
+}
+
+int s2a_mac_hid_pad_motion(const void *id, s2a_pad_motion *out) {
+    int ok = 0;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < S2A_HID_PAD_MAX; i++) {
+        hp_dev *d = &g_dev[i];
+        if (id != (const void *)d || !d->dev || !d->motion_us) continue;
+        if (hp_now_us() - d->motion_us < 200000) { *out = d->motion; ok = 1; }
+        break;
+    }
+    pthread_mutex_unlock(&g_mu);
+    return ok;
 }

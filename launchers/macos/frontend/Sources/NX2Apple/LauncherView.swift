@@ -68,6 +68,7 @@ struct LauncherView: View {
             topBar
             if !showingHome { Divider().opacity(0.3) }
             noticeBar
+            phoneUpdateBar
             libraryNoticeBar
             if model.batchShown {
                 BatchExportView(model: model, covers: covers, install: { installFor = $0 }, freeSpace: { spaceFor = $0 }, uiLanguage: uiLanguage)
@@ -78,6 +79,8 @@ struct LauncherView: View {
             } else if let session = model.session, session.export == nil, !model.sessionHidden, !model.isInline(session) {
                 if session.kind == .play { PlaySessionView(model: model, covers: covers, session: session, uiLanguage: uiLanguage) }
                 else { JobSessionView(model: model, session: session) }
+            } else if let phone = model.phoneSession, phone.kind == .installUpdate, !model.phoneHidden {   // 更新 iPhone 上的 S2Arm（手机槽）：主槽没占着整页时整页显示
+                JobSessionView(model: model, session: phone)
             } else if let id = model.exportFor, let game = model.games.first(where: { $0.id == id }) {
                 ExportView(model: model, covers: covers, game: game) { installFor = game.id }
             } else {
@@ -175,6 +178,30 @@ struct LauncherView: View {
     }
 
     /// 删除游戏 / 清除缓存的进行中与结果（S2ArmLauncherModel.libraryNotice）：点下就出现，成功几秒后自己收起，失败留着等玩家关
+    /// 新版启动器首次启动后的 iPhone 版 S2Arm 横幅（S2ArmLauncherModel+PhoneBanner.swift）：准备中 / 已准备好 / 连上自动更新 / 更新进度
+    @ViewBuilder private var phoneUpdateBar: some View {
+        if let line = model.phoneBannerLine {
+            HStack(spacing: 10) {
+                if line.percent != nil || model.phoneBanner == .preparing { ProgressView().controlSize(.small) }
+                else { Image(systemName: "iphone.and.arrow.forward").foregroundStyle(LauncherPalette.cream) }
+                let label = Text(txt(line.key).replacingOccurrences(of: "{0}", with: "\(line.percent ?? 0)")).font(.manrope(13, .semibold)).monospacedDigit()
+                    .fixedSize(horizontal: false, vertical: true)
+                if line.percent == nil && model.phoneBanner != .preparing {   // 手动更新（11-16）：横幅文字点了 = 顶栏「更新 iPhone」，玩家点了才装
+                    Button { model.requestPhoneUpdate(language: model.provider.client.environment.uiLanguage ?? "zh-Hans") } label: { label }
+                        .controllerButtonStyle(.plain).accessibilityIdentifier("notice.phoneUpdate.open")
+                } else { label }
+                Spacer(minLength: 8)
+                if line.percent == nil {
+                    Button { model.phoneBanner = nil } label: { Image(systemName: "xmark") }.controllerButtonStyle(.plain).foregroundStyle(.secondary)
+                        .help(txt("notice.close")).accessibilityLabel(txt("notice.close")).accessibilityIdentifier("notice.phoneUpdate.close")
+                }
+            }
+            .padding(.horizontal, 34).padding(.vertical, 10)
+            .background(LauncherPalette.cream.opacity(0.10))
+            .accessibilityIdentifier("notice.phoneUpdate")
+        }
+    }
+
     @ViewBuilder private var libraryNoticeBar: some View {
         if let n = model.libraryNotice {
             let text = loc.t(n.key + "." + { switch n.kind { case .running: "running"; case .done: "done"; case .failed: "failed" } }())
@@ -399,7 +426,7 @@ struct LauncherView: View {
         }
     }
 
-    /// 有新版：后台下载时一行小字，下好后一颗「更新并重启」，都在顶栏，不打断玩家。
+    /// 有新版：顶栏一颗「有新版 vX」（点开更新弹窗，玩家点「现在更新」才下）；下载时一行小字。都在顶栏，不打断玩家。
     @ViewBuilder private var updateButton: some View {
         switch model.updateState {
         case .working(let id, let percent):
@@ -407,7 +434,7 @@ struct LauncherView: View {
                 ProgressView().controlSize(.mini)
                 Text(txt(id).replacingOccurrences(of: "{0}", with: "\(percent ?? 0)")).font(.manrope(12)).monospacedDigit().foregroundStyle(.secondary)
             }
-        case .ready:
+        case .ready, .idle where model.availableUpdate != nil:
             // 草图：「以后再说」之后顶栏留「有新版 vX」，点开回到更新弹窗①（「现在更新并重启」在弹窗里；有局在跑时那里先拦下说明）
             Button { model.showUpdatePopup() } label: {
                 Label(txt("update.top.available").replacingOccurrences(of: "{0}", with: model.availableUpdate?["version"] as? String ?? ""), systemImage: "arrow.down.circle")
@@ -480,6 +507,13 @@ struct LauncherView: View {
             }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("top.currentTask")
                 .accessibilityLabel(loc.t("home.currentTask") + " · " + session.name)
         }
+        // 收起的、或被主槽整页（出包进度等）压着的「更新 iPhone 上的 S2Arm」：回到它的进度页
+        if let phone = model.phoneSession, phone.kind == .installUpdate,
+           model.phoneHidden || (model.session.map { !model.sessionHidden && ($0.export != nil || !model.isInline($0)) } ?? false) {
+            Button { model.phoneHidden = false; model.sessionHidden = true } label: {
+                Label(phone.name, systemImage: "iphone").font(.manrope(12.5, .semibold)).lineLimit(1)
+            }.controllerButtonStyle(LauncherSecondaryButtonStyle()).controllerID("top.phoneTask")
+        }
     }
 
     /// 批量出包（v0.2.4）：清单页没开着时，这批正在出 / 上次还有没出完的 → 顶部胶囊回到清单页
@@ -502,8 +536,8 @@ struct LauncherView: View {
         if let session = model.session, session.export != nil, model.sessionHidden {
             Button { model.sessionHidden = false } label: {
                 HStack(spacing: 7) {
-                    if model.busy { ProgressView().controlSize(.mini) } else { Image(systemName: "checkmark.circle.fill").foregroundStyle(LauncherPalette.ready) }
-                    Text(txt(model.busy ? "export.pill.running" : "export.pill.done").replacingOccurrences(of: "{0}", with: session.name)).font(.manrope(12.5, .semibold)).lineLimit(1)
+                    if model.mainBusy { ProgressView().controlSize(.mini) } else { Image(systemName: "checkmark.circle.fill").foregroundStyle(LauncherPalette.ready) }
+                    Text(txt(model.mainBusy ? "export.pill.running" : "export.pill.done").replacingOccurrences(of: "{0}", with: session.name)).font(.manrope(12.5, .semibold)).lineLimit(1)
                     if !model.exportQueue.isEmpty {
                         Text(txt("export.pill.queue").replacingOccurrences(of: "{0}", with: "\(model.exportQueue.count)")).font(.manrope(12)).foregroundStyle(.secondary).lineLimit(1)
                     }
@@ -517,7 +551,7 @@ struct LauncherView: View {
     /// 跑完还没回去看 → 「已装好 / 没装完 · 查看结果」（#308，Mac 与 Windows 同一套入口）。
     @ViewBuilder private var phonePill: some View {
         if installFor == nil {
-            if let s = model.session, S2ArmLauncherModel.phoneKinds.contains(s.kind), let id = s.gameID {
+            if let s = model.phoneSession, S2ArmLauncherModel.phoneKinds.contains(s.kind), let id = s.gameID {
                 Button { installFor = id } label: {
                     HStack(spacing: 7) {
                         ProgressView().controlSize(.mini)

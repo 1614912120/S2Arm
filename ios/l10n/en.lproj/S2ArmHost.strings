@@ -38,6 +38,7 @@
 "cheats.status.execError" = "Execution error";
 "cheats.status.gameNotLoaded" = "Game not loaded";
 "cheats.status.modifiesCode" = "Changes game code, so it can't run when imported on the phone: import this txt in S2Arm on your computer, then update S2Arm on the phone";
+"cheats.status.notPacked" = "Changes game code and wasn't built into this package (too many patches for the module, etc.; see the export results on your computer)";
 "cheats.status.packed" = "Active";
 "cheats.status.off" = "Off";
 "cheats.status.pending" = "Waiting to take effect…";
@@ -110,7 +111,8 @@
 "settings.fps.patchTitle" = "Frame rate";
 "settings.fps.patchNote" = "Community patch · up to %ld fps";
 "settings.fps.pick" = "Frame rate level";
-"settings.fps.pick.auto" = "Auto (match screen)";
+"settings.fps.pick.auto" = "Auto (60 fps)";
+"settings.fps.pick.note" = "120 fps needs a device that really keeps up; if it can't, the game slows down.";
 "settings.fps.pick.level" = "%ld fps";
 "settings.patchNote" = "Community patch";
 "settings.fullscreen.patchNote" = "Community full-screen patch";
@@ -230,6 +232,7 @@
 "vpad.menu.face.xbox" = "Buttons: Xbox layout";
 "vpad.menu.face.xbox.note" = "Xbox button positions; the bottom button confirms";
 "vpad.menu.gyro" = "Phone gyro";
+"vpad.menu.gyro.note" = "Xbox-style controllers such as 8BitDo or GameSir only have motion controls in Switch mode.";
 "vpad.menu.haptic.note" = "A light tap when you press a button";
 "vpad.menu.holdLock.note" = "Hold for 2 s to lock; this game only";
 "vpad.menu.hud" = "Performance overlay";
@@ -341,6 +344,7 @@
 "diag.error.zip" = "Couldn’t create the bundle (writing the zip failed; the phone may be out of space)";
 "diag.export" = "Export diagnostics";
 "diag.prompt.abnormalExit" = "S2Arm didn’t quit normally last time (it crashed, froze or was closed by the system)";
+"diag.prompt.imlLost" = "S2Arm didn’t quit normally last time. This install lost the “Increased Memory Limit” permission, so a large game quitting is most likely running out of memory. Reinstall with “Install on iPhone” in S2Arm on your computer (a free Apple ID keeps this permission too). If you sign it yourself, use Xcode or AltStore Classic 2.2 or later; re-signing with SideStore 0.7.0 drops it. For an existing install, you can also add the permission to the App ID with GetMoreRam and reinstall";
 "diag.prompt.crash" = "The system reported that S2Arm crashed or froze last time";
 "diag.prompt.message" = "%@. This uploads run logs, crash reports and the list of graphics pipelines the games used (shader IDs only) — no saves, keys or game files — and gives you a short code.";
 "diag.prompt.no" = "No thanks";
@@ -387,7 +391,8 @@
 "gfx.fpsLimit" = "Frame rate limit";
 "gfx.fpsLimit.none" = "Unlimited";
 "gfx.resolution" = "Render resolution";
-"iml.lost.body" = "Large games may run out of memory or slow down. Re-sign with Xcode or AltStore Classic v2.3 and reinstall, or use GetMoreRam to add the permission to the App ID and reinstall.";
+"iml.lost.body" = "Large games may run out of memory and quit or slow down. Reinstall with “Install on iPhone” in S2Arm on your computer (a free Apple ID keeps this permission too). If you sign it yourself, use Xcode or AltStore Classic 2.2 or later; re-signing with SideStore 0.7.0 drops it. For an existing install, you can also add the permission to the App ID with GetMoreRam and reinstall.";
+"iml.lost.short" = "Large games may run out of memory and close. Tap “Learn more” to see how to sign S2Arm again with this permission.";
 "iml.lost.title" = "This install lost the “Increased Memory Limit” permission";
 "lan.denied.later" = "Not now";
 "lan.denied.message" = "The system hasn’t allowed “%@” to find devices on your local network, so multiplayer can’t find other players.\n\nGo to Settings › Privacy & Security › Local Network, turn on “%@”, then come back and join multiplayer again.";
