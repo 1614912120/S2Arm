@@ -457,12 +457,12 @@ public final class S2ArmLauncherModel: ObservableObject {
         let shellUpdate = (r["shellUpdate"] as? Bool ?? false) && Self.autoUpdatePhoneOn()
         if (kept.isEmpty && !shellUpdate) || device.isEmpty { return false }
         if r["running"] as? Bool != false { return false }   // 手机上 S2Arm 正在跑（或查不清）：装 App 会杀掉玩家这一局，等它退了下一轮再推（这一批不记已试）
+        // 只发现、不装（11-16 维护者：「改成更稳妥的手动更新吧，启动器和移动端都是」）：重读游戏库，顶栏按 phoneUpdates 亮「更新 iPhone」，玩家点了才装
         let batch = device + ":" + kept.sorted().joined(separator: ",") + (shellUpdate ? ":shell" : "")
         if keptAutoTried.contains(batch) || busy { return false }
         keptAutoTried.insert(batch)
-        let language = provider.client.environment.uiLanguage ?? "zh-Hans"
-        refresh { [weak self] in self?.updatePhone(acceptStale: false, repack: [], language: language, device: device, ask: false, mode: "device") }   // 自动更新只装到连着的手机：显式 device，不跟随「出完之后导出自签」的缺省（那条只给玩家手点）
-        return true
+        refresh {}
+        return false
     }
 
     public func refresh(_ done: (() -> Void)? = nil) {

@@ -129,12 +129,12 @@ public sealed partial class EnvironmentWindow
             if ((kept.Count == 0 && !shellUpdate) || device.Length == 0) return false;
             // 正在玩（或查不清）：装 App 会杀掉玩家这一局，等下一轮（这一批不记已试）
             if (!(r.TryGetProperty("running", out var run) && run.ValueKind == JsonValueKind.False)) return false;
+            // 只发现、不装（11-16 维护者：「改成更稳妥的手动更新吧，启动器和移动端都是」）：重读游戏库，顶栏 / 更新页按 phoneUpdates 亮「更新 iPhone」，玩家点了才装
             var batch = device + ":" + string.Join(",", kept) + (shellUpdate ? ":shell" : "");
             if (phoneAutoTried.Contains(batch) || ControlBusy || batchRunning) return false;
             phoneAutoTried.Add(batch);
-            await RefreshLibraryAsync();   // 顶栏 / 更新页按刚读回的 phoneUpdates 画
-            _ = UpdatePhoneAsync(false, [], ask: false, mode: "device", device: device);   // 自动更新只装到连着的手机：显式 device，不跟随「出完之后导出自签」的缺省
-            return true;
+            await RefreshLibraryAsync();
+            return false;
         }
         finally { phoneAutoTicking = false; }
     }
