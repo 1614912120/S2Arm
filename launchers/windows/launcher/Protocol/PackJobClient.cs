@@ -86,10 +86,8 @@ public static class PackJobClient
     {
         // The developer certificate and the install mode belong to this computer, installUpdate to the phone (install.update_phone): no game.
         // export 的游戏在计划里（plan.items，ExportStream），信封上不带
-        // phoneKeptPull / installUpdatePrepare（启动器升级顺带更新 iPhone：2 分钟循环、新版首启准备）属于这台电脑与连着的手机，也不带游戏号——
-        //   原先不在这里，空游戏号在这一步抛 ArgumentException、被循环的 catch 吞掉，Windows 上自动更新与首启准备一次都没发出去（0.5.0 候选验收）
-        var perGame = request.Operation is not ("devCert" or "installMode" or "installUpdate" or "installUpdatePrepare" or "phoneKeptPull" or "export" or "sgradeScan");
-        if (perGame && string.IsNullOrWhiteSpace(request.GameId)) throw new ArgumentException("A game is required.", nameof(request));
+        // 要不要游戏号由作业层自己判（自己人之间不设允许清单，#1149）：有就带，没有就不带；要游戏的作业缺了由作业层报「请求里没有游戏号」。
+        //   原先这里按名单要求带游戏号，名单漏登的 phoneKeptPull / installUpdatePrepare 在这一步抛异常、被循环吞掉，Windows 上自动更新一次都没发出去（0.5.0 候选验收）
         var payload = new Dictionary<string, object?>
         {
             ["schema"] = 1, ["jobId"] = jobId, ["operation"] = request.Operation,
@@ -98,7 +96,7 @@ public static class PackJobClient
             // The job stops itself when this launcher process is gone (main.py supervise).
             ["parentPid"] = Environment.ProcessId
         };
-        if (perGame) payload["gameId"] = request.GameId;
+        if (!string.IsNullOrWhiteSpace(request.GameId)) payload["gameId"] = request.GameId;
         // The bundled iPhone shell is a launcher path setting (Settings → Shell); ipa.bundled_shell reads shellDir.
         // export 的每一步子作业沿用这份请求（pack/jobs/export_plan.py），iPhone 那步要的壳与随包资源一并带上
         if (request.Operation is "ipa" or "install" or "installUpdate" or "export") payload["shellDir"] = Path.GetFullPath(request.Paths.Shell);

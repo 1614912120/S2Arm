@@ -25,6 +25,20 @@ public sealed partial class EnvironmentWindow
     private readonly HashSet<string> phoneAutoTried = new();
 
     private string AutoUpdatePhoneOffPath => Path.Combine(privateRoot, "auto-update-phone.off");
+    // 自动更新的后台作业失败不再静默（0.5.0 候选验收：请求体被拒、循环 catch 吞掉，十几分钟一单都没发出也看不出来）：
+    //   每次失败写一行 <私有目录>/logs/phone-auto-update.log（诊断包收 logs/），带「连续第几次」；成功一次计数归零。同 Mac S2ArmLauncherModel+PhoneBanner.swift
+    private readonly Dictionary<string, int> phoneAutoFails = new();
+    private void NotePhoneAuto(string operation, string? failure)
+    {
+        if (failure is null) { phoneAutoFails.Remove(operation); return; }
+        var n = phoneAutoFails[operation] = phoneAutoFails.GetValueOrDefault(operation) + 1;
+        try
+        {
+            var dir = Path.Combine(privateRoot, "logs"); Directory.CreateDirectory(dir);
+            File.AppendAllText(Path.Combine(dir, "phone-auto-update.log"), $"{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss zzz} {operation} 失败（连续第 {n} 次）：{failure}{Environment.NewLine}");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
     private bool AutoUpdatePhoneOn => !File.Exists(AutoUpdatePhoneOffPath);
 
     /// <summary>横幅状态："" 不显示 / preparing / ready / onConnect</summary>
@@ -41,9 +55,14 @@ public sealed partial class EnvironmentWindow
         phonePrepareTried = true;
         phoneBanner = "preparing"; Render();
         var ok = false;
-        try { ok = (await PackJobClient.RunAsync(PackRequest("installUpdatePrepare", ""), null, CancellationToken.None)).Report.Succeeded; }
+        try
+        {
+            var job = await PackJobClient.RunAsync(PackRequest("installUpdatePrepare", ""), null, CancellationToken.None);
+            ok = job.Report.Succeeded;
+            NotePhoneAuto("installUpdatePrepare", ok ? null : "作业没成功（作业记录里有原因）");
+        }
         catch (Exception error) when (error is LibraryProtocolException or IOException or UnauthorizedAccessException or ArgumentException or
-            InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception) { }
+            InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception) { NotePhoneAuto("installUpdatePrepare", error.GetType().Name + "：" + error.Message); }
         if (phoneBanner == "preparing") { phoneBanner = ok ? "ready" : "onConnect"; Render(); }
     }
 
@@ -96,11 +115,12 @@ public sealed partial class EnvironmentWindow
             try
             {
                 var job = await PackJobClient.RunAsync(PackRequest("phoneKeptPull", ""), null, CancellationToken.None);
-                if (!job.Report.Succeeded || job.Report.Result.ValueKind != JsonValueKind.Object) return false;
+                if (!job.Report.Succeeded || job.Report.Result.ValueKind != JsonValueKind.Object) { NotePhoneAuto("phoneKeptPull", "作业没成功（作业记录里有原因）"); return false; }
+                NotePhoneAuto("phoneKeptPull", null);
                 r = job.Report.Result;
             }
             catch (Exception error) when (error is LibraryProtocolException or IOException or UnauthorizedAccessException or ArgumentException or
-                InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception) { return false; }
+                InvalidOperationException or OperationCanceledException or System.ComponentModel.Win32Exception) { NotePhoneAuto("phoneKeptPull", error.GetType().Name + "：" + error.Message); return false; }
             var device = r.TryGetProperty("device", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() ?? "" : "";
             var kept = r.TryGetProperty("kept", out var k) && k.ValueKind == JsonValueKind.Array
                 ? k.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).OrderBy(s => s, StringComparer.Ordinal).ToList()
