@@ -204,6 +204,16 @@ public static class PackCases
             catch (ArgumentException e) { why = e.Message; }
             check(body is not null && (string?)body["operation"] == op && !body.ContainsKey("gameId"), $"request: {op} needs no game and is sent ({why})");
         }
+        // 客户端不判要不要游戏号（自己人之间不设允许清单，#1149）：以后新增一种不带游戏号的作业不用改客户端；
+        //   要游戏的作业空着游戏号也照样发出去，由作业层报「请求里没有游戏号」（pack/jobs/core.py Context.game）
+        foreach (var op in new[] { "someFutureMachineJob", "ipa" })
+        {
+            Dictionary<string, object?>? body = null; string why = "";
+            try { body = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", op, ""), "win-nogame"); }
+            catch (ArgumentException e) { why = e.Message; }
+            check(body is not null && (string?)body["operation"] == op && !body.ContainsKey("gameId"),
+                $"request: {op} with no game is sent as is, the job layer decides ({why})");
+        }
         // 没有前端操作白名单（11-15）：引擎不认识的操作照样发出去，引擎回失败结果，界面拿到的是一条带文字的失败，不是异常（#1149 卡死的根）
         {
             var odd = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "noSuchOperation", "G"), "win-8");
