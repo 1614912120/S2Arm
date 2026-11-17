@@ -1,5 +1,6 @@
 // 新回放着色器入口 + 真实图形/计算请求构造与身份；编译器边界只捕获 JSON。
 // 合成来源/设备，不声称运行真实游戏或着色器。
+#define _DARWIN_C_SOURCE   // macOS：-std=c11 下 mkdtemp 要它才有声明（Linux 由测试脚本加 _GNU_SOURCE）
 #define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
