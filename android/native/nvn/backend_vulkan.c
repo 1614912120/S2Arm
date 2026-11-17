@@ -2800,6 +2800,10 @@ nvn_gpu_rc nvn_gpu_shader_load(const nvn_gpu_shader_src *s, nvn_gpu_shader *out,
         return fail(err, NVN_GPU_E_UNSUPPORTED, "GS 未启用或探测未通过");
     if (s->kind != NVN_GPU_BLOB_SPIRV) return fail(err, NVN_GPU_E_UNSUPPORTED, "只收 SPIR-V blob（kind=%d）", s->kind);
     if (s->bytes & 3) return fail(err, NVN_GPU_E_ARG, "SPIR-V 字节数不是 4 的倍数");
+    // #1340：shaderInt16 不再是整机门槛。设备没有它时，声明了 OpCapability Int16 的模块不交给驱动（不合法的 SPIR-V），
+    // 按程序报 UNSUPPORTED、why 点名特性；程序层据此记未接清单 shader int16_not_supported。
+    if (!g.dev->core_features.shaderInt16 && s2a_spirv_declares_cap(s->blob, s->bytes, 22) == 1)
+        return fail(err, NVN_GPU_E_UNSUPPORTED, "shaderInt16：设备没有 16 位整数，模块声明了 OpCapability Int16（stage %d）", (int)s->stage);
     struct nvn_gpu_shader_s *sh = calloc(1, sizeof *sh);
     if (!sh) return fail(err, NVN_GPU_E_OOM, "着色器结构分配失败");
     sh->stage = s->stage;
