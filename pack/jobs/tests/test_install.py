@@ -2510,6 +2510,18 @@ class WidgetSignTests(unittest.TestCase):
     """主屏小组件扩展（11-16 小组件 B 半）：Mac 装机按签名方式带 / 去扩展；带不成去掉重签、照常装，黄字说原因"""
     ENGINE = Path(__file__).resolve().parents[3]
 
+    def test_widget_mod_imports_from_the_engine_tree_like_the_mac_app(self):
+        """Mac App 里作业层在 Contents/Resources/Jobs、引擎在 Resources/Engine：widget_mod 要按请求的引擎树导入 pack/widget_ext.py。
+        0.5.0 正式候选 667ccdb92 按本文件往上两级找（= Contents，没有 pack），装到 iPhone 一律 ModuleNotFoundError。
+        新开隔离的 Python（-I：仓库根不在 sys.path），把 install.py 的位置换成 App 里那样，引擎给仓库根"""
+        jobs = Path(install.__file__).resolve().parent
+        code = ("import sys, types; sys.path.insert(0, sys.argv[1]); import install; "
+                "install.__file__ = sys.argv[2]; "
+                "m = install.widget_mod(types.SimpleNamespace(engine=sys.argv[3])); print('ok' if hasattr(m, 'retarget') else 'no')")
+        fake = self.tmp / "S2Arm.app/Contents/Resources/Jobs/install.py"
+        r = subprocess.run([sys.executable, "-I", "-c", code, str(jobs), str(fake), str(self.ENGINE)], capture_output=True, text=True, cwd=self.tmp)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "ok"), r.stderr[-800:])
+
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="s2a-widget-"))
         self.addCleanup(shutil.rmtree, self.tmp, True)
