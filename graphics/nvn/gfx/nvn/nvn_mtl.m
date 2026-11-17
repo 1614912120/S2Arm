@@ -11400,7 +11400,9 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     }
     if (reusable && args_ubo_patchable(sh)) {   // only what the uniform slots point at changed since this block: copy it, write the uniform slots and the bounds table again
         NSUInteger len = sh->arg_len; id<MTLBuffer> ab; size_t off = arena_alloc(len, &ab);
-        uint64_t *p = (uint64_t *)(void *)(g_cur_arena->cpu + off);
+        // The block's addresses are taken now: cbuf_slot (ubd_shadow / ubp_get) and len_fill below allocate from the arena too, and when that starts a new block,
+        //   g_cur_arena->gpu + off named the new block at this block's offset (the table written here, the GPU pointed elsewhere: GPU page faults; same fix as nxnative 44d67fbe)
+        uint64_t *p = (uint64_t *)(void *)(g_cur_arena->cpu + off); const uint64_t agpu = g_cur_arena->gpu + off;
         memcpy(p, (const uint8_t *)sh->ab_buf.contents + sh->ab_off, len);
         uint64_t ubcap[NVN_UBOLEN_N]; for (int r = 0; r < NVN_UBOLEN_N; r++) ubcap[r] = UINT64_MAX; int ul_aid = -1;
         pthread_mutex_lock(&g_rmu);   // as the full encode (the pool lookups of gpu_addr_want)
@@ -11414,8 +11416,8 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
         }
         pthread_mutex_unlock(&g_rmu);
         if (ul_aid >= 0) p[ul_aid] = len_fill(sh, nvn_stage, NVN_RB_UBOLEN, ubcap);
-        bind_args(en, nvn_stage, metal_vertex, ab, g_cur_arena->gpu + off, off, sh->rf.abi);
-        sh->ab_buf = ab; sh->ab_gpu = g_cur_arena->gpu + off; sh->ab_off = off; g_args_ubo[nvn_stage] = 0;   // pass, base instance, pool generation and support copy are the copied block's
+        bind_args(en, nvn_stage, metal_vertex, ab, agpu, off, sh->rf.abi);
+        sh->ab_buf = ab; sh->ab_gpu = agpu; sh->ab_off = off; g_args_ubo[nvn_stage] = 0;   // pass, base instance, pool generation and support copy are the copied block's
         g_stat_args_patch++;
         return 1;
     }
