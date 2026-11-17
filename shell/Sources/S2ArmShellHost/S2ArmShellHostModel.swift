@@ -531,7 +531,7 @@ public final class S2ArmShellHostModel {
     /// 待补文件（#8be819）：有的游戏把代码模块（NRO）藏在自有加密归档里，出包时取不到；第一次跑到那里宿主把游戏解开的整份存到
     ///   <文档根>/games/<号>/wire/<号大写>/nro/<SHA-256>.nro（runtime/src/loader.c s2a_nro_keep），这一局随后闪退。
     ///   手机连上电脑、启动器开着时，装机作业把它拉回、补进包，装好后删掉手机上这几份（pack/jobs/install.py pull_kept_nros）。
-    ///   所以「目录里还有这几份」= 还没补好：库顶提示一条（不拦开局；关了这次打开 App 内不再出，补好前下次打开还会出）
+    ///   所以「目录里还有这几份」= 还没补好：库顶提示一条：连电脑开启动器、点「更新 iPhone 上的 S2Arm」补上（11-16 起启动器与手机都手动更新，不会自动补）；不拦开局，关了这次打开 App 内不再出，补好前下次打开还会出
     public private(set) var nroNotice: IMLNotice?
     @ObservationIgnored private var nroPendingIDs: [String] = []
     @ObservationIgnored private var nroNoticeClosed = false
@@ -546,7 +546,7 @@ public final class S2ArmShellHostModel {
         guard let first = names.first else { return nil }
         let title = names.count == 1 ? String(format: shellText("%@ needs one more file"), first)
                                      : String(format: shellText("%lld games need one more file: %@"), names.count, ListFormatter.localizedString(byJoining: names))
-        return IMLNotice(title: title, body: shellText("Connect your phone to your computer and open the S2Arm launcher. It adds the file automatically. Until then, the game will close again at the same point."))
+        return IMLNotice(title: title, body: shellText("Connect your phone to your computer, open the S2Arm launcher and click “Update S2Arm on iPhone”. That adds the file. Until then, the game will close again at the same point."))
     }
     private func refreshNROPending() {
         let ids = Self.nroPending(gamesRoot: gamesRoot, ids: games.map(\.id))
