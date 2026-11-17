@@ -3011,6 +3011,7 @@
   "游戏库里的「{0}」正被别的程序占用（资源管理器、杀毒扫描或下载工具），等它放开再搬（已等 {1} 秒）": "\"{0}\" en la biblioteca está en uso por otro programa (Explorador de archivos, análisis del antivirus o herramienta de descarga). Esperando a que se libere antes de mover (esperados {1} segundos)",
   "请选择独立的游戏库文件夹，不能直接用整个盘或用户文件夹。": "Elige una carpeta específica para la biblioteca, no una unidad completa ni tu carpeta de usuario.",
   "密钥文件过大。": "El archivo de claves es demasiado grande.",
+  "选的密钥文件找不到了（可能被移动、删除，或还在 iCloud 里没下载到本机）：请重新选择 prod.keys。": "No se encuentra el archivo de claves que elegiste (puede que se haya movido o borrado, o que siga en iCloud sin descargar). Vuelve a elegir prod.keys.",
   "密钥文件格式无效，请选择 prod.keys 文本文件。": "El archivo de claves no es válido. Elige el archivo de texto prod.keys.",
   "缺少有效的 header_key。": "Falta un header_key válido.",
   "读取游戏内容时磁盘空间不足。": "Se agotó el espacio en disco al leer el contenido del juego.",
