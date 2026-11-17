@@ -108,7 +108,9 @@ public sealed partial class EnvironmentWindow
     private async Task<bool> PhoneAutoUpdateTickAsync()
     {
         // 玩家在出包页选了「出完之后导出自签」：不走启动器装机，自动装到手机也不做（玩家选择优先）
-        if (IosAfterPackIsExport || phoneAutoTicking || connectedFolder is null || libraryId is null || ControlBusy || batchRunning) return false;
+        // 只按真冲突跳过（维护者「只按真冲突互斥」）：别的作业在跑照样收（升级首启迁移几分钟，原先「有任何作业就整轮跳过」拖到第 360 秒）；
+        //   和同一台手机上装机 / 推包的冲突由作业层判（phoneKeptPull 拿不到手机锁就这一轮不收）
+        if (IosAfterPackIsExport || phoneAutoTicking || connectedFolder is null || libraryId is null || batchRunning) return false;
         phoneAutoTicking = true;
         try
         {
@@ -132,7 +134,7 @@ public sealed partial class EnvironmentWindow
             if (!(r.TryGetProperty("running", out var run) && run.ValueKind == JsonValueKind.False)) return false;
             // 只发现、不装（11-16 维护者：「改成更稳妥的手动更新吧，启动器和移动端都是」）：重读游戏库，顶栏 / 更新页按 phoneUpdates 亮「更新 iPhone」，玩家点了才装
             var batch = device + ":" + string.Join(",", kept) + (shellUpdate ? ":shell" : "");
-            if (phoneAutoTried.Contains(batch) || ControlBusy || batchRunning) return false;
+            if (phoneAutoTried.Contains(batch) || batchRunning) return false;
             phoneAutoTried.Add(batch);
             await RefreshLibraryAsync();
             return false;
