@@ -2444,8 +2444,49 @@ def phone_kept_pull(c):
     只推程序（正在玩就不推：装 App 会杀掉这局，等它退了下一轮再推）。没连手机 / 没装过 = new 0、不报错"""
     try:
         ph = phone_for(c)
-    except Failure:
-        return dict(device="", new=0, kept=[], shellUpdate=False, stale=[], running=False)
+    except Failure as e:
+        if e.code == "device_required" and not (c.r.get("device") or "").strip():
+            return _kept_pull_many(c)
+        return _kept_pull_none()
+    return _kept_pull_on(c, ph)
+
+
+def _kept_pull_none():   # 没连手机 / 都问不到：每次一份新的（列表不共用）
+    return dict(device="", new=0, kept=[], shellUpdate=False, stale=[], running=False)
+
+
+def _kept_pull_many(c):
+    """多台手机同时连着、请求没说哪台（phone_for 报 device_required）：按游戏库里有设备记录的逐台问
+    （11-16 候选验收：Mac 插着两部 iPhone，启动器的 2 分钟循环每次都拿到 device=""，自动更新永远不触发）。
+    带上设备号建手机对象，认到的不是这台就跳过（这台没连着时选机会退到唯一连着的那台，那不是这条记录）；
+    有事要做（收回了 NRO / 有没补进的款 / 壳要更新）且没在玩的那台先返回，其次是有事但在玩的；都没事返回第一台问到的；一台都问不到 → 空结果。
+    启动器每轮只装返回的那台，下一轮再问时它已经是新版，就轮到下一台。请求里的 device 问完还原"""
+    had, old = "device" in c.r, c.r.get("device")
+    busy = idle = None
+    try:
+        for key, _ in layout.devices(c):
+            c.r["device"] = key
+            try:
+                ph = phone_for(c)
+            except Failure:
+                continue
+            if ph.key != key:
+                continue
+            r = _kept_pull_on(c, ph)
+            if r["new"] or r["kept"] or r["shellUpdate"]:
+                if not r["running"]:
+                    return r
+                busy = busy or r
+            idle = idle or r
+    finally:
+        if had:
+            c.r["device"] = old
+        else:
+            c.r.pop("device", None)
+    return busy or idle or _kept_pull_none()
+
+
+def _kept_pull_on(c, ph):
     rec = layout.load_device(c, ph.key)
     games = [g for g in rec.get("games") or [] if isinstance(g, str)]
     new = ph.pull_kept(games)

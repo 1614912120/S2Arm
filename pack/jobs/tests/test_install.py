@@ -1555,6 +1555,47 @@ class AssembleTests(unittest.TestCase):
                  um.patch.object(packer, "usable_kit", return_value="kit"), um.patch.object(rewrite_refresh, "kept_todo", return_value=[]):
                 self.assertEqual(install.phone_kept_pull(self.c)["running"], want, heartbeat)
 
+    def test_phone_kept_pull_many_devices(self):
+        """多台手机连着、请求没说哪台（11-16 候选验收：Mac 插着两部 iPhone，2 分钟循环每次 device=""，自动更新永远不触发）：
+        按设备记录逐台问——有事且没在玩的那台先回；有事的都在玩回第一台有事的；都没事回第一台；
+        选机退到别的手机（这台没连着、只连着另一台）的记录跳过，不把那台的结论安在它头上；问完请求里的 device 还原"""
+        self._update()
+        A = self.A
+        import ipa as packer, rewrite_refresh
+        state = dict(online={"dev1", "dev2"}, running={})
+        def pf(c):
+            want = (c.r.get("device") or "").strip()
+            if not want:
+                raise Failure("多台", code="device_required")
+            on = state["online"]
+            if want not in on:
+                if len(on) == 1:   # 同 _pick_device / win_udid：给的那台没列着、只连着一台 → 退到那一台
+                    return types.SimpleNamespace(key=next(iter(on)), pull_kept=lambda g: 0, app_running=lambda: False)
+                raise Failure("不在线", code="device_not_connected")
+            return types.SimpleNamespace(key=want, pull_kept=lambda g: 0, app_running=lambda w=want: state["running"].get(w, False))
+        def run(shell1, shell2, online=("dev1", "dev2"), running=None):
+            layout.save_device(self.c, "dev1", dict(games={A: dict(pack="pa")}, shellId=shell1))
+            layout.save_device(self.c, "dev2", dict(games={A: dict(pack="pa")}, shellId=shell2))
+            state["online"], state["running"] = set(online), dict(running or {})
+            with um.patch.object(install, "phone_for", pf), um.patch.object(packer, "current_shell_id", return_value="SID2"), \
+                 um.patch.object(packer, "usable_kit", return_value="kit"), um.patch.object(rewrite_refresh, "kept_todo", return_value=[]):
+                r = install.phone_kept_pull(self.c)
+            self.assertNotIn("device", self.c.r, "问完还原请求（原来没有 device）")
+            return (r["device"], r["shellUpdate"], r["running"])
+        self.assertEqual(run("SID2", "SID1"), ("dev2", True, False), "第一台已是本版、第二台壳旧 → 回第二台")
+        self.assertEqual(run("SID1", "SID1", running={"dev1": True}), ("dev2", True, False), "都壳旧、第一台在玩 → 先回没在玩的")
+        self.assertEqual(run("SID1", "SID1", running={"dev1": True, "dev2": True}), ("dev1", True, True), "都在玩 → 回第一台有事的（启动器这轮不装）")
+        self.assertEqual(run("SID2", "SID2"), ("dev1", False, False), "都没事 → 第一台")
+        self.assertEqual(run("SID2", "SID1", online=("dev1",)), ("dev1", False, False), "dev2 没连着、选机退到 dev1：不把 dev2 的壳旧安到 dev1 头上")
+        def none(c): raise Failure("没连手机", code="device_not_connected")
+        with um.patch.object(install, "phone_for", side_effect=none):
+            self.assertEqual(install.phone_kept_pull(self.c)["device"], "")
+        self.c.r["device"] = "dev1"   # 请求给了哪台、那台多台不明（device_required 不该在给了 device 时出现）：照旧空结果、不逐台问
+        def many(c): raise Failure("多台", code="device_required")
+        with um.patch.object(install, "phone_for", side_effect=many):
+            self.assertEqual(install.phone_kept_pull(self.c)["device"], "")
+        self.assertEqual(self.c.r["device"], "dev1")
+
     def test_app_running(self):
         """自动推送前查手机上 S2Arm 是否在跑（#8be819）：进程在它安装目录下 = True；没有 = False；没装 = False；devicectl 查不了 = None"""
         url = "file:///private/var/containers/Bundle/Application/X/S2Arm.app/"
