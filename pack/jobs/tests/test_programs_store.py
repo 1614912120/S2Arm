@@ -284,5 +284,34 @@ class ProgramStoreTests(unittest.TestCase):
         self.assertEqual(parts["shaders"], [self.cache])
 
 
+class PutDir(unittest.TestCase):
+    """换目录（programs._put_dir）：期望手写——旧的整份被新的取代、不留挪开的旧目录；Windows 上改名被拒（WinError 5，杀软扫描）退避重试后成功"""
+    def setUp(self):
+        self.t = Path(tempfile.mkdtemp()); self.addCleanup(shutil.rmtree, self.t, True)
+        self.part, self.dest = self.t / "kit.partial", self.t / "kit"
+        self.part.mkdir(); (self.part / "new.txt").write_text("新")
+        self.dest.mkdir(); (self.dest / "old.txt").write_text("旧")
+
+    def test_existing_dest_is_replaced_whole(self):
+        programs._put_dir(self.part, self.dest)
+        self.assertEqual(sorted(p.name for p in self.dest.iterdir()), ["new.txt"])
+        self.assertEqual(sorted(p.name for p in self.t.iterdir()), ["kit"])   # 没留 kit.partial / kit.old-*
+
+    def test_busy_rename_is_retried_on_windows(self):
+        sys.path.append(str(Path(programs.__file__).resolve().parents[2]))
+        from pack.orch import dirrename
+        real, calls = Path.rename, []
+        def rename(src, dst):
+            calls.append(src.name)
+            if len(calls) == 1:
+                raise PermissionError(13, "被占用")   # 没有 winerror 属性按 5 认（同 dirrename）
+            return real(src, dst)
+        with mock.patch.object(dirrename, "os", SimpleNamespace(name="nt")), mock.patch.object(dirrename, "DIR_RENAME_RETRIES", (0, 0)), \
+             mock.patch.object(Path, "rename", rename):
+            programs._put_dir(self.part, self.dest)
+        self.assertEqual(calls, ["kit", "kit", "kit.partial"])   # 挪开旧的：第一次被拒、第二次成功；再把新的改名就位
+        self.assertEqual((self.dest / "new.txt").read_text(), "新")
+
+
 if __name__ == "__main__":
     unittest.main()
