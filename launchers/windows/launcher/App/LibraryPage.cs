@@ -787,6 +787,18 @@ public sealed partial class EnvironmentWindow
         return libraryOperation = RunLibraryAsync("catalog", null);
     }
 
+    /// <summary>把刚读到的游戏目录落到界面状态：换目录、清封面缓存；选中的那款若不在新目录里（删了 / 藏了），
+    /// 选中清空、顶部回退到第一款。只落状态、不跑作业——夹具直接调它模拟“目录重读回来了”。
+    /// 例外：正在出包或刚出好包的那款不清空——出包成功后重读目录时它若暂时不在列表里，选中丢了就回不来了（#1392）。</summary>
+    private void ApplyCatalog(LibraryCatalog fresh)
+    {
+        catalog = fresh; ClearCovers();
+        if (!catalog.Games.Any(g => g.Id == selectedGame && !g.Hidden)
+            && !(packGame is { } packed && packState is "running" or "succeeded" && selectedGame == packed.Id))
+            selectedGame = null;
+        librarySummary = "library.completed";
+    }
+
     private async Task RunLibraryAsync(string operation, string[]? selectedPaths)
     {
         if (libraryBusy) { if (operation == "catalog") catalogAgain = true; return; }
@@ -819,9 +831,7 @@ public sealed partial class EnvironmentWindow
             var listing = await LibraryJobClient.RunAsync(paths, privateRoot, connectedFolder!, libraryId, "catalog", null, front.Token, jobId: front.Next(), startup: TakeStartupCatalog());
             DisplayJob(listing);
             if (!listing.Report.Succeeded) { librarySummary = "library.failed"; return; }
-            catalog = LibraryCatalog.Parse(listing.Report.Result); ClearCovers();
-            if (!catalog.Games.Any(g => g.Id == selectedGame && !g.Hidden)) selectedGame = null;
-            librarySummary = "library.completed";
+            ApplyCatalog(LibraryCatalog.Parse(listing.Report.Result));
             _ = PreparePhoneUpdateAsync();   // 新版启动器头一次读到要更新的手机：后台准备 iPhone App 更新（PhoneAutoUpdate.cs）
         }
         catch (LibraryProtocolException error)
