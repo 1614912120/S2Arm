@@ -151,6 +151,36 @@ class ProgramStoreTests(unittest.TestCase):
         layout.ios_kit(self.c, GID)
         self.assertEqual(taken, ["programs-migrate-" + GID])
 
+    def test_two_concurrent_first_uses_migrate_once(self):
+        # 真并发（11-16 Windows 升级首启：清单与两单作业同一秒迁移同一款撞 WinError 32）：两个线程同时第一次用到同一款旧布局，
+        #   用真文件锁（filelock.held，同 c.lock）。期望手写：原始程序只存一次（第二个等第一个搬完、再看已没有旧件）；两边都拿到同一份完整 kit；
+        #   旧位置删掉、没有 .partial / .old- 残留、没有异常
+        import contextlib, filelock, threading
+        @contextlib.contextmanager
+        def lock(name, wait=None):
+            with filelock.held(self.c.library / f".{name}.lock", wait_s=60):
+                yield
+        self.c.lock = lock
+        game = layout.game_dir(self.c, GID)
+        shutil.copytree(self.product(), game / "image/ios/kit"); shutil.copytree(self.exefs(), game / "original-exefs")
+        real, saves = programs.save_exefs, []
+        def slow_save(c, gid, exefs):   # 拉长迁移，两个线程必然重叠
+            saves.append(threading.get_ident()); threading.Event().wait(0.3); return real(c, gid, exefs)
+        got, errs, start = {}, [], threading.Barrier(2)
+        def use(i):
+            try:
+                start.wait(); got[i] = layout.ios_kit(self.c, GID)
+            except BaseException as e:
+                errs.append(e)
+        with mock.patch.object(programs, "save_exefs", slow_save):
+            ts = [threading.Thread(target=use, args=(i,)) for i in range(2)]
+            [t.start() for t in ts]; [t.join(30) for t in ts]
+        self.assertEqual(errs, []); self.assertEqual(len(saves), 1)
+        self.assertEqual(got[0], got[1]); self.assertTrue((got[0] / "main.npdm").is_file())
+        self.assertFalse((game / "image/ios/kit").exists()); self.assertFalse((game / "original-exefs").exists())
+        left = [p for p in self.root.rglob("*") if ".partial" in p.name or ".old-" in p.name]
+        self.assertEqual(left, [])
+
     def test_archive_write_is_safe_when_target_is_busy(self):
         # 期望手写：同一内容再写一遍不换文件（别的进程正开着读也不碰它）；Windows 换文件被占（WinError 32）退避后成功，临时文件不留
         programs.save_exefs(self.c, GID, self.exefs())   # 直接测写归档这一层（sgrade.save_program 主程序没变就不写）
