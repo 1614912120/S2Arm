@@ -2114,7 +2114,8 @@ void s2a_mac_gpu_stuck(const char *why) {
         } else {
             fprintf(stderr, "[s2a] GPU 卡住暂停：玩家选退出，收尾\n");
             // 收局退出码 86（同 GPU 挂死安全停，runtime/src/lifecycle.c）：游戏是卡住后被停下的、不是玩完了，启动器按它说「游戏卡住了，已经安全停下」而不是「操作完成」（#1378）
-            void s2a_host_exit_code(int code); s2a_host_exit_code(86);
+            //   按名取（同 host_adapt.m）：输入单测只链本文件、不链 lifecycle.c，取不到就照旧
+            void (*code)(int) = (void (*)(int))dlsym(RTLD_DEFAULT, "s2a_host_exit_code"); if (code) code(86);
             dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ s2a_host_shutdown("GPU 卡住，玩家选退出"); });
         }
     });
