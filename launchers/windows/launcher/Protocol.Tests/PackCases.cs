@@ -236,6 +236,12 @@ public static class PackCases
             check(slots.Contains("CloseWaitLimit = TimeSpan.FromSeconds(20)") && slots.Contains("closeAnyway = true"),
                 "close: waiting for jobs is capped well under the installer's 90 s, then the window closes anyway");
         }
+        // 更新装完拉起不靠当前目录（NetSparkle 脚本 cd 不带 /d，装在非系统盘时相对的 S2Arm.exe 找不到、静默不拉起）：可执行文件给绝对路径、前缀 cd /d
+        {
+            var upd = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "AppSource", "UpdateFlow.cs"));
+            check(upd.Contains("RestartExecutableName = Path.Combine(InstallDir,") && upd.Contains("RelaunchAfterUpdateCommandPrefix = $\"cd /d"),
+                "update: relaunch uses the absolute exe path and cd /d (works when installed on a non-system drive)");
+        }
         // 客户端不判要不要游戏号（自己人之间不设允许清单，#1149）：以后新增一种不带游戏号的作业不用改客户端；
         //   要游戏的作业空着游戏号也照样发出去，由作业层报「请求里没有游戏号」（pack/jobs/core.py Context.game）
         foreach (var op in new[] { "someFutureMachineJob", "ipa" })

@@ -17,5 +17,6 @@
     <None Include="../App/LibraryPage.cs" Link="AppSource/LibraryPage.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../App/ExportPages.cs" Link="AppSource/ExportPages.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../App/JobSlots.cs" Link="AppSource/JobSlots.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../App/UpdateFlow.cs" Link="AppSource/UpdateFlow.cs" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
