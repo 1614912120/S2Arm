@@ -212,6 +212,8 @@ public static class PackCases
             var body = tickAt < 0 ? "" : src[tickAt..];
             check(tickAt >= 0 && !body.Contains("UpdatePhoneAsync(") && !body.Contains("\"installUpdate\"") && body.Contains("RefreshLibraryAsync()"),
                 "phone auto tick: finds updates and refreshes the library, never starts an iPhone install (manual update)");
+            // 只按真冲突互斥：别的作业在跑照样收（升级首启迁移时原先整轮跳过，拉回拖到第 360 秒）；手机在用由作业层的手机锁判
+            check(tickAt >= 0 && !body.Contains("ControlBusy"), "phone auto tick: not skipped just because another job is running");
         }
         // 客户端不判要不要游戏号（自己人之间不设允许清单，#1149）：以后新增一种不带游戏号的作业不用改客户端；
         //   要游戏的作业空着游戏号也照样发出去，由作业层报「请求里没有游戏号」（pack/jobs/core.py Context.game）

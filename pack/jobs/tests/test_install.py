@@ -993,6 +993,18 @@ class KeptNroTests(unittest.TestCase):
         ph.drop_kept(self.G, [f"{a}.nro"])
         self.assertEqual(rms, [f"{install.game_docs(self.G)}/wire/{self.G.upper()}/nro/{a}.nro"])
 
+    def test_pull_skips_only_when_the_phone_is_in_use(self):
+        # 只按真冲突互斥（候选验收：升级首启迁移几分钟，前端「有任何作业就整轮跳过」，拉回拖到第 360 秒）。期望手写：
+        #   手机锁被装机 / 推包占着（ipa.phone_lock）→ 这一轮不碰手机、回空结果；锁空着 → 照常收（别的作业在跑不影响，前端不再拦）
+        pulled = []
+        ph = types.SimpleNamespace(key="dev1", pull_kept=lambda games: pulled.append(list(games)) or 0, app_running=lambda: False)
+        install.layout.save_device(self.c, "dev1", dict(games={self.G: {}}))
+        with self.c.lock("phone"):
+            r = install._kept_pull_on(self.c, ph)
+        self.assertEqual((r["device"], r["new"], pulled), ("", 0, []))
+        r = install._kept_pull_on(self.c, ph)
+        self.assertEqual((r["device"], pulled), ("dev1", [[self.G]]))
+
 class PullSeenTests(unittest.TestCase):
     setUp = tj.JobsTests.setUp; tearDown = tj.JobsTests.tearDown
 
