@@ -177,7 +177,10 @@ def rebuild(c, gid):
         return None
     import rewrite_refresh as rr
     kit = cache(c, gid) / "kit"
-    work = Path(tempfile.mkdtemp(prefix=".kit-", dir=cache(c, gid).parent if cache(c, gid).parent.is_dir() else None))
+    # 临时目录必须和 kit 同卷：原先缓存的上级不在（第一次用、或玩家「释放空间」清过缓存）就落到系统临时目录（C: / 内置盘），
+    #   游戏库在别的盘时最后 os.replace 跨卷报 WinError 17 / EXDEV，现建失败、这款更新 iPhone / 装机失败（11-16 Windows 实机按配方现建实测）
+    cache(c, gid).parent.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix=".kit-", dir=cache(c, gid).parent))
     try:
         built = work / "kit"
         _extract(arc, built)

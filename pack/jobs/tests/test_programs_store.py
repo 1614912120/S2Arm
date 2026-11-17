@@ -95,6 +95,18 @@ class ProgramStoreTests(unittest.TestCase):
         self.assertFalse((kit / "romfs.std").exists())
         self.assertNotIn("romfs.std", self.names(self.store / "recipe.tar.zst"))
 
+    def test_rebuild_works_beside_the_kit_even_when_cache_was_cleared(self):
+        # 期望手写：程序缓存整个被清掉（连 cache/programs 都不在）后现建，临时目录建在 kit 的同级（同卷），不落系统临时目录——
+        #   游戏库在别的盘时跨卷 os.replace 会报 WinError 17 / EXDEV（11-16 Windows 实机实测）。现建出的 kit 照样完整
+        self.export()
+        shutil.rmtree(self.root / "work/cache")
+        real, dirs = tempfile.mkdtemp, []
+        def mkdtemp(*a, **k):
+            dirs.append(k.get("dir")); return real(*a, **k)
+        with mock.patch.object(programs.tempfile, "mkdtemp", mkdtemp):
+            kit = programs.rebuild(self.c, GID)
+        self.assertEqual(dirs, [self.cache.parent]); self.assertTrue((kit / "main.npdm").is_file())
+
     def test_cache_deleted_rebuilds_same_kit(self):
         for rows, seen in (("", "-"), ("p main 1 2 3 # x\n", "rows")):
             with self.subTest(rows=bool(rows)):
