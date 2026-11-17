@@ -118,7 +118,11 @@ def _iml_device_hint(c, tgt, gid):
     ios_ver 取目标设备系统大版本；has_iml 按签名配置判（dev/adhoc 均带 IML，pack/app.entitlements 只有 IML）；
     addr_need.tsv 在产物根里（stage_rewrite.sh 生成，若不存在不报错）。读不到设备 / 表缺失不报错不中止。
     """
-    iml_check_path = Path(__file__).resolve().parents[1] / "iml_check.py"
+    # 按请求的引擎树找（同 install.widget_mod）：Mac App 里作业层在 Resources/Jobs、iml_check.py 在 Resources/Engine/pack，
+    #   原先按本文件往上一级找（= Resources），App 里永远找不到、提示悄悄不出；引擎树里没有时才退回源码树
+    iml_check_path = Path(c.engine) / "pack" / "iml_check.py"
+    if not iml_check_path.is_file():
+        iml_check_path = Path(__file__).resolve().parents[1] / "iml_check.py"
     if not iml_check_path.is_file():
         return
     has_iml = True   # dev 签名描述文件允许 IML = 有；adhoc 自签 app.entitlements 只带 IML = 有
@@ -370,8 +374,7 @@ def _build(c):
     pack_dir = out / (ipa.stem + "资源包")   # 同 pack/oneclick/oneclick.sh 的交付布局
     patches.record(c, gid, "ios", product_root(c, gid))   # 补丁打入结果（打上 / 没打上，完成页列；deliver 之前产物根还在，11-14）
     deliver(c, gid, product_root(c, gid), pack_dir, ipa)
-    import sgrade   # iPhone 设置页的 S 级状态底料（版本对照 / 满屏来源 / 出包时选不打入；手机上没有补丁库，开关与自动关由手机本机算）
-    sgrade.write_kit_state(c, gid, layout.ios_kit(c, gid))
+    finish_kit_state(c, gid)
     if c.r.get("platform") == "tvos":   # Apple TV（11-15）：同一份改写产物派生（pack/jobs/tvos.py derive），要在清解包目录之前（ASTC 预转读 romfs）
         import tvos
         tvos.derive(c, gid, extraction)
@@ -465,6 +468,16 @@ def phone_lock(c):
 
 
 CONTAINER_BUNDLE = "io.s2arm.games"   # 组装时的占位包名：Mac 装机换成团队专属的 io.s2arm.games.<团队>（install.container_bundle_id）；Windows 由 plumesign 按账号定
+
+
+def finish_kit_state(c, gid):
+    """出 iPhone 包收尾：iPhone 设置页的 S 级状态底料写进 kit（sgrade_state.json：版本对照 / 满屏来源 / 出包时选不打入；手机上没有补丁库，
+    开关与自动关由手机本机算），再把常驻配方重存一次——它在 deliver 存配方之后才写，不重存的话缓存清掉、按配方现建的 kit 缺它，
+    手机 S 级设置页没底料（11-16 Windows 实机按配方现建对比：37 / 38 同，只缺它）"""
+    import programs
+    import sgrade
+    sgrade.write_kit_state(c, gid, layout.ios_kit(c, gid))
+    programs.save_recipe(c, gid)
 
 
 def deliver(c, gid, root, pack_dir, ipa):

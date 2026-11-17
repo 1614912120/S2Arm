@@ -973,12 +973,12 @@ print(op + " 8 字节 → " + sys.argv[3])
         self.assertEqual(ops.read_text().split(), ["put-at", "rm", "put"])
 
     def test_denied_and_not_removable_reports_phone_words_and_next_step(self):
-        # 期望（手写）：删也被拒 → 不再写，报手机原话（Permission denied）+ 下一步（手机上打开一次 S2Arm）；分类成「App 写不进」
+        # 期望（手写）：删也被拒 → 不再写，报手机原话（Permission denied）+ 下一步（导出存档、删除重装 S2Arm：App 改不了这个目录的属主，迁移 11-15 已撤）；分类成「App 写不进」
         dev, ops = self.denied_helper(rm_ok=False)
         with self.assertRaises(push.Fail) as cm:
             dev.put(self.pk / "a", "Library/S2Arm/games/G/资源包/game.img")
         self.assertEqual(ops.read_text().split(), ["put", "rm"])
-        self.assertIn("Permission denied", str(cm.exception)); self.assertIn("在手机上打开一次 S2Arm", str(cm.exception))
+        self.assertIn("Permission denied", str(cm.exception)); self.assertIn("删除并重新安装 S2Arm", str(cm.exception))
         self.assertEqual(push.push_reason(str(cm.exception)), "手机上这个文件 App 写不进（Permission denied）")
 
     def image_plan(self):

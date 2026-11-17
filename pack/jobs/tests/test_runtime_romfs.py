@@ -2,6 +2,7 @@
 # Copyright 2026 S2Arm contributors
 """Mac 运行包必须包含独立 RomFS；共享存储链接不能漏拷或逃逸。"""
 import errno
+import jobcase  # noqa: E402（作业上下文替身统一工厂 jobcase.fake_context）
 import importlib.util
 import json
 import os
@@ -32,7 +33,7 @@ class RuntimeRomfs(unittest.TestCase):
         (self.source / "romfs").symlink_to("../.romfs_store/game/input-v1")
         self.dest = self.base / "library/games/game/releases/new.partial"
         self.dest.mkdir(parents=True)
-        self.c = types.SimpleNamespace(library=self.base / "library", check=lambda: None, progress=lambda *a: None)
+        self.c = jobcase.fake_context(self.base, library=self.base / "library", check=lambda: None, progress=lambda *a: None)
 
     def test_store_link_materializes_independent_readonly_files(self):
         (self.store / "data.bin").chmod(0o444)

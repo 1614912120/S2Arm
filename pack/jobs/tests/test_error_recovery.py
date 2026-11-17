@@ -67,6 +67,16 @@ class ErrorRecoveryTests(JobCase):
         self.assert_failure(failed, "keys_invalid")
         self.assertEqual(self.c.keys.read_bytes(), before)
 
+    def test_missing_keys_file_is_keys_invalid_not_our_file_missing(self):
+        # 诊断#c719ce：选的 prod.keys 已经不在（被移动 / 删除 / iCloud 没下载），原先 stat 抛 FileNotFoundError 落到 job_failed，
+        #   报成「S2Arm 自己的文件找不到了」。期望手写：报 keys_invalid、说是选的密钥文件找不到、让玩家重新选；原有密钥不变
+        self.import_keys()
+        before = self.c.keys.read_bytes()
+        _, failed = self.worker("keys", path=str(self.root / "gone" / "prod.keys"))
+        diagnostic = self.assert_failure(failed, "keys_invalid")
+        self.assertIn("找不到", json.dumps(diagnostic, ensure_ascii=False)); self.assertIn("重新选择", json.dumps(diagnostic, ensure_ascii=False))
+        self.assertEqual(self.c.keys.read_bytes(), before)
+
     def test_specific_reader_error_replaces_tool_exit_and_preserves_evidence(self):
         self.import_keys(); self.install_reader_fixture()
         source = self.root / "source.nsp"

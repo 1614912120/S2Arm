@@ -30,11 +30,16 @@ public struct S2ArmShellHostView: View {
                 if s2a_shell_take_open_settings() != 0 { DispatchQueue.main.async { NotificationCenter.default.post(name: .shellOpenSettings, object: nil) } }
             }
             .onDisappear { model.stopControllers() }
-            // 库顶上的提示：这次安装丢了「提高内存上限」权限（可关，关了这次安装内不再出）；删除游戏的进度与结果（点一下收起结果）
+            // 库顶上的提示：这次安装丢了「提高内存上限」权限（可关，只管这次打开；「了解详情」看各装法怎么带上）；删除游戏的进度与结果（点一下收起结果）
             .overlay(alignment: .top) {
                 VStack(spacing: 10) {
                     if let iml = model.imlNotice, !model.guideOpen {   // 首次引导开着时先不出（引导盖在上面、点不到关闭），引导关了再出
-                        IMLNoticeBar(notice: iml, close: { model.closeIMLNotice() })
+                        IMLNoticeBar(notice: iml, close: { model.closeIMLNotice() }, more: { model.openIMLGuide() })
+                            .onAppear { s2a_shell_iml_notice_seen() }   // 真显示出来才记（起局那条不再重复）
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                    if let nro = model.nroNotice, !model.guideOpen {   // 待补文件（#8be819）：连电脑开启动器自动补上；补好后自动消失
+                        IMLNoticeBar(notice: nro, close: { model.closeNRONotice() }, symbol: "puzzlepiece.extension", id: "nro.notice")
                             .transition(.move(edge: .top).combined(with: .opacity))
                     }
                     if let notice = model.deleteNotice {
@@ -46,6 +51,8 @@ public struct S2ArmShellHostView: View {
             }
             .animation(.smooth(duration: 0.25), value: model.deleteNotice)
             .animation(.smooth(duration: 0.25), value: model.imlNotice)
+            .sheet(isPresented: Binding(get: { model.imlGuideOpen }, set: { model.imlGuideOpen = $0 })) { IMLGuideView() }
+            .animation(.smooth(duration: 0.25), value: model.nroNotice)
             // 首次进入引导（三页横滑：设置 / 金手指 / 故障报修），盖在最上面；看过一次就不再弹
             .overlay {
                 if model.guideOpen {
@@ -89,20 +96,30 @@ public struct S2ArmShellHostView: View {
 struct IMLNoticeBar: View {
     let notice: S2ArmShellHostModel.IMLNotice
     let close: () -> Void
+    var more: (() -> Void)? = nil   // 「了解详情」：给了才出这个按钮
+    var symbol = "memorychip"
+    var id = "iml.notice"
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "memorychip").font(.system(size: 18, weight: .semibold)).foregroundStyle(Color(red: 1, green: 0.78, blue: 0.28))
+            Image(systemName: symbol).font(.system(size: 18, weight: .semibold)).foregroundStyle(Color(red: 1, green: 0.78, blue: 0.28))
                 .padding(.top, 2).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(notice.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(.white).fixedSize(horizontal: false, vertical: true)
                 Text(notice.body).font(.system(size: 13)).foregroundStyle(.white.opacity(0.72)).fixedSize(horizontal: false, vertical: true)
+                if let more {
+                    Button(action: more) {
+                        Text(shellText("Learn more")).font(.system(size: 13, weight: .semibold)).foregroundStyle(Color(red: 1, green: 0.78, blue: 0.28))
+                            .padding(.top, 2).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).accessibilityIdentifier(id + ".more")
+                }
             }
             Spacer(minLength: 0)
             Button(action: close) {
                 Image(systemName: "xmark").font(.system(size: 13, weight: .bold)).foregroundStyle(.white.opacity(0.7)).frame(width: 30, height: 30)
                     .contentShape(Rectangle())
             }
-            .buttonStyle(.plain).accessibilityLabel(shellText("Close")).accessibilityIdentifier("iml.notice.close")
+            .buttonStyle(.plain).accessibilityLabel(shellText("Close")).accessibilityIdentifier(id + ".close")
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
         .background(Color(red: 0.075, green: 0.075, blue: 0.082).opacity(0.96), in: RoundedRectangle(cornerRadius: 16))

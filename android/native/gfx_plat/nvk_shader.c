@@ -477,6 +477,94 @@ struct facts {
     uint32_t ubo_use[6];
 };
 
+// ---- 句柄在游戏用户常量缓冲里的贴图事实（#999 第 4 片；编译器侧契约见 DirectGpuAccessor.NeedTexture）----
+// 编译器对 c3..c18 里的句柄字只认精确事实 (阶段, 字下标, cbufSlot)，缺了按这个坐标报 MISSING_FACT。宿主事先不知道一份着色器
+// 读哪些常量缓冲字，所以按编译器报的坐标学：记在「阶段 + 阶段键」名下（ubo_need_learn），之后这份着色器每次建请求都读那个字
+// （同回放 rp_draw.c ubo_word：这一刻游戏内存里的值），低 20 位 + 池起点 = 贴图号，按登记快照给事实。读不到 / 没登记就不给，
+// 编译器照实报缺、这笔照旧取不到——不猜类型。表只有提交线程读写（fill_facts / input_sig / work_run 现编段都在提交线程），rp_shader_reset 清。
+int rp_pool_find(uint64_t addr, uint64_t len, const uint8_t **mem, uint64_t *size);   // rp_entry.c
+static const uint8_t *stage_key(unsigned st);
+enum { UBO_NEED_SLOTS = 256, UBO_NEED_PROBE = 16, UBO_NEED_COORDS = 8 };
+struct ubo_need { uint8_t key[8], st, used, n; struct { uint16_t word; uint8_t cbuf; } c[UBO_NEED_COORDS]; };
+static struct ubo_need g_ubo_need[UBO_NEED_SLOTS];
+static unsigned g_ubo_need_n;     // 有坐标的项数：0 时 input_sig / fill_facts 一步不多走（绝大多数游戏）
+static int g_ubo_learned;         // 本次现编学到了新坐标（resolve_slow 据此当场重编一次）
+static struct ubo_need *ubo_need_at(int st, const uint8_t key[8], int add) {
+    uint64_t h = 1469598103934665603ull;
+    for (int i = 0; i < 8; i++) { h ^= key[i]; h *= 1099511628211ull; }
+    h ^= (uint64_t)st; h *= 1099511628211ull;
+    for (unsigned k = 0; k < UBO_NEED_PROBE; k++) {
+        struct ubo_need *e = &g_ubo_need[(h + k) & (UBO_NEED_SLOTS - 1)];
+        if (e->used && e->st == st && !memcmp(e->key, key, 8)) return e;
+        if (!e->used) {
+            if (!add) return NULL;
+            memset(e, 0, sizeof *e); memcpy(e->key, key, 8); e->st = (uint8_t)st; e->used = 1; g_ubo_need_n++;
+            return e;
+        }
+    }
+    return NULL;
+}
+static struct ubo_need *ubo_need_find(int st) {
+    if (!g_ubo_need_n) return NULL;
+    struct ubo_need *e = ubo_need_at(st, stage_key((unsigned)st), 0);
+    return e && e->n ? e : NULL;
+}
+// 现编失败的摘要里带编译器错误 JSON；只认 MISSING_FACT 且坐标是用户常量缓冲（cbufSlot 3..18）的那种。1 = 学到新坐标
+static int ubo_need_learn(const char *summary, const uint8_t (*keys)[8], int nst) {
+    if (!summary || !strstr(summary, "\"code\":\"MISSING_FACT\"")) return 0;
+    const char *m = strstr(summary, " has no source (stage=");
+    if (!m) return 0;
+    m += strlen(" has no source (stage=");
+    int st = !strncmp(m, "vs,", 3) ? 0 : !strncmp(m, "fs,", 3) ? 1 : !strncmp(m, "gs,", 3) ? 2 : -1;
+    unsigned word = 0; int cbuf = 0; char close = 0;
+    if (st < 0 || st >= nst || sscanf(m + 3, "handle=%u,cbufSlot=%d%c", &word, &cbuf, &close) != 3 || close != ')') return 0;
+    if (cbuf < 3 || cbuf > 18 || word >= 0x10000 / 4) return 0;
+    struct ubo_need *e = ubo_need_at(st, keys[st], 1);
+    if (!e) { red1("ubo_handle_need_table_full", "着色器的常量缓冲句柄坐标表满"); return 0; }
+    for (unsigned i = 0; i < e->n; i++) if (e->c[i].word == word && e->c[i].cbuf == cbuf) return 0;
+    if (e->n == UBO_NEED_COORDS) { red1("ubo_handle_need_coords_full", "一份着色器读的常量缓冲句柄超过 8 个"); return 0; }
+    e->c[e->n].word = (uint16_t)word; e->c[e->n].cbuf = (uint8_t)cbuf; e->n++;
+    return 1;
+}
+// 常量缓冲 cbuf（c3 起 = 用户槽 cbuf − 3）字下标 word 处的句柄 → 贴图号。-1 = 槽没绑 / 越界 / 不在登记过的池里
+static long ubo_tex_id(int st, unsigned cbuf, unsigned word) {
+    const unsigned reg = cbuf - 3, off = word * 4;
+    if (reg >= 16) return -1;
+    const p_bind_buf *u = &rp_S.ubo[st][reg];
+    if (!u->addr || (uint64_t)off + 4 > u->size || !rp_pool_find(u->addr + off, 4, NULL, NULL)) return -1;
+    uint32_t h; memcpy(&h, (const void *)(uintptr_t)(u->addr + off), 4);
+    return (long)(h & 0xFFFFF) + rp_S.tex_base;
+}
+static int request_texture_fact(uint32_t fmt, uint32_t target, uint32_t layers, struct s2a_nvn_texture_fact *out, char *why, size_t why_size);
+static void ubo_facts_add(struct facts *f, int st) {
+    const struct ubo_need *e = ubo_need_find(st);
+    for (unsigned i = 0; e && i < e->n && f->ntex < S2A_COMPILE_TEXTURE_MAX; i++) {
+        long id = ubo_tex_id(st, e->c[i].cbuf, e->c[i].word);
+        tex_t t; view_t tv; int has_tv = 0; struct s2a_nvn_texture_fact nf; char why[96];
+        if (id < 0 || !rp_tex_snap_by_id((int)id, &t, &tv, &has_tv)) continue;
+        if (request_texture_fact((uint32_t)(has_tv && tv.set_format ? tv.format : t.d.format), (uint32_t)(has_tv && tv.set_target ? tv.target : t.d.target), t.d.depth, &nf, why, sizeof why)) continue;
+        int n = f->ntex++;
+        memcpy(f->tfmt[n], nf.format, sizeof f->tfmt[n]); memcpy(f->tsmp[n], nf.sampler_type, sizeof f->tsmp[n]);
+        f->tex[n] = (struct s2a_compile_texture_src){st == 0 ? "vs" : st == 1 ? "fs" : "gs", e->c[i].word, e->c[i].cbuf, f->tsmp[n], f->tfmt[n], nf.is_buffer, nf.normalized, 0, nf.array_length};
+    }
+}
+// 快路摘要用：这份着色器学过的每个坐标此刻指向的贴图的编译事实（格式 / 目标 / 深度；读不到记「无」）
+static uint64_t ubo_fact_sig(int st) {
+    const struct ubo_need *e = ubo_need_find(st);
+    if (!e) return 0;
+    uint64_t h = 1469598103934665603ull;
+    #define UMIX(v) do { h ^= (uint64_t)(v); h *= 1099511628211ull; } while (0)
+    for (unsigned i = 0; i < e->n; i++) {
+        long id = ubo_tex_id(st, e->c[i].cbuf, e->c[i].word);
+        tex_t t; view_t tv; int has_tv = 0;
+        if (id >= 0 && rp_tex_snap_by_id((int)id, &t, &tv, &has_tv)) {
+            UMIX(1); UMIX(has_tv && tv.set_format ? tv.format : t.d.format); UMIX(has_tv && tv.set_target ? tv.target : t.d.target); UMIX(t.d.depth);
+        } else UMIX(2);
+    }
+    #undef UMIX
+    return h;
+}
+
 static int depth_clip_cap(void);
 static void fill_facts(const struct rp_shader_req *q, const struct s2a_direct_compile_context *pc, struct facts *f, int nst) {
     memset(f, 0, sizeof *f);
@@ -534,6 +622,7 @@ static void fill_facts(const struct rp_shader_req *q, const struct s2a_direct_co
         memcpy(f->tfmt[n], nf.format, sizeof f->tfmt[n]); memcpy(f->tsmp[n], nf.sampler_type, sizeof f->tsmp[n]);
         f->tex[n] = (struct s2a_compile_texture_src){(const char *const[]){"vs", "fs", "gs"}[st], (uint32_t)(90 + 2 * slot), 2, f->tsmp[n], f->tfmt[n], nf.is_buffer, nf.normalized, 1, nf.array_length};
     }
+    for (int st = 0; st < nst; st++) ubo_facts_add(f, st);   // 句柄在用户常量缓冲里的贴图（见 ubo_need_learn）
 }
 
 #include "nvk_shader_fact_cache.h"
@@ -957,6 +1046,7 @@ static struct entry *work_run(const struct work_snap *s, int background) {
             atomic_fetch_add_explicit(&g_n_failed, 1, memory_order_relaxed);
             red1("compile_failed", oc.summary);
             compiler_rejected(oc.summary);
+            if (ubo_need_learn(oc.summary, (const uint8_t (*)[8])s->keys, s->nst)) g_ubo_learned = 1;
             s2a_compile_outcome_free(&oc);
             struct entry *fe = (struct entry *)calloc(1, sizeof *fe);
             if (fe) { fe->failed = 1; memcpy(fe->prog.identity, s->identity, 32); }
@@ -1182,6 +1272,7 @@ static uint64_t input_sig(const struct rp_shader_req *q, const struct s2a_direct
         // 几何阶段（VS|FS|GS）在重场景里极少出现，不进上面那张小表：直接算这 32 格的摘要（省下每次比 32 个句柄）。
         if (stages & 4u) MIX(rp_tex_fact_sig(rp_S.tex[2], 32, rp_S.tex_base, rp_S.tex_pool_n));
         if (stages & 4u) MIX(sep_fact_sig(2));
+        if (g_ubo_need_n) for (int st = 0; st < 3; st++) if (st < 2 || (stages & 4u)) MIX(ubo_fact_sig(st));
     }
     #undef MIX
     return h;
@@ -1439,6 +1530,7 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
     struct entry *ne = NULL;
     const uint64_t dg_c0 = atomic_load(&g_n_compiled);
     struct work_snap *snap = snap_capture(&f, &id, sha, &pc, stages, nst);
+    g_ubo_learned = 0;
     if (!snap || !(ne = work_run(snap, 0))) {
         snap_free(snap);
         if (claimed) inflight_abort(sha);
@@ -1460,7 +1552,16 @@ static int resolve_slow(const struct rp_shader_req *q, const struct rp_prog **ou
     struct entry *use = pr > 0 ? ne : have;
     if (pr == 0) entry_free(ne);
     // 失败标志在发布锁内读好带出来：发布之后 entry 已归缓存，会话收尾（rp_shader_reset）可能回收它。
-    if (failed) return -1;
+    if (failed) {
+        // 编译器报缺的是用户常量缓冲里的句柄事实、且刚学到这个坐标：带上它当场重建请求（身份随事实变，不撞上面这份失败项）。
+        // 每轮至少多学一个坐标、每份着色器至多 8 个，深度有界；同一笔绘制就能画出来，不必等下一帧。
+        static int depth;
+        if (!g_ubo_learned || depth >= UBO_NEED_COORDS) return -1;
+        g_ubo_learned = 0; depth++;
+        int rc = resolve_slow(q, out, pcp, stages, nst, group);
+        depth--;
+        return rc;
+    }
     *out = &use->prog;
     if (reusable && use->fact_ok) fact_cache_keep_mask(&id, fact_base, use->fact_mask, &use->prog);
     nvk_prog_warm_note(&rec);   // 真实 resolve 成功：记身份 + uses（含 c1）
@@ -1755,6 +1856,7 @@ void rp_shader_reset(void) {
     // （摘要首项是计算专用的域标记），这一次释放一并带走；下一次存项时再按需分配。
     free(g_last_tab); g_last_tab = NULL;
     memset(g_comb_sig, 0, sizeof g_comb_sig);
+    memset(g_ubo_need, 0, sizeof g_ubo_need); g_ubo_need_n = 0; g_ubo_learned = 0;
     memset(g_idg, 0, sizeof g_idg); memset(g_idg_set, 0, sizeof g_idg_set);
     g_idg_groups = g_idg_idents = g_idg_resolves = g_idg_compiles = g_idg_loads = g_idg_multi = 0; g_idg_last_ns = 0;
     g_cs_hits = g_cs_misses = g_cs_hit_ns = g_cs_miss_ns = 0; g_mark_cs_hits = g_mark_cs_misses = g_mark_cs_hit_ns = g_mark_cs_miss_ns = 0;

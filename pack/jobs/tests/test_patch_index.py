@@ -1,5 +1,5 @@
 """补丁索引生成（tools/patch_index.py，11-13：压缩包里的补丁与金手指、按内容去重）。临时镜像目录，期望按规则手写"""
-import hashlib, io, json, os, shutil, sys, tempfile, unittest, zipfile
+import hashlib, io, json, os, shutil, sys, tempfile, unittest, unittest.mock, zipfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "tools"))
 import patch_index
@@ -96,6 +96,17 @@ class PatchIndexTests(unittest.TestCase):
         self.assertNotIn(hashlib.sha256(up).hexdigest(), {r["sha256"] for r in rows})
         self.assertEqual(sorted(x[2] for x in patch_index.UPRES), [(2560, 1440), (3440, 1440)])
 
+    def test_known_bad_patches_are_not_indexed(self):
+        # 11-16：已定因会崩的单份补丁按内容编号（sha256 前 16 位）不收，别的照收。期望手写：表里那份不在索引里、旁边那份在
+        bad, good = b"@nsobid-AABBCCDDEEFF00112233445566778899\n@enabled\n00001000 1F2003D5\n", b"@nsobid-AABBCCDDEEFF00112233445566778899\n@enabled\n00001004 1F2003D5\n"
+        g = self.m / "orig__mods" / "Odyssey [0100000000010000]"
+        (g / "GQ3/exefs").mkdir(parents=True); (g / "GQ3/exefs/1.3.0.pchtxt").write_bytes(bad)
+        (g / "Other/exefs").mkdir(parents=True); (g / "Other/exefs/1.3.0.pchtxt").write_bytes(good)
+        with unittest.mock.patch.dict(patch_index.KNOWN_BAD, {hashlib.sha256(bad).hexdigest()[:16]: "测试"}):
+            got = {r["sha256"] for r in patch_index.dedupe(patch_index.scan(str(self.m))) if "0100000000010000" in r["gids"]}
+        self.assertEqual(got, {hashlib.sha256(good).hexdigest()})
+        self.assertEqual(set(patch_index.KNOWN_BAD), {"e8b51176ead1bcd3"})
+
     def test_cheat_libraries_are_not_indexed_twice(self):
         os.rename(self.m / "orig__mods", self.m / "ChanseyIsTheBest__NX-60FPS-RES-GFX-Cheats")
         (self.m / "SOURCES.tsv").write_text("来源\tURL\t提交号\n" + "".join(f"{r}\tu\t{'c' * 40}\n" for r in ("ChanseyIsTheBest__NX-60FPS-RES-GFX-Cheats", "ADEMOLA200__mods")))
@@ -128,6 +139,28 @@ class PatchPackTests(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.m, ignore_errors=True); shutil.rmtree(self.o, ignore_errors=True)
+
+    def test_raised_resolution_widescreen_is_fixed_before_publishing(self):
+        # 11-16 #b824d1 后续（维护者「提前把这类补丁中参数改对，这样用户用着的就是对的」）：改内部渲染分辨率的满屏补丁，发布前改成 高 1080、宽按原比例。期望手写：
+        #   ① 3440×1440 那份进 g/（老客户端照常拿到），字节里 movz #3440 / #1440 换成 #2580 / #1080、其余字节不动，sha256 / 编号按新字节，adjusted 记原 / 新尺寸与原文 sha256；
+        #   ② 写了两对（3440×1440 + 5160×2160）的认不全 → 不进包
+        import base64, gzip, json as js
+        mz = lambda rd, imm: (0x52800000 | (imm << 5) | rd).to_bytes(4, "little").hex().upper()
+        up = f"@nsobid-FF1D1C05670DB6021C85B624A710B963\n@enabled\n00001000 {mz(8, 3440)}\n00001004 {mz(9, 1440)}\n".encode()
+        fixed = f"@nsobid-FF1D1C05670DB6021C85B624A710B963\n@enabled\n00001000 {mz(8, 2580)}\n00001004 {mz(9, 1080)}\n".encode()
+        two = f"@nsobid-FF1D1C05670DB6021C85B624A710B963\n@enabled\n00001000 {mz(8, 3440)}\n00001004 {mz(9, 1440)}\n00001008 {mz(8, 5160)}\n0000100C {mz(9, 2160)}\n".encode()
+        a = self.m / "orig__mods" / "G [01006F8002326000]"
+        for d, data in (("[3440x1440 Ultrawide]", up), ("[5160x2160 Ultrawide]", two)):
+            (a / d / "exefs").mkdir(parents=True); (a / d / "exefs/1.0.pchtxt").write_bytes(data)
+        idx = self.pp.build(str(self.m), str(self.o))
+        self.assertEqual(sorted(idx["bundles"]), ["b/AAAABBBBCCCCDDDD", "g/01006F8002326000"])
+        g = js.loads(gzip.decompress((self.o / "g/01006F8002326000.json.gz").read_bytes()))["items"]
+        adj = [i for i in g if i.get("adjusted")]
+        self.assertEqual([(base64.b64decode(i["data"]), i["sha256"], i["id"], i["adjusted"]) for i in adj],
+                         [(fixed, hashlib.sha256(fixed).hexdigest(), hashlib.sha256(fixed).hexdigest()[:16],
+                           dict(res_from=[3440, 1440], res_to=[2580, 1080], orig_sha256=hashlib.sha256(up).hexdigest()))])
+        self.assertNotIn(base64.b64encode(two).decode(), [i["data"] for i in g])
+        self.assertEqual([i["name"] for i in g if i["kind"] == "pchtxt"].count("1.0.pchtxt"), 2)   # 原来那份 21:9 + 改过的这份
 
     def test_bundles(self):
         import base64, gzip, json as js

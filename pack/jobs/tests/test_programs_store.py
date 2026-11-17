@@ -9,6 +9,7 @@
   ⑤ 没存原始程序的老款：整份 kit 进配方（推不出产物）
   ⑥ 释放空间：iPhone 包只列资源包；程序缓存列在「着色器与出包缓存」"""
 import io
+import jobcase  # noqa: E402（作业上下文替身统一工厂 jobcase.fake_context）
 import json
 import os
 from pathlib import Path
@@ -46,7 +47,7 @@ class ProgramStoreTests(unittest.TestCase):
         t = tempfile.TemporaryDirectory(prefix="s2arm programs ")
         self.addCleanup(t.cleanup)
         self.root = Path(t.name)
-        self.c = SimpleNamespace(library=self.root / "library", work_root=self.root / "work", engine=self.root, env=lambda: {})
+        self.c = jobcase.fake_context(self.root, library=self.root / "library", work_root=self.root / "work", engine=self.root, env=lambda: {})
         self.c.library.mkdir()
         self.store = self.c.library / ".programs" / GID
         self.cache = self.root / "work/cache/programs" / GID
@@ -94,6 +95,29 @@ class ProgramStoreTests(unittest.TestCase):
         self.assertFalse((kit / "romfs.std").exists())
         self.assertNotIn("romfs.std", self.names(self.store / "recipe.tar.zst"))
 
+    def test_rebuild_works_beside_the_kit_even_when_cache_was_cleared(self):
+        # 期望手写：程序缓存整个被清掉（连 cache/programs 都不在）后现建，临时目录建在 kit 的同级（同卷），不落系统临时目录——
+        #   游戏库在别的盘时跨卷 os.replace 会报 WinError 17 / EXDEV（11-16 Windows 实机实测）。现建出的 kit 照样完整
+        self.export()
+        shutil.rmtree(self.root / "work/cache")
+        real, dirs = tempfile.mkdtemp, []
+        def mkdtemp(*a, **k):
+            dirs.append(k.get("dir")); return real(*a, **k)
+        with mock.patch.object(programs.tempfile, "mkdtemp", mkdtemp):
+            kit = programs.rebuild(self.c, GID)
+        self.assertEqual(dirs, [self.cache.parent]); self.assertTrue((kit / "main.npdm").is_file())
+
+    def test_sgrade_state_survives_rebuild(self):
+        # 期望手写：出包收尾写进 kit 的 sgrade_state.json（ipa.finish_kit_state）进常驻配方；缓存清掉后按配方现建的 kit 里照样有、内容相同
+        self.export()
+        def write_state(c, gid, kit):
+            (Path(kit) / "sgrade_state.json").write_text('{"schema": 1}')
+        with mock.patch.object(sgrade, "write_kit_state", write_state):
+            ipa.finish_kit_state(self.c, GID)
+        shutil.rmtree(self.cache)
+        kit = layout.ios_kit(self.c, GID)
+        self.assertEqual((kit / "sgrade_state.json").read_text(), '{"schema": 1}')
+
     def test_cache_deleted_rebuilds_same_kit(self):
         for rows, seen in (("", "-"), ("p main 1 2 3 # x\n", "rows")):
             with self.subTest(rows=bool(rows)):
@@ -125,6 +149,82 @@ class ProgramStoreTests(unittest.TestCase):
         self.assertEqual({p.relative_to(kit).as_posix(): p.read_bytes() for p in kit.rglob("*") if p.is_file()}, want)
         self.assertFalse((game / "image/ios/kit").exists()); self.assertFalse((game / "original-exefs").exists())
         self.assertNotIn("main.patched.bin", self.names(self.store / "recipe.tar.zst"))
+
+    def test_catalog_badge_never_migrates(self):
+        # 11-16 Windows 0.4.4 → 0.5.0 首启：清单画金色 S 调到迁移，与后台作业撞上 WinError 32、整个清单读失败。
+        #   期望手写：旧布局里带宽屏已验证表的款照亮 S，但清单里一步迁移都不做（旧位置原样在、常驻没有归档、kit_dir 没被调）
+        product = self.product(); (product / "widen_verified.tsv").write_text("x")
+        game = layout.game_dir(self.c, GID)
+        shutil.copytree(product, game / "image/ios/kit"); shutil.copytree(self.exefs(), game / "original-exefs")
+        with mock.patch.object(programs, "kit_dir", side_effect=AssertionError("清单里不该迁移 / 现建")):
+            self.assertTrue(library.sgrade_badge(self.c, GID, self.root / "no-mac-image"))
+        self.assertTrue((game / "image/ios/kit/main.npdm").is_file()); self.assertFalse((self.store / "exefs.tar.zst").exists())
+        shutil.rmtree(game / "image/ios/kit")   # 一份程序件都没有：不亮、不报错
+        self.assertFalse(library.sgrade_badge(self.c, GID, self.root / "no-mac-image"))
+
+    def test_migration_holds_its_own_lock(self):
+        # 并发第一次用到同一款：迁移整段持 programs-migrate-<号>（不是交付 / 装机持着的 program-<号>，那把不可重入）
+        import contextlib
+        taken = []
+        @contextlib.contextmanager
+        def lock(name, wait=None):
+            taken.append(name); yield
+        self.c.lock = lock
+        game = layout.game_dir(self.c, GID)
+        shutil.copytree(self.product(), game / "image/ios/kit"); shutil.copytree(self.exefs(), game / "original-exefs")
+        layout.ios_kit(self.c, GID)
+        self.assertEqual(taken, ["programs-migrate-" + GID])
+
+    def test_two_concurrent_first_uses_migrate_once(self):
+        # 真并发（11-16 Windows 升级首启：清单与两单作业同一秒迁移同一款撞 WinError 32）：两个线程同时第一次用到同一款旧布局，
+        #   用真文件锁（filelock.held，同 c.lock）。期望手写：原始程序只存一次（第二个等第一个搬完、再看已没有旧件）；两边都拿到同一份完整 kit；
+        #   旧位置删掉、没有 .partial / .old- 残留、没有异常
+        import contextlib, filelock, threading
+        @contextlib.contextmanager
+        def lock(name, wait=None):
+            with filelock.held(self.c.library / f".{name}.lock", wait_s=60):
+                yield
+        self.c.lock = lock
+        game = layout.game_dir(self.c, GID)
+        shutil.copytree(self.product(), game / "image/ios/kit"); shutil.copytree(self.exefs(), game / "original-exefs")
+        real, saves = programs.save_exefs, []
+        def slow_save(c, gid, exefs):   # 拉长迁移，两个线程必然重叠
+            saves.append(threading.get_ident()); threading.Event().wait(0.3); return real(c, gid, exefs)
+        got, errs, start = {}, [], threading.Barrier(2)
+        def use(i):
+            try:
+                start.wait(); got[i] = layout.ios_kit(self.c, GID)
+            except BaseException as e:
+                errs.append(e)
+        with mock.patch.object(programs, "save_exefs", slow_save):
+            ts = [threading.Thread(target=use, args=(i,)) for i in range(2)]
+            [t.start() for t in ts]; [t.join(30) for t in ts]
+        self.assertEqual(errs, []); self.assertEqual(len(saves), 1)
+        self.assertEqual(got[0], got[1]); self.assertTrue((got[0] / "main.npdm").is_file())
+        self.assertFalse((game / "image/ios/kit").exists()); self.assertFalse((game / "original-exefs").exists())
+        left = [p for p in self.root.rglob("*") if ".partial" in p.name or ".old-" in p.name]
+        self.assertEqual(left, [])
+
+    def test_archive_write_is_safe_when_target_is_busy(self):
+        # 期望手写：同一内容再写一遍不换文件（别的进程正开着读也不碰它）；Windows 换文件被占（WinError 32）退避后成功，临时文件不留
+        programs.save_exefs(self.c, GID, self.exefs())   # 直接测写归档这一层（sgrade.save_program 主程序没变就不写）
+        arc = self.store / "exefs.tar.zst"; first = arc.read_bytes()
+        with mock.patch.object(programs, "_replace_file", side_effect=AssertionError("同一内容不该再换")):
+            programs.save_exefs(self.c, GID, self.exefs())
+        self.assertEqual(arc.read_bytes(), first)
+        busy = PermissionError(13, "另一个程序正在使用此文件"); busy.winerror = 32
+        real, calls = os.replace, []
+        def replace(a, b):   # 只数换归档那一下（save_exefs 换缓存目录也走 os.replace）
+            if str(b).endswith("exefs.tar.zst"):
+                calls.append(1)
+                if len(calls) == 1:
+                    raise busy
+            return real(a, b)
+        ex = self.exefs(); (ex / "sdk").write_bytes(b"sdk v2")   # 内容变了，要换（exefs() 每次重写原样，改要在它之后）
+        with mock.patch.object(programs, "REPLACE_RETRIES", (0,)), mock.patch("os.replace", replace):
+            programs.save_exefs(self.c, GID, ex)
+        self.assertEqual(len(calls), 2); self.assertNotEqual(arc.read_bytes(), first)
+        self.assertEqual([p.name for p in self.store.iterdir() if p.name.endswith(".partial")], [])
 
     def test_legacy_kit_that_does_not_rebuild_the_same_keeps_whole_kit(self):
         # 旧 kit 的改写产物和按配方现建的对不上（老版本改写器出的 / S 级补进时没同步补丁行表）：整份 kit 进配方，现建出来与原 kit 逐字节同

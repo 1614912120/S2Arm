@@ -373,6 +373,9 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// 刚导入的游戏要等下一次别的刷新才出现）。nil = 没有要补的
     private var refreshAgain: [() -> Void]?
     private var startupCatalogSent = false
+    /// 启动后的后台循环（自动拉回 / 首启准备 / Apple TV 备份 / Mac S 级）是否已开：按「第一次读库成功」开，不跟 startup 那一次读绑死——
+    ///   那一次读失败（首次使用还没选游戏库、外置游戏库没挂上）时原先整个启动器开着期间都不开（11-16 第 3 份候选 Mac 整链：等 6 分钟一单 phoneKeptPull 都没发）
+    private(set) var startupLoopsStarted = false
     private var controllerGameStarted = false
     /// 导入后排着等准备的游戏（同旧启动器：放进来就自动准备，维护者 10-23 不让玩家选）。
     private static let logLimit = 200
@@ -445,20 +448,25 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     /// keptModulesLoop 的一次（单测直接调）：→ 这次有没有发起「更新 iPhone」
     @discardableResult func keptModulesTick() async -> Bool {
-        if busy || selfSignChosen { return false }   // 出包页选了「出完之后导出自签」：不走启动器装机，自动装到手机也不做（玩家选择优先）
-        guard let r = try? await provider.client.perform("phoneKeptPull").result else { return false }
+        // 只按真冲突跳过：手机正被装机 / 推包占着（phoneBusy）；出包等别的作业在跑照样收（升级首启迁移几分钟，原先 busy 整轮跳过拖到第 360 秒）
+        if phoneBusy || selfSignChosen { return false }   // 出包页选了「出完之后导出自签」：不走启动器装机，自动装到手机也不做（玩家选择优先）
+        let r: [String: Any]
+        do {
+            r = try await provider.client.perform("phoneKeptPull").result
+            notePhoneAuto("phoneKeptPull", nil)
+        } catch { notePhoneAuto("phoneKeptPull", String(describing: error)); return false }
         let kept = (r["kept"] as? [String]) ?? [], device = r["device"] as? String ?? ""
         // 启动器升级顺带更新 iPhone App（11-16 维护者「点一次完成整个流程」）：连着的这台壳比本版旧、且没有要按新版重出包的款（shellUpdate），
         //   开关开着（缺省开）就同样自动更新；要重出的款照旧留给顶栏按钮问
         let shellUpdate = (r["shellUpdate"] as? Bool ?? false) && Self.autoUpdatePhoneOn()
         if (kept.isEmpty && !shellUpdate) || device.isEmpty { return false }
         if r["running"] as? Bool != false { return false }   // 手机上 S2Arm 正在跑（或查不清）：装 App 会杀掉玩家这一局，等它退了下一轮再推（这一批不记已试）
+        // 只发现、不装（11-16 维护者：「改成更稳妥的手动更新吧，启动器和移动端都是」）：重读游戏库，顶栏按 phoneUpdates 亮「更新 iPhone」，玩家点了才装
         let batch = device + ":" + kept.sorted().joined(separator: ",") + (shellUpdate ? ":shell" : "")
-        if keptAutoTried.contains(batch) || busy { return false }
+        if keptAutoTried.contains(batch) || phoneBusy { return false }
         keptAutoTried.insert(batch)
-        let language = provider.client.environment.uiLanguage ?? "zh-Hans"
-        refresh { [weak self] in self?.updatePhone(acceptStale: false, repack: [], language: language, device: device, ask: false, mode: "device") }   // 自动更新只装到连着的手机：显式 device，不跟随「出完之后导出自签」的缺省（那条只给玩家手点）
-        return true
+        refresh {}
+        return false
     }
 
     public func refresh(_ done: (() -> Void)? = nil) {
@@ -483,7 +491,7 @@ public final class S2ArmLauncherModel: ObservableObject {
                 self.games = games; self.libraryError = nil; self.showingSnapshot = false
                 self.phoneUpdates = self.provider.library.phoneUpdates
                 self.phoneDevices = self.provider.library.phoneDevices
-                if startup { self.sgradeMacInBackground(); self.keptModulesLoop(); self.preparePhoneUpdate(); self.appleTVBackupLoop() }
+                if !self.startupLoopsStarted { self.startupLoopsStarted = true; self.sgradeMacInBackground(); self.keptModulesLoop(); self.preparePhoneUpdate(); self.appleTVBackupLoop() }
                 if self.selectedID == nil || !games.contains(where: { $0.id == self.selectedID }) { self.selectedID = games.first?.id }
             case .failure(let error):
                 self.libraryError = error.message
@@ -1101,6 +1109,8 @@ public final class S2ArmLauncherModel: ObservableObject {
     var lastUpdateArgs: UpdateArgs?
     var sgradeMacFlag = false
     var keptLoopStarted = false, keptAutoTried: Set<String> = []   // keptModulesLoop（#8be819）
+    var phoneAutoFails: [String: Int] = [:]   // 自动更新后台作业连续失败次数（notePhoneAuto，+PhoneBanner.swift）
+    var phonePrepareStarted = false   // 首启在电脑侧准备 iPhone 更新只做一次（准备期间不出横幅，不能再靠横幅状态挡重复）
     /// Apple TV（tvOS 版，S2ArmLauncherModel+AppleTV）：配对过的电视、出包页选的那台、存档自动备份循环起没起
     @Published var appleTVs: [[String: Any]] = []
     @Published var appleTVChoice: String?

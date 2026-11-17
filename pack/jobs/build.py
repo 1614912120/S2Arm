@@ -577,7 +577,6 @@ def collect_degrade(c, root):
     try:
         log = c.logs / f"{c.task}-degrade.log"
         log.write_text(DEGRADE_HEAD + "\n" + "".join("\t".join([r["stage"], r["kind"], str(r["count"]), r["hint"], r["note"]]) + "\n" for r in rows), encoding="utf-8")
-        log.chmod(0o600)
     except OSError as e:
         c.emit("message", f"降级表没存进日志目录（{e}），诊断包里会少这一份；出包结果不受影响")
     return list(dict.fromkeys(r["hint"] for r in rows if r["hint"]))

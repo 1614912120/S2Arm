@@ -97,6 +97,14 @@ int rp_tex_snap_by_id(int id, tex_t *t, view_t *v, int *h) {
     if (separate_fixture == 3) t->d.target = NVN_TEXTURE_TARGET_BUFFER;
     *h = id == 77 && separate_fixture != 3; if (*h) { v->set_target = 1; v->target = NVN_TEXTURE_TARGET_RECTANGLE; } return 1;
 }
+// 用户常量缓冲夹具：rp_pool_find 只认这块宿主内存（真实实现在 rp_entry.c，查登记过的池）
+static uint32_t ubo_mem[128];
+int rp_pool_find(uint64_t addr, uint64_t len, const uint8_t **mem, uint64_t *size) {
+    (void)mem; (void)size;
+    const uint64_t lo = (uint64_t)(uintptr_t)ubo_mem, hi = lo + sizeof ubo_mem;
+    return addr >= lo && addr + len <= hi;
+}
+static int fake_ubo_missing;   // 1：请求里没有 (fs, 92, c3) 的事实就照真编译器报 MISSING_FACT
 static uint64_t fake_reg_generation;
 static int fake_reg_changes = 1, gs_sep_hash_calls;
 uint64_t rp_tex_reg_gen(void) { return fake_reg_changes ? ++fake_reg_generation : fake_reg_generation; }
@@ -124,6 +132,11 @@ static int32_t fake_compile(uint64_t session, uint64_t gen, s2a_direct_bytes req
     CHECK(req.bytes < sizeof captured, "request fits capture");
     if (req.bytes >= sizeof captured) return -1;
     memcpy(captured, req.data, (size_t)req.bytes); captured[req.bytes] = 0; compiler_calls++;
+    if (fake_ubo_missing && !strstr(captured, "\"stage\":\"fs\",\"handle\":92,\"cbufSlot\":3,")) {
+        static const char err[] = "{\"schema\":\"s2a-direct-error-v1\",\"code\":\"MISSING_FACT\",\"message\":\"QuerySamplerType has no source (stage=fs,handle=92,cbufSlot=3)\"}";
+        s2a_direct_bytes payload = {(const uint8_t *)err, sizeof err - 1};
+        (void)emit(sink, payload); return -1;
+    }
     if (capture_output) {
         FILE *f = fopen(capture_output, "wb");
         CHECK(f != NULL, "real compiler request output opens");
@@ -819,6 +832,54 @@ done:
     rp_shader_reset(); rp_state_reset();
 }
 
+/* 句柄在游戏用户常量缓冲里的贴图（#999 第 4 片）：编译器按 (fs, 字 92, c3) 报缺事实 → 宿主读 c3 第 92 字 → 贴图号 → 补事实当场重编。 */
+static int ubo_fact_in_request(const char *sampler, int normalized) {
+    const char *p = strstr(captured, "\"stage\":\"fs\",\"handle\":92,\"cbufSlot\":3,"), *end = p ? strchr(p, '}') : NULL;
+    char type[64], norm[32];
+    snprintf(type, sizeof type, "\"samplerType\":\"%s\"", sampler); snprintf(norm, sizeof norm, "\"normalized\":%s", normalized ? "true" : "false");
+    const char *t = p ? strstr(p, type) : NULL, *n = p ? strstr(p, norm) : NULL;
+    return end && t && t < end && n && n < end;
+}
+static void graphics_ubo_handle_fact_test(void) {
+    rp_shader_reset(); s2a_source_clear(); rp_state_reset(); nvn_unimpl_reset();
+    uint8_t keys[2][8]; for (unsigned st = 0; st < 2; st++) gs_source(st, 0, keys[st]);
+    memset(&gs_program, 0, sizeof gs_program); gs_program.magic = MAGIC('P','R','O','G');
+    gs_program.serial = 950; gs_program.nstage = 2;
+    memset(gs_stages, 0xff, sizeof gs_stages); memset(gs_keys, 0, sizeof gs_keys);
+    for (unsigned st = 0; st < 2; st++) { gs_stages[st] = (uint8_t)st; memcpy(gs_keys[st], keys[st], 8); }
+    gs_keys_ok = 3; p_bind_program_id bind = {&gs_program, gs_program.serial, 0x1f, 0};
+    CHECK(rp_state_op(OP_BIND_PROGRAM, &bind, sizeof bind + 8), "UBO handle fixture binds");
+    bind_pools(100); separate_fixture = 1; fake_reg_changes = 0;
+    fake_gs_success = 1; fake_gs_result_mode = 1; fake_ubo_missing = 1;
+    memset(ubo_mem, 0, sizeof ubo_mem); ubo_mem[92] = 78;   // 池起点 0：句柄低 20 位就是贴图号
+    rp_S.ubo[1][0].addr = (uint64_t)(uintptr_t)ubo_mem; rp_S.ubo[1][0].size = sizeof ubo_mem;
+    struct rp_shader_req q = {0}; q.prim = 4; const struct rp_prog *p = NULL;
+    compiler_calls = 0;
+    CHECK(!rp_shader_resolve(&q, &p) && p && compiler_calls == 2, "missing c3 handle fact is learned and compiled in the same draw: calls=%d", compiler_calls);
+    CHECK(ubo_fact_in_request("2d", 1), "retry request carries (fs,92,c3) fact from texture 78");
+    const struct rp_prog *first = p;
+    CHECK(!rp_shader_resolve(&q, &p) && p == first && compiler_calls == 2, "same UBO texture takes the fast path");
+    ubo_mem[92] = 77;   // 77 带 RECTANGLE 视图：坐标不归一，编译事实不同
+    CHECK(!rp_shader_resolve(&q, &p) && p && p != first && compiler_calls == 3, "UBO now names a texture with other facts: recompiles (calls=%d)", compiler_calls);
+    CHECK(ubo_fact_in_request("2d", 0), "recompile carries texture 77's unnormalized fact");
+    ubo_mem[92] = 79;   // 79 与 78 事实相同：回到第一份程序，不重编
+    CHECK(!rp_shader_resolve(&q, &p) && p == first && compiler_calls == 3, "same facts as 78 reuse the first program (calls=%d)", compiler_calls);
+    // 反例：句柄字读不到（槽长度不够盖住第 92 字）→ 不给事实：请求与第一次缺事实那份逐字节相同，命中那份失败项，不编、不猜、不循环
+    rp_S.ubo[1][0].size = 92 * 4;
+    int before = compiler_calls; captured[0] = 0;
+    CHECK(rp_shader_resolve(&q, &p) == -1 && compiler_calls == before && !captured[0], "unreadable handle word reuses the fact-less failure (calls=%d)", compiler_calls - before);
+    // 换局清表：同样的输入要重新学（两次编译）
+    rp_shader_reset(); rp_S.ubo[1][0].size = sizeof ubo_mem; ubo_mem[92] = 78; compiler_calls = 0;
+    CHECK(!rp_shader_resolve(&q, &p) && p && compiler_calls == 2, "session reset forgets learned coordinates (calls=%d)", compiler_calls);
+    // 反例：c2 / 组合槽坐标的缺事实不进这张表（不当成用户常量缓冲去读）
+    rp_shader_reset(); fake_ubo_missing = 0; fake_gs_success = 0; compiler_calls = 0;
+    fake_compile_error = "{\"schema\":\"s2a-direct-error-v1\",\"code\":\"MISSING_FACT\",\"message\":\"QuerySamplerType has no source (stage=fs,handle=92,cbufSlot=2)\"}";
+    CHECK(rp_shader_resolve(&q, &p) == -1 && compiler_calls == 1, "c2 missing fact is not retried as a user UBO handle (calls=%d)", compiler_calls);
+    fake_compile_error = NULL; fake_gs_result_mode = 0; separate_fixture = 0; fake_reg_changes = 1;
+    memset(&rp_S.ubo[1][0], 0, sizeof rp_S.ubo[1][0]);
+    rp_shader_reset(); rp_state_reset();
+}
+
 /* The compiler request contains only stages in this graphics program. Inactive
  * UBO state (including compute) must not create new graphics identities. */
 static void graphics_active_ubo_test(void) {
@@ -897,6 +958,7 @@ int main(int argc, char **argv) {
     graphics_alias_test(1);
     graphics_alias_fact_test(1);
     graphics_alias_fact_bg_test(1);
+    graphics_ubo_handle_fact_test();
     unsetenv("S2A_SHADER_REVISION_ROOT"); unsetenv("S2A_DIRECT_CACHE_DIR"); rp_state_reset(); source();
     for (int cs = 0; cs < 2; cs++) {
         run_case(cs, 0, 0, "texture_pool_missing");

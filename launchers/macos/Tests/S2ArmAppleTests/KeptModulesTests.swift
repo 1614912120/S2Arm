@@ -6,10 +6,10 @@ import XCTest
 @testable import NX2AppleUI
 import S2ArmAppleAdapter
 
-// 手机上宿主留下的代码模块（#8be819，S2ArmLauncherModel.keptModulesTick）：phoneKeptPull 回报有还没补进 iPhone 件的款 → 自动发起一次「更新 iPhone」，
-//   带上那台设备、不弹确认（ask: false）；同一批再查到不重复发起；没有要补的 → 不发起；手机上 S2Arm 正在跑 → 这一轮不推、退了再推
+// 手机上宿主留下的代码模块（#8be819）与壳旧了（启动器升级）：2 分钟循环（S2ArmLauncherModel.keptModulesTick）只发现、重读游戏库亮「更新 iPhone」，
+//   不发起装机（11-16 维护者：「改成更稳妥的手动更新吧，启动器和移动端都是」）——手机在线、有更新、没在玩、循环跑多轮，一次都不装
 @MainActor final class KeptModulesTests: XCTestCase {
-    func testTickStartsOneUpdatePerBatch() async throws {
+    func testTickNeverInstallsOnlyRefreshes() async throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("s2arm-kept-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -33,18 +33,19 @@ import S2ArmAppleAdapter
         XCTAssertFalse(selfSign, "出包页选了导出自签：不自动装到手机（玩家选择优先）")
         XCTAssertEqual(runner.updates.count, 0)
         model.iosAfterPack = "install"
-        let first = await model.keptModulesTick()
-        for _ in 0..<300 where model.busy || runner.updates.count < 1 { try? await Task.sleep(for: .milliseconds(10)) }
-        let again = await model.keptModulesTick()
-        XCTAssertTrue(first, "退出后有没补进的款：发起（正在玩那一轮没记已试）")
-        XCTAssertFalse(again, "同一批只发起一次")
-        XCTAssertEqual(runner.updates.count, 1)
-        XCTAssertEqual(runner.updates.first?["device"] as? String, "00008160-FIXTURE", "带上回报的那台")
-        XCTAssertEqual(runner.updates.first?["mode"] as? String, "device", "自动更新显式装到手机，不跟随导出自签的缺省")
+        runner.shellUpdate = true
+        for round in 0..<5 {   // 手机在线、有没补进的款也壳旧了、没在玩：跑多轮
+            let started = await model.keptModulesTick()
+            for _ in 0..<30 where model.busy { try? await Task.sleep(for: .milliseconds(10)) }
+            XCTAssertFalse(started, "第 \(round + 1) 轮：只发现、不发起装机")
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(runner.updates.count, 0, "循环跑多轮也不发 installUpdate（玩家点了才装）")
+        XCTAssertGreaterThan(runner.catalogs, 0, "发现有要更新的：重读游戏库，顶栏按 phoneUpdates 亮「更新 iPhone」")
     }
 
-    // 启动器升级顺带更新 iPhone App（11-16）：壳旧了且不用问（shellUpdate）→ 开关开着就自动更新一次；开关关 → 不发起；正在玩 → 不发起
-    func testShellUpdateFollowsSwitch() async throws {
+    // 启动器升级后手机壳旧了（shellUpdate）：开关开 / 关、在玩 / 没在玩，循环都不发起装机（手动更新，11-16）；没碰过开关缺省开（只管首启准备与提示）
+    func testShellUpdateNeverAutoInstalls() async throws {
         _ = NSApplication.shared
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("s2arm-shell-" + UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -62,16 +63,43 @@ import S2ArmAppleAdapter
         let playing = await model.keptModulesTick()
         XCTAssertFalse(playing, "正在玩：不更新")
         runner.running = false
-        let first = await model.keptModulesTick()
-        for _ in 0..<300 where model.busy || runner.updates.count < 1 { try? await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertTrue(first, "开关开、没在玩、壳旧了不用问：自动更新")
-        XCTAssertEqual(runner.updates.count, 1)
-        XCTAssertEqual(runner.updates.first?["device"] as? String, "00008160-FIXTURE")
+        for _ in 0..<3 {
+            let started = await model.keptModulesTick()
+            XCTAssertFalse(started, "开关开、没在玩、壳旧了：也只提示、不装")
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(runner.updates.count, 0)
         XCTAssertTrue(S2ArmLauncherModel.autoUpdatePhoneOn(UserDefaults(suiteName: "s2arm-fresh-" + UUID().uuidString)!), "没碰过开关：缺省开")
     }
 
-    // 新版启动器首次读到游戏库（11-16「启动器升级并更新 IPA」）：有要更新的手机 → 后台 installUpdatePrepare 一次，横幅 准备好 / 准备不了 → 连上自动更新；
-    //   开关关 → 不准备、不显示、更新弹窗按钮照旧；装过手机 → 更新弹窗按钮写「更新启动器和 iPhone App」
+    // 启动器打开后第一次读库失败（首次使用还没选游戏库 / 外置游戏库没挂上），之后读成功：后台循环在第一次读成功时开（11-16 Mac 整链：原先跟 startup 那一次绑死，
+    //   第一次失败就整次不开，手机上留了代码模块也一直不亮「更新 iPhone」）
+    func testStartupLoopsStartOnFirstSuccessfulLoad() async throws {
+        _ = NSApplication.shared
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("s2arm-loops-" + UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("Jobs"), withIntermediateDirectories: true)
+        try Data().write(to: root.appendingPathComponent("Jobs/main.py"))
+        let runner = KeptRunner(); runner.catalogFails = true; runner.catalog = ["games": [[String: Any]]()]
+        let model = S2ArmLauncherModel(client: JobClient(environment: JobEnvironment(
+            privateRoot: root, resources: root, library: root.appendingPathComponent("lib").path, libraryId: "fixture"), runner: runner))
+        model.refresh()
+        for _ in 0..<300 where !model.libraryLoaded { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(model.libraryLoaded); XCTAssertFalse(model.startupLoopsStarted, "第一次读库失败：循环还不开")
+        XCTAssertFalse(model.keptLoopStarted)
+        runner.catalogFails = false
+        model.refresh()
+        for _ in 0..<300 where !model.startupLoopsStarted { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(model.startupLoopsStarted, "之后第一次读成功：开")
+        XCTAssertTrue(model.keptLoopStarted, "自动拉回循环开了")
+        let catalogs = runner.catalogs
+        model.refresh()
+        for _ in 0..<300 where runner.catalogs == catalogs { try? await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(model.keptLoopStarted, "再读成功：不重复开（keptModulesLoop 自带只开一次）")
+    }
+
+    // 新版启动器首次读到游戏库：有要更新的手机 → 后台 installUpdatePrepare 一次（不碰手机），准备完出横幅 准备好 / 没准备成（都是「点这里更新」，手动更新 11-16）；
+    //   开关关 → 不准备、不显示
     func testPrepareBannerAfterLauncherUpdate() async throws {
         _ = NSApplication.shared
         let key = S2ArmLauncherModel.autoUpdatePhoneOffKey, before = UserDefaults.standard.object(forKey: key)
@@ -88,19 +116,13 @@ import S2ArmAppleAdapter
             let model = S2ArmLauncherModel(client: JobClient(environment: JobEnvironment(
                 privateRoot: root, resources: root, library: root.appendingPathComponent("lib").path, libraryId: "fixture"), runner: runner))
             model.refresh()
-            for _ in 0..<300 where !model.libraryLoaded || model.phoneBanner == .preparing { try? await Task.sleep(for: .milliseconds(10)) }
+            for _ in 0..<300 where !model.libraryLoaded || (on && model.phoneBanner == nil) { try? await Task.sleep(for: .milliseconds(10)) }
             return (model, runner)
         }
         let (ok, okRunner) = try await run(fails: false, on: true)
         XCTAssertEqual(okRunner.prepared, 1, "有要更新的手机：准备一次")
         XCTAssertEqual(ok.phoneBanner, .ready)
         XCTAssertEqual(ok.phoneBannerLine?.key, "phone.update.banner.ready")
-        XCTAssertTrue(ok.updateAlsoPhone, "装过手机、开关开：更新弹窗写「更新启动器和 iPhone App」")
-        let after = UserDefaults.standard.object(forKey: "S2AIosAfterPack")
-        ok.iosAfterPack = "export"
-        XCTAssertFalse(ok.updateAlsoPhone, "选了导出自签：更新弹窗按钮照旧")
-        ok.iosAfterPack = "install"
-        UserDefaults.standard.set(after, forKey: "S2AIosAfterPack")
         ok.phoneUpdates = []
         XCTAssertNil(ok.phoneBannerLine, "手机已是本版：横幅收起")
         let (bad, _) = try await run(fails: true, on: true)
@@ -108,7 +130,6 @@ import S2ArmAppleAdapter
         let (off, offRunner) = try await run(fails: false, on: false)
         XCTAssertEqual(offRunner.prepared, 0, "开关关：不准备")
         XCTAssertNil(off.phoneBannerLine)
-        XCTAssertFalse(off.updateAlsoPhone, "开关关：更新弹窗按钮照旧")
     }
 }
 
@@ -121,6 +142,8 @@ private final class KeptRunner: JobProcessRunner {
     var prepareFails = false
     var prepared = 0
     var catalog: [String: Any] = [:]
+    var catalogs = 0
+    var catalogFails = false
     func start(executable: URL, arguments: [String], environment: [String: String],
                onLine: @escaping (Data) -> Void, onStderr: @escaping (Data) -> Void,
                onExit: @escaping (Int32) -> Void) throws -> JobProcessHandle {
@@ -130,10 +153,11 @@ private final class KeptRunner: JobProcessRunner {
             taskId = request["taskId"] as? String ?? ""; op = request["operation"] as? String ?? ""
             if op == "installUpdate" { updates.append(request) }
             if op == "installUpdatePrepare" { prepared += 1 }
+            if op == "catalog" { catalogs += 1 }
         }
         let result: [String: Any] = op == "phoneKeptPull" ? ["device": "00008160-FIXTURE", "new": kept.count, "kept": kept, "shellUpdate": shellUpdate, "stale": [String](), "running": running]
             : op == "catalog" ? catalog : [:]
-        let failed = op == "installUpdatePrepare" && prepareFails
+        let failed = (op == "installUpdatePrepare" && prepareFails) || (op == "catalog" && catalogFails)
         let event: [String: Any] = ["schema": 1, "taskId": taskId, "type": "result", "state": failed ? "failed" : "succeeded", "result": result, "message": failed ? "fixture" : ""]
         DispatchQueue.main.async { onLine(try! JSONSerialization.data(withJSONObject: event)); onExit(0) }
         return Handle()

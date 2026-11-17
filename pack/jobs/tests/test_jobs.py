@@ -84,6 +84,18 @@ class JobsTests(unittest.TestCase):
         self.redirect.__exit__(None, None, None)
         self.tmp.cleanup()
 
+    def test_game_required_when_request_has_no_game(self):
+        """客户端不再按名单拦「要不要游戏号」（自己人之间不设允许清单，#1149）：要游戏的作业请求里没带游戏号，
+        作业层说清缺的是游戏号，不是「游戏未登记」；带了但库里没有照旧是未登记"""
+        c = Context(dict(self.request, operation="ipa"))
+        with self.assertRaises(Failure) as e:
+            c.game()
+        self.assertIn("没有游戏号", str(e.exception))
+        c = Context(dict(self.request, operation="ipa", gameId="0100000000ABCDEF"))
+        with self.assertRaises(Failure) as e:
+            c.game()
+        self.assertIn("未登记", str(e.exception))
+
     def test_context_accepts_readable_windows_volume_when_final_path_query_is_unsupported(self):
         import core
         # 用真实路径起步：Mac 临时目录在 /var（指向 /private/var 的符号链接）下，退回分支逐级查到它会按「路上有链接」照样报错
@@ -2949,10 +2961,10 @@ class JobsTests(unittest.TestCase):
         event = json.loads(result.stdout.splitlines()[-1])
         self.assertEqual(event["jobId"], "cli-test")
         self.assertEqual(event["state"], "failed")
-        p.chmod(0o644)
+        p.chmod(0o644)   # 11-16 不再自设权限：系统缺省权限的请求照常收（原先拒收、stdout 为空）
         result = subprocess.run([sys.executable, "-I", "-B", str(JOBS / "main.py"), "--request", str(p)], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(json.loads(result.stdout.splitlines()[-1])["state"], "failed")
 
     def test_invalid_keys_preserve_the_previous_player_key(self):
         self.c.keys.parent.mkdir(parents=True)

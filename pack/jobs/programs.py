@@ -14,12 +14,15 @@
 手机端存的那份（Documents/games/<程序号>/.s2a-program/）用同样两个归档。"""
 from __future__ import annotations
 
+import contextlib
 import io
 import os
 from pathlib import Path
 import shutil
 import tarfile
 import tempfile
+import threading
+import time
 
 from core import Failure
 import layout
@@ -63,14 +66,35 @@ def _write(path, base, files):
             with open(f, "rb") as src:
                 t.addfile(info, src)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".partial")
-    tmp.write_bytes(_compress(buf.getvalue()))
-    os.replace(tmp, path)
+    data = _compress(buf.getvalue())
+    try:   # 同一内容出同一字节：已是这份就不换（别的进程刚迁移完、正开着它读时，Windows 上换它会报 WinError 32）
+        if path.read_bytes() == data:
+            return
+    except OSError:
+        pass
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.partial")   # 每个进程 / 线程各自的临时名：并发迁移同一款不互相覆盖
+    tmp.write_bytes(data)
+    _replace_file(tmp, path)
+
+
+REPLACE_RETRIES = (0.1, 0.2, 0.5, 1, 2, 4, 8)   # 换文件被占（Windows WinError 5 / 32：别的进程开着目标读）时的退避，合计约 16 秒
+
+
+def _replace_file(tmp, path):
+    """os.replace 带 Windows 占用退避（11-16：0.4.4 升 0.5.0 首启，游戏库清单与两单作业同一秒迁移同一款，报 WinError 32 读库失败）"""
+    for delay in (*REPLACE_RETRIES, None):
+        try:
+            return os.replace(tmp, path)
+        except PermissionError as e:
+            if delay is None or getattr(e, "winerror", None) not in (5, 32):
+                Path(tmp).unlink(missing_ok=True)
+                raise
+            time.sleep(delay)
 
 
 def _extract(path, dest):
     """归档解到 dest（先解到 dest.partial 再改名，中途断了不留半个）；只认普通文件、相对路径不出界"""
-    part = dest.with_name(dest.name + ".partial")
+    part = dest.with_name(f"{dest.name}.{os.getpid()}.{threading.get_ident()}.partial")   # 各自的临时目录：并发解同一份不互相删
     shutil.rmtree(part, ignore_errors=True)
     part.mkdir(parents=True)
     with tarfile.open(fileobj=io.BytesIO(_decompress(Path(path).read_bytes())), mode="r") as t:
@@ -153,7 +177,10 @@ def rebuild(c, gid):
         return None
     import rewrite_refresh as rr
     kit = cache(c, gid) / "kit"
-    work = Path(tempfile.mkdtemp(prefix=".kit-", dir=cache(c, gid).parent if cache(c, gid).parent.is_dir() else None))
+    # 临时目录必须和 kit 同卷：原先缓存的上级不在（第一次用、或玩家「释放空间」清过缓存）就落到系统临时目录（C: / 内置盘），
+    #   游戏库在别的盘时最后 os.replace 跨卷报 WinError 17 / EXDEV，现建失败、这款更新 iPhone / 装机失败（11-16 Windows 实机按配方现建实测）
+    cache(c, gid).parent.mkdir(parents=True, exist_ok=True)
+    work = Path(tempfile.mkdtemp(prefix=".kit-", dir=cache(c, gid).parent))
     try:
         built = work / "kit"
         _extract(arc, built)
@@ -189,7 +216,18 @@ def kit_dir(c, gid):
 
 def adopt(c, gid):
     """旧布局搬进来（第一次用到时）：游戏文件夹的 image/ios/kit、original-exefs，或上一版的 .programs/<号>/kit、original-exefs
-    → 原始程序进常驻归档 + 缓存，kit 进缓存并存配方；旧位置删掉。没有旧件什么都不做"""
+    → 原始程序进常驻归档 + 缓存，kit 进缓存并存配方；旧位置删掉。没有旧件什么都不做。
+    整段持这款的迁移锁（programs-migrate-<号>）：几个进程同时第一次用到同一款（升级首启的游戏库清单 + 后台作业），只有一个在搬，
+    其余等它搬完、再看时已经没有旧件。不用 program-<号>：出包交付 / 装机持着它再调到这里，同一把锁不可重入"""
+    lock = getattr(c, "lock", None)
+    with (lock("programs-migrate-" + gid.upper(), wait=MIGRATE_LOCK_WAIT_S) if lock else contextlib.nullcontext()):
+        _adopt(c, gid)
+
+
+MIGRATE_LOCK_WAIT_S = 600   # 迁移一款：压原始程序 + 按配方现建对拍，大款几十秒；等别的进程搬完
+
+
+def _adopt(c, gid):
     store = layout.program_store(c, gid)
     old_exefs = [d for d in (store / layout.PROGRAM_EXEFS, layout.path(c, gid, layout.PROGRAM_EXEFS, create=False)) if (d / "main").is_file()]
     old_kits = [d for d in (store / layout.IOS_KIT, layout.image_ios(c, gid, create=False) / layout.IOS_KIT) if (d / "main.npdm").is_file()]

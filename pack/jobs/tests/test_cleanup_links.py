@@ -9,6 +9,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import jobcase  # noqa: E402（作业上下文替身统一工厂 jobcase.fake_context）
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core import Failure
@@ -21,7 +22,7 @@ class CleanupLinkTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory(prefix="s2arm synthetic cleanup ")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
-        self.c = SimpleNamespace(library=self.root / "library", work_root=self.root / "work")
+        self.c = jobcase.fake_context(self.root, library=self.root / "library", work_root=self.root / "work")
         self.gid = "0100000000000000"
         self.c.library.mkdir()
         self.output = layout.ios_work(self.c, self.gid)   # 这款文件夹的出包工作目录 build/ios

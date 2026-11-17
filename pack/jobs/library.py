@@ -1009,6 +1009,10 @@ def validate_keys(path):
     # 玩家把游戏原件当密钥选了进来（诊断 D-HZF3：同一位玩家连选 4 次 .nsp / .nsz，只看到「过大」「格式无效」）：认得出就直说
     if Path(path).suffix.lower() in SOURCE_SUFFIXES:
         raise Failure("选的是游戏文件，不是密钥：这里要的是 prod.keys 文本文件（通常几十 KB）；游戏请从「添加游戏」导入。", code="keys_invalid")
+    # 选的文件不在了（被移动 / 删除，或 iCloud 占位文件没下载）：原先直接 stat 抛 FileNotFoundError，落到通用 job_failed，
+    #   报成「S2Arm 自己的文件找不到了」，方向说反（诊断#c719ce D-4R5W）
+    if not Path(path).is_file():
+        raise Failure("选的密钥文件找不到了（可能被移动、删除，或还在 iCloud 里没下载到本机）：请重新选择 prod.keys。", code="keys_invalid")
     if Path(path).stat().st_size > 1 << 20:
         raise Failure("密钥文件过大。", code="keys_invalid")
     entries = {}
@@ -2157,7 +2161,7 @@ def _retry_shared(func, path, error, sleep=time.sleep):
 def _rmtree(p):
     """删整棵目录；遇到只读目录（产物根的 RomFS 共享存储 roots/.romfs_store/ 整棵只读，pack/roots.sh）先给它加回写权限再删。
     Windows 上封存不是只读位，是 ACL 里给当前用户的拒写项（pack/orch/roots.py seal → _win_acl），chmod 解不开：
-    按 roots 同一个函数把出错的项和它的父目录解封再删（11-07 Windows 出包机：启动器出包成功后清中间产物卡在 .romfs_store，WinError 5）。
+    按 roots 同一个函数把出错的项和它的父目录解封、再去掉只读位后再删（11-07 Windows 出包机：启动器出包成功后清中间产物卡在 .romfs_store，WinError 5）。
     exFAT 上删数据文件时 AppleDouble 附属文件（._*）会一并消失，scandir 里还挂着的名字再 unlink 得到 ENOENT——当作已删完。"""
     def unlock(func, path, err):
         error = err[1] if isinstance(err, tuple) else err   # onerror 给 exc_info、onexc 给异常本身
@@ -2178,6 +2182,8 @@ def _rmtree(p):
             for q in (parent, path):
                 if os.path.lexists(q) and not os.path.islink(q):
                     roots._win_acl(q, False)
+            if os.path.lexists(path) and not os.path.islink(path) and not os.path.isdir(path):
+                os.chmod(path, stat.S_IWRITE)   # 只读位（别的来源放进来的只读文件，os.unlink 不认、报 WinError 5）：去掉再删；还删不掉就照抛
         else:
             os.chmod(parent, stat.S_IMODE(os.lstat(parent).st_mode) | stat.S_IRWXU)
         func(path)
@@ -2258,7 +2264,9 @@ def sgrade_badge(c, gid, image):
         return False
     # 只认真打进去了的（11-14：原先「补丁库里有这款的包」也亮，没出过包的款也亮了；发布说明写的是「亮起的已经带上了」）：
     #   Mac 运行版本 / iPhone 程序件里补丁表有条目，或带着随包金手指原文（多数金手指只改内存、不进补丁表）。Mac 老游戏启动器打开时会补上（sgradeMac），补完就亮
-    for d in (Path(image), layout.ios_kit(c, gid)):
+    for d in (Path(image), layout.ios_kit_present(c, gid)):   # 只读已有的：清单里不迁移、不现建（见 layout.ios_kit_present）
+        if d is None:
+            continue
         try:
             # 维护者 11-15「两者合成一套」：没补丁、但本包在宽屏已验证名单（我方通用满屏缺省开，产物根 widen_verified.tsv）也算带上了 S 级优化的满屏
             if table_rows(d / "cpatch.tsv") or any(d.glob("cheat-src.*")) or (d / "widen_verified.tsv").is_file():

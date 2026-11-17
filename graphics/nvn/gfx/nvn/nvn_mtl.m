@@ -5949,6 +5949,7 @@ static void defer_fallback(void);
 static int g_el_w, g_el_h, g_el_draws; static char g_el_key[12];
 static int enc_label_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_ENC_LABEL"); v = e && atoi(e); } return v; }
 static int g_nbcrt; static void bcrt_flush(void);   // shadows of block-compressed render targets used by the open pass (see bcrt_attach)
+static int g_unb; static p_set_rt g_unb_rt; static uint64_t g_unb_n, g_unb_land;   // a held empty binding (see unb_on)
 static void rp_end(void) { if (!g_rlane) geo_run_flush(); if (g_enc) { AP_B;
     if (enc_label_on()) { static uint64_t lf = ~0ull, base; uint64_t f = atomic_load(&g_cur_frame); if (f != lf) { lf = f; base = g_stat_pass - 1; }   // Intra-frame serial: the same pass has the same name every frame, so the table can aggregate by name
         [(id)g_enc setLabel:[NSString stringWithFormat:@"p%02llu %dx%d %s d%d", (unsigned long long)(g_stat_pass - base), g_el_w, g_el_h, g_el_key[0] ? g_el_key : "-", g_el_draws]]; }
@@ -5962,7 +5963,9 @@ static void rp_end(void) { if (!g_rlane) geo_run_flush(); if (g_enc) { AP_B;
     rr_finish(ranged);
 #endif
     AP_E(0);
-} }
+}
+    if (g_unb) { g_unb = 0; R.rt = g_unb_rt; }   // a held unbind takes effect once the pass with the old targets has ended (see unb_on)
+}
 // The format an attachment is actually attached with: the view's format if the view changes the format and can be attached, otherwise the base texture's. Shared by attaching (attach) and pipeline prediction (pso_predict_rest) so both agree --
 // prediction used the base format, so for a pass written through an sRGB view (Mario's last pass) the predicted pipeline had the wrong format and the real one was compiled at the first draw (from d2r-mobile e2a0c9a9b)
 // A compressed texture as a render target (The Legend of Zelda: Breath of the Wild a 32x32 RGTC1 (BC4) texture, Tears of the Kingdom a 32x32x32 3D one drawn one depth plane per pass, both written
@@ -11233,6 +11236,51 @@ static inline void p65_count(NvShader *sh, int st, int hit, int k, int reg, uint
 //   Audit #1646 P1-65: the table used to follow the binding alone, so with a shorter copy / shadow the shader's clamp let it read past it (11-07 census: 112921 widen-copy hits in one run)
 static inline uint32_t ubolen_vec4_cap(const p_bind_buf *u, uint64_t cap) { uint64_t v = u->addr ? (u->size + 15) / 16 : 0; if (v > 4096) v = 4096; if (v > cap / 16) v = cap / 16; return (uint32_t)v; }
 static inline uint32_t ubolen_vec4(const p_bind_buf *u) { return ubolen_vec4_cap(u, UINT64_MAX); }
+// Diagnostic readouts, behaviour unchanged (yellow lines, one per shader, at most 64 each in a run, each line carries the running count):
+//   ① a bound uniform buffer shorter (past its vec4 rounding) than the part of it the shader reads (cb_extent.tsv sh->cb_ext[slot]): constant-index reads within the declared range are not clamped, so the
+//     reads past the binding see whatever memory follows it (real hardware reads 0 there). Shader key, stage, slot, declared bytes, bound bytes.
+//   ② a fragment shader that reads the depth attachment of the open pass through a texture handle kept in a uniform buffer (TEXU): the same-pass depth read snapshot (fb_prepare)
+//     only covers a depth attachment bound in an ordinary texture slot, so such a read may see depth the pass is still writing, tile by tile
+static uint64_t g_ubos_n, g_dtu_n; static unsigned g_ubos_shown, g_dtu_shown;
+static __attribute__((noinline, cold)) void ubos_note(NvShader *sh, int st, int reg, uint64_t want, uint64_t have) {
+    g_ubos_n++; if (sh->logged & 0x200) return; sh->logged |= 0x200; if (g_ubos_shown >= 64) return; g_ubos_shown++;
+    MLOG("【黄】 uniform buffer shorter than the shader reads: shader %s stage %d slot %d can read up to %llu bytes, bound %llu bytes (reads past it see the memory that follows; %llu such bindings so far)",
+         sh->key, st, reg, (unsigned long long)want, (unsigned long long)have, (unsigned long long)g_ubos_n);
+}
+static __attribute__((noinline, cold)) void dtu_note(NvShader *sh, int st, int reg, int k, uint64_t ser) {
+    g_dtu_n++; if (sh->logged & 0x400) return; sh->logged |= 0x400; if (g_dtu_shown >= 64) return; g_dtu_shown++;
+    MLOG("【黄】 depth attachment read through a uniform-buffer texture handle in the open pass: shader %s stage %d uniform slot %d element %d, depth texture ser=%llu (not covered by the same-pass depth snapshot; %llu such reads so far)",
+         sh->key, st, reg, k, (unsigned long long)ser, (unsigned long long)g_dtu_n);
+}
+static inline void dtu_check(NvShader *sh, int st, int reg, int k, int tid) {
+    if (st != 1 || !g_enc || !R.has_rt || !R.rt.depth || tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) return;
+    if (__builtin_expect(g_treg[tid].t.serial == R.rt.depth->serial && R.rt.depth->serial, 0)) dtu_note(sh, st, reg, k, R.rt.depth->serial);
+}
+// Diagnostic readout ③, behaviour unchanged: attachments whose last pass ended without writing back (the store lookahead proved the next use clears them, or the xv trial
+//   dropped it), so their memory holds stale or undefined content until that clear. The lookahead only sees textures bound in texture / image slots; a texture reached through a
+//   handle kept in a uniform buffer (TEXU, any stage, e.g. a GPU culling dispatch reading the scene depth) is not seen, and would read that memory. One yellow line per texture
+//   (at most 64), with the shader, stage and slot that read it. The set is small and open-addressed by serial; a full set just stops recording
+enum { NST_N = 512 };
+static uint64_t g_nst[NST_N]; static int g_nst_n; static uint64_t g_nst_hits; static unsigned g_nst_shown; static uint64_t g_nst_logged[64];
+static int nst_slot(uint64_t ser) { uint32_t h = (uint32_t)(ser * 0x9E3779B97F4A7C15ull >> 55); for (int k = 0; k < NST_N; k++) { int i = (h + k) & (NST_N - 1); if (g_nst[i] == ser || !g_nst[i]) return i; } return -1; }
+static void nst_put(uint64_t ser) { if (!ser || g_nst_n >= NST_N * 3 / 4) return; int i = nst_slot(ser); if (i >= 0 && !g_nst[i]) { g_nst[i] = ser; g_nst_n++; } }
+static void nst_del(uint64_t ser) {   // backward-shift delete keeps the probe chains intact
+    if (!ser || !g_nst_n) return; int i = nst_slot(ser); if (i < 0 || g_nst[i] != ser) return;
+    g_nst[i] = 0; g_nst_n--;
+    for (int j = (i + 1) & (NST_N - 1); g_nst[j]; j = (j + 1) & (NST_N - 1)) { uint64_t s = g_nst[j]; g_nst[j] = 0; g_nst_n--; nst_put(s); }
+}
+static __attribute__((noinline, cold)) void nst_note(NvShader *sh, int st, int reg, uint64_t ser) {
+    g_nst_hits++;
+    for (unsigned k = 0; k < g_nst_shown; k++) if (g_nst_logged[k] == ser) return;
+    if (g_nst_shown >= 64) return; g_nst_logged[g_nst_shown++] = ser;
+    MLOG("【黄】 a texture whose last pass did not write it back is read through a uniform-buffer handle: texture ser=%llu, shader %s stage %d uniform slot %d (its memory holds stale content until the clear the store lookahead expected; %llu such reads so far)",
+         (unsigned long long)ser, sh->key, st, reg, (unsigned long long)g_nst_hits);
+}
+static inline void nst_check(NvShader *sh, int st, int reg, int tid) {
+    if (!g_nst_n || tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) return;
+    uint64_t ser = g_treg[tid].t.serial; int i = nst_slot(ser);
+    if (__builtin_expect(i >= 0 && g_nst[i] == ser && ser, 0)) nst_note(sh, st, reg, ser);
+}
 typedef struct { int stage; } sbsz_ctx;
 static uint32_t sbsz_bound(void *ctx, const nvn_rbind *b) {
     int nvn_stage = ((sbsz_ctx *)ctx)->stage;
@@ -11397,6 +11445,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             const p_bind_buf *u = reg < 16 ? &S.ubo[nvn_stage][reg] : NULL;
             void *mb; uint64_t mo, gpu, pav, ul; int pk;
             if (!cbuf_slot(sh, nvn_stage, reg, &mb, &mo, &gpu, &pav, &ul, &pk)) { slots[aid] = zero_bank_gpu(); USE(zero_bank(), MTLResourceUsageRead); continue; }
+            if (__builtin_expect(reg < 16 && u->size && sh->cb_ext[reg] > ((u->size + 15) & ~15ull), 0)) ubos_note(sh, nvn_stage, reg, sh->cb_ext[reg], u->size);   // readout ① (see ubos_note)
             if (reg < NVN_UBOLEN_N) { ubcap[reg] = pk ? pav : ul;   // pk 0: a deferred-update shadow covers exactly the read range ul
               if (pk) { uint64_t tb = (uint64_t)ubolen_vec4_cap(u, ubcap[reg]) * 16; if (__builtin_expect(tb > pav, 0)) { if (!p65_hit) { p65_k = pk; p65_reg = reg; p65_tb = tb; p65_av = pav; } p65_hit |= pk; } } }   // probe: the table actually written vs the bytes behind the pointer (0 once capped)   // the bounds table lets the shader read tb bytes
             if (bl) {
@@ -11423,6 +11472,8 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             uint64_t real = 0;                         // at byte 8k, the index the shader computes from the handle's offset (an NVN handle is 64-bit)
             for (int k = 0; k < b->n; k++) {
                 int tid = ubo_tex_id(ubo_handle(nvn_stage, reg, 8 * k)); if (tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) tid = -1;   // as for the samplers: other data, not a handle
+                nst_check(sh, nvn_stage, reg, tid);   // readout ③ (see nst_note)
+                dtu_check(sh, nvn_stage, reg, k, tid);   // readout ② (see dtu_note)
                 // not a handle (tid -1): the dummy below without a lookup. tex_by_id(-1) reported 「texture ID -1 not registered」 (#788: every run of such a shader), and that once-only red
                 //   (RED_ONCE 10) then hid the real unregistered IDs for the rest of the run
                 void *tv = NULL; uint64_t trid = tid >= 0 ? tex_fast_rid(tid, &tv) : 0; __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
@@ -11447,6 +11498,8 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                            (int)sp.ws, (int)sp.wt, (int)sp.wr, sp.border[0], sp.border[1], sp.border[2], sp.border[3], sp.lod_min, sp.lod_max, sp.lod_bias, sp.aniso, (int)sp.cmp_mode, (int)sp.cmp_func, ss ? "real" : "failed"); }
         } else if (b->kind == NVN_RB_TEX || b->kind == NVN_RB_TEXU) {
             int tid = b->kind == NVN_RB_TEXU ? ubo_tex_id(ubo_packed(nvn_stage, b)) : (int)(tex_slot_h(S.tex[nvn_stage], S.img[nvn_stage], reg) & 0xfffff);
+            if (b->kind == NVN_RB_TEXU) nst_check(sh, nvn_stage, reg, tid);   // readout ③ (see nst_note)
+            if (b->kind == NVN_RB_TEXU) dtu_check(sh, nvn_stage, reg, 0, tid);   // readout ② (see dtu_note)
             if (b->unb && b->kind == NVN_RB_TEX) ub_note(ubw, b->unb - 1, tid);   // the texture registered at this ID, as the NVN driver writes its descriptor
             void *tv = NULL; uint64_t trid = tex_fast_rid(tid, &tv); __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
             if (tv) p20_check(sh, nvn_stage, b, tid, tv);   // audit #1534 P1-20 probe: declared type / class against the texture as registered (before any fitting below)
@@ -11954,6 +12007,7 @@ static void sd_finish(void) {
                     (unsigned long long)t->ser, (unsigned long long)g_stat_pass, (unsigned long long)g_noload_wrong, w->wwhy, w->prec, (unsigned long long)w->pass, (unsigned long long)w->draw, w->vs, w->fs, w->gs, w->geo, w->run, w->wd, w->wdm, g_pass_geo);
                 else if (!(g_noload_wrong & (g_noload_wrong - 1))) MLOG("【红】 color attachments not loaded but written (lookahead wrong): %llu so far", (unsigned long long)g_noload_wrong); }
             if (t->depth == 1) [g_enc setDepthStoreAction:sa]; else if (t->depth == 2) [g_enc setStencilStoreAction:sa]; else [g_enc setColorStoreAction:sa atIndex:(NSUInteger)t->idx];
+            nst_del(t->ser);   // readout ③: memory holds this pass's content (stored, or never changed)
             g_sd_n_all++; if (dead) { g_sd_n_dead++; g_sd_dead_bytes += t->bytes; g_bw_store -= t->bytes; g_udc_saved_bytes += t->bytes; }
             PD("Z %llu %s ser=%llu lv%u sl%u %s load=%d wrote=%d wwhy=%d (TBDR set off)", g_stat_pass, t->depth == 1 ? "d" : t->depth == 2 ? "s" : "c", (unsigned long long)t->ser, t->lv, t->sl, dead ? "dontcare" : "store", t->load, t->wrote, t->wwhy); }
         g_nsd = 0; return; }
@@ -11973,6 +12027,7 @@ static void sd_finish(void) {
         if (xvcand && !xvdead) xv_set(t->ser, t->lv, t->sl, XV_PROBE, xtag);   // Trial period: write back as usual, only track the next touch
         int dead = t->state == 2 || udc_dead || xvdead; MTLStoreAction sa = dead ? MTLStoreActionDontCare : MTLStoreActionStore;
         if (xvdead) { xv_set(t->ser, t->lv, t->sl, XV_INVALID, xtag); g_xv_dc++; }
+        if ((t->state == 2 && !udc_dead) || xvdead) nst_put(t->ser); else nst_del(t->ser);   // readout ③ (see nst_note)
         if (t->depth == 1) [g_enc setDepthStoreAction:sa]; else if (t->depth == 2) [g_enc setStencilStoreAction:sa]; else [g_enc setColorStoreAction:sa atIndex:(NSUInteger)t->idx];
         g_sd_n_all++; if (dead) { g_sd_n_dead++; g_sd_dead_bytes += t->bytes; g_bw_store -= t->bytes; if (udc_dead) g_udc_saved_bytes += t->bytes; }
         if (!t->state) t->why = 5;
@@ -12356,7 +12411,38 @@ static void lp_finish(void) {
     cb_put(dcb);
 }
 static const p_set_rt *set_rt_op(const uint8_t *op, p_set_rt *t) { op_hdr h; memcpy(&h, op, sizeof h); return set_rt_rec(op + 8, h.size, t); }   // a SET_RT record from its header (nvn_obj.h)
+// Pass continuity across redundant unbinds (DM_NVN_UNBIND_DEFER=1, off by default; nxnative d6b5fc1b / 87422462, MIT, from issue 2806): Unreal-engine titles set no targets
+//   before each draw and then the same targets again; the empty binding ended the pass, so every draw opened one that loaded and stored its targets (upstream report: about 550
+//   passes a frame, 424 of them load-all store-all, on a split-screen title). With the switch: ① an empty binding while a pass is open is held (g_unb) and the open pass stays,
+//   so the next SET_RT can take the same-target continuation; any op that is not pure state (unb_keeps) lands it first, and a pass ending for any other reason applies it (rp_end);
+//   ② rt_same compares views by the fields their flags set (the rest and _rsv hold whatever the game left in its stack slot) and ignores trailing empty colour slots.
+//   Off: exactly as before (memcmp of whole views, slot counts compared as recorded)
+static int unb_on(void) { static int v = -1; if (v < 0) { const char *e = getenv("DM_NVN_UNBIND_DEFER"); v = e && atoi(e) > 0; MLOG("pass continuity across redundant unbinds: %s (DM_NVN_UNBIND_DEFER)", v ? "on" : "off"); } return v; }
+static int view_same(const view_t *x, const view_t *y) {
+    if (x->set_levels != y->set_levels || x->set_layers != y->set_layers || x->set_format != y->set_format || x->set_target != y->set_target || x->set_swizzle != y->set_swizzle || x->set_dsmode != y->set_dsmode) return 0;
+    if (x->set_levels && (x->base_level != y->base_level || x->nlevels != y->nlevels)) return 0;
+    if (x->set_layers && (x->min_layer != y->min_layer || x->nlayers != y->nlayers)) return 0;
+    if (x->set_format && x->format != y->format) return 0;
+    if (x->set_target && x->target != y->target) return 0;
+    if (x->set_swizzle && memcmp(x->swz, y->swz, 4)) return 0;
+    if (x->set_dsmode && x->dsmode != y->dsmode) return 0;
+    return 1;
+}
+static int rt_same_loose(const p_set_rt *a, const p_set_rt *b) {
+    int na = a->n < 8 ? a->n : 8, nb = b->n < 8 ? b->n : 8;   // trailing empty colour slots do not change the set
+    while (na > 0 && !a->color[na - 1]) na--;
+    while (nb > 0 && !b->color[nb - 1]) nb--;
+    if (na != nb || !a->depth != !b->depth || (a->depth && a->depth->serial != b->depth->serial)) return 0;
+    static const view_t z;
+    if (a->depth && !view_same(a->has_dview ? &a->dview : &z, b->has_dview ? &b->dview : &z)) return 0;
+    for (int k = 0; k < na; k++) {
+        if (!a->color[k] != !b->color[k] || (a->color[k] && a->color[k]->serial != b->color[k]->serial)) return 0;
+        if (a->color[k] && !view_same(a->has_cview[k] ? &a->cview[k] : &z, b->has_cview[k] ? &b->cview[k] : &z)) return 0;
+    }
+    return 1;
+}
 static int rt_same(const p_set_rt *a, const p_set_rt *b) {   // Same set of targets: compare by texture serial and view (not by object pointer: the game may copy texture objects by value)
+    if (unb_on()) return rt_same_loose(a, b);
     if (a->n != b->n || !a->depth != !b->depth || (a->depth && a->depth->serial != b->depth->serial) || a->has_dview != b->has_dview) return 0;
     if (a->has_dview && memcmp(&a->dview, &b->dview, sizeof a->dview)) return 0;
     for (int k = 0; k < a->n && k < 8; k++) {
@@ -14546,6 +14632,15 @@ static void lc_take(NvProg *pr) {
     lc_land();
 }
 // The operations a waiting clear can wait across: they neither read nor write textures
+static int unb_keeps(uint32_t op) {   // pure state an open pass carries over to the targets set again (see unb_on); anything else lands a held unbind first
+    switch (op) {
+        case OP_SET_RT: case OP_VIEWPORTS: case OP_SCISSOR: case OP_DEPTH_RANGE: case OP_BIND_PROGRAM: case OP_BIND_STATE: case OP_BIND_VATTR: case OP_BIND_VSTREAM: case OP_BIND_VBUF:
+        case OP_BIND_UBO: case OP_BIND_SSBO: case OP_BIND_TEX: case OP_BIND_TEX1: case OP_BIND_SAMP: case OP_BIND_IMG: case OP_STENCIL: case OP_POLY_OFFSET: case OP_BLEND_COLOR:
+        case OP_ALPHA_REF: case OP_DEPTH_CLAMP: case OP_SET_PATCH_SIZE: case OP_VP_SWIZZLE: case OP_PRIM_RESTART: case OP_RAST_DISCARD: case OP_SET_TEX_POOL: case OP_SET_SAMP_POOL:
+        case OP_JUMP: case OP_CALL: return 1;
+        default: return 0;
+    }
+}
 static int lc_keeps(uint32_t op) {
     switch (op) {
         case OP_SET_RT: case OP_CLEAR_COLOR: case OP_CLEAR_DS: case OP_DRAW: case OP_DRAW_IDX: case OP_BEGIN: case OP_JUMP: case OP_CALL:
@@ -16540,6 +16635,7 @@ void nvn_be_exec(const uint8_t *p) {
         if (g_allocprof) { static uint64_t last; static int prev = -1; uint64_t now = g_dev.currentAllocatedSize; if (prev >= 0 && prev < 64 && now > last) g_ap_bytes[prev] += now - last; last = now; prev = h.op; }
         if (g_hoist_n && hoist_take(p)) { if (g_fz.active && p == g_fz.rt2_op) { g_fz.phase = 2; g_rt_merged = 0; PD("F %llu merged pass enters the later pass's draws", g_stat_pass); } p += h.size; continue; }   // A pure-clear render pass already executed early / the start of a later pass already merged in   // Entering the later pass: the same-target continuation of the earlier pass ends here; the later pass reading the earlier pass's attachment is proven to be same-pixel by fz_p2_draw, and is no longer split by the continuation rule
         const void *a = p + 8;
+        if (g_unb && !unb_keeps(h.op) && !(h.op == OP_END && g_ret_n)) { g_unb_land++; PD("M %llu held unbind lands before op %u", g_stat_pass, (unsigned)h.op); rp_flush(); }   // see unb_on
         if (g_nlc && !lc_keeps(h.op) && !(h.op == OP_END && g_ret_n)) lc_land();   // see lc_keeps (a sub-list's end returns to its caller)
         if (g_gr.active && !geo_run_keeps(h.op)) geo_run_flush();   // only state settings and draws stay inside a geometry run (nvn_geometry.inc ①)
         switch (h.op) {
@@ -16617,6 +16713,10 @@ void nvn_be_exec(const uint8_t *p) {
                 p_set_rt rb; const p_set_rt *r = set_rt_rec(a, h.size, &rb); dsnap_stale();
                 if (defer_begin_q(p)) break;
                 int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
+                { int empty = !r->depth; for (int k = 0; k < r->n && k < 8; k++) if (r->color[k]) empty = 0;   // an empty binding: held while the pass stays open (see unb_on)
+                  if (empty && g_enc && g_enc_mode != 1 && !pend && R.has_rt && unb_on()) { g_unb = 1; g_unb_rt = *r;
+                      if (!g_unb_n++) MLOG("held unbind: first case pass %llu", g_stat_pass); PD("M %llu empty binding held", g_stat_pass); break; }
+                  g_unb = 0; }   // targets again: compared with the open pass's below (a different set ends it as before)
                 if (g_enc && !pend && R.has_rt && tbdr_on() && rt_range_same(&R.rt,r)) {
                     g_rt_merged = g_rt_range_active = g_rt_range_pending = 1; R.rt = *r; break; }
                 if (g_enc && g_fz.active && g_fz.phase == 1 && fz_reuse_op(p) && !pend && g_enc_mode != 1 && R.has_rt && tbdr_on() && rt_same(&g_fz.rt1, r)) {
