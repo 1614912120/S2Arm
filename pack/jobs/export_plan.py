@@ -167,7 +167,6 @@ def _run_step(c, child, gid, platform, plan, location, followUp):
     path = c.logs / "jobs" / (child + ".request.json")
     path.parent.mkdir(parents=True, exist_ok=True)
     atomic(path, request)
-    os.chmod(path, 0o600)
     seen = {}
     def relay(line):
         try:
