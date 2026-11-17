@@ -9832,12 +9832,12 @@
   "en": "\"{0}\" includes {0} code patch(es): they take effect after you re-pack this game (or run the S-grade upgrade)"
  },
  {
-  "source": "显卡卡住了，S2Arm 把这局安全停下了。",
-  "en": "The GPU hung, so S2Arm stopped this session safely."
+  "source": "游戏卡住了，S2Arm 把这局安全停下了。",
+  "en": "The game got stuck, so S2Arm stopped this session safely."
  },
  {
-  "source": "再开一次一般能接着玩（存档停在游戏上次保存的地方）；同一处反复这样，就在「环境检查」导出诊断包，到 GitHub 发帖附上。",
-  "en": "Starting again usually lets you keep playing (your save is as of the last time the game saved). If it keeps happening at the same spot, export a diagnostics package from Environment Check and attach it to a GitHub issue."
+  "source": "点「再启动一次」一般能接着玩，存档停在游戏上次保存的地方。",
+  "en": "Click “Start again” and you can usually keep playing; your save is as of the last time the game saved."
  },
  {
   "source": "在游戏库里长按这款，选「删除游戏…」，再把电脑上导出的这款 .img 重新放进「放这里导入」。",
