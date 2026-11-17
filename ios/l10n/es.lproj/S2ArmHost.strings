@@ -339,7 +339,7 @@
 "diag.error.zip" = "No se pudo crear el paquete (falló al escribir el zip; el teléfono puede estar sin espacio)";
 "diag.export" = "Exportar diagnóstico";
 "diag.prompt.abnormalExit" = "S2Arm no se cerró normalmente la última vez (se bloqueó, se congeló o fue cerrado por el sistema)";
-"diag.prompt.imlLost" = "S2Arm no se cerró normalmente la última vez. Esta instalación perdió el permiso «Límite de memoria ampliado», así que si un juego grande se cerró, lo más probable es que se quedara sin memoria. Vuelve a instalar con «Instalar en el iPhone» en S2Arm en tu ordenador (un Apple ID gratuito también conserva este permiso). Si lo firmas tú, usa Xcode o AltStore Classic v2.3; al volver a firmar con SideStore 0.7.0 se pierde. Si ya está instalado, también puedes añadir el permiso al App ID con GetMoreRam y reinstalar";
+"diag.prompt.imlLost" = "S2Arm no se cerró normalmente la última vez. Esta instalación perdió el permiso «Límite de memoria ampliado», así que si un juego grande se cerró, lo más probable es que se quedara sin memoria. Vuelve a instalar con «Instalar en el iPhone» en S2Arm en tu ordenador (un Apple ID gratuito también conserva este permiso). Si lo firmas tú, usa Xcode o AltStore Classic 2.2 o posterior; al volver a firmar con SideStore 0.7.0 se pierde. Si ya está instalado, también puedes añadir el permiso al App ID con GetMoreRam y reinstalar";
 "diag.prompt.crash" = "El sistema informó que S2Arm se bloqueó o congeló la última vez";
 "diag.prompt.message" = "%@. Esto sube registros de ejecución, informes de bloqueo y la lista de canales gráficos que usaron los juegos (solo ID de sombreadores), sin partidas guardadas, claves ni archivos de juego, y te da un código corto.";
 "diag.prompt.no" = "No, gracias";
