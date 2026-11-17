@@ -118,7 +118,11 @@ def _iml_device_hint(c, tgt, gid):
     ios_ver 取目标设备系统大版本；has_iml 按签名配置判（dev/adhoc 均带 IML，pack/app.entitlements 只有 IML）；
     addr_need.tsv 在产物根里（stage_rewrite.sh 生成，若不存在不报错）。读不到设备 / 表缺失不报错不中止。
     """
-    iml_check_path = Path(__file__).resolve().parents[1] / "iml_check.py"
+    # 按请求的引擎树找（同 install.widget_mod）：Mac App 里作业层在 Resources/Jobs、iml_check.py 在 Resources/Engine/pack，
+    #   原先按本文件往上一级找（= Resources），App 里永远找不到、提示悄悄不出；引擎树里没有时才退回源码树
+    iml_check_path = Path(c.engine) / "pack" / "iml_check.py"
+    if not iml_check_path.is_file():
+        iml_check_path = Path(__file__).resolve().parents[1] / "iml_check.py"
     if not iml_check_path.is_file():
         return
     has_iml = True   # dev 签名描述文件允许 IML = 有；adhoc 自签 app.entitlements 只带 IML = 有
