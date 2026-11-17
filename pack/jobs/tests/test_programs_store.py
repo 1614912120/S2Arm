@@ -107,6 +107,17 @@ class ProgramStoreTests(unittest.TestCase):
             kit = programs.rebuild(self.c, GID)
         self.assertEqual(dirs, [self.cache.parent]); self.assertTrue((kit / "main.npdm").is_file())
 
+    def test_sgrade_state_survives_rebuild(self):
+        # 期望手写：出包收尾写进 kit 的 sgrade_state.json（ipa.finish_kit_state）进常驻配方；缓存清掉后按配方现建的 kit 里照样有、内容相同
+        self.export()
+        def write_state(c, gid, kit):
+            (Path(kit) / "sgrade_state.json").write_text('{"schema": 1}')
+        with mock.patch.object(sgrade, "write_kit_state", write_state):
+            ipa.finish_kit_state(self.c, GID)
+        shutil.rmtree(self.cache)
+        kit = layout.ios_kit(self.c, GID)
+        self.assertEqual((kit / "sgrade_state.json").read_text(), '{"schema": 1}')
+
     def test_cache_deleted_rebuilds_same_kit(self):
         for rows, seen in (("", "-"), ("p main 1 2 3 # x\n", "rows")):
             with self.subTest(rows=bool(rows)):
