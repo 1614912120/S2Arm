@@ -2,7 +2,6 @@
 # Copyright 2026 S2Arm contributors
 """Independent Windows environment contracts; fake probes are not device proof."""
 import contextlib
-import jobcase  # noqa: E402（作业上下文替身统一工厂 jobcase.fake_context）
 import importlib.util
 import io
 import json
@@ -20,6 +19,8 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[3]
 SOURCE = ROOT / "pack/jobs/winenv.py"
 sys.path.insert(0, str(ROOT / "pack/jobs"))   # 用到真 library / toolchain 的几条（Mac 预检同一份规则）：从仓库根跑时也找得到
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # tests/winenv_test.sh 用 python3 -I 跑，-I 不把脚本目录放进 sys.path：jobcase 要显式找
+import jobcase  # noqa: E402（作业上下文替身统一工厂 jobcase.fake_context）
 
 
 class FakeProbe:
