@@ -103,6 +103,11 @@ public sealed class PrivateJobRequest : IDisposable
         var system = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
         var administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
         bool Trusted(IdentityReference who) => who.Equals(current) || who.Equals(system) || who.Equals(administrators);
+        // 收紧前先给本人一条显式、可继承的完全控制（11-16 Windows 实机：目录先由别的进程建、本人的写权限只靠继承来的「Authenticated Users 修改」，
+        //   自愈把它当「其他账户」删了，只剩 SYSTEM / Administrators——提权运行时还能写，普通运行（UAC 下 Administrators 只能用来拒绝）就拒绝访问，
+        //   维护者在桌面上点「添加游戏」直接报红）。只收紧别人，不收紧本人
+        void KeepCurrent(DirectorySecurity a) => a.AddAccessRule(new FileSystemAccessRule(current, FileSystemRights.FullControl,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
         bool Others(DirectorySecurity a) => a.GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>()
             .Any(rule => rule.AccessControlType == AccessControlType.Allow && (rule.FileSystemRights & readers) != 0 && !Trusted(rule.IdentityReference));
         var acl = directory.GetAccessControl();
@@ -136,6 +141,7 @@ public sealed class PrivateJobRequest : IDisposable
             try
             {
                 acl.SetAccessRuleProtection(isProtected: true, preserveInheritance: true);   // 先把继承来的转成显式规则，下面才删得掉
+                KeepCurrent(acl);
                 directory.SetAccessControl(acl);
                 directory.Refresh(); acl = directory.GetAccessControl();
                 foreach (FileSystemAccessRule rule in acl.GetAccessRules(true, false, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().ToList())
@@ -158,6 +164,7 @@ public sealed class PrivateJobRequest : IDisposable
             //   玩家每次添加游戏都卡在「Private job root inherits permissions」，换游戏库位置也没用（这个目录不在游戏库里）。
             //   就地改成不继承、把现有规则原样转成显式规则：有效权限不变，只是以后上级目录的变动不再传进来
             acl.SetAccessRuleProtection(isProtected: true, preserveInheritance: true);
+            KeepCurrent(acl);
             directory.SetAccessControl(acl);
             directory.Refresh();
             if (!directory.GetAccessControl().AreAccessRulesProtected) throw new IOException("Private job root inherits permissions.");

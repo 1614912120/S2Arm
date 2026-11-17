@@ -756,7 +756,8 @@ public sealed partial class EnvironmentWindow
         }
         if (connectedFolder is null) return;
         try { PrivateJobRequest.EnsurePrivateRoot(privateRoot); File.WriteAllText(LibraryPreference, folder); }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { importError = error.Message; Render(); }
+        catch (UnauthorizedAccessException error) { importError = NoWrite(error, connectedFolder ?? libraryFolder); Render(); }
+        catch (IOException error) { importError = error.Message; Render(); }
     }
 
     /// <summary>设置页「导入密钥」（游戏原件统一走顶栏「添加游戏」）</summary>

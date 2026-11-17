@@ -968,6 +968,7 @@
       {"id": "library.working", "zh-Hans": "正在处理，请稍候", "en": "Working, please wait"},
       {"id": "library.completed", "zh-Hans": "操作完成", "en": "Done"},
       {"id": "library.failed", "zh-Hans": "操作未完成，查看下面的处理建议", "en": "Not finished; see the suggestions below"},
+      {"id": "library.no_write", "zh-Hans": "这个位置写不进去：{0}。可能是以前用管理员身份运行过 S2Arm、这个文件夹在只读盘上，或者被杀毒软件挡住了。换一个位置，或者给这个文件夹加上当前账户的写权限后再试。", "en": "Can't write to this location: {0}. S2Arm may have been run as administrator before, the folder may be on a read-only drive, or antivirus may be blocking it. Choose another location, or give your account write permission to this folder, then try again."},
       {"id": "library.select", "zh-Hans": "选择这款游戏", "en": "Select this game"},
       {"id": "library.selected", "zh-Hans": "已选游戏", "en": "Selected game"},
       {"id": "library.version", "zh-Hans": "版本", "en": "Version"},

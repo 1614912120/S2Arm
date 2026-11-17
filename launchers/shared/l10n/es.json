@@ -496,6 +496,7 @@
   "private_root.owner": "La carpeta de datos privados de S2Arm {0} pertenece a otra cuenta de Windows y esta cuenta no puede apropiársela. S2Arm funciona con normalidad, pero esa cuenta puede ver los archivos en ella; para protegerla, elimina la carpeta y vuelve a abrir S2Arm (se recrea; tu biblioteca de juegos y partidas guardadas no están ahí, pero las claves importadas deben importarse de nuevo), o abre S2Arm una vez con esa cuenta.",
   "private_root.others": "La carpeta de datos privados de S2Arm {0} sigue dando acceso a otra cuenta y esta cuenta no puede eliminarlo. S2Arm funciona con normalidad, pero esa cuenta puede ver los archivos en ella; para protegerla, elimina la carpeta y vuelve a abrir S2Arm (se recrea; tu biblioteca de juegos y partidas guardadas no están ahí, pero las claves importadas deben importarse de nuevo).",
   "welcome.sheet.libraryFailed": "La biblioteca de juegos no está configurada ({0}): {1}",
+  "library.no_write": "No se puede escribir en esta ubicación: {0}. Puede que S2Arm se haya ejecutado antes como administrador, que la carpeta esté en una unidad de solo lectura o que el antivirus la esté bloqueando. Elige otra ubicación o da permiso de escritura a tu cuenta en esta carpeta y vuelve a intentarlo.",
   "welcome.sheet.libraryRetry": "Reintentar",
   "welcome.sheet.libraryChange": "Elegir otra carpeta",
   "welcome.sheet.dropBusy": "Otra tarea aún está en curso. Añade esto cuando termine.",
