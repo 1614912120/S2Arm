@@ -373,6 +373,9 @@ public final class S2ArmLauncherModel: ObservableObject {
     /// 刚导入的游戏要等下一次别的刷新才出现）。nil = 没有要补的
     private var refreshAgain: [() -> Void]?
     private var startupCatalogSent = false
+    /// 启动后的后台循环（自动拉回 / 首启准备 / Apple TV 备份 / Mac S 级）是否已开：按「第一次读库成功」开，不跟 startup 那一次读绑死——
+    ///   那一次读失败（首次使用还没选游戏库、外置游戏库没挂上）时原先整个启动器开着期间都不开（11-16 第 3 份候选 Mac 整链：等 6 分钟一单 phoneKeptPull 都没发）
+    private(set) var startupLoopsStarted = false
     private var controllerGameStarted = false
     /// 导入后排着等准备的游戏（同旧启动器：放进来就自动准备，维护者 10-23 不让玩家选）。
     private static let logLimit = 200
@@ -488,7 +491,7 @@ public final class S2ArmLauncherModel: ObservableObject {
                 self.games = games; self.libraryError = nil; self.showingSnapshot = false
                 self.phoneUpdates = self.provider.library.phoneUpdates
                 self.phoneDevices = self.provider.library.phoneDevices
-                if startup { self.sgradeMacInBackground(); self.keptModulesLoop(); self.preparePhoneUpdate(); self.appleTVBackupLoop() }
+                if !self.startupLoopsStarted { self.startupLoopsStarted = true; self.sgradeMacInBackground(); self.keptModulesLoop(); self.preparePhoneUpdate(); self.appleTVBackupLoop() }
                 if self.selectedID == nil || !games.contains(where: { $0.id == self.selectedID }) { self.selectedID = games.first?.id }
             case .failure(let error):
                 self.libraryError = error.message
