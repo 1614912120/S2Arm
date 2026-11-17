@@ -28,6 +28,7 @@
 #include "nvn_vk_bcdec.h"
 #include "nvn_fmt_info.h"
 #include "vk_device.h"
+#include "spirv_storage.h"   // s2a_spirv_declares_cap（C1340）
 #include "nvn_plat_vk.h"
 
 // 平台件替身：无头表面（lavapipe 没有窗口系统）。交换链、取图、呈现段、信号量与布局都是真的，校验层照查。
@@ -4222,6 +4223,72 @@ static void c1072a_vertex_caps(const char *dir) {
     c1072a_case(dir, "vs_clip.vert", 0, &f->shaderClipDistance, "shaderClipDistance", 1);
     c1072a_case(dir, "vs_cull.vert", 0, &f->shaderCullDistance, "shaderCullDistance", 1);
     printf("C1072a 缺特性时 UNSUPPORTED 并点名特性，只读存储负控照建\n");
+}
+
+// C1340：shaderInt16 按程序要求（#1340）。手造两份最小计算模块，只差一行 OpCapability Int16（外加一个 16 位整数类型）。
+// 设备没有 shaderInt16（清掉「已启用记录」或模拟机型档真藏掉）：带 Int16 的模块装载即 UNSUPPORTED、why 点名 shaderInt16、
+// 不交给驱动；不带的照常装、照常建计算管线。设备真有：恢复后带 Int16 的也照常建（validation 0 条）。
+// 负对照：撤掉 nvn_gpu_shader_load 里的 Int16 检查，第一条断言变红。
+static const uint32_t *c1340_module(int int16, size_t *bytes) {
+    static uint32_t w[2][64];
+    uint32_t *o = w[int16 ? 1 : 0];
+    size_t k = 0;
+    o[k++] = 0x07230203u; o[k++] = 0x00010000u; o[k++] = 0; o[k++] = 6; o[k++] = 0;   // 头：魔数 / 1.0 / 生成器 / bound / 0
+    o[k++] = 2u << 16 | 17; o[k++] = 1;                                  // OpCapability Shader
+    if (int16) { o[k++] = 2u << 16 | 17; o[k++] = 22; }                  // OpCapability Int16
+    o[k++] = 3u << 16 | 14; o[k++] = 0; o[k++] = 1;                      // OpMemoryModel Logical GLSL450
+    o[k++] = 5u << 16 | 15; o[k++] = 5; o[k++] = 1; o[k++] = 0x6e69616du; o[k++] = 0;   // OpEntryPoint GLCompute %1 "main"
+    o[k++] = 6u << 16 | 16; o[k++] = 1; o[k++] = 17; o[k++] = 1; o[k++] = 1; o[k++] = 1;   // OpExecutionMode %1 LocalSize 1 1 1
+    o[k++] = 2u << 16 | 19; o[k++] = 2;                                  // %2 = OpTypeVoid
+    o[k++] = 3u << 16 | 33; o[k++] = 3; o[k++] = 2;                      // %3 = OpTypeFunction %2
+    if (int16) { o[k++] = 4u << 16 | 21; o[k++] = 5; o[k++] = 16; o[k++] = 1; }   // %5 = OpTypeInt 16 1
+    o[k++] = 5u << 16 | 54; o[k++] = 2; o[k++] = 1; o[k++] = 0; o[k++] = 3;   // %1 = OpFunction %2 None %3
+    o[k++] = 2u << 16 | 248; o[k++] = 4;                                 // OpLabel
+    o[k++] = 1u << 16 | 253;                                             // OpReturn
+    o[k++] = 1u << 16 | 56;                                              // OpFunctionEnd
+    *bytes = k * 4;
+    return o;
+}
+static nvn_gpu_rc c1340_build(int int16, nvn_gpu_shader *sh, nvn_gpu_pipe *cp, nvn_gpu_err *e) {
+    size_t bytes = 0;
+    const uint32_t *m = c1340_module(int16, &bytes);
+    nvn_gpu_shader_src src;
+    memset(&src, 0, sizeof src);
+    src.stage = NVN_GPU_SH_CS; src.kind = NVN_GPU_BLOB_SPIRV; src.entry = "main"; src.blob = m; src.bytes = bytes;
+    *sh = NULL; *cp = NULL;
+    memset(e, 0, sizeof *e);
+    nvn_gpu_rc r = nvn_gpu_shader_load(&src, sh, e);
+    if (!OK(r) || !*sh) return r;
+    nvn_gpu_stage_desc cs;
+    memset(&cs, 0, sizeof cs);
+    cs.sh = *sh;
+    return nvn_gpu_cpipe_get(&cs, NVN_GPU_PIPE_SYNC, cp, e);
+}
+static void c1340_int16_per_program(void) {
+    size_t b16 = 0, b0 = 0;
+    const uint32_t *m16 = c1340_module(1, &b16), *m0 = c1340_module(0, &b0);
+    CHECK(s2a_spirv_declares_cap(m16, b16, 22) == 1, "C1340 扫描器没认出 OpCapability Int16");
+    CHECK(s2a_spirv_declares_cap(m0, b0, 22) == 0, "C1340 扫描器把不带 Int16 的模块认成带");
+    CHECK(s2a_spirv_declares_cap(m0, 16, 22) == -1, "C1340 扫描器对不完整的头应返回 -1");
+    VkBool32 *f = &g_dev.core_features.shaderInt16;
+    const VkBool32 has = *f;
+    printf("C1340 16 位整数按程序要求：设备 shaderInt16=%u\n", (unsigned)has);
+    nvn_gpu_shader sh; nvn_gpu_pipe cp; nvn_gpu_err e;
+    *f = VK_FALSE;
+    nvn_gpu_rc r = c1340_build(1, &sh, &cp, &e);
+    CHECK(r.code == NVN_GPU_E_UNSUPPORTED && !sh && !cp && strstr(e.why, "shaderInt16"),
+          "C1340 缺 shaderInt16 时声明 Int16 的模块应 UNSUPPORTED 且点名，实 %d「%s」", r.code, e.why);
+    if (sh) nvn_gpu_shader_release(sh);
+    r = c1340_build(0, &sh, &cp, &e);
+    CHECK(OK(r) && sh && cp, "C1340 缺 shaderInt16 时不声明 Int16 的模块应照常建：%d %s", r.code, e.why);
+    if (sh) nvn_gpu_shader_release(sh);
+    *f = has;
+    if (has) {
+        r = c1340_build(1, &sh, &cp, &e);
+        CHECK(OK(r) && sh && cp, "C1340 有 shaderInt16 时声明 Int16 的模块应照常建：%d %s", r.code, e.why);
+        if (sh) nvn_gpu_shader_release(sh);
+    }
+    printf("C1340 缺 shaderInt16 时声明 Int16 的模块具名拒收，不声明的照常建\n");
 }
 
 // C60b：Unknown 存储视图须按已启用的 without-format 写特性建管线。
@@ -9296,6 +9363,70 @@ static void c207_all(const char *dir) {
     printf("C207 诊断读数互不清零：近 300 帧读数与逐笔读数各自读增量、不清零共享累加器，已核对\n");
 }
 
+// C209：管线标签随对象（#1274）。管线预热清单把（槽号, 槽代号）标签存在后端管线对象上（nvn_gpu_pipe_warm_tag / _tag_set），
+// 热路径上换到同一条管线时只读标签、不再序列化配方和算散列。这个做法靠两条前提：
+//   ① 一局内管线对象与（配方 + 程序）一一对应：缓存键含着色器句柄指针，句柄不按内容合并——同一份 SPIR-V 载入两次是两个句柄，
+//      配同一份描述得到两条管线。将来若有人让句柄按内容合并，这里变红：请回头看清单标签的前提（nvn_vk_pipe_warm.h）；
+//   ② 一局内管线不淘汰、指针不复用：销毁只在会话收尾整批做；哈希表翻倍重排只搬节点，不换对象。
+// 起始 16 桶（用例开关 4）建 C209_N = 700 条互不相同的管线（翻倍 6 次）。建每条时标签必须是 0（新对象不继承旧的），
+// 建完立刻写一个互不相同的标签；全部建完再按描述逐条取一遍：取回的是原对象、标签原样读回。
+extern uint64_t nvn_gpu_pipe_warm_tag(nvn_gpu_pipe p);
+extern void nvn_gpu_pipe_warm_tag_set(nvn_gpu_pipe p, uint64_t tag);
+enum { C209_N = 700 };
+static uint64_t c209_tag_of(int i) { return ((uint64_t)(unsigned)(i + 1) << 32) | (uint64_t)(unsigned)(i + 1); }
+static void c209_pipe_tag(const char *dir) {
+    nvn_gpu_shader vs = NULL, fs = NULL, vs2 = NULL, fs2 = NULL; void *vm = NULL, *fm = NULL, *vm2 = NULL, *fm2 = NULL;
+    nvn_gpu_pipe_desc base, base2, d, d2; nvn_gpu_pipe p2 = NULL; nvn_gpu_err e = {0};
+    nvn_gpu_pipe *pp = calloc(C209_N, sizeof *pp), *srt = calloc(C209_N, sizeof *srt);
+    int bad = 0, fresh = 0, dup = 0, miss = 0, lost = 0;
+    CHECK(pp && srt, "C209 分配");
+    if (!(pp && srt)) goto done;
+    if (!load_shader_pair(dir, "tri3.vert", "solid_green.frag", NULL, NULL, &vs, &fs, &vm, &fm)) { CHECK(0, "C209 读着色器"); goto done; }
+    fill_gpipe_desc(&base, vs, fs, 0);
+    nvn_vk_dbg_pipe_test_mode(4);
+    for (int i = 0; i < C209_N; i++) {
+        c205_desc(&base, i, &d);
+        if (!OK(nvn_gpu_pipe_get(&d, NVN_GPU_PIPE_SYNC, &pp[i], &e)) || !pp[i]) { bad++; continue; }
+        if (nvn_gpu_pipe_warm_tag(pp[i]) != 0) fresh++;
+        nvn_gpu_pipe_warm_tag_set(pp[i], c209_tag_of(i));
+    }
+    nvn_vk_dbg_pipe_test_mode(0);
+    CHECK(bad == 0, "C209：建 %d 条管线期望全部成功 → 失败 %d（%s）", C209_N, bad, e.why);
+    CHECK(fresh == 0, "C209：新建的管线对象标签期望是 0（不继承别的对象的）→ %d 条不是", fresh);
+    memcpy(srt, pp, C209_N * sizeof *pp);
+    qsort(srt, C209_N, sizeof *srt, c205_ptr_cmp);
+    for (int i = 1; i < C209_N; i++) if (srt[i] == srt[i - 1]) dup++;
+    CHECK(dup == 0, "C209：一局内描述不同的管线指针期望互不相同（指针不复用）→ 重复 %d 对", dup);
+    for (int i = 0; i < C209_N; i++) {
+        nvn_gpu_pipe q = NULL; c205_desc(&base, i, &d);
+        if (!OK(nvn_gpu_pipe_get(&d, NVN_GPU_PIPE_SYNC, &q, &e)) || q != pp[i]) miss++;
+        else if (nvn_gpu_pipe_warm_tag(q) != c209_tag_of(i)) lost++;
+    }
+    CHECK(miss == 0 && lost == 0, "C209：翻倍重排后按描述再取一遍期望取回原对象、标签原样读回 → 没取回 %d、标签变了 %d / %d", miss, lost, C209_N);
+    // 前提 ①：同一份 SPIR-V 再载入一次得到新句柄，配同一份描述（只换句柄）是另一条管线，标签 0，原来那条的标签不动
+    if (!load_shader_pair(dir, "tri3.vert", "solid_green.frag", NULL, NULL, &vs2, &fs2, &vm2, &fm2)) { CHECK(0, "C209 再读着色器"); goto done; }
+    CHECK(vs2 != vs && fs2 != fs, "C209：同一份 SPIR-V 载入两次期望是两个句柄（句柄不按内容合并）→ 顶点 %s、片元 %s", vs2 != vs ? "不同" : "相同", fs2 != fs ? "不同" : "相同");
+    fill_gpipe_desc(&base2, vs2, fs2, 0);
+    c205_desc(&base2, 0, &d2);
+    CHECK(OK(nvn_gpu_pipe_get(&d2, NVN_GPU_PIPE_SYNC, &p2, &e)) && p2 && p2 != pp[0], "C209：只换着色器句柄的同一份描述期望是另一条管线对象（管线按句柄分，不按内容合并）→ %s", e.why);
+    CHECK(p2 && nvn_gpu_pipe_warm_tag(p2) == 0, "C209：另一条管线对象的标签期望是 0");
+    CHECK(pp[0] && nvn_gpu_pipe_warm_tag(pp[0]) == c209_tag_of(0), "C209：原来那条管线的标签期望不动");
+done:
+    free(pp); free(srt);
+    if (vs) nvn_gpu_shader_release(vs);
+    if (fs) nvn_gpu_shader_release(fs);
+    if (vs2) nvn_gpu_shader_release(vs2);
+    if (fs2) nvn_gpu_shader_release(fs2);
+    free(vm); free(fm); free(vm2); free(fm2);
+}
+static void c209_all(const char *dir) {
+    nvn_gpu_err e = {0};
+    if (!open_backend()) { CHECK(0, "C209 open"); return; }
+    c209_pipe_tag(dir);
+    CHECK(OK(nvn_gpu_close(5000000000ull, &e)), "C209 close：%d %s", e.rc.code, e.why);
+    printf("C209 管线标签随对象：新对象标签为 0 / 翻倍重排后对象与标签不丢 / 指针不复用 / 同一份 SPIR-V 载入两次不合并句柄，已核对\n");
+}
+
 // 上屏 EASU 开关夹具：单独进程跑一次，先关后开各呈现一次。
 // 为什么单独：nvn_gpu_surface 是进程级单例，且提交信号序列由 C71 占着；
 // 插在大套件里会把 C71 的时间线打成失败终态（实测 signal 7 < 91）。
@@ -9660,6 +9791,13 @@ int main(int argc, char **argv) {
         memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
         c207_all(argv[1]);
         printf("nvn_gpu Vulkan 后端 C207 单跑：%s（%d 处不符）\n", g_fail ? "红" : "绿", g_fail);
+        s2a_vk_device_destroy(&g_dev, 1);
+        return g_fail ? 1 : 0;
+    }
+    if (getenv("S2A_TEST_C209_ONLY") && argc > 1) {   // 开发时只跑 C209（管线标签随对象；run.sh 不设这个变量）
+        memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
+        c209_all(argv[1]);
+        printf("nvn_gpu Vulkan 后端 C209 单跑：%s（%d 处不符）\n", g_fail ? "红" : "绿", g_fail);
         s2a_vk_device_destroy(&g_dev, 1);
         return g_fail ? 1 : 0;
     }
@@ -10042,6 +10180,7 @@ int main(int argc, char **argv) {
     if (!open_backend()) return 1;
     c60b_unknown_image_tbuf(argv[1]);
     c1072a_vertex_caps(argv[1]);
+    c1340_int16_per_program();
     CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C60b close：%d %s", e18.rc.code, e18.why);
     if (!open_backend()) return 1;
     c60c_unknown_image_tbuf_read(argv[1]);
@@ -10084,6 +10223,7 @@ int main(int argc, char **argv) {
     c205_all(argv[1]);   // C205 图形管线散列表：每个臂自己一个会话
     c207_all(argv[1]);   // C207 诊断读数互不清零：自己一个会话（计时开关、逐笔读数周期都在用例里开 / 还原）
     c208_close_wakeup();   // C208 close 不等满时限：自己一个会话
+    c209_all(argv[1]);   // C209 管线标签随对象（#1274）：自己一个会话（起始 16 桶的用例开关要在会话里第一条管线之前设）
 
     for (int sw = 0; sw < 2; sw++) {
         if (!open_backend()) return 1;

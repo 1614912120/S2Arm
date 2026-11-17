@@ -150,6 +150,7 @@ struct nvn_gpu_pipe_s {
     nvn_gpu_pipe_desc key;
     uint32_t actual_samples; // 主机实际管线样本数；key 保留请求以匹配预热与查找。
     uint8_t warm;          // 1 = 这份对象是预热带 / 预热线程建的，真实 draw 第一次命中时计数（见 nvn_gpu_pipe_get）
+    uint64_t warm_tag;     // 管线预热清单的标签（槽号 + 槽代号，见 nvn_vk_pipe_warm.h）；0 = 没设过。原子读写，随对象销毁
     struct nvn_gpu_pipe_s *all_next;
     struct nvn_gpu_pipe_s *hnext;   // 图形管线的散列桶链（g_pipe_ht）
     uint32_t hash;                  // 建管线时的 pipe_hash(描述)：查表先比它、相同才逐字段比（不碰 key 那一大块内存）；重排桶也用它
@@ -2800,6 +2801,10 @@ nvn_gpu_rc nvn_gpu_shader_load(const nvn_gpu_shader_src *s, nvn_gpu_shader *out,
         return fail(err, NVN_GPU_E_UNSUPPORTED, "GS 未启用或探测未通过");
     if (s->kind != NVN_GPU_BLOB_SPIRV) return fail(err, NVN_GPU_E_UNSUPPORTED, "只收 SPIR-V blob（kind=%d）", s->kind);
     if (s->bytes & 3) return fail(err, NVN_GPU_E_ARG, "SPIR-V 字节数不是 4 的倍数");
+    // #1340：shaderInt16 不再是整机门槛。设备没有它时，声明了 OpCapability Int16 的模块不交给驱动（不合法的 SPIR-V），
+    // 按程序报 UNSUPPORTED、why 点名特性；程序层据此记未接清单 shader int16_not_supported。
+    if (!g.dev->core_features.shaderInt16 && s2a_spirv_declares_cap(s->blob, s->bytes, 22) == 1)
+        return fail(err, NVN_GPU_E_UNSUPPORTED, "shaderInt16：设备没有 16 位整数，模块声明了 OpCapability Int16（stage %d）", (int)s->stage);
     struct nvn_gpu_shader_s *sh = calloc(1, sizeof *sh);
     if (!sh) return fail(err, NVN_GPU_E_OOM, "着色器结构分配失败");
     sh->stage = s->stage;
@@ -3096,6 +3101,10 @@ static uint64_t g_warm_hits, g_warm_created, g_pipe_dup;
 void nvn_gpu_pipe_warm_scope(int on) { t_warm_scope = on ? 1 : 0; }
 uint64_t nvn_gpu_pipe_warm_hits(void) { return __atomic_load_n(&g_warm_hits, __ATOMIC_RELAXED); }
 uint64_t nvn_gpu_pipe_warm_created(void) { return __atomic_load_n(&g_warm_created, __ATOMIC_RELAXED); }
+// 清单标签（管线预热清单把「这条管线对应哪一槽」存在对象上，换回同一条管线时只加计数）。后端管线局内不淘汰、
+// 不复用指针（销毁只在会话收尾整批做），所以标签随对象生灭；读写不加锁（单个 64 位原子）。
+uint64_t nvn_gpu_pipe_warm_tag(nvn_gpu_pipe p) { return p ? __atomic_load_n(&((struct nvn_gpu_pipe_s *)p)->warm_tag, __ATOMIC_RELAXED) : 0; }
+void nvn_gpu_pipe_warm_tag_set(nvn_gpu_pipe p, uint64_t tag) { if (p) __atomic_store_n(&((struct nvn_gpu_pipe_s *)p)->warm_tag, tag, __ATOMIC_RELAXED); }
 
 // 缓存里按配方找一条图形管线（调用方持 g_mu）。散列只取描述里一部分字段（都是 same_pipe_desc 比的），
 // 相等与否仍由 same_pipe_desc 定。
