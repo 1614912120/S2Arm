@@ -6996,8 +6996,8 @@
   "en": "Connect the iPhone or iPad to this computer with a cable, or put it on the same Wi-Fi; unlock it and tap Trust."
  },
  {
-  "source": "另一个任务正在使用游戏库，请稍后重试。",
-  "en": "Another task is using the library. Please try again later."
+  "source": "等正在用游戏库的那个任务结束（或在任务列表里取消它）再重试；什么都没有改动。",
+  "en": "Wait for the task that is using the library to finish (or cancel it in the task list), then try again. Nothing was changed."
  },
  {
   "source": "原任务进程已不在，但游戏库的锁仍被占用。重新连接或重新挂载游戏库所在磁盘后再试；不要手动删除锁文件。本次没有改动游戏文件。",

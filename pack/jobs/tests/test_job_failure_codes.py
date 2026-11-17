@@ -731,7 +731,7 @@ class PlayerSummary(unittest.TestCase):
 class RecoveryCoverage(unittest.TestCase):
     def test_library_busy_stays_short_and_stuck_lock_has_recovery(self):
         source = RECOVERY["library_busy"]
-        self.assertEqual(source, "另一个任务正在使用游戏库，请稍后重试。")
+        self.assertEqual(source, "等正在用游戏库的那个任务结束（或在任务列表里取消它）再重试；什么都没有改动。")
         stuck = RECOVERY["library_lock_stuck"]
         self.assertIn("重新连接或重新挂载", stuck)
         self.assertIn("不要手动删除锁文件", stuck)
@@ -740,7 +740,7 @@ class RecoveryCoverage(unittest.TestCase):
         self.assertTrue(next(i["en"] for i in translations if i.get("source") == stuck))
         spec = json.loads((ROOT / "launchers/shared/experience.v1.json").read_text())
         error = next(i for i in spec["errors"]["items"] if i["code"] == "library_busy")
-        self.assertEqual(error["detail"]["zh-Hans"], source)
+        self.assertEqual(error["detail"]["zh-Hans"], "等它结束再试，这次什么都没有改动。")
         stuck_error = next(i for i in spec["errors"]["items"] if i["code"] == "library_lock_stuck")
         self.assertEqual(stuck_error["detail"]["zh-Hans"], stuck)
         self.assertIn("remount", stuck_error["detail"]["en"].lower())

@@ -301,7 +301,7 @@
        "next_action": {"from": "pack/jobs/errors.py"}},
       {"code": "library_busy", "severity": "error", "retryable": true, "recoverable": true,
        "title": {"zh-Hans": "另一个任务正在使用游戏库", "en": "Another task is using the library"},
-       "detail": {"zh-Hans": "另一个任务正在使用游戏库，请稍后重试。", "en": "Another task is using the library. Please try again later."},
+       "detail": {"zh-Hans": "等它结束再试，这次什么都没有改动。", "en": "Wait for it to finish, then try again. Nothing was changed."},
        "next_action": {"from": "pack/jobs/errors.py"}},
       {"code": "library_lock_stuck", "severity": "error", "retryable": true, "recoverable": true,
        "title": {"zh-Hans": "游戏库的锁仍被占用", "en": "The library lock is still held"},
