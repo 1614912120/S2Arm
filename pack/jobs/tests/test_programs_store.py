@@ -126,6 +126,52 @@ class ProgramStoreTests(unittest.TestCase):
         self.assertFalse((game / "image/ios/kit").exists()); self.assertFalse((game / "original-exefs").exists())
         self.assertNotIn("main.patched.bin", self.names(self.store / "recipe.tar.zst"))
 
+    def test_catalog_badge_never_migrates(self):
+        # 11-16 Windows 0.4.4 → 0.5.0 首启：清单画金色 S 调到迁移，与后台作业撞上 WinError 32、整个清单读失败。
+        #   期望手写：旧布局里带宽屏已验证表的款照亮 S，但清单里一步迁移都不做（旧位置原样在、常驻没有归档、kit_dir 没被调）
+        product = self.product(); (product / "widen_verified.tsv").write_text("x")
+        game = layout.game_dir(self.c, GID)
+        shutil.copytree(product, game / "image/ios/kit"); shutil.copytree(self.exefs(), game / "original-exefs")
+        with mock.patch.object(programs, "kit_dir", side_effect=AssertionError("清单里不该迁移 / 现建")):
+            self.assertTrue(library.sgrade_badge(self.c, GID, self.root / "no-mac-image"))
+        self.assertTrue((game / "image/ios/kit/main.npdm").is_file()); self.assertFalse((self.store / "exefs.tar.zst").exists())
+        shutil.rmtree(game / "image/ios/kit")   # 一份程序件都没有：不亮、不报错
+        self.assertFalse(library.sgrade_badge(self.c, GID, self.root / "no-mac-image"))
+
+    def test_migration_holds_its_own_lock(self):
+        # 并发第一次用到同一款：迁移整段持 programs-migrate-<号>（不是交付 / 装机持着的 program-<号>，那把不可重入）
+        import contextlib
+        taken = []
+        @contextlib.contextmanager
+        def lock(name, wait=None):
+            taken.append(name); yield
+        self.c.lock = lock
+        game = layout.game_dir(self.c, GID)
+        shutil.copytree(self.product(), game / "image/ios/kit"); shutil.copytree(self.exefs(), game / "original-exefs")
+        layout.ios_kit(self.c, GID)
+        self.assertEqual(taken, ["programs-migrate-" + GID])
+
+    def test_archive_write_is_safe_when_target_is_busy(self):
+        # 期望手写：同一内容再写一遍不换文件（别的进程正开着读也不碰它）；Windows 换文件被占（WinError 32）退避后成功，临时文件不留
+        programs.save_exefs(self.c, GID, self.exefs())   # 直接测写归档这一层（sgrade.save_program 主程序没变就不写）
+        arc = self.store / "exefs.tar.zst"; first = arc.read_bytes()
+        with mock.patch.object(programs, "_replace_file", side_effect=AssertionError("同一内容不该再换")):
+            programs.save_exefs(self.c, GID, self.exefs())
+        self.assertEqual(arc.read_bytes(), first)
+        busy = PermissionError(13, "另一个程序正在使用此文件"); busy.winerror = 32
+        real, calls = os.replace, []
+        def replace(a, b):   # 只数换归档那一下（save_exefs 换缓存目录也走 os.replace）
+            if str(b).endswith("exefs.tar.zst"):
+                calls.append(1)
+                if len(calls) == 1:
+                    raise busy
+            return real(a, b)
+        ex = self.exefs(); (ex / "sdk").write_bytes(b"sdk v2")   # 内容变了，要换（exefs() 每次重写原样，改要在它之后）
+        with mock.patch.object(programs, "REPLACE_RETRIES", (0,)), mock.patch("os.replace", replace):
+            programs.save_exefs(self.c, GID, ex)
+        self.assertEqual(len(calls), 2); self.assertNotEqual(arc.read_bytes(), first)
+        self.assertEqual([p.name for p in self.store.iterdir() if p.name.endswith(".partial")], [])
+
     def test_legacy_kit_that_does_not_rebuild_the_same_keeps_whole_kit(self):
         # 旧 kit 的改写产物和按配方现建的对不上（老版本改写器出的 / S 级补进时没同步补丁行表）：整份 kit 进配方，现建出来与原 kit 逐字节同
         product = self.product()

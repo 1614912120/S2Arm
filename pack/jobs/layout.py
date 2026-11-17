@@ -456,6 +456,16 @@ def ios_kit(c, gid):
     return programs.kit_dir(c, gid)
 
 
+def ios_kit_present(c, gid):
+    """已有的 iPhone 程序件目录（缓存 kit，或还没迁移的旧布局）→ 路径 | None。只看文件，不迁移、不现建：给游戏库清单这类只读的地方用
+    （11-16：清单画金色 S 调 ios_kit，升级首启在读库里做旧布局迁移，与后台作业撞上 WinError 32，整个清单读失败）"""
+    import programs
+    for kit in (programs.cache(c, gid) / "kit", program_store(c, gid) / IOS_KIT, image_ios(c, gid, create=False) / IOS_KIT):
+        if (kit / "main.npdm").is_file():
+            return kit
+    return None
+
+
 def has_ios_kit(c, gid):
     """有没有 iPhone 程序件（游戏库清单每款都问：只看文件，不迁移、不现建——旧布局的迁移要压缩 + 现建对拍，留到真用程序件时做）"""
     import programs
