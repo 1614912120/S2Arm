@@ -25,8 +25,8 @@ INPUTS = ["runtime", "ios", "graphics", "translator", "services", "compat", "pac
           "platform/build.mk", "launchers/macos/build.mk", "macos", "tests/visual/galrec",
           # 打 iPhone 包（make ios）要编 platform/apple/plat_apple.c（10-23 Spare-host 前端打 iPhone 包撞「no such file」）
           "platform/apple", "shell", "launchers/shared/SaveSync", "launchers/macos/frontend", "launchers/macos/adapter", "platform/plat.h", "platform/plat_asm.h",
-          # Android target uses the same immutable engine snapshot as its pack stages.
-          "android", "LICENSE", "README.md",
+          # 不收 android/（11-16 安装包瘦身，约 11 MB）：安卓导出未对玩家开放（启动器回「即将上线」），开放时再加回
+          "LICENSE", "README.md",
           # 随包 Python 的钉版依赖清单：Windows 环境检查（pack/jobs/winenv.py）按它核随包 Python 的库版本（11-07 发版产物端到端：快照缺它、整份清单报错误码合同无法核实）
           "launchers/macos/requirements-runtime.txt",
           # 游戏设置定义表（pack/jobs/community.py 按它读写 launch.json、转宿主开关；11-09 启动设置）
@@ -43,14 +43,10 @@ INPUTS = ["runtime", "ios", "graphics", "translator", "services", "compat", "pac
 
 
 def include_source(relative):
-    """Do not ship Android/Vulkan test trees in the app's production engine."""
+    """发版引擎快照不收测试树（11-16 安装包瘦身：出包流程不跑测试，各处 tests/ 约 18 MB）。
+    例外：根目录 tests/visual/galrec 是出包要读的（INPUTS 单独列进来），按顶层 tests 之后的目录判。"""
     parts = Path(relative).parts
-    if parts[:1] == ("android",):
-        directories = parts[1:-1]
-    elif parts[:2] == ("graphics", "vulkan"):
-        directories = parts[2:-1]
-    else:
-        return True
+    directories = parts[1:-1] if parts[:1] == ("tests",) else parts[:-1]
     return not any(p in ("test", "tests", "androidTest", "testFixtures") or p.endswith("-tests")
                    for p in directories)
 

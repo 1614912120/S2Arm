@@ -1097,8 +1097,12 @@ static uint8_t *punch_at(uint64_t hp) { return g_punch_pend + (hp - L.win_base) 
 // 还页走懒清零（持 g_mu）：[a, a + n) 全在文件后备窗口里才接，改成不可访问并记待清零；接了返回 1
 static int punch_defer_locked(uint64_t a, uint64_t n) {
     if (!punch_defer_on() || !L.win_size || !s2a_guest_in_file(a, n) || a < L.win_base || a + n > L.win_base + L.win_size || (a | n) & (HPG - 1)) return 0;
+    // 待清零表先分配、分不出就不走懒清零（返回 0：调用方走 s2a_guest_zero 立即清零）。诊断#0ed154（8 GB iPad、低区耗尽、errno 12 ×22）：
+    //   原先 mprotect 后才 calloc、不判空，calloc 回空后按页号写进空指针（读 0xfebb），宿主在还页路径上崩
+    if (!g_punch_pend && !(g_punch_pend = calloc(L.win_size / HPG, 1))) {
+        static int once; if (!once++) LOG("【红】懒清零待清零表 %llu KB 分配失败（errno=%d），改走立即清零", (unsigned long long)(L.win_size / HPG >> 10), errno);
+        return 0; }
     if (mprotect((void *)a, n, PROT_NONE)) die("懒清零 mprotect errno=%d", errno);
-    if (!g_punch_pend) g_punch_pend = calloc(L.win_size / HPG, 1);
     for (uint64_t p = a; p < a + n; p += HPG) { uint8_t *b = punch_at(p); if (!*b) { *b = 1; g_punch_pending_n++; } }
     return 1;
 }

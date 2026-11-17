@@ -8,6 +8,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <math.h>
 #include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
@@ -22,6 +23,7 @@
 #include <unistd.h>
 
 #include "nvn_backend.h"
+#include "nvn_unimpl.h"
 #include "nvn_vk_format.h"
 #include "nvn_vk_bcdec.h"
 #include "nvn_fmt_info.h"
@@ -41,9 +43,10 @@ VkResult nvn_plat_vk_surface_create(VkInstance instance, void *native, VkSurface
 }
 int nvn_plat_window_size(void *native, uint32_t *w, uint32_t *h) { (void)native; *w = 320; *h = 180; return 1; }
 // S2A_TEST_NVK_DQ=1：整套用例在「两级回放开」下再跑一遍（run.sh 第二遍）
-// S2A_TEST_NVK_DQ=1：整套用例在「两级回放开」下再跑一遍；S2A_TEST_DESC_MEMO=1：在「描述符组备忘开」下再跑一遍
-// （备忘开着时内容相同的组不再分配，按「分配了几组」写的那几条期望在这一遍里不比，像素期望照比）。
-static int g_memo_on;
+// S2A_TEST_NVK_DQ=1：整套用例在「两级回放开」下再跑一遍；S2A_TEST_DESC_MEMO=0：在「描述符组备忘关」下再跑一遍（生产缺省是开，整套默认就在开下跑；
+// 开着时内容相同的组不再分配、UBO 走动态偏移，按「分配了几组」写的那几条期望在默认这遍里不比，像素期望照比；关的那遍保留原来的分配数期望）。
+static int g_memo_on = 1;        // 整套用例这一遍 nvk_desc_memo 的取值：main 开头按环境变量 S2A_TEST_DESC_MEMO 定（没设 = 1，生产缺省）
+static int g_memo_dflt_seen = -1;   // 没设环境变量时后端传给 nvn_plat_flag("nvk_desc_memo", dflt) 的缺省值（C208 核它 = 1：缺省开）
 static int g_shown_timing_test;
 void nvn_plat_safepoint(void) {}
 static int g_upscale_flag = -1;   // -1 = 后端缺省（关），>= 0 = 读成这个值
@@ -76,12 +79,21 @@ int nvn_plat_flag(const char *name, int dflt) {
     if (!strcmp(name, "nvk_plc_first_ms") && g_plc_thr_first_ms >= 0) return g_plc_thr_first_ms;
     if (!strcmp(name, "nvk_plc_every_ms") && g_plc_thr_every_ms >= 0) return g_plc_thr_every_ms;
     if (!strcmp(name, "nvk_dq") && getenv("S2A_TEST_NVK_DQ")) return 1;
-    if (!strcmp(name, "nvk_desc_memo") && getenv("S2A_TEST_DESC_MEMO")) { g_memo_on = 1; return 1; }
+    if (!strcmp(name, "nvk_desc_memo")) {
+        if (getenv("S2A_TEST_DESC_MEMO")) return g_memo_on;
+        g_memo_dflt_seen = dflt;   // 没指定：读后端自己的缺省，核它是开（C208）
+        return dflt;
+    }
     return dflt;
 }
 static int g_shown_empty_logged;
+static unsigned g_msaa_log_2, g_msaa_log_8;
 void nvn_plat_log(int level, const char *cls, const char *text) {
     (void)level;
+    if (text && strstr(text, "msaa_fallback:")) {
+        if (strstr(text, "请求 2 重采样")) g_msaa_log_2++;
+        if (strstr(text, "请求 8 重采样")) g_msaa_log_8++;
+    }
     if (text && strstr(text, "分时（实际上屏）") && strstr(text, "帧率= ") && strstr(text, "扩展未启用或不支持")) g_shown_empty_logged++;
     if (atomic_load_explicit(&g_c207_cap, memory_order_relaxed) && text) {   // C207：下面两种行只由绘制 / 呈现所在的（测试）线程打，不加锁
         if (strstr(text, "描述符细分（每帧毫秒，近 300 帧）")) {
@@ -108,6 +120,9 @@ static unsigned g_desc_sets_total;
 // 5 空闲串里的组 / 6 表项数 / 7 增长池个数 / 8 dead 的表项数 / 9 回收是否开着（开会话时读的开关）/ 10 到总量上限退回老路径的次数 / 13 沿登记表遍历数出来的表项数（应恒等于 6）/ 26 当前的总量上限 /
 // 布局表：19 布局结构数 / 20 建管线取布局的次数 / 21 其中命中 / 22 散列桶数 / 23 最长桶链 / 24 进程内累计向驱动建过的布局数 / 25 累计销毁的布局数
 uint64_t nvn_vk_dbg_dset_stat(int which);
+uint64_t nvn_vk_dbg_dyn_stat(int which);   // C208：0 = 选了动态 UBO 的管线条数、1 = 建过的带 UBO 的管线条数（进程内累计）、2 = 当前的动态 UBO 上限（设备值，或被下面压低后的值）、3 = 绑定表里「只换偏移」直接放过的项数（进程内累计）
+void nvn_vk_dbg_dyn_limit(uint32_t v);     // C208：把上限压低到 v（只降不升），0 = 还原设备值
+void nvn_vk_dbg_dyn_split(uint32_t bits);  // C208：把动态偏移的拆分点（低位走动态偏移、高位放描述符）从 32 位压到 bits 位，0 = 还原 32 位
 uint64_t nvn_vk_dbg_dlay_get(const uint32_t *k4, uint32_t nb);   // 直接按结构取一个布局（不经管线）：nb 条 {binding, 类型, 数量, 阶段}，返回布局句柄的数值，0 = 失败
 void nvn_vk_dbg_dset_hold(int on);     // 1 = 测试线程自己持着回收表的锁（取组碰锁退回老路径）；0 = 放开。持着期间只能读 nvn_vk_dbg_dset_stat(9 / 11)
 void nvn_vk_dbg_dset_inject(int mode);   // 0 不注入；1 一批（> 1 组）向驱动要组时回「池耗尽」；2 任何一次向增长池要组都回「池耗尽」
@@ -4711,6 +4726,226 @@ static void c976b_border_color(const char *dir) {
     }
 }
 
+// C976r：min / max 归约（#976）。2x1 R32F 纹素 {0.25, 0.75}，线性过滤、夹到边，在两纹素中心的中点 u = 0.5 采样：
+// 两个纹素权重各一半。期望：平均 0.5、min 0.25、max 0.75。修前后端不读 reduction，三种都读到 0.5。
+static void c976r_reduction(const char *dir) {
+    printf("C976r 归约：设备 sampler_filter_minmax=%d image_mapping=%d\n", g_dev.sampler_minmax_enabled, g_dev.minmax_image_mapping);
+    static const float texels[2] = {0.25f, 0.75f};
+    static const float uv[1][2] = {{0.5f, 0.5f}};
+    static const struct { uint32_t red; const char *name; float want; } k[3] = {
+        {NVN_SAMPLER_REDUCTION_AVERAGE, "平均", 0.5f}, {NVN_SAMPLER_REDUCTION_MIN, "min", 0.25f}, {NVN_SAMPLER_REDUCTION_MAX, "max", 0.75f}};
+    nvn_gpu_err e;
+    nvn_gpu_tex t = make_tex(2, 1, NVN_FORMAT_R32F, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
+    nvn_gpu_cmd c = begin_cmd();
+    nvn_gpu_tex_upload(c, t, 0, 0, NULL, texels, 8, 8);
+    nvn_gpu_rc r = nvn_gpu_cmd_commit(c, 1, on_done, NULL, &e);
+    CHECK(OK(r) && OK(nvn_gpu_fence_wait(1, 5000000000ull, &e)), "C976r 上传：%s", e.why);
+    uint64_t signal = 1;
+    for (int i = 0; i < 3; i++) {
+        samp_par sp; memset(&sp, 0, sizeof sp);
+        sp.minf = NVN_MIN_FILTER_LINEAR; sp.magf = NVN_MAG_FILTER_LINEAR;
+        sp.ws = sp.wt = sp.wr = NVN_WRAP_MODE_CLAMP_TO_EDGE; sp.reduction = k[i].red;
+        nvn_gpu_samp samp = NULL; memset(&e, 0, sizeof e);
+        if (i) {   // 没有扩展（模拟档 no_minmax；有扩展时本用例把启用位清零再问一次）：min / max 必须具名 UNSUPPORTED，不能静默退回平均
+            const int had = g_dev.sampler_minmax_enabled;
+            char want[48]; snprintf(want, sizeof want, "sampler_reduction_%s：", k[i].name);
+            g_dev.sampler_minmax_enabled = 0;
+            r = nvn_gpu_samp_create(&sp, &samp, &e);
+            g_dev.sampler_minmax_enabled = had;
+            CHECK(r.code == NVN_GPU_E_UNSUPPORTED && !samp && !strncmp(e.why, want, strlen(want)),
+                  "C976r 没有扩展：%s 期望 UNSUPPORTED「%s…」→ rc=%d why=%s", k[i].name, want, r.code, e.why);
+            printf("C976r 没有扩展：%s 归约建采样器 rc=%d（%s）\n", k[i].name, r.code, e.why);
+            if (samp) { nvn_gpu_samp_release(samp); samp = NULL; }
+            if (!had) continue;
+            // 缺完整映射时，退回平均并具名记一次；实际读取必须等于平均值。
+            const int mapping = g_dev.minmax_image_mapping;
+            uint64_t before = nvn_unimpl_count("gpu", "sampler_reduction_average_no_component_mapping");
+            g_dev.minmax_image_mapping = 0;
+            memset(&e, 0, sizeof e);
+            r = nvn_gpu_samp_create(&sp, &samp, &e);
+            g_dev.minmax_image_mapping = mapping;
+            CHECK(OK(r) && samp, "C976r %s 缺多分量映射：期望平均采样器建成 → rc=%d why=%s", k[i].name, r.code, e.why);
+            CHECK(nvn_unimpl_count("gpu", "sampler_reduction_average_no_component_mapping") == before + 1,
+                  "C976r 缺多分量映射：期望具名降级记录一次");
+            if (samp) {
+                float avg[1][4] = {{-1, -1, -1, -1}};
+                if (samp_at(dir, t, samp, uv, 1, avg, ++signal)) {
+                    CHECK(fabsf(avg[0][0] - 0.5f) < 1e-3f, "C976r 缺多分量映射：期望平均 0.5 → %g", avg[0][0]);
+                    printf("C976r 缺多分量映射 %s：平均 0.5 → %g\n", k[i].name, avg[0][0]);
+                }
+                nvn_gpu_samp_release(samp); samp = NULL;
+            }
+            if (!mapping) continue;
+            memset(&e, 0, sizeof e);
+        }
+        r = nvn_gpu_samp_create(&sp, &samp, &e);
+        CHECK(OK(r) && samp, "C976r %s 建采样器：%d %s", k[i].name, r.code, e.why);
+        if (!samp) continue;
+        float got[1][4] = {{-1, -1, -1, -1}};
+        if (samp_at(dir, t, samp, uv, 1, got, ++signal)) {
+            CHECK(got[0][0] > k[i].want - 1e-3f && got[0][0] < k[i].want + 1e-3f, "C976r %s：中点线性采样 期望 %.2f → 读到 %g", k[i].name, k[i].want, got[0][0]);
+            printf("C976r 归约 %s：期望 %.2f → 读到 %g\n", k[i].name, k[i].want, got[0][0]);
+        }
+        nvn_gpu_samp_release(samp);
+    }
+    nvn_gpu_tex_release(t);
+    // 即使本机没有支持归约的四分量格式，也可让校验层检查两个扩展结构同时建采样器。
+    if (g_dev.sampler_minmax_enabled && g_dev.minmax_image_mapping && g_dev.custom_border_enabled &&
+        g_dev.custom_border_without_format && g_dev.custom_border_max >= 2) {
+        samp_par both = {0}; both.minf = NVN_MIN_FILTER_LINEAR; both.magf = NVN_MAG_FILTER_LINEAR;
+        both.ws = NVN_WRAP_MODE_CLAMP_TO_BORDER; both.wt = both.wr = NVN_WRAP_MODE_CLAMP_TO_EDGE;
+        both.reduction = NVN_SAMPLER_REDUCTION_MIN;
+        both.border[0] = 0.2f; both.border[1] = 0.4f; both.border[2] = 0.6f; both.border[3] = 0.8f;
+        nvn_gpu_samp sampler = NULL; memset(&e, 0, sizeof e);
+        r = nvn_gpu_samp_create(&both, &sampler, &e);
+        CHECK(OK(r) && sampler, "C976r 双扩展采样器：期望建成 → rc=%d why=%s", r.code, e.why);
+        printf("C976r 双扩展采样器：rc=%d\n", r.code);
+        if (sampler) nvn_gpu_samp_release(sampler);
+    }
+    // 两个扩展同时使用：浮点采样器必须同时携带自定义边框和 min 归约；整数采样器保留自定义边框。
+    VkFormatProperties fp = {0}; vkGetPhysicalDeviceFormatProperties(g_dev.physical, VK_FORMAT_R32G32B32A32_SFLOAT, &fp);
+    if (g_dev.sampler_minmax_enabled && g_dev.minmax_image_mapping && g_dev.custom_border_enabled &&
+        g_dev.custom_border_without_format && g_dev.custom_border_max >= 2 &&
+        (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_MINMAX_BIT_EXT)) {
+        const float pixels[2][4] = {{0.25f, 0.25f, 0.25f, 0.25f}, {0.75f, 0.75f, 0.75f, 0.75f}};
+        const float coords[2][2] = {{-0.5f, 0.5f}, {0.5f, 0.5f}};
+        const float border[4] = {0.2f, 0.4f, 0.6f, 0.8f};
+        samp_par sp; memset(&sp, 0, sizeof sp);
+        sp.minf = NVN_MIN_FILTER_LINEAR; sp.magf = NVN_MAG_FILTER_LINEAR;
+        sp.ws = NVN_WRAP_MODE_CLAMP_TO_BORDER; sp.wt = sp.wr = NVN_WRAP_MODE_CLAMP_TO_EDGE;
+        sp.reduction = NVN_SAMPLER_REDUCTION_MIN; memcpy(sp.border, border, sizeof border);
+        nvn_gpu_samp samp = NULL; memset(&e, 0, sizeof e);
+        r = nvn_gpu_samp_create(&sp, &samp, &e);
+        CHECK(OK(r) && samp, "C976r 自定义边框 + min：建采样器 %d %s", r.code, e.why);
+        nvn_gpu_tex ct = make_tex(2, 1, NVN_FORMAT_RGBA32F, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
+        c = begin_cmd(); nvn_gpu_tex_upload(c, ct, 0, 0, NULL, pixels, 32, 32);
+        r = nvn_gpu_cmd_commit(c, ++signal, on_done, NULL, &e);
+        CHECK(OK(r) && OK(nvn_gpu_fence_wait(signal, 5000000000ull, &e)), "C976r 组合上传：%s", e.why);
+        float got[2][4] = {{0}};
+        if (samp && samp_at(dir, ct, samp, coords, 2, got, ++signal)) {
+            for (int j = 0; j < 4; j++) {
+                CHECK(fabsf(got[0][j] - border[j]) < 1e-3f, "C976r 边框 + min：边框分量 %d 期望 %g → %g", j, border[j], got[0][j]);
+                CHECK(fabsf(got[1][j] - 0.25f) < 1e-3f, "C976r 边框 + min：中点分量 %d 期望 0.25 → %g", j, got[1][j]);
+            }
+            printf("C976r 边框 + min：边框 R=%g，中点 R=%g\n", got[0][0], got[1][0]);
+        }
+        if (samp) nvn_gpu_samp_release(samp);
+        nvn_gpu_tex_release(ct);
+    } else printf("C976r 边框 + min：设备缺所需能力，组合像素未测\n");
+    // 分离图像 / 采样器：配对格式未知，绘制必须实际走平均采样并只记一次降级。
+    if (g_dev.sampler_minmax_enabled && g_dev.minmax_image_mapping) {
+        nvn_gpu_layout_ent ents[2] = {{0}};
+        ents[0].cls = NVN_GPU_RES_TEX; ents[0].access = NVN_GPU_ACC_R; ents[0].binding = 0; ents[0].count = 2; ents[0].stages = 1u << NVN_GPU_SH_FS;
+        ents[1].cls = NVN_GPU_RES_SAMP; ents[1].access = NVN_GPU_ACC_R; ents[1].binding = 1; ents[1].count = 1; ents[1].stages = 1u << NVN_GPU_SH_FS;
+        nvn_gpu_layout fl = {0}; fl.ent = ents; fl.nent = 2;
+        nvn_gpu_shader vs = NULL, fs = NULL; void *vm = NULL, *fm = NULL;
+        if (load_shader_pair(dir, "tri3.vert", "arr2.frag", NULL, &fl, &vs, &fs, &vm, &fm)) {
+            nvn_gpu_pipe_desc pd; fill_gpipe_desc(&pd, vs, fs, 0);
+            nvn_gpu_pipe pipe = NULL; memset(&e, 0, sizeof e);
+            r = nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e);
+            CHECK(OK(r) && pipe, "C976r 分离采样：管线 %d %s", r.code, e.why);
+            samp_par sp = {0}; sp.minf = NVN_MIN_FILTER_LINEAR; sp.magf = NVN_MAG_FILTER_LINEAR;
+            sp.ws = sp.wt = sp.wr = NVN_WRAP_MODE_CLAMP_TO_EDGE; sp.reduction = NVN_SAMPLER_REDUCTION_MIN;
+            nvn_gpu_samp samp = NULL; r = nvn_gpu_samp_create(&sp, &samp, &e);
+            CHECK(OK(r) && samp, "C976r 分离采样：建采样器 %d %s", r.code, e.why);
+            const uint8_t sep_texels[16] = {64,0,0,255, 192,0,0,255, 64,0,0,255, 192,0,0,255};
+            nvn_gpu_tex tex = make_tex(2, 2, NVN_FORMAT_RGBA8, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
+            nvn_gpu_view view = make_view(tex);
+            nvn_gpu_tex tex0 = make_tex(2, 2, NVN_FORMAT_RGBA8, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
+            nvn_gpu_view view0 = make_view(tex0);
+            nvn_gpu_tex out = make_tex(64, 64, NVN_FORMAT_RGBA8, NVN_GPU_TEX_RENDER | NVN_GPU_TEX_SAMPLED);
+            nvn_gpu_view ov = make_view(out);
+            nvn_gpu_buf rb = make_buf(64 * 64 * 4, NVN_GPU_MEM_SHARED, NULL), vb = full_vb();
+            if (pipe && samp && view && view0 && ov && rb && vb) {
+                uint64_t before = nvn_unimpl_count("gpu", "sampler_reduce_average_separate_unknown_format");
+                c = begin_cmd(); nvn_gpu_tex_upload(c, tex, 0, 0, NULL, sep_texels, 8, 16);
+                nvn_gpu_tex_upload(c, tex0, 0, 0, NULL, sep_texels, 8, 16);
+                nvn_gpu_pass_desc pass = {0};
+                pass.ncolor = 1; pass.color[0].view = ov; pass.color[0].load = NVN_GPU_LOAD_CLEAR; pass.color[0].store = NVN_GPU_STORE_STORE;
+                pass.w = 64; pass.h = 64; pass.layers = 1;
+                nvn_gpu_pass_begin(c, &pass); nvn_gpu_set_pipe(c, pipe);
+                nvn_gpu_dyn dyn; full_dyn(&dyn); nvn_gpu_set_dyn(c, &dyn); nvn_gpu_set_vbuf(c, 0, vb, 0);
+                nvn_gpu_binding bs[3] = {{0}};
+                bs[0].ent = 0; bs[0].cls = NVN_GPU_RES_TEX; bs[0].u.view = view0;
+                bs[1].ent = 0; bs[1].elem = 1; bs[1].cls = NVN_GPU_RES_TEX; bs[1].u.view = view;
+                bs[2].ent = 1; bs[2].cls = NVN_GPU_RES_SAMP; bs[2].u.samp = samp;
+                nvn_gpu_bind(c, NVN_GPU_SH_FS, bs, 3);
+                nvn_gpu_draw_args da = {0}; da.prim = 4; da.count = 3; da.instances = 1; nvn_gpu_draw(c, &da);
+                nvn_gpu_pass_end(c); nvn_gpu_copy_tex_buf(c, out, 0, 0, NULL, rb, 0, 64 * 4, 64 * 64 * 4);
+                memset(&e, 0, sizeof e); r = nvn_gpu_cmd_commit(c, ++signal, on_done, NULL, &e);
+                CHECK(OK(r), "C976r 分离采样：期望绘制成功 → rc=%d why=%s", r.code, e.why);
+                if (OK(r)) {
+                    r = nvn_gpu_fence_wait(signal, 5000000000ull, &e);
+                    CHECK(OK(r), "C976r 分离采样 wait：%s", e.why);
+                    if (OK(r)) {
+                        const uint8_t *pixel = (const uint8_t *)buf_cpu(rb) + (32 * 64 + 32) * 4;
+                        CHECK(pixel[0] >= 127 && pixel[0] <= 128, "C976r 分离采样：期望平均 0.5（127/128）→ %u", pixel[0]);
+                        printf("C976r 分离采样：期望平均 0.5（127/128）→ %u\n", pixel[0]);
+                    }
+                }
+                CHECK(nvn_unimpl_count("gpu", "sampler_reduce_average_separate_unknown_format") == before + 1,
+                      "C976r 分离采样：期望具名降级记录一次");
+            }
+            if (vb) nvn_gpu_buf_release(vb, NULL, NULL);
+            if (rb) nvn_gpu_buf_release(rb, NULL, NULL);
+            if (ov) nvn_gpu_view_release(ov);
+            if (out) nvn_gpu_tex_release(out);
+            if (view) nvn_gpu_view_release(view);
+            if (view0) nvn_gpu_view_release(view0);
+            if (tex) nvn_gpu_tex_release(tex);
+            if (tex0) nvn_gpu_tex_release(tex0);
+            if (samp) nvn_gpu_samp_release(samp);
+            if (vs) nvn_gpu_shader_release(vs);
+            if (fs) nvn_gpu_shader_release(fs);
+            free(vm); free(fm);
+        } else CHECK(0, "C976r 分离采样：着色器读取失败");
+    }
+
+}
+
+// C976r 格式负控：RGBA32F 不支持 FILTER_MINMAX 时，在真实的组合描述符路径具名拒绝。
+static void c976r_bad_format(const char *dir) {
+    VkFormatProperties fp = {0}; vkGetPhysicalDeviceFormatProperties(g_dev.physical, VK_FORMAT_R32G32B32A32_SFLOAT, &fp);
+    if (!g_dev.sampler_minmax_enabled || !g_dev.minmax_image_mapping ||
+        (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_MINMAX_BIT_EXT)) {
+        printf("C976r 不支持格式负控：设备条件不符，未测\n"); return;
+    }
+    nvn_gpu_err e = {0};
+    samp_par sp = {0}; sp.minf = NVN_MIN_FILTER_LINEAR; sp.magf = NVN_MAG_FILTER_LINEAR;
+    sp.ws = sp.wt = sp.wr = NVN_WRAP_MODE_CLAMP_TO_EDGE; sp.reduction = NVN_SAMPLER_REDUCTION_MIN;
+    nvn_gpu_samp samp = NULL; nvn_gpu_rc r = nvn_gpu_samp_create(&sp, &samp, &e);
+    CHECK(OK(r) && samp, "C976r 格式负控建采样器：%d %s", r.code, e.why);
+    nvn_gpu_tex tex = make_tex(2, 1, NVN_FORMAT_RGBA32F, NVN_GPU_TEX_SAMPLED);
+    nvn_gpu_view view = make_view(tex);
+    const float uv[2] = {0.5f, 0.5f};
+    nvn_gpu_buf in = make_buf(sizeof uv, NVN_GPU_MEM_SHARED, uv), out = make_buf(16, NVN_GPU_MEM_SHARED, NULL);
+    nvn_gpu_layout_ent ents[3] = {{0}};
+    ents[0].cls = NVN_GPU_RES_TEX_SAMP; ents[0].access = NVN_GPU_ACC_R; ents[0].binding = 0; ents[0].count = 1; ents[0].stages = 1u << NVN_GPU_SH_CS;
+    ents[1].cls = NVN_GPU_RES_SSBO; ents[1].access = NVN_GPU_ACC_R; ents[1].binding = 1; ents[1].count = 1; ents[1].stages = 1u << NVN_GPU_SH_CS;
+    ents[2].cls = NVN_GPU_RES_SSBO; ents[2].access = NVN_GPU_ACC_W; ents[2].binding = 2; ents[2].count = 1; ents[2].stages = 1u << NVN_GPU_SH_CS;
+    nvn_gpu_layout layout = {0}; layout.ent = ents; layout.nent = 3;
+    nvn_gpu_shader sh = NULL; nvn_gpu_pipe pipe = mk_cpipe(dir, "samp_at.comp", &layout, &sh);
+    CHECK(pipe != NULL, "C976r 格式负控管线为空");
+    if (pipe && samp && view && in && out) {
+        nvn_gpu_cmd c = begin_cmd(); nvn_gpu_set_pipe(c, pipe);
+        nvn_gpu_binding b[3] = {{0}};
+        b[0].ent = 0; b[0].cls = NVN_GPU_RES_TEX_SAMP; b[0].u.ts.view = view; b[0].u.ts.samp = samp;
+        b[1].ent = 1; b[1].cls = NVN_GPU_RES_SSBO; b[1].u.b.buf = in; b[1].u.b.len = sizeof uv;
+        b[2].ent = 2; b[2].cls = NVN_GPU_RES_SSBO; b[2].u.b.buf = out; b[2].u.b.len = 16;
+        nvn_gpu_bind(c, NVN_GPU_SH_CS, b, 3); nvn_gpu_dispatch(c, pipe, 1, 1, 1, NULL, 0);
+        memset(&e, 0, sizeof e); r = nvn_gpu_cmd_commit(c, 1, on_done, NULL, &e);
+        CHECK(r.code == NVN_GPU_E_UNSUPPORTED && strstr(e.why, "sampler_reduction_view_format"),
+              "C976r 不支持格式：期望具名 UNSUPPORTED → rc=%d why=%s", r.code, e.why);
+        printf("C976r 不支持格式：rc=%d（%s）\n", r.code, e.why);
+    }
+    if (view) nvn_gpu_view_release(view);
+    if (tex) nvn_gpu_tex_release(tex);
+    if (samp) nvn_gpu_samp_release(samp);
+    if (in) nvn_gpu_buf_release(in, NULL, NULL);
+    if (out) nvn_gpu_buf_release(out, NULL, NULL);
+    if (sh) nvn_gpu_shader_release(sh);
+}
+
 // C63：描述符数组元素位。t[2] 绑定 elem0=红、elem1=绿，着色器取 t[1] → 全绿。
 // 若后端把 elem 当 0 写，elem1 会盖到元素 0、t[1] 留空——本例必红。
 static void c63_desc_array_elem(const char *dir) {
@@ -4775,6 +5010,81 @@ static void c63_desc_array_elem(const char *dir) {
     r = nvn_gpu_fence_wait(110, 5000000000ull, &e);
     CHECK(OK(r), "C63 wait：%d %s", r.code, e.why);
     expect_rect(buf_cpu(rb), 0, 0, 64, 64, 0, 255, 0, "C63");
+    nvn_gpu_view_release(vr); nvn_gpu_view_release(vg);
+    nvn_gpu_tex_release(tr); nvn_gpu_tex_release(tg);
+    nvn_gpu_samp_release(samp);
+    nvn_gpu_view_release(ov); nvn_gpu_tex_release(out);
+    nvn_gpu_buf_release(vb, NULL, NULL);
+    nvn_gpu_buf_release(rb, NULL, NULL);
+    nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs);
+    free(vm); free(fm);
+}
+
+// C63b（独占一个会话，围栏从 1 起）：描述符数组里相邻元素相同。t[2] 的 elem0、elem1 都绑绿色视图（采样器共用），着色器取 t[1] → 全绿、校验层 0 条。
+// 写入跳过（nvk_desc_skip，缺省开）的影子若不比元素号，elem1 会被当成「和 elem0 一样」跳过，新组里 t[1] 从没写过：
+// 校验层报描述符未更新，画面不是绿色。
+static void c63b_desc_array_same(const char *dir) {
+    nvn_gpu_layout_ent ents[2];
+    memset(ents, 0, sizeof ents);
+    ents[0].set = 0; ents[0].cls = NVN_GPU_RES_TEX; ents[0].access = NVN_GPU_ACC_R;
+    ents[0].binding = 0; ents[0].count = 2; ents[0].stages = 1u << NVN_GPU_SH_FS;
+    ents[1].set = 0; ents[1].cls = NVN_GPU_RES_SAMP; ents[1].access = NVN_GPU_ACC_R;
+    ents[1].binding = 1; ents[1].count = 1; ents[1].stages = 1u << NVN_GPU_SH_FS;
+    nvn_gpu_layout fl;
+    memset(&fl, 0, sizeof fl);
+    fl.ent = ents; fl.nent = 2;
+    nvn_gpu_shader vs = NULL, fs = NULL;
+    void *vm = NULL, *fm = NULL;
+    if (!load_shader_pair(dir, "tri3.vert", "arr2.frag", NULL, &fl, &vs, &fs, &vm, &fm)) { CHECK(0, "读不到 arr2 着色器"); return; }
+    nvn_gpu_pipe_desc pd;
+    fill_gpipe_desc(&pd, vs, fs, 0);
+    nvn_gpu_err e;
+    nvn_gpu_pipe pipe = NULL;
+    CHECK(OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e)), "C63b pipe：%d %s", e.rc.code, e.why);
+    const uint8_t red[16] = {255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255};
+    const uint8_t grn[16] = {0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255, 0, 255};
+    nvn_gpu_tex tr = make_tex(2, 2, NVN_FORMAT_RGBA8, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
+    nvn_gpu_tex tg = make_tex(2, 2, NVN_FORMAT_RGBA8, NVN_GPU_TEX_SAMPLED | NVN_GPU_TEX_CPU_UPLOAD);
+    nvn_gpu_view vr = make_view(tr), vg = make_view(tg);
+    samp_par sp;
+    memset(&sp, 0, sizeof sp);
+    nvn_gpu_samp samp = NULL;
+    CHECK(OK(nvn_gpu_samp_create(&sp, &samp, &e)), "C63b samp：%d %s", e.rc.code, e.why);
+    nvn_gpu_tex out = make_tex(64, 64, NVN_FORMAT_RGBA8, NVN_GPU_TEX_RENDER | NVN_GPU_TEX_SAMPLED);
+    nvn_gpu_view ov = make_view(out);
+    nvn_gpu_buf rb = make_buf(64 * 64 * 4, NVN_GPU_MEM_SHARED, NULL);
+    nvn_gpu_buf vb = full_vb();
+    nvn_gpu_cmd c = begin_cmd();
+    nvn_gpu_tex_upload(c, tr, 0, 0, NULL, red, 8, 16);
+    nvn_gpu_tex_upload(c, tg, 0, 0, NULL, grn, 8, 16);
+    nvn_gpu_pass_desc p;
+    memset(&p, 0, sizeof p);
+    p.ncolor = 1; p.color[0].view = ov; p.color[0].load = NVN_GPU_LOAD_CLEAR; p.color[0].store = NVN_GPU_STORE_STORE;
+    p.color[0].clear.f[3] = 1;
+    p.w = 64; p.h = 64; p.layers = 1;
+    nvn_gpu_pass_begin(c, &p);
+    nvn_gpu_set_pipe(c, pipe);
+    nvn_gpu_dyn dyn;
+    full_dyn(&dyn);
+    nvn_gpu_set_dyn(c, &dyn);
+    nvn_gpu_set_vbuf(c, 0, vb, 0);
+    nvn_gpu_binding bs[3];
+    memset(bs, 0, sizeof bs);
+    bs[0].ent = 0; bs[0].cls = NVN_GPU_RES_TEX; bs[0].elem = 0; bs[0].u.view = vg;
+    bs[1].ent = 0; bs[1].cls = NVN_GPU_RES_TEX; bs[1].elem = 1; bs[1].u.view = vg;
+    bs[2].ent = 1; bs[2].cls = NVN_GPU_RES_SAMP; bs[2].u.samp = samp;
+    nvn_gpu_bind(c, NVN_GPU_SH_FS, bs, 3);
+    nvn_gpu_draw_args da;
+    memset(&da, 0, sizeof da);
+    da.prim = 4; da.count = 3; da.instances = 1;
+    nvn_gpu_draw(c, &da);
+    nvn_gpu_pass_end(c);
+    nvn_gpu_copy_tex_buf(c, out, 0, 0, NULL, rb, 0, 64 * 4, 64 * 64 * 4);
+    nvn_gpu_rc r = nvn_gpu_cmd_commit(c, 1, on_done, NULL, &e);
+    CHECK(OK(r), "C63b commit：%d %s", r.code, e.why);
+    r = nvn_gpu_fence_wait(1, 5000000000ull, &e);
+    CHECK(OK(r), "C63b wait：%d %s", r.code, e.why);
+    expect_rect(buf_cpu(rb), 0, 0, 64, 64, 0, 255, 0, "C63b");
     nvn_gpu_view_release(vr); nvn_gpu_view_release(vg);
     nvn_gpu_tex_release(tr); nvn_gpu_tex_release(tg);
     nvn_gpu_samp_release(samp);
@@ -5400,6 +5710,271 @@ static void c204_dset_recycle(const char *dir) {
     const char *only = getenv("S2A_TEST_C204_ARM");   // 调试：只跑某一个臂（A…N）
     for (int arm = 0; arm < 14; arm++) if (!only || only[0] - 'A' == arm) c204_arm(dir, arm);
     if (!only) printf("C204 描述符组按布局回收：A…N 十四个臂已核对\n");
+}
+
+// C208（#1233）：动态 UBO 偏移。备忘开着（nvk_desc_memo，缺省开）时，管线布局里的 UBO 个数不超过设备的动态 UBO 上限就全部走动态偏移，超了保持静态；备忘关着一律静态。
+// 两条管线：P2 = 片元着色器读两个 UBO（set 0 binding 0、set 1 binding 3，故意不连号）；P9 = 一个组里 9 个 UBO（binding 0..8，只有 0 和 8 被着色器读、逐笔变，其余 7 个恒定）。
+// 每个臂 (lim2, lim9) 开一个会话，建 P2 前把「设备动态 UBO 上限」压到 lim2、建 P9 前压到 lim9（宿主设备 lavapipe 的上限比真机大，要核「刚好在上限」「超一个」只能这样压）：
+//   (1, 8) 两条都超 1 个 → 全静态；(2, 9) 两条都刚好 → 备忘开时全动态；(2, 8) P2 刚好 / P9 超一个 → 一动一静。
+// 期望动态与否：dyn = 备忘开 && UBO 个数 ≤ 上限；用 nvn_vk_dbg_dyn_stat 的前后差核，不靠像素猜。
+// P2 每笔绘制缩到一个像素（scissor），逐笔换（A 缓冲, 偏移, 范围）/（B 缓冲, 偏移），像素 i 的 R = 51 × A 项号、G = 51 × B 项号（0.2 × 255 = 51，没有舍入歧义；bc 的项号是反的：第 k 项 = 0.2(4-k)）：
+//   0 首笔，两组都新；1 只换 A 的偏移；2 只换 B 的偏移；3 两个偏移都换；4 一模一样；5 A 的范围 16 → 32（内容变）；6 A 换缓冲（内容变）；7 两个偏移都换；
+//   8 A 回到「ba、范围 16」；9 A 回到「bc、范围 32」。
+// 向回收表取的组数（动态 + 备忘）：0 笔取 2、5 笔取 1、6 笔取 1，8 / 9 笔内容和本段此前写过的组一样 → 备忘命中、不取 = 共 4；静态：每笔换了偏移或内容的组都要重新取 = 2+1+1+2+0+1+1+2+1+2 = 13（偏移在键里，8 / 9 笔不命中）。
+// P9 四笔 A 偏移 {0,1,1,3} / B 偏移 {0,0,2,4}：动态取 1（首笔）、静态取 4。两轮各一个命令段（第 2 轮 = 新段，首笔所有组重新取）。
+struct c208_env { nvn_gpu_buf ba, bb, bc, vb, rb; nvn_gpu_tex out; nvn_gpu_view ov; };
+static void c208_begin(nvn_gpu_cmd *cp, struct c208_env *E, nvn_gpu_pipe pipe) {
+    nvn_gpu_cmd c = begin_cmd();
+    nvn_gpu_pass_desc p;
+    memset(&p, 0, sizeof p);
+    p.ncolor = 1; p.color[0].view = E->ov; p.color[0].load = NVN_GPU_LOAD_CLEAR; p.color[0].store = NVN_GPU_STORE_STORE;
+    p.w = 10; p.h = 1; p.layers = 1;
+    nvn_gpu_pass_begin(c, &p);
+    nvn_gpu_set_pipe(c, pipe);
+    nvn_gpu_set_vbuf(c, 0, E->vb, 0);
+    *cp = c;
+}
+static void c208_pixel_draw(nvn_gpu_cmd c, int i) {
+    nvn_gpu_dyn dd;
+    memset(&dd, 0, sizeof dd); dd.origin_ll = 1; dd.nvp = 1; dd.vp[0][2] = 10; dd.vp[0][3] = 1; dd.vp[0][5] = 1;
+    dd.has_sc = 1; dd.sc[0] = i; dd.sc[1] = 0; dd.sc[2] = 1; dd.sc[3] = 1;
+    nvn_gpu_set_dyn(c, &dd);
+}
+static void c208_draw(nvn_gpu_cmd c) {
+    nvn_gpu_draw_args da;
+    memset(&da, 0, sizeof da);
+    da.prim = 4; da.count = 3; da.instances = 1;
+    nvn_gpu_draw(c, &da);
+}
+static int c208_finish(nvn_gpu_cmd c, struct c208_env *E, uint64_t id, int npix, const uint8_t (*want)[4], const char *tag) {
+    nvn_gpu_err e; memset(&e, 0, sizeof e);
+    nvn_gpu_pass_end(c);
+    nvn_gpu_copy_tex_buf(c, E->out, 0, 0, NULL, E->rb, 0, 10 * 4, 40);
+    nvn_gpu_rc r = nvn_gpu_cmd_commit(c, id, on_done, NULL, &e);
+    CHECK(OK(r), "C208 %s commit：%d %s", tag, r.code, e.why);
+    r = nvn_gpu_fence_wait(id, 5000000000ull, &e);
+    CHECK(OK(r), "C208 %s wait：%d %s", tag, r.code, e.why);
+    c204_settle();
+    const uint8_t *v = buf_cpu(E->rb);
+    int bad = 0;
+    for (int i = 0; i < npix; i++)
+        if (memcmp(v + i * 4, want[i], 4)) {
+            bad++;
+            printf("C208 %s 像素 %d：期望 %u,%u,%u,%u → %u,%u,%u,%u\n", tag, i, want[i][0], want[i][1], want[i][2], want[i][3], v[i*4], v[i*4+1], v[i*4+2], v[i*4+3]);
+        }
+    CHECK(bad == 0, "C208 %s：%d 个像素期望全对 → %d 个不符", tag, npix, bad);
+    return bad == 0;
+}
+static void c208_p2(struct c208_env *E, nvn_gpu_pipe pipe, int dyn, uint32_t lim, uint64_t sig0) {
+    // 每笔：A 的（缓冲, 项号, 范围）、B 的（缓冲, 项号）；项号 × 256 = 偏移；B 范围恒为 16
+    const struct { nvn_gpu_buf *a; int ka; uint64_t la; nvn_gpu_buf *b; int kb; } seq[10] = {
+        {&E->ba, 0, 16, &E->bb, 0}, {&E->ba, 1, 16, &E->bb, 0}, {&E->ba, 1, 16, &E->bb, 2}, {&E->ba, 3, 16, &E->bb, 4}, {&E->ba, 3, 16, &E->bb, 4},
+        {&E->ba, 3, 32, &E->bb, 4}, {&E->bc, 1, 32, &E->bb, 4}, {&E->bc, 2, 32, &E->bb, 1}, {&E->ba, 4, 16, &E->bb, 1}, {&E->bc, 0, 32, &E->bb, 3}};
+    const unsigned want_taken = dyn ? 4u : 13u;
+    for (int round = 0; round < 2; round++) {
+        char tag[96]; snprintf(tag, sizeof tag, "P2 上限 %u 动态 %d 第 %d 轮", lim, dyn, round);
+        const uint64_t t0 = nvn_vk_dbg_dset_stat(4), f0 = nvn_vk_dbg_dyn_stat(3);
+        nvn_gpu_cmd c; c208_begin(&c, E, pipe);
+        uint8_t want[10][4];
+        for (int i = 0; i < 10; i++) {
+            c208_pixel_draw(c, i);
+            nvn_gpu_binding bs[2];
+            memset(bs, 0, sizeof bs);
+            bs[0].ent = 0; bs[0].cls = NVN_GPU_RES_UBO; bs[0].u.b.buf = *seq[i].a; bs[0].u.b.off = (uint64_t)seq[i].ka * 256; bs[0].u.b.len = seq[i].la;
+            bs[1].ent = 1; bs[1].cls = NVN_GPU_RES_UBO; bs[1].u.b.buf = *seq[i].b; bs[1].u.b.off = (uint64_t)seq[i].kb * 256; bs[1].u.b.len = 16;
+            nvn_gpu_bind(c, NVN_GPU_SH_FS, bs, 2);
+            c208_draw(c);
+            const int ra = seq[i].a == &E->bc ? 4 - seq[i].ka : seq[i].ka;
+            want[i][0] = (uint8_t)(51 * ra); want[i][1] = (uint8_t)(51 * seq[i].kb); want[i][2] = 0; want[i][3] = 255;
+        }
+        c208_finish(c, E, sig0 + (uint64_t)round, 10, (const uint8_t (*)[4])want, tag);   // 提交号严格递增：每次调用错开
+        const uint64_t taken = nvn_vk_dbg_dset_stat(4) - t0;
+        if (nvn_vk_dbg_dset_stat(9))   // 回收关着（run.sh 的回收关档）时没有「向回收表取」这回事，只核像素
+            CHECK(taken == want_taken, "C208 %s：这一段向回收表取的组数期望 %u → %llu", tag, want_taken, (unsigned long long)taken);
+        // 「只换偏移」的近路：第 1、2 笔各 1 项，第 3 笔 2 项，第 7 笔 2 项，第 9 笔 1 项（共 7）；静态档一项也不走。
+        // 备忘开着时这条近路换成「标脏 → 查备忘 → 命中」结果一样（取组数、像素都不变），只有这条读数能钉住它没被去掉。
+        const uint64_t fast = nvn_vk_dbg_dyn_stat(3) - f0;
+        CHECK(fast == (dyn ? 7u : 0u), "C208 %s：「只换偏移」直接放过的绑定项数期望 %u → %llu", tag, dyn ? 7u : 0u, (unsigned long long)fast);
+    }
+}
+static void c208_p9(struct c208_env *E, nvn_gpu_pipe pipe, int dyn, uint32_t lim) {
+    const int ka9[4] = {0, 1, 1, 3}, kb9[4] = {0, 0, 2, 4};
+    char tag[96]; snprintf(tag, sizeof tag, "P9 上限 %u 动态 %d", lim, dyn);
+    const uint64_t t0 = nvn_vk_dbg_dset_stat(4), f0 = nvn_vk_dbg_dyn_stat(3);
+    nvn_gpu_cmd c; c208_begin(&c, E, pipe);
+    uint8_t want[4][4];
+    for (int i = 0; i < 4; i++) {
+        c208_pixel_draw(c, i);
+        nvn_gpu_binding bs[9];
+        memset(bs, 0, sizeof bs);
+        for (int k = 0; k < 9; k++) { bs[k].ent = (uint32_t)k; bs[k].cls = NVN_GPU_RES_UBO; bs[k].u.b.buf = E->ba; bs[k].u.b.len = 16; }
+        bs[0].u.b.off = (uint64_t)ka9[i] * 256; bs[8].u.b.buf = E->bb; bs[8].u.b.off = (uint64_t)kb9[i] * 256;
+        nvn_gpu_bind(c, NVN_GPU_SH_FS, bs, 9);
+        c208_draw(c);
+        want[i][0] = (uint8_t)(51 * ka9[i]); want[i][1] = (uint8_t)(51 * kb9[i]); want[i][2] = 0; want[i][3] = 255;
+    }
+    c208_finish(c, E, 220, 4, (const uint8_t (*)[4])want, tag);
+    const uint64_t taken = nvn_vk_dbg_dset_stat(4) - t0;
+    if (nvn_vk_dbg_dset_stat(9))
+        CHECK(taken == (dyn ? 1u : 4u), "C208 %s：这一段向回收表取的组数期望 %u → %llu", tag, dyn ? 1u : 4u, (unsigned long long)taken);
+    const uint64_t fast = nvn_vk_dbg_dyn_stat(3) - f0;   // 第 1 笔 A 换偏移、第 2 笔 B 换偏移、第 3 笔两个都换：共 4 项
+    CHECK(fast == (dyn ? 4u : 0u), "C208 %s：「只换偏移」直接放过的绑定项数期望 %u → %llu", tag, dyn ? 4u : 0u, (unsigned long long)fast);
+}
+static void c208_p34(struct c208_env *E, nvn_gpu_pipe pipe) {
+    // 34 个 UBO（两个组各 17 个）：超过 32 条的封顶，设备上限再大也保持静态（动态偏移串固定 32 项，不能溢出）；偏移在描述符里，像素照对
+    const int ka[4] = {0, 1, 1, 3}, kb[4] = {0, 0, 2, 4};
+    const uint64_t f0 = nvn_vk_dbg_dyn_stat(3);
+    nvn_gpu_cmd c; c208_begin(&c, E, pipe);
+    uint8_t want[4][4];
+    for (int i = 0; i < 4; i++) {
+        c208_pixel_draw(c, i);
+        nvn_gpu_binding bs[34];
+        memset(bs, 0, sizeof bs);
+        for (int k = 0; k < 34; k++) { bs[k].ent = (uint32_t)k; bs[k].cls = NVN_GPU_RES_UBO; bs[k].u.b.buf = E->ba; bs[k].u.b.len = 16; }
+        bs[0].u.b.off = (uint64_t)ka[i] * 256; bs[33].u.b.buf = E->bb; bs[33].u.b.off = (uint64_t)kb[i] * 256;
+        nvn_gpu_bind(c, NVN_GPU_SH_FS, bs, 34);
+        c208_draw(c);
+        want[i][0] = (uint8_t)(51 * ka[i]); want[i][1] = (uint8_t)(51 * kb[i]); want[i][2] = 0; want[i][3] = 255;
+    }
+    c208_finish(c, E, 240, 4, (const uint8_t (*)[4])want, "P34");
+    CHECK(nvn_vk_dbg_dyn_stat(3) == f0, "C208 P34（静态，34 个 UBO）：「只换偏移」直接放过的绑定项数期望 0 → %llu", (unsigned long long)(nvn_vk_dbg_dyn_stat(3) - f0));
+}
+// C208 拆分点用例（#1292 评审补两条：偏移高位非 0、对齐边界上的偏移拼回逐字节对）。宿主设备（lavapipe）单次分配上限 2 GiB、maxBufferSize 4 GiB − 1，
+// 造不出 ≥ 4 GiB 的缓冲，偏移的高 32 位在宿主上恒为 0；这里用测试钩子 nvn_vk_dbg_dyn_split 把拆分点从 32 位降到 20 位（偏移低 20 位走动态偏移、其余放描述符），
+// 同一段代码、同一套判据，4 MiB 缓冲里的偏移就有了非 0 的「高位」：缓冲整个填毒值（1.0 → 像素 255），只在九个偏移处放标记（项号 j：x = y = 0.2 j → 像素 51 j）；
+// 九个偏移取在高位边界（1 MiB 的整倍数）两侧、都按 256 对齐（≥ minUniformBufferOffsetAlignment，和静态同一条）：低位最大（…FFF00）与低位为 0、为 0x100 各有。
+// 拼错（高位丢了、低位多加一遍、两段拼反）读到的不是毒值就是别的标记，或者越过缓冲尾被校验层报错。
+static const uint64_t c208_mo[9] = {0x000000, 0x0FFF00, 0x100000, 0x100100, 0x1FFF00, 0x200000, 0x2FFF00, 0x3FFF00, 0x300100};
+static const int c208_mj[9] = {0, 1, 2, 3, 4, 1, 2, 3, 4};
+static void c208_split(struct c208_env *E, nvn_gpu_buf bh, nvn_gpu_pipe pipe, int dyn, uint64_t sig0) {
+    // 十笔的（A 偏移项, B 偏移项）；「只换偏移」直接放过的项：同缓冲、同范围、高位相同、偏移不同 = 第 1 笔 A、第 4 笔 B、第 5 笔 A、第 7 笔 A + B、第 9 笔 A + B，共 7 项；
+    // 高位变的（第 2、3、6、8 笔）走脏组重写，不算。两轮各一个命令段（第 2 轮首笔所有组重新取）。
+    static const int seq[10][2] = {{0, 1}, {1, 1}, {1, 2}, {3, 2}, {3, 4}, {4, 4}, {5, 6}, {6, 5}, {7, 8}, {8, 7}};
+    for (int round = 0; round < 2; round++) {
+        char tag[96]; snprintf(tag, sizeof tag, "拆分点 20 位 动态 %d 第 %d 轮", dyn, round);
+        const uint64_t f0 = nvn_vk_dbg_dyn_stat(3);
+        nvn_gpu_cmd c; c208_begin(&c, E, pipe);
+        uint8_t want[10][4];
+        for (int i = 0; i < 10; i++) {
+            c208_pixel_draw(c, i);
+            nvn_gpu_binding bs[2];
+            memset(bs, 0, sizeof bs);
+            bs[0].ent = 0; bs[0].cls = NVN_GPU_RES_UBO; bs[0].u.b.buf = bh; bs[0].u.b.off = c208_mo[seq[i][0]]; bs[0].u.b.len = 16;
+            bs[1].ent = 1; bs[1].cls = NVN_GPU_RES_UBO; bs[1].u.b.buf = bh; bs[1].u.b.off = c208_mo[seq[i][1]]; bs[1].u.b.len = 16;
+            nvn_gpu_bind(c, NVN_GPU_SH_FS, bs, 2);
+            c208_draw(c);
+            want[i][0] = (uint8_t)(51 * c208_mj[seq[i][0]]); want[i][1] = (uint8_t)(51 * c208_mj[seq[i][1]]); want[i][2] = 0; want[i][3] = 255;
+        }
+        c208_finish(c, E, sig0 + (uint64_t)round, 10, (const uint8_t (*)[4])want, tag);
+        const uint64_t fast = nvn_vk_dbg_dyn_stat(3) - f0;
+        CHECK(fast == (dyn ? 7u : 0u), "C208 %s：「只换偏移」直接放过的绑定项数期望 %u → %llu", tag, dyn ? 7u : 0u, (unsigned long long)fast);
+    }
+}
+static void c208_arm(const char *dir, uint32_t lim2, uint32_t lim9) {
+    if (!open_backend()) { CHECK(0, "C208 (%u,%u) 开会话失败", lim2, lim9); return; }
+    struct c208_env E; memset(&E, 0, sizeof E);
+    nvn_gpu_layout_ent fe[2], f9[9], f34[34];
+    memset(fe, 0, sizeof fe); memset(f9, 0, sizeof f9); memset(f34, 0, sizeof f34);
+    fe[0].set = 0; fe[0].binding = 0; fe[0].cls = NVN_GPU_RES_UBO; fe[0].access = NVN_GPU_ACC_R; fe[0].count = 1; fe[0].stages = 1u << NVN_GPU_SH_FS;
+    fe[1] = fe[0]; fe[1].set = 1; fe[1].binding = 3;
+    for (int k = 0; k < 9; k++) { f9[k].set = 0; f9[k].binding = (uint32_t)k; f9[k].cls = NVN_GPU_RES_UBO; f9[k].access = NVN_GPU_ACC_R; f9[k].count = 1; f9[k].stages = 1u << NVN_GPU_SH_FS; }
+    for (int k = 0; k < 34; k++) { f34[k].set = k < 17 ? 0u : 1u; f34[k].binding = (uint32_t)(k < 17 ? k : k - 17); f34[k].cls = NVN_GPU_RES_UBO; f34[k].access = NVN_GPU_ACC_R; f34[k].count = 1; f34[k].stages = 1u << NVN_GPU_SH_FS; }
+    nvn_gpu_layout fl, fl9, fl34;
+    memset(&fl, 0, sizeof fl); memset(&fl9, 0, sizeof fl9); memset(&fl34, 0, sizeof fl34);
+    fl.ent = fe; fl.nent = 2; fl9.ent = f9; fl9.nent = 9; fl34.ent = f34; fl34.nent = 34;
+    nvn_gpu_shader vs = NULL, fs = NULL, vs9 = NULL, fs9 = NULL, vs34 = NULL, fs34 = NULL;
+    void *vm = NULL, *fm = NULL, *vm9 = NULL, *fm9 = NULL, *vm34 = NULL, *fm34 = NULL;
+    nvn_gpu_err e; memset(&e, 0, sizeof e);
+    nvn_gpu_pipe pipe2 = NULL, pipe9 = NULL, pipe34 = NULL;
+    if (!load_shader_pair(dir, "tri3.vert", "ubo_dyn.frag", NULL, &fl, &vs, &fs, &vm, &fm)) { CHECK(0, "C208 读不到 ubo_dyn"); goto done; }
+    if (!load_shader_pair(dir, "tri3.vert", "ubo_dyn9.frag", NULL, &fl9, &vs9, &fs9, &vm9, &fm9)) { CHECK(0, "C208 读不到 ubo_dyn9"); goto done; }
+    if (!load_shader_pair(dir, "tri3.vert", "ubo_dyn34.frag", NULL, &fl34, &vs34, &fs34, &vm34, &fm34)) { CHECK(0, "C208 读不到 ubo_dyn34"); goto done; }
+    {
+        float tab[8 * 64], tabc[8 * 64];   // 每项 256 字节（64 个 float）；ba / bb 的第 k 项：x = 0.2k、y = 0.2k；bc 的第 k 项：x = 0.2(4-k)（和 ba 反着来，换缓冲不换偏移也能从像素看出来）；其余 0
+        memset(tab, 0, sizeof tab); memset(tabc, 0, sizeof tabc);
+        for (int k = 0; k < 5; k++) { tab[k * 64 + 0] = 0.2f * (float)k; tab[k * 64 + 1] = 0.2f * (float)k; tabc[k * 64 + 0] = 0.2f * (float)(4 - k); tabc[k * 64 + 1] = 0.2f * (float)(4 - k); }
+        E.ba = make_buf(sizeof tab, NVN_GPU_MEM_SHARED, tab); E.bb = make_buf(sizeof tab, NVN_GPU_MEM_SHARED, tab); E.bc = make_buf(sizeof tabc, NVN_GPU_MEM_SHARED, tabc);
+    }
+    E.vb = full_vb();
+    E.out = make_tex(10, 1, NVN_FORMAT_RGBA8, NVN_GPU_TEX_RENDER); E.ov = make_view(E.out);
+    E.rb = make_buf(64, NVN_GPU_MEM_SHARED, NULL);
+    {
+        nvn_gpu_pipe_desc pd, pd9, pd34;
+        fill_gpipe_desc(&pd, vs, fs, 0); fill_gpipe_desc(&pd9, vs9, fs9, 0); fill_gpipe_desc(&pd34, vs34, fs34, 0);
+        nvn_vk_dbg_dyn_limit(0);
+        const uint64_t devlim = nvn_vk_dbg_dyn_stat(2);   // 宿主设备真值；压低只降不升，宿主上限不够 9 时「刚好在上限」的 P9 臂退化成超限臂（下面按实际生效的上限算期望）
+        const uint32_t eff2 = lim2 < devlim ? lim2 : (uint32_t)devlim, eff9 = lim9 < devlim ? lim9 : (uint32_t)devlim;
+        const int dyn2 = g_memo_on && eff2 >= 2, dyn9 = g_memo_on && eff9 >= 9;   // P2 有 2 个 UBO、P9 有 9 个
+        nvn_vk_dbg_dyn_limit(lim2);
+        const uint64_t dp0 = nvn_vk_dbg_dyn_stat(0), up0 = nvn_vk_dbg_dyn_stat(1), l2 = nvn_vk_dbg_dyn_stat(2);
+        CHECK(OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe2, &e)), "C208 (%u,%u) 建 P2：%d %s", lim2, lim9, e.rc.code, e.why);
+        if (!pipe2) goto done;
+        CHECK(nvn_vk_dbg_dyn_stat(1) - up0 == 1 && l2 == eff2 && nvn_vk_dbg_dyn_stat(0) - dp0 == (dyn2 ? 1u : 0u),
+              "C208 (%u,%u) P2（2 个 UBO、上限 %llu、备忘 %d）：带 UBO 的管线增量期望 1 → %llu，选动态的管线增量期望 %u → %llu", lim2, lim9, (unsigned long long)l2, g_memo_on,
+              (unsigned long long)(nvn_vk_dbg_dyn_stat(1) - up0), dyn2 ? 1u : 0u, (unsigned long long)(nvn_vk_dbg_dyn_stat(0) - dp0));
+        nvn_vk_dbg_dyn_limit(lim9);
+        const uint64_t dq0 = nvn_vk_dbg_dyn_stat(0), uq0 = nvn_vk_dbg_dyn_stat(1), l9 = nvn_vk_dbg_dyn_stat(2);
+        CHECK(OK(nvn_gpu_pipe_get(&pd9, NVN_GPU_PIPE_SYNC, &pipe9, &e)), "C208 (%u,%u) 建 P9：%d %s", lim2, lim9, e.rc.code, e.why);
+        if (!pipe9) goto done;
+        CHECK(nvn_vk_dbg_dyn_stat(1) - uq0 == 1 && l9 == eff9 && nvn_vk_dbg_dyn_stat(0) - dq0 == (dyn9 ? 1u : 0u),
+              "C208 (%u,%u) P9（9 个 UBO、上限 %llu、备忘 %d）：带 UBO 的管线增量期望 1 → %llu，选动态的管线增量期望 %u → %llu", lim2, lim9, (unsigned long long)l9, g_memo_on,
+              (unsigned long long)(nvn_vk_dbg_dyn_stat(1) - uq0), dyn9 ? 1u : 0u, (unsigned long long)(nvn_vk_dbg_dyn_stat(0) - dq0));
+        nvn_vk_dbg_dyn_limit(0);   // P34 不压上限：超过 32 条的封顶要在设备上限很大时才看得出
+        const uint64_t dr0 = nvn_vk_dbg_dyn_stat(0), ur0 = nvn_vk_dbg_dyn_stat(1);
+        CHECK(OK(nvn_gpu_pipe_get(&pd34, NVN_GPU_PIPE_SYNC, &pipe34, &e)), "C208 (%u,%u) 建 P34：%d %s", lim2, lim9, e.rc.code, e.why);
+        if (!pipe34) goto done;
+        CHECK(nvn_vk_dbg_dyn_stat(1) - ur0 == 1 && nvn_vk_dbg_dyn_stat(0) - dr0 == 0,
+              "C208 (%u,%u) P34（34 个 UBO、设备上限 %llu）：带 UBO 的管线增量期望 1 → %llu，选动态的管线增量期望 0（超过 32 条封顶）→ %llu", lim2, lim9, (unsigned long long)devlim,
+              (unsigned long long)(nvn_vk_dbg_dyn_stat(1) - ur0), (unsigned long long)(nvn_vk_dbg_dyn_stat(0) - dr0));
+        c208_p2(&E, pipe2, dyn2, eff2, 208);
+        c208_p9(&E, pipe9, dyn9, eff9);
+        c208_p2(&E, pipe2, dyn2, eff2, 230);   // 回到 P2：动态 ↔ 静态管线切换后偏移不串
+        c208_p34(&E, pipe34);
+        {   // 拆分点用例：4 MiB 缓冲，毒值 1.0 铺满，九个标记偏移处放 0.2 j（x、y 两个分量；z、w 清 0）
+            enum { HS = 4 << 20 };
+            float *th = malloc(HS);
+            if (!th) { CHECK(0, "C208 (%u,%u) 拆分点用例：4 MiB 分配失败", lim2, lim9); goto done; }
+            for (size_t k = 0; k < HS / sizeof(float); k++) th[k] = 1.0f;
+            for (int k = 0; k < 9; k++) { float *q = th + c208_mo[k] / sizeof(float); q[0] = q[1] = 0.2f * (float)c208_mj[k]; q[2] = q[3] = 0.0f; }
+            nvn_gpu_buf bh = make_buf(HS, NVN_GPU_MEM_SHARED, th);
+            free(th);
+            if (!bh) { CHECK(0, "C208 (%u,%u) 拆分点用例：建 4 MiB 缓冲失败", lim2, lim9); goto done; }
+            nvn_vk_dbg_dyn_split(20);
+            c208_split(&E, bh, pipe2, dyn2, 250);
+            nvn_vk_dbg_dyn_split(0);
+            nvn_gpu_buf_release(bh, NULL, NULL);
+        }
+        printf("C208 (%u,%u) 臂：设备动态 UBO 上限 %llu，压到 %u / %u 后 P2 动态 %d、P9 动态 %d\n", lim2, lim9, (unsigned long long)devlim, eff2, eff9, dyn2, dyn9);
+        if (lim9 >= 9 && eff9 < 9) printf("C208 注意：宿主动态 UBO 上限 %llu < 9，(%u,%u) 臂里「刚好在上限」的 P9 退化成超限臂\n", (unsigned long long)devlim, lim2, lim9);
+    }
+done:
+    nvn_vk_dbg_dyn_limit(0);   // 还原设备真值
+    nvn_vk_dbg_dyn_split(0);   // 还原 32 位拆分点
+    if (E.rb) nvn_gpu_buf_release(E.rb, NULL, NULL);
+    if (E.ov) nvn_gpu_view_release(E.ov);
+    if (E.out) nvn_gpu_tex_release(E.out);
+    if (E.vb) nvn_gpu_buf_release(E.vb, NULL, NULL);
+    if (E.ba) nvn_gpu_buf_release(E.ba, NULL, NULL);
+    if (E.bb) nvn_gpu_buf_release(E.bb, NULL, NULL);
+    if (E.bc) nvn_gpu_buf_release(E.bc, NULL, NULL);
+    if (vs) nvn_gpu_shader_release(vs);
+    if (fs) nvn_gpu_shader_release(fs);
+    if (vs9) nvn_gpu_shader_release(vs9);
+    if (fs9) nvn_gpu_shader_release(fs9);
+    if (vs34) nvn_gpu_shader_release(vs34);
+    if (fs34) nvn_gpu_shader_release(fs34);
+    free(vm); free(fm); free(vm9); free(fm9); free(vm34); free(fm34);
+    nvn_gpu_err ce; memset(&ce, 0, sizeof ce);
+    CHECK(OK(nvn_gpu_close(5000000000ull, &ce)), "C208 (%u,%u) close：%d %s", lim2, lim9, ce.rc.code, ce.why);
+}
+static void c208_dyn_ubo(const char *dir) {
+    c208_arm(dir, 1, 8);   // 两条管线都超上限 1 个：全静态
+    if (!getenv("S2A_TEST_DESC_MEMO"))   // 没指定环境变量：后端读 nvk_desc_memo 时传的缺省值必须是开（备忘 + 动态 UBO 缺省开，#1233；建管线时读过了）
+        CHECK(g_memo_dflt_seen == 1, "C208 nvk_desc_memo 的缺省值期望 1（缺省开）→ %d（-1 = 后端没读过）", g_memo_dflt_seen);
+    c208_arm(dir, 2, 9);   // 两条都刚好在上限上：备忘开时全动态
+    c208_arm(dir, 2, 8);   // P2 刚好 / P9 超 1 个：一动一静
+    c208_arm(dir, 8, 8);   // 设备只报规范最小值 8（不少 Mali 如此，#1292 评审补）：2 个 UBO 的 P2 动态、9 个 UBO 的 P9 超 1 个保持静态；像素与全静态臂的期望相同、校验层 0 条
+    printf("C208 动态 UBO 偏移（备忘%s）：四个臂（全静态 / 全动态 / 一动一静 / 上限 8）与拆分点 20 位的高位偏移已核对\n", g_memo_on ? "开" : "关，一律静态");
 }
 
 // C67：origin_ll=1（NVN 窗口原点在左下）时后端不翻视口：这种约定下图是自下而上存的，行号 0 就是「下」，
@@ -6420,7 +6995,9 @@ static void c87_resolve(const char *dir) {
     pd.samples = 4; pd.prim = 5; pd.chmask.mask = 0xf; pd.color.logic_op = 3;
     pd.attr[0].fmt = pd.attr[1].fmt = NVN_FORMAT_RGBA32F; pd.attr[1].offset = 16; pd.stream[0].stride = 32;
     nvn_gpu_pipe pipe = NULL; CHECK(OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e)), "C87 MSAA管线：%s", e.why);
-    float verts[4][8] = {{-1,-1,0,1,1,0,0,1},{-1,1,0,1,1,0,0,1},{1,-1,0,1,1,0,0,1},{1,1,0,1,1,0,0,1}};
+    // 覆盖由几何边定，不靠小数视口：视口边界只保 viewportSubPixelBits 位（规范最小 0，Mali-G715 报 0，宽 0.5 的视口可能一个样本都不盖），
+    // 顶点位置至少 4 位子像素。NDC x=-0.75 落在帧缓冲 x=0.5，标准 4× 位置下首列盖住 x=0.375 / 0.125 两个样本。
+    float verts[4][8] = {{-1,-1,0,1,1,0,0,1},{-1,1,0,1,1,0,0,1},{-0.75f,-1,0,1,1,0,0,1},{-0.75f,1,0,1,1,0,0,1}};
     nvn_gpu_buf vb = make_buf(sizeof verts, NVN_GPU_MEM_SHARED, verts);
     nvn_gpu_tex b = make_tex(4, 4, NVN_FORMAT_RGBA8, NVN_GPU_TEX_RENDER);
     nvn_gpu_view av = make_view(a), bv = make_view(b); nvn_gpu_buf rb = make_buf(64, NVN_GPU_MEM_SHARED, NULL);
@@ -6428,7 +7005,7 @@ static void c87_resolve(const char *dir) {
     p.color[0].view = av; p.color[0].load = NVN_GPU_LOAD_CLEAR; p.color[0].store = NVN_GPU_STORE_STORE;
     p.color[0].clear.f[2] = p.color[0].clear.f[3] = 1;
     nvn_gpu_pass_begin(c, &p); nvn_gpu_set_pipe(c, pipe);
-    nvn_gpu_dyn dyn = {0}; dyn.origin_ll = pd.origin_ll; dyn.nvp = 1; dyn.vp[0][2] = 0.5f; dyn.vp[0][3] = 4; dyn.vp[0][5] = 1;
+    nvn_gpu_dyn dyn = {0}; dyn.origin_ll = pd.origin_ll; dyn.nvp = 1; dyn.vp[0][2] = 4; dyn.vp[0][3] = 4; dyn.vp[0][5] = 1;
     dyn.has_sc = 1; dyn.sc[2] = dyn.sc[3] = 4; nvn_gpu_set_dyn(c, &dyn); nvn_gpu_set_vbuf(c, 0, vb, 0);
     nvn_gpu_draw_args da = {0}; da.prim = 5; da.count = 4; da.instances = 1; nvn_gpu_draw(c, &da); nvn_gpu_pass_end(c);
     NVNcopyRegion rr = {0, 0, 0, 4, 4, 1}; nvn_gpu_blit(c, av, &rr, bv, &rr, 0);
@@ -6437,8 +7014,13 @@ static void c87_resolve(const char *dir) {
     if (OK(rc)) {
         CHECK(OK(nvn_gpu_fence_wait(160, 5000000000ull, &e)), "C87 wait：%s", e.why);
         const uint8_t *px = buf_cpu(rb); int badpx = 0;
-        for (int i = 0; i < 16; i++) { int red = i % 4 == 0 ? 128 : 0, blue = i % 4 == 0 ? 128 : 255;
-            if (px[i*4] != red || px[i*4+1] || px[i*4+2] != blue || px[i*4+3] != 255) badpx++; }
+        // vkCmdResolveImage 对 normalized 格式按实现决定的方式合成样本，128 不是规范值：
+        // 样本一致的通道判精确值；首列红、蓝各在 [96,159]（2/4 平均 127.5，1/4、3/4 落在外面），且红 + 蓝在 255±2。
+        for (int i = 0; i < 16; i++) {
+            const uint8_t *q = px + i * 4; int mix = i % 4 == 0, sum = q[0] + q[2];
+            int ok = !q[1] && q[3] == 255 && (mix ? q[0] >= 96 && q[0] <= 159 && q[2] >= 96 && q[2] <= 159 && sum >= 253 && sum <= 257
+                                                   : !q[0] && q[2] == 255);
+            if (!ok) badpx++; }
         CHECK(!badpx, "C87 混合解析16像素不符 %d，首像素 %u,%u,%u,%u", badpx, px[0], px[1], px[2], px[3]);
     }
     nvn_gpu_view_release(av); nvn_gpu_view_release(bv); nvn_gpu_tex_release(a); nvn_gpu_tex_release(b);
@@ -8689,6 +9271,23 @@ done:
     if (sf) CHECK(OK(nvn_gpu_surface_detach(sf, 5000000000ull, &e)), "C207 detach：%s", e.why);
     nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs); free(vsm); free(fsm);
 }
+// C208：close 不该等满时限。缓冲先 release、它的缓冲视图还活着：close 销毁视图 → 缓冲进退休队列 → worker 退休它。
+// 退休完 worker 要唤醒 close；漏了唤醒时 close 睡到截止时间才醒（给 5 秒就白等 5 秒，整套 vk 用例每次关会话都这样）。
+static void c208_close_wakeup(void) {
+    nvn_gpu_err e = {0};
+    if (!open_backend()) { CHECK(0, "C208 open"); return; }
+    nvn_gpu_buf b = make_buf(64, NVN_GPU_MEM_SHARED, NULL);
+    nvn_gpu_view v = NULL;
+    nvn_gpu_rc r = b ? nvn_gpu_view_create_buf(b, 0, 64, NVN_FORMAT_R32UI, &v, &e) : (nvn_gpu_rc){0};
+    CHECK(b && OK(r) && v, "C208 缓冲视图：%d %s", r.code, e.why);
+    if (b) nvn_gpu_buf_release(b, NULL, NULL);   // 视图还拿着引用：缓冲要等 close 销毁视图之后才退休
+    const double t0 = c89_now_ms();
+    r = nvn_gpu_close(5000000000ull, &e);
+    const double ms = c89_now_ms() - t0;
+    CHECK(OK(r), "C208 close：%d %s", r.code, e.why);
+    CHECK(ms < 2000.0, "C208 close 等满了时限：%.0f ms（时限 5000 ms；退休队列清空后 worker 没唤醒 close）", ms);
+    printf("C208 close 不等满时限：带着引用已释放缓冲的视图关会话 %.0f ms，已核对\n", ms);
+}
 static void c207_all(const char *dir) {
     nvn_gpu_err e = {0};
     if (!open_backend()) { CHECK(0, "C207 open"); return; }
@@ -8855,8 +9454,193 @@ static int present_upscale_only(void) {
     return g_fail ? 1 : 0;
 }
 
+// 设备真实支持集合提供独立期望；只检查缺失的档，不能把支持原数当降级证据。
+static void c1072_msaa_red(const char *dir) {
+    VkImageFormatProperties ip = {0};
+    VkImageUsageFlags usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    VkResult qr = vkGetPhysicalDeviceImageFormatProperties(g_dev.physical, VK_FORMAT_R8G8B8A8_UNORM,
+        VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, usage, 0, &ip);
+    CHECK(qr == VK_SUCCESS, "C1072 format query rc=%d", (int)qr);
+    if (qr != VK_SUCCESS) return;
+    unsigned ran = 0;
+    const uint32_t wants[] = {2, 8};
+    for (unsigned i = 0; i < 2; i++) {
+        uint32_t want = wants[i], expected = want;
+        if (ip.sampleCounts & want) continue;
+        while (expected > 1 && !(ip.sampleCounts & expected)) expected >>= 1;
+        if (!(ip.sampleCounts & expected)) continue;
+        nvn_gpu_tex_desc td = {0}; td.d.target = NVN_TEXTURE_TARGET_2D_MULTISAMPLE;
+        td.d.format = NVN_FORMAT_RGBA8; td.d.width = td.d.height = 4;
+        td.d.depth = td.d.levels = 1; td.d.samples = (int)want; td.usage = NVN_GPU_TEX_RENDER;
+        nvn_gpu_tex tex = NULL; nvn_gpu_err err = {0};
+        nvn_gpu_rc rc = nvn_gpu_tex_create(&td, &tex, &err);
+        CHECK(OK(rc) && tex, "C1072 %ux requested, expect %ux image: %s", want, expected, err.why);
+        if (tex) { nvn_gpu_tex_info info = {0}; nvn_gpu_tex_info_get(tex, &info);
+            CHECK(info.samples == expected, "C1072 %ux actual=%u expect=%u", want, info.samples, expected);
+            nvn_gpu_tex duplicate = NULL; nvn_gpu_rc dup = nvn_gpu_tex_create(&td, &duplicate, &err);
+            CHECK(OK(dup) && duplicate, "C1072 repeated %ux creation", want);
+            if (duplicate) nvn_gpu_tex_release(duplicate);
+            CHECK((want == 2 ? g_msaa_log_2 : g_msaa_log_8) == 1, "C1072 %ux fallback is logged once per format/request", want);
+            void *vsm = NULL, *fsm = NULL; nvn_gpu_shader vs = NULL, fs = NULL;
+            int shaders = load_shader_pair(dir, "quad.vert", "quad.frag", NULL, NULL, &vs, &fs, &vsm, &fsm);
+            CHECK(shaders, "C1072 shader pair");
+            if (shaders) {
+                nvn_gpu_pipe_desc pd = {0}; pd.poly.mode = NVN_POLYGON_MODE_FILL; pd.origin_ll = (uint8_t)!g_tri_origin_ul;
+                pd.st[NVN_GPU_SH_VS].sh = vs; pd.st[NVN_GPU_SH_FS].sh = fs; pd.cfmt[0] = NVN_FORMAT_RGBA8;
+                pd.samples = want; pd.prim = 5; pd.chmask.mask = 0xf; pd.color.logic_op = 3;
+                pd.attr[0].fmt = pd.attr[1].fmt = NVN_FORMAT_RGBA32F; pd.attr[1].offset = 16; pd.stream[0].stride = 32;
+                nvn_gpu_pipe pipe = NULL; CHECK(OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &err)) && pipe,
+                                                "C1072 %ux pipe follows image: %s", want, err.why);
+                if (pipe) {
+                    nvn_gpu_pipe cached = NULL;
+                    CHECK(nvn_gpu_pipe_lookup(&pd, &cached) && cached == pipe, "C1072 %ux lookup preserves requested identity", want);
+                    float vertices[4][8] = {{-1,-1,0,1,1,0,0,1},{-1,1,0,1,1,0,0,1},{1,-1,0,1,1,0,0,1},{1,1,0,1,1,0,0,1}};
+                    nvn_gpu_buf vb = make_buf(sizeof vertices, NVN_GPU_MEM_SHARED, vertices);
+                    nvn_gpu_tex dest = make_tex(4, 4, NVN_FORMAT_RGBA8, NVN_GPU_TEX_RENDER);
+                    nvn_gpu_view av = make_view(tex), bv = make_view(dest); nvn_gpu_buf rb = make_buf(64, NVN_GPU_MEM_SHARED, NULL);
+                    nvn_gpu_cmd c = begin_cmd(); nvn_gpu_pass_desc pass = {0}; pass.ncolor = 1; pass.w = pass.h = 4; pass.layers = 1;
+                    pass.color[0].view = av; pass.color[0].load = NVN_GPU_LOAD_CLEAR; pass.color[0].store = NVN_GPU_STORE_STORE;
+                    nvn_gpu_pass_begin(c, &pass); nvn_gpu_set_pipe(c, pipe);
+                    nvn_gpu_dyn dyn = {0}; dyn.origin_ll = pd.origin_ll; dyn.nvp = 1; dyn.vp[0][2] = dyn.vp[0][3] = 4; dyn.vp[0][5] = 1;
+                    dyn.has_sc = 1; dyn.sc[2] = dyn.sc[3] = 4; nvn_gpu_set_dyn(c, &dyn); nvn_gpu_set_vbuf(c, 0, vb, 0);
+                    nvn_gpu_draw_args da = {0}; da.prim = 5; da.count = 4; da.instances = 1; nvn_gpu_draw(c, &da); nvn_gpu_pass_end(c);
+                    NVNcopyRegion rr = {0, 0, 0, 4, 4, 1}; nvn_gpu_blit(c, av, &rr, bv, &rr, 0);
+                    nvn_gpu_copy_tex_buf(c, dest, 0, 0, NULL, rb, 0, 16, 64);
+                    uint64_t fence = i + 1; nvn_gpu_rc cr = nvn_gpu_cmd_commit(c, fence, on_done, NULL, &err);
+                    CHECK(OK(cr), "C1072 %ux draw and resolve/copy commit: %s", want, err.why);
+                    if (OK(cr)) { CHECK(OK(nvn_gpu_fence_wait(fence, 5000000000ull, &err)), "C1072 fence: %s", err.why);
+                        const uint8_t *px = buf_cpu(rb); int badpx = 0;
+                        for (int j = 0; j < 16; j++) if (px[4*j] != 255 || px[4*j+1] || px[4*j+2] || px[4*j+3] != 255) badpx++;
+                        CHECK(!badpx, "C1072 %ux resolved pixels expect 16 red, bad=%d", want, badpx); }
+                    nvn_gpu_view_release(av); nvn_gpu_view_release(bv); nvn_gpu_tex_release(dest);
+                    nvn_gpu_buf_release(rb, NULL, NULL); nvn_gpu_buf_release(vb, NULL, NULL);
+                }
+                nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs);
+            }
+            free(vsm); free(fsm);
+            nvn_gpu_tex_release(tex); }
+        printf("C1072 request=%u expect=%u support=%#x\n", want, expected, (unsigned)ip.sampleCounts);
+        ran++;
+    }
+    // 宿主缺哪档就练哪档：有的 Mesa 版本 lavapipe 缺 2x 与 8x（练两档），CI 镜像的 lavapipe 报 1/4/8x（只缺 2x、练一档）。
+    // 两档都支持的宿主练不到降档：照样报红，不静默跳过（换缺档的宿主或模拟档）。
+    CHECK(ran >= 1, "C1072 requires host missing 2x or 8x; exercised=%u", ran);
+    VkImageFormatProperties r8 = {0};
+    VkResult r8rc = vkGetPhysicalDeviceImageFormatProperties(g_dev.physical, VK_FORMAT_R8_UNORM,
+        VK_IMAGE_TYPE_2D, VK_IMAGE_TILING_OPTIMAL, usage, 0, &r8);
+    if (r8rc == VK_SUCCESS && (r8.sampleCounts & VK_SAMPLE_COUNT_1_BIT) && !(r8.sampleCounts & VK_SAMPLE_COUNT_2_BIT)) {
+        nvn_gpu_tex_desc td = {0}; td.d.target = NVN_TEXTURE_TARGET_2D_MULTISAMPLE;
+        td.d.format = NVN_FORMAT_R8; td.d.width = td.d.height = 4; td.d.depth = td.d.levels = 1;
+        td.d.samples = 2; td.usage = NVN_GPU_TEX_RENDER;
+        nvn_gpu_tex first = NULL, second = NULL; nvn_gpu_err err = {0};
+        CHECK(OK(nvn_gpu_tex_create(&td, &first, &err)) && first, "C1072 R8 2x fallback: %s", err.why);
+        CHECK(OK(nvn_gpu_tex_create(&td, &second, &err)) && second, "C1072 repeated R8 2x fallback: %s", err.why);
+        CHECK(g_msaa_log_2 == 2, "C1072 distinct formats each log once for 2x, count=%u", g_msaa_log_2);
+        if (first) nvn_gpu_tex_release(first);
+        if (second) nvn_gpu_tex_release(second);
+        printf("C1072 diagnostic distinct formats: count=%u\n", g_msaa_log_2);
+    } else printf("C1072 diagnostic R8 case unavailable, mask=%#x rc=%d\n", (unsigned)r8.sampleCounts, (int)r8rc);
+}
+
+// 真实 SPIR-V 声明 sampler2DMS；降为单采样后必须在绑定前拒绝，不能向驱动发错类型的图。
+static void c1072_sample_guard(const char *dir) {
+    nvn_gpu_tex_desc td = {0}; td.d.target = NVN_TEXTURE_TARGET_2D_MULTISAMPLE;
+    td.d.format = NVN_FORMAT_RGBA8; td.d.width = td.d.height = 4; td.d.depth = td.d.levels = 1; td.d.samples = 2;
+    td.usage = NVN_GPU_TEX_RENDER | NVN_GPU_TEX_SAMPLED;
+    nvn_gpu_err e = {0}; nvn_gpu_tex tex = NULL;
+    CHECK(OK(nvn_gpu_tex_create(&td, &tex, &e)) && tex, "C1072 sampled target: %s", e.why);
+    if (!tex) return;
+    nvn_gpu_tex_info info = {0}; nvn_gpu_tex_info_get(tex, &info);
+    CHECK(info.samples == 1, "C1072 sampled target must be downgraded to 1x");
+    nvn_gpu_layout_ent ent = {0}; ent.cls = NVN_GPU_RES_TEX_SAMP; ent.count = 1;
+    ent.access = NVN_GPU_ACC_R; ent.stages = 1u << NVN_GPU_SH_FS;
+    nvn_gpu_layout fl = {0}; fl.ent = &ent; fl.nent = 1;
+    nvn_gpu_shader vs = NULL, fs = NULL; void *vsm = NULL, *fsm = NULL;
+    int ok = load_shader_pair(dir, "quad.vert", "msaa_read.frag", NULL, &fl, &vs, &fs, &vsm, &fsm);
+    CHECK(ok, "C1072 real multisample shader loads");
+    if (ok) {
+        nvn_gpu_pipe_desc pd = {0}; pd.poly.mode = NVN_POLYGON_MODE_FILL;
+        pd.st[NVN_GPU_SH_VS].sh = vs; pd.st[NVN_GPU_SH_FS].sh = fs; pd.cfmt[0] = NVN_FORMAT_RGBA8;
+        pd.samples = 1; pd.prim = 5; pd.chmask.mask = 0xf; pd.color.logic_op = 3;
+        pd.attr[0].fmt = pd.attr[1].fmt = NVN_FORMAT_RGBA32F; pd.attr[1].offset = 16; pd.stream[0].stride = 32;
+        nvn_gpu_pipe pipe = NULL; CHECK(OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e)) && pipe, "C1072 sample pipe: %s", e.why);
+        if (pipe) {
+            nvn_gpu_tex out = make_tex(4, 4, NVN_FORMAT_RGBA8, NVN_GPU_TEX_RENDER);
+            nvn_gpu_view ov = make_view(out), tv = make_view(tex); samp_par sp = {0}; nvn_gpu_samp samp = NULL;
+            CHECK(OK(nvn_gpu_samp_create(&sp, &samp, &e)) && samp, "C1072 sampler: %s", e.why);
+            nvn_gpu_cmd c = begin_cmd(); nvn_gpu_pass_desc pass = {0}; pass.ncolor = 1; pass.w = pass.h = 4; pass.layers = 1;
+            pass.color[0].view = ov; pass.color[0].load = NVN_GPU_LOAD_CLEAR; pass.color[0].store = NVN_GPU_STORE_STORE;
+            nvn_gpu_pass_begin(c, &pass); nvn_gpu_set_pipe(c, pipe);
+            nvn_gpu_binding b = {0}; b.cls = NVN_GPU_RES_TEX_SAMP; b.u.ts.view = tv; b.u.ts.samp = samp;
+            nvn_gpu_bind(c, NVN_GPU_SH_FS, &b, 1);
+            nvn_gpu_rc cr = nvn_gpu_cmd_commit(c, 1, on_done, NULL, &e);
+            CHECK(cr.code == NVN_GPU_E_UNSUPPORTED && strstr(e.why, "msaa_sampled_single"),
+                  "C1072 single sample must reject MS shader before draw: rc=%d %s", cr.code, e.why);
+            if (cr.code == NVN_GPU_E_UNSUPPORTED && strstr(e.why, "msaa_sampled_single"))
+                printf("C1072 guard sampled: rejected before draw\n");
+            nvn_gpu_samp_release(samp); nvn_gpu_view_release(tv); nvn_gpu_view_release(ov); nvn_gpu_tex_release(out);
+        }
+        nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs);
+    }
+    free(vsm); free(fsm); nvn_gpu_tex_release(tex);
+}
+
+static void c1072_attachment_guard(void) {
+    nvn_gpu_tex_desc td = {0}; td.d.target = NVN_TEXTURE_TARGET_2D_MULTISAMPLE;
+    td.d.format = NVN_FORMAT_RGBA8; td.d.width = td.d.height = 4; td.d.depth = td.d.levels = 1; td.d.samples = 2; td.usage = NVN_GPU_TEX_RENDER;
+    nvn_gpu_tex a = NULL, b = NULL; nvn_gpu_err e = {0};
+    CHECK(OK(nvn_gpu_tex_create(&td, &a, &e)) && a, "C1072 1x attachment: %s", e.why);
+    td.d.samples = 4; CHECK(OK(nvn_gpu_tex_create(&td, &b, &e)) && b, "C1072 4x attachment: %s", e.why);
+    if (a && b) {
+        nvn_gpu_view av = make_view(a), bv = make_view(b); nvn_gpu_cmd c = begin_cmd();
+        nvn_gpu_pass_desc pass = {0}; pass.ncolor = 2; pass.w = pass.h = 4; pass.layers = 1;
+        pass.color[0].view = av; pass.color[1].view = bv;
+        nvn_gpu_pass_begin(c, &pass);
+        nvn_gpu_rc cr = nvn_gpu_cmd_commit(c, 1, on_done, NULL, &e);
+        CHECK(cr.code == NVN_GPU_E_UNSUPPORTED && strstr(e.why, "msaa_attachment_mismatch"),
+              "C1072 inconsistent attachments rejected before renderpass: rc=%d %s", cr.code, e.why);
+        if (cr.code == NVN_GPU_E_UNSUPPORTED && strstr(e.why, "msaa_attachment_mismatch"))
+            printf("C1072 guard attachments: rejected before renderpass\n");
+        nvn_gpu_view_release(av); nvn_gpu_view_release(bv);
+    }
+    if (a) nvn_gpu_tex_release(a);
+    if (b) nvn_gpu_tex_release(b);
+}
+
+static void c1072_pipe_guard(const char *dir) {
+    nvn_gpu_tex_desc td = {0}; td.d.target = NVN_TEXTURE_TARGET_2D_MULTISAMPLE;
+    td.d.format = NVN_FORMAT_RGBA8; td.d.width = td.d.height = 4; td.d.depth = td.d.levels = 1; td.d.samples = 4; td.usage = NVN_GPU_TEX_RENDER;
+    nvn_gpu_tex tex = NULL; nvn_gpu_err e = {0};
+    CHECK(OK(nvn_gpu_tex_create(&td, &tex, &e)) && tex, "C1072 4x pipe-guard attachment: %s", e.why);
+    if (!tex) return;
+    nvn_gpu_shader vs = NULL, fs = NULL; void *vsm = NULL, *fsm = NULL;
+    int ok = load_shader_pair(dir, "quad.vert", "quad.frag", NULL, NULL, &vs, &fs, &vsm, &fsm);
+    CHECK(ok, "C1072 pipe-guard shaders");
+    if (ok) {
+        nvn_gpu_pipe_desc pd = {0}; pd.poly.mode = NVN_POLYGON_MODE_FILL;
+        pd.st[NVN_GPU_SH_VS].sh = vs; pd.st[NVN_GPU_SH_FS].sh = fs; pd.cfmt[0] = NVN_FORMAT_RGBA8;
+        pd.samples = 1; pd.prim = 5; pd.chmask.mask = 0xf; pd.color.logic_op = 3;
+        pd.attr[0].fmt = pd.attr[1].fmt = NVN_FORMAT_RGBA32F; pd.attr[1].offset = 16; pd.stream[0].stride = 32;
+        nvn_gpu_pipe pipe = NULL; CHECK(OK(nvn_gpu_pipe_get(&pd, NVN_GPU_PIPE_SYNC, &pipe, &e)) && pipe, "C1072 pipe-guard pipe: %s", e.why);
+        if (pipe) {
+            nvn_gpu_view view = make_view(tex); nvn_gpu_cmd c = begin_cmd();
+            nvn_gpu_pass_desc pass = {0}; pass.ncolor = 1; pass.w = pass.h = 4; pass.layers = 1; pass.color[0].view = view;
+            nvn_gpu_pass_begin(c, &pass); nvn_gpu_set_pipe(c, pipe);
+            nvn_gpu_rc cr = nvn_gpu_cmd_commit(c, 1, on_done, NULL, &e);
+            CHECK(cr.code == NVN_GPU_E_UNSUPPORTED && strstr(e.why, "msaa_pipeline_mismatch"),
+                  "C1072 pipeline mismatch rejected before draw: rc=%d %s", cr.code, e.why);
+            if (cr.code == NVN_GPU_E_UNSUPPORTED && strstr(e.why, "msaa_pipeline_mismatch"))
+                printf("C1072 guard pipeline: rejected before draw\n");
+            nvn_gpu_view_release(view);
+        }
+        nvn_gpu_shader_release(vs); nvn_gpu_shader_release(fs);
+    }
+    free(vsm); free(fsm); nvn_gpu_tex_release(tex);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IOLBF, 0);   // 经 tee 的管道默认整块缓冲：超时被杀时最后一行不是卡点；按行刷新才看得出卡在哪
+    g_memo_on = getenv("S2A_TEST_DESC_MEMO") ? atoi(getenv("S2A_TEST_DESC_MEMO")) != 0 : 1;   // 备忘这一遍开 / 关：没设 = 生产缺省（开）
     if (getenv("S2A_TEST_COUNT_ONLY")) return c658_main(argc, argv);
     if (getenv("S2A_TEST_ERROR697_ONLY")) return error697_only();
     if (getenv("S2A_TEST_PRESENT_UPSCALE_ONLY")) return present_upscale_only();
@@ -8868,6 +9652,21 @@ int main(int argc, char **argv) {
     }
     if (argc > 5 && !strcmp(argv[2], "--c89-child")) return c89_child_main(argv);   // C89 里被 SIGKILL 的那一局：由 c89_midrun_save 起
     printf("device: %s (%s)\n", g_dev.properties.deviceName, g_dev.driver_name);
+    if (argc > 2 && !strcmp(argv[2], "--msaa-only")) {
+        memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
+        if (!open_backend()) return 1;
+        c1072_msaa_red(argv[1]);
+        nvn_gpu_err e = {0}; CHECK(OK(nvn_gpu_close(5000000000ull, &e)), "C1072 close %s", e.why);
+        if (open_backend()) { c1072_sample_guard(argv[1]); CHECK(OK(nvn_gpu_close(5000000000ull, &e)), "C1072 sampled close %s", e.why); }
+        else CHECK(0, "C1072 reopen for sample guard");
+        if (open_backend()) { c1072_attachment_guard(); CHECK(OK(nvn_gpu_close(5000000000ull, &e)), "C1072 attachment close %s", e.why); }
+        else CHECK(0, "C1072 reopen for attachment guard");
+        if (open_backend()) { c1072_pipe_guard(argv[1]); CHECK(OK(nvn_gpu_close(5000000000ull, &e)), "C1072 pipe close %s", e.why); }
+        else CHECK(0, "C1072 reopen for pipe guard");
+        printf("C1072 isolated failures=%d\n", g_fail);
+        s2a_vk_device_destroy(&g_dev, 1);
+        return g_fail ? 1 : 0;
+    }
     if (getenv("S2A_TEST_PLC_ONLY") && argc > 1) {   // 开发时只跑 C89（run.sh 不设这个变量）
         memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
         c89_midrun_save(argv[1]);
@@ -8879,6 +9678,13 @@ int main(int argc, char **argv) {
         memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
         c204_dset_recycle(argv[1]);
         printf("nvn_gpu Vulkan 后端 C204 单跑：%s（%d 处不符）\n", g_fail ? "红" : "绿", g_fail);
+        s2a_vk_device_destroy(&g_dev, 1);
+        return g_fail ? 1 : 0;
+    }
+    if (getenv("S2A_TEST_C208_ONLY") && argc > 1) {   // 开发时只跑 C208（动态 UBO 偏移；run.sh 不设这个变量）
+        memset(&g_desc, 0, sizeof g_desc); g_desc.host_device = &g_dev; g_desc.app_label = "nvn-backend-vk-test";
+        c208_dyn_ubo(argv[1]);
+        printf("nvn_gpu Vulkan 后端 C208 单跑：%s（%d 处不符）\n", g_fail ? "红" : "绿", g_fail);
         s2a_vk_device_destroy(&g_dev, 1);
         return g_fail ? 1 : 0;
     }
@@ -8989,6 +9795,17 @@ int main(int argc, char **argv) {
                    "C883 unsupported has no ID and logs empty metrics with reason: tags=%u logs=%d", g_timing_tags, g_shown_empty_logged);
         nvn_gpu_err ce = {0};
         CHECK(OK(nvn_gpu_close(5000000000ull, &ce)), "C883 close: %s", ce.why);
+        s2a_vk_device_destroy(&g_dev, 1);
+        return g_fail ? 1 : 0;
+    }
+    if (argc > 2 && !strcmp(argv[2], "--sampler-minmax-only")) {
+        if (!open_backend()) return 1;
+        c976r_reduction(argv[1]);
+        nvn_gpu_err e = {0};
+        CHECK(OK(nvn_gpu_close(5000000000ull, &e)), "C976r close：%s", e.why);
+        if (!open_backend()) return 1;
+        c976r_bad_format(argv[1]);
+        CHECK(OK(nvn_gpu_close(5000000000ull, &e)), "C976r bad format close：%s", e.why);
         s2a_vk_device_destroy(&g_dev, 1);
         return g_fail ? 1 : 0;
     }
@@ -9310,6 +10127,12 @@ int main(int argc, char **argv) {
     if (!open_backend()) return 1;   // 自己一个会话：围栏号 1..6，配额计数从 0 起
     c976b_border_color(argv[1]);
     CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C976b close：%d %s", e18.rc.code, e18.why);
+    if (!open_backend()) return 1;   // 自己一个会话：围栏号 1–4
+    c976r_reduction(argv[1]);
+    CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C976r close：%d %s", e18.rc.code, e18.why);
+    if (!open_backend()) return 1;
+    c976r_bad_format(argv[1]);
+    CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C976r 格式负控 close：%d %s", e18.rc.code, e18.why);
 
     if (!open_backend()) return 1;
     cube_array_one_face();
@@ -9318,6 +10141,7 @@ int main(int argc, char **argv) {
     c197_pass_cache();
     CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C197 close：%d %s", e18.rc.code, e18.why);
     c204_dset_recycle(argv[1]);   // 描述符组按布局回收（#1096）：每个臂自己开 / 关会话
+    c208_dyn_ubo(argv[1]);   // 动态 UBO 偏移（#1233）：关 / 开两个臂各开一次会话
     if (!open_backend()) return 1;   // C201 同样自己一个会话
     c201_view_list();
     c201_fb_scan(0);
@@ -9328,6 +10152,7 @@ int main(int argc, char **argv) {
 
     c205_all(argv[1]);   // C205 图形管线散列表：每个臂自己一个会话
     c207_all(argv[1]);   // C207 诊断读数互不清零：自己一个会话（计时开关、逐笔读数周期都在用例里开 / 还原）
+    c208_close_wakeup();   // C208 close 不等满时限：自己一个会话
     c209_all(argv[1]);   // C209 管线标签随对象（#1274）：自己一个会话（起始 16 桶的用例开关要在会话里第一条管线之前设）
 
     for (int sw = 0; sw < 2; sw++) {
@@ -9341,6 +10166,10 @@ int main(int argc, char **argv) {
         attach_swizzle_subresource_case(argv[1], srgb);
         CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "attachment subresource close：%d %s", e18.rc.code, e18.why);
     }
+
+    if (!open_backend()) return 1;
+    c63b_desc_array_same(argv[1]);
+    CHECK(OK(nvn_gpu_close(5000000000ull, &e18)), "C63b close：%d %s", e18.rc.code, e18.why);
 
     if (!open_backend()) return 1;
     c49b_restart_pipe_cache(argv[1]);

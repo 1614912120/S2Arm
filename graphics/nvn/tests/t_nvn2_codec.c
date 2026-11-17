@@ -308,6 +308,9 @@ int main(int argc, char **argv) {
         void *f1 = s2a_codec_entry("_ZN2nn2oe26SetGraphicsTargetFrameRateENS0_23GraphicsTargetFrameRateE"), *f2 = s2a_codec_entry("_ZN2nn2oe26SetGraphicsTargetFrameRateEi");
         CHECK(f1 && f1 == f2 && !nvn2_gs_booted() && ((Result (*)(int))f1)(30) == 0 && ((Result (*)(int))f1)(60) == 0);
         CHECK(!s2a_codec_entry("_ZN2nn2oe20SetAudioOutputPolicyENS0_17AudioOutputPolicyE"));   // 负对照：oe 的其余函数照走 sdk
+        // D-SM6Y：自动档（无参数）同样在 sdk 内直调 gs 帧长模式；接管后 gs 没启动也回成功
+        void *f3 = s2a_codec_entry("_ZN2nn2oe30SetGraphicsTargetFrameRateAutoEv");
+        CHECK(f3 && f3 != f1 && !nvn2_gs_booted() && ((Result (*)(void))f3)() == 0);
     }
     // nn::vi::GetDisplayVsyncEvent（金刚 / raiders，11-04）：nvn2.c 的 vi 表弱引用到本文件实现；挂到游戏 SystemEvent（托管、自动清除），宿主线程按 60 Hz 触发
     {

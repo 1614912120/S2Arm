@@ -68,7 +68,7 @@ int nvk_pipe_warm_build(const struct nvk_pipe_rec *rec);
 
 // 真实创建成功后记录一条（提交线程）。着色器句柄 / nspec / spec 不进记录、不参与判等；nspec 非 0 或
 // 程序没有身份就直接跳过；去重按整份配方字节 + 程序身份（重复只 uses++）；有界：上限
-// debug.s2a.nvk_warm_max（缺省 4096），满了淘汰 uses 最小、同 uses 最久没用的那条。
+// debug.s2a.nvk_warm_max（缺省 8192，也是硬顶），满了淘汰 uses 最小、同 uses 最久没用的那条。
 void nvk_pipe_warm_note(const nvn_gpu_pipe_desc *d, const uint8_t prog_identity[32]);
 
 // rp_draw 用的入口：程序身份从 rp_prog 取（回放核心里不出现身份解析）。程序没有身份就不记。

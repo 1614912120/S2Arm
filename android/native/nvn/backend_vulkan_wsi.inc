@@ -418,6 +418,10 @@ nvn_gpu_rc nvn_gpu_present(nvn_gpu_surface s, const nvn_gpu_drawable *dr, const 
           snprintf(b, sizeof b, "描述符细分（每帧毫秒，近 300 帧）：分配 %.2f、构造写入项 %.2f、写入 %.2f、绑定 %.2f；每帧重写 %.0f 组（其中备忘命中 %.0f 组）、写 %.0f 条描述符",
               v4[0] / 300.0 / 1e6, v4[1] / 300.0 / 1e6, v4[2] / 300.0 / 1e6, v4[3] / 300.0 / 1e6, nst / 300.0, diag_delta(&g_desc_hit, &l_hit) / 300.0, nwt / 300.0);
           nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
+        { static uint64_t l_rb; const double rb = (double)diag_delta(&g_dyn_rebind, &l_rb) / 300.0;   // 动态 UBO 偏移（#1233）读数
+          snprintf(b, sizeof b, "动态 UBO 偏移（每帧，近 300 帧）：只换偏移、不重写组、只重绑 %.0f 次；用动态偏移的管线 %llu 条（建过带 UBO 的管线 %llu 条）；设备动态 UBO 上限 %u；nvk_desc_memo=%d",
+              rb, (unsigned long long)__atomic_load_n(&g_dyn_pipes[0], __ATOMIC_RELAXED), (unsigned long long)__atomic_load_n(&g_dyn_pipes[1], __ATOMIC_RELAXED), g_max_dyn_ubo, desc_memo_flag());
+          nvn_plat_log(NVN_PLAT_LOG_INFO, "gpu", b); }
         { static uint64_t lnew, lreuse, lput, lfreed, lcap, lbusy, lsig;   // 描述符组按布局回收（#1096）：计数开会话起累计，这里按两次打印之差算每帧
           pthread_mutex_lock(&g_dset_mu);
           const uint64_t n1 = g_dset_new, r1 = g_dset_reuse, p1 = g_dset_put, f1 = g_dset_freed, s1 = g_dset_sigmiss, c1 = g_dset_capped; const uint32_t np1 = g_dset_npools, nb1 = g_dset_nbins, cap1 = g_dset_cap;

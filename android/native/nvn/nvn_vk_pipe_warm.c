@@ -1,6 +1,6 @@
 // 管线预热清单的实现，合同见 nvn_vk_pipe_warm.h。
 //
-// 数据：固定槽位数组（上限 debug.s2a.nvk_warm_max，缺省 4096）+ 每条一个散列桶链。散列只作预筛，
+// 数据：固定槽位数组（上限 debug.s2a.nvk_warm_max，缺省 8192、也是硬顶）+ 每条一个散列桶链。散列只作预筛，
 // 命中要 identity + 紧凑配方整份逐字节相等（旧层按 64 位散列直接命中撞过一次：同 hash 不同配方会
 // 复用不兼容管线）。note 在提交线程（每次「管线状态变了」一笔，世界场景里几乎每笔绘制一次），所以：
 // 同一条后端管线第二次起按管线标签只加计数（nvk_pipe_warm_note_prog：不序列化、不散列、不查表）；
@@ -42,7 +42,8 @@ void nvn_gpu_pipe_warm_tag_set(nvn_gpu_pipe p, uint64_t tag) __attribute__((weak
 #define NVK_PW_HDR 32
 #define NVK_PW_MAX_HARD 8192          // 内存上限：8192 × 400 B ≈ 3.2 MiB
 #define NVK_PW_FILE_MAX (NVK_PW_HDR + (size_t)NVK_PW_MAX_HARD * NVK_PW_ENTRY)
-#define NVK_PW_DEF_CAP 4096
+#define NVK_PW_DEF_CAP 8192           // 缺省上限 = 硬顶：同一路线一局的管线配方撞满 8192（4096 时走动才用到的配方被挤掉，走进新区域现建管线）
+_Static_assert(NVK_PW_DEF_CAP <= NVK_PW_MAX_HARD, "缺省上限不能超过硬顶");
 #define NVK_PW_MEMO 4
 
 static const char k_magic[8] = {'S', '2', 'A', 'P', 'W', '1', 0, 0};

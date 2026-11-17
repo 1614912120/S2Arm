@@ -12,6 +12,8 @@ Switch 2 游戏现在拿到手的形态是主机上导出的松散目录（11-04
              解成段不压缩的 NSO（S2A_NX_UNPACK = nx_unpack 程序，一键出包会给；没给就报红）
     romfs/   最新更新的 romfs 里有与本体逐字节相同的文件 = 全量（导出工具挂的是打过补丁的文件系统），只用它；
              没有 = 差量，本体叠更新（更新覆盖），打黄字说明
+             镜像形态（缺省，S2A_ROMFS_IMAGE=0 回 romfs/ 散文件）：不出 romfs/ 散文件，选出的文件交 nx_unpack --romfs-image 直接建 romfs.std（标准 RomFS）；
+             版本目录里是 romfs.nupmap（镜像形态的 pack/ns2_nup.py 展开）时，数据直接从 NUP 容器读
     aoc/<序号>/ + aoc.tsv   序号 = DLC 标题号 − 程序号 − 0x1000（同 nx_unpack）
     ctl/control.nacp       导出带了控制分区（版本目录里 romfs 之外的 control.nacp）就用原件 + icon.jpg；没带才合成（README.synth 标明非原件，
                            标题取目录名、不是游戏自带信息）：16 语言标题、启动要账号、存档属主 = 程序号、账号存档 128 MB / 日志 64 MB；游戏代码挂临时存储 / 本机存档 / 缓存存储的（按 nn::fs 导入名判）另声明对应大小（save_kinds）
@@ -204,13 +206,66 @@ def fill_fixed(nacp, tid, saves=()):
     return bytes(n), True
 
 
+def image_mode():   # 镜像形态开关（同 nx_unpack / ns2_nup）：romfs 不落散文件、直接出 romfs.std；缺省开，S2A_ROMFS_IMAGE=0 回旧路径
+    return os.environ.get('S2A_ROMFS_IMAGE') != '0'
+
+
+def romfs_of(verdir):
+    """版本目录的 romfs：相对路径 → 来源。导出目录里是散文件（来源 = 路径）；镜像形态展开的 NUP 只有清单 romfs.nupmap（pack/ns2_nup.py write_nupmap），
+    来源 = (字节数, 容器, 偏移, 长度, 编码, SHA-256)。"""
+    m = os.path.join(verdir, 'romfs.nupmap')
+    if not os.path.isfile(m):
+        return walk(os.path.join(verdir, 'romfs'))
+    out = {}
+    with open(m, encoding='utf-8', newline='\n') as f:
+        for line in f:
+            rel, size, src, off, ln, codec, sha = line.rstrip('\n').split('\t')
+            out[rel.replace('/', os.sep)] = (int(size), src, int(off), int(ln), codec, sha)
+    return out
+
+
+def fsize(v):
+    return v[0] if isinstance(v, tuple) else os.path.getsize(v)
+
+
+def write_image(rom, out):
+    """镜像形态：rom（相对路径 → 来源）交 nx_unpack --romfs-image 建 out（标准 RomFS，与先克隆成 romfs/ 再 services/romfs_index.sh --std 逐字节相同）"""
+    nxu = os.environ.get('S2A_NX_UNPACK')
+    if not nxu or not os.path.isfile(nxu):
+        red('镜像形态（缺省，S2A_ROMFS_IMAGE=0 关）由 nx_unpack 建 romfs.std：设 S2A_NX_UNPACK=<nx_unpack 程序>（一键出包会给）')
+    lst = out + '.list'
+    with open(lst, 'w', encoding='utf-8', newline='\n') as f:
+        for rel, a in rom.items():
+            r = rel.replace(os.sep, '/')
+            if '\t' in r or '\n' in r or '\r' in r:
+                red(f'romfs 文件名带制表 / 换行，写不进镜像清单：{rel!r}')
+            if isinstance(a, tuple):
+                f.write('\t'.join([r, str(a[0]), a[1], str(a[2]), str(a[3]), a[4], a[5]]) + '\n')
+            else:
+                n = os.path.getsize(a)
+                f.write(f'{r}\t{n}\t{os.path.abspath(a)}\t0\t{n}\tfile\t-\n')
+    try:
+        r = subprocess.run([nxu, '--romfs-image', lst, out], capture_output=True, text=True)
+    finally:
+        os.unlink(lst)
+    if r.returncode:
+        red(f'建 romfs.std 失败（nx_unpack 退出 {r.returncode}）：{(r.stderr or r.stdout).strip()[-300:]}')
+
+
 def same_file(rb, ru, limit=64):
     """全量 / 差量判法：导出工具挂的是打过补丁的文件系统 = 全量，里面一定有没改过、与本体逐字节相同的文件；
     差量包只装改过 / 新增的，没有这种文件。只看同路径同大小的前 limit 个，找到一个就返回它的路径，找不到返回 None。
     （不能按「本体路径全在更新里」判：补丁会删掉旧版本文件，11-04 金刚 41 个、raiders 86 个 Product.100 旧文件只在本体里。）"""
     n = 0
     for rel in sorted(set(rb) & set(ru)):
-        if os.path.getsize(rb[rel]) != os.path.getsize(ru[rel]):
+        if fsize(rb[rel]) != fsize(ru[rel]):
+            continue
+        if isinstance(rb[rel], tuple) or isinstance(ru[rel], tuple):   # 镜像形态的 NUP 清单：同大小同 SHA-256 即逐字节相同（写镜像时按 SHA-256 核过数据）
+            if isinstance(rb[rel], tuple) and isinstance(ru[rel], tuple) and rb[rel][5] == ru[rel][5]:
+                return rel
+            n += 1
+            if n >= limit:
+                break
             continue
         with open(rb[rel], 'rb') as a, open(ru[rel], 'rb') as b:
             while True:
@@ -250,6 +305,8 @@ def src_key(dump):
         st = os.stat(a)
         h.update(f'{rel}\t{st.st_size}\t{st.st_mtime_ns}\n'.encode())   # 纳秒（审计 P1-54：秒级键同一秒内换同大小的文件认不出）
     h.update(hashlib.sha256(open(os.path.abspath(__file__), 'rb').read()).digest())
+    if image_mode():   # 两种形态出的东西不同（romfs/ 或 romfs.std），不能互相复用；缺省键不变
+        h.update(b'romfs-image')
     nxu = os.environ.get('S2A_NX_UNPACK')   # ZBIC 由它解：换了解码器（自写替换 ZstdSharp.Zbic）就重做
     if nxu and os.path.isfile(nxu):
         h.update(hashlib.sha256(open(nxu, 'rb').read()).digest())
@@ -283,8 +340,8 @@ def convert(dump, out, name=None):
         red(str(e))
 
     # romfs
-    rb = walk(os.path.join(base, 'romfs'))
-    ru = walk(os.path.join(upd, 'romfs')) if upd else {}
+    rb = romfs_of(base)
+    ru = romfs_of(upd) if upd else {}
     same = same_file(rb, ru)
     if ru and not rb:
         rom, how = ru, f'更新 {ups[-1]}（本体没带 romfs）'
@@ -305,10 +362,14 @@ def convert(dump, out, name=None):
         if k in low:
             red(f'romfs 里有只差大小写的路径：{low[k]} / {rel}（文件系统不分大小写）')
         low[k] = rel
-    nb = 0
-    for rel, a in rom.items():
-        clone(a, os.path.join(tmp, 'romfs', rel))
-        nb += os.path.getsize(a)
+    nb = sum(fsize(a) for a in rom.values())
+    if image_mode():
+        write_image(rom, os.path.join(tmp, 'romfs.std'))
+    elif any(isinstance(a, tuple) for a in rom.values()):
+        red('这份 NUP 是按镜像形态展开的（只有 romfs.nupmap），整理也要镜像形态：别设 S2A_ROMFS_IMAGE=0')
+    else:
+        for rel, a in rom.items():
+            clone(a, os.path.join(tmp, 'romfs', rel))
 
     # DLC
     aoc_rows, aoc_idx = [], []

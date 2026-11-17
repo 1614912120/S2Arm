@@ -60,7 +60,7 @@ int nvk_prog_warm_pending(void);
 int nvk_prog_warm_build(const struct nvk_prog_rec *rec);
 
 // 真实 resolve 成功后记录一条（提交线程）：带上当次源快照的 c1 与 uses=1。去重（identity 已有则
-// uses++、刷新记录）与有界（上限按 uses 淘汰最冷的一条；`debug.s2a.nvk_warm_max` 可改，缺省 2048）。
+// uses++、刷新记录）与有界（上限按 uses 淘汰最冷的一条；`debug.s2a.nvk_warm_max` 可改，缺省 8192、硬顶 16384）。
 void nvk_prog_warm_note(const struct nvk_prog_rec *rec);
 
 // 同步落盘（Stop / 会话收尾）。失败只计数，不影响收尾。

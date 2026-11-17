@@ -1215,6 +1215,17 @@ static void test_shared_input_config(void) {
 int main(int argc, const char **argv) {
     setenv("S2A_PAD_ORDER_FILE", "/nonexistent/s2arm-pad-order.json", 1);   // 不读本机分配过的顺序表（#520 E）
     setenv("S2A_PAD_FACE_FILE", "/nonexistent/s2arm-face.json", 1);
+    // 兜底手柄体感（11-16 第三方 Switch 模式手柄）：0x30 报告第 13 字节起 3 组 IMU，取最后一组（13 + 24）。期望手算：
+    //   加速度 x 原始 4096 × 0.000244 = 0.999424 g → 按 Pro 轴向落到输出 y；角速度 x 原始 1000 × 0.06103 = 61.03 度/秒 → 输出 gyro_y；z 原样
+    {   uint8_t r[64] = {0x30}; const uint8_t *last = r + 13 + 24; (void)last;
+        r[13 + 24 + 0] = 0x00; r[13 + 24 + 1] = 0x10;   // ax = 4096
+        r[13 + 24 + 4] = 0x00; r[13 + 24 + 5] = 0xF0;   // az = -4096
+        r[13 + 24 + 6] = 0xE8; r[13 + 24 + 7] = 0x03;   // gx = 1000
+        s2a_pad_motion m = {0};
+        expect(s2a_pro_imu(r, 49, &m) && fabsf(m.acceleration_y - 0.999424f) < 1e-5f && fabsf(m.acceleration_x) < 1e-6f && fabsf(m.acceleration_z + 0.999424f) < 1e-5f
+               && fabsf(m.gyro_y - 61.03f) < 1e-3f && fabsf(m.gyro_x) < 1e-6f, "HID pad 0x30 report IMU (last sample) maps like the Pro");
+        expect(!s2a_pro_imu(r, 48, &m) && !s2a_pro_imu((const uint8_t[64]){0x21}, 64, &m), "HID pad IMU needs a whole 0x30 report");
+    }
     // 兜底手柄（macos/hid_pad.m，#934）：Switch 简易 HID 键号 1 = B（南）、2 = A（东）、3 = Y（西）、4 = X（北）、9 = −、10 = +；13 Home 不进键位
     expect(s2a_hid_pad_switch_button_bit(1) == (1u << 1) && s2a_hid_pad_switch_button_bit(2) == (1u << 0) &&
            s2a_hid_pad_switch_button_bit(3) == (1u << 3) && s2a_hid_pad_switch_button_bit(4) == (1u << 2), "HID pad face buttons follow Switch labels");
@@ -1224,9 +1235,11 @@ int main(int argc, const char **argv) {
     expect(s2a_hid_pad_hat_bits(0, 0, 7) == (1u << 13) && s2a_hid_pad_hat_bits(3, 0, 7) == ((1u << 15) | (1u << 14)) &&
            s2a_hid_pad_hat_bits(8, 0, 7) == 0 && s2a_hid_pad_hat_bits(1, 1, 8) == (1u << 13), "HID pad hat switch to d-pad bits");
     // 轴：0..65535 中点约 0；Y 反向（HID 向下为正）
-    // 接不接（#934 11-15）：名字带 Pro Controller 就接，任天堂原厂 0x057e 也接（macOS 27 上原厂一代 Pro 手柄系统认不出）；别的手柄名不接
-    expect(s2a_hid_pad_wants("Pro Controller", 0x057e) && s2a_hid_pad_wants("PowerA Wireless Pro Controller", 0) &&
-           !s2a_hid_pad_wants("Xbox Wireless Controller", 0x045e) && !s2a_hid_pad_wants(NULL, 0), "HID pad fallback takes Pro Controllers, Nintendo's own too");
+    // 走不走 Switch Pro 协议那一支（#934 11-15）：名字带 Pro Controller 就走，任天堂原厂 0x057e 也走（macOS 27 上原厂一代 Pro 手柄系统认不出）；
+    //   别的手柄名走通用那一支（hid_generic.h，runtime/tests/t_hid_generic.c）；原厂一代 Pro 系统没列出时照旧占位、不等
+    expect(s2a_hidg_is_pro("Pro Controller") && s2a_hidg_is_pro("PowerA Wireless Pro Controller") &&
+           !s2a_hidg_is_pro("Xbox Wireless Controller") && !s2a_hidg_is_pro(NULL), "HID pad Pro protocol branch by name");
+    expect(s2a_hidg_route(1, 0x057e, 1, 0, 0) == S2A_HIDG_TAKE, "HID pad fallback takes Nintendo's own Pro Controller at once");
     expect(s2a_hid_pad_axis(0, 0, 65535, 0) == -32767 && s2a_hid_pad_axis(65535, 0, 65535, 0) == 32767 &&
            s2a_hid_pad_axis(0, 0, 65535, 1) == 32767 && abs(s2a_hid_pad_axis(32768, 0, 65535, 0)) <= 1, "HID pad axis normalisation");
     {   // Switch Pro 协议（#934 11-15：PowerA 简易模式量程不对、摇杆慢五六倍；改发子命令切 0x30 完整报告）。期望全部手算：

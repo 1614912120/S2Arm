@@ -21,6 +21,7 @@ native-test-nvn_replay:
 	  if [ -n "$$bad" ]; then echo "【红】 回放核心出现图形 API / 平台专有内容（注释外）：$$bad"; exit 1; fi; \
 	  echo "分层扫描：回放核心注释外图形 API / 平台专有 0 处"
 	timeout 30 $(BUILD)/tests/t_nvn_replay docs/直连_Vulkan回放接线表.tsv
+	timeout 30 $(BUILD)/tests/t_nvn_replay --sync-reuse
 	@echo '✓ t_nvn_replay：回放核心状态继承 / 未接命令报名 / 一次提交一段 / 完成后回写 / 接线表与名字表一致 / 分层扫描'
 TEST_TARGETS += native-test-nvn_replay
 

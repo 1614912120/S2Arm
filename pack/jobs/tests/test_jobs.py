@@ -84,6 +84,18 @@ class JobsTests(unittest.TestCase):
         self.redirect.__exit__(None, None, None)
         self.tmp.cleanup()
 
+    def test_game_required_when_request_has_no_game(self):
+        """客户端不再按名单拦「要不要游戏号」（自己人之间不设允许清单，#1149）：要游戏的作业请求里没带游戏号，
+        作业层说清缺的是游戏号，不是「游戏未登记」；带了但库里没有照旧是未登记"""
+        c = Context(dict(self.request, operation="ipa"))
+        with self.assertRaises(Failure) as e:
+            c.game()
+        self.assertIn("没有游戏号", str(e.exception))
+        c = Context(dict(self.request, operation="ipa", gameId="0100000000ABCDEF"))
+        with self.assertRaises(Failure) as e:
+            c.game()
+        self.assertIn("未登记", str(e.exception))
+
     def test_context_accepts_readable_windows_volume_when_final_path_query_is_unsupported(self):
         import core
         # 用真实路径起步：Mac 临时目录在 /var（指向 /private/var 的符号链接）下，退回分支逐级查到它会按「路上有链接」照样报错
@@ -292,8 +304,9 @@ class JobsTests(unittest.TestCase):
         logs = self.root / "logs"; logs.mkdir()
         ms.plan(self.c, 1, "build_dual")
         self.assertFalse(self.c.keys.exists())
+        # 读取器是桩（reader.dll 不在）：RomFS 镜像形态（缺省）要真 nx_unpack 建 romfs.std，这里按目录形态（S2A_ROMFS_IMAGE=0）核分流与产物形状
         with um.patch.object(toolchain, "reader", return_value=self.root / "reader.dll"), um.patch.object(self.c, "run", run):
-            x = build.ensure_extract(self.c, game, build.selected_packages(game), {}, logs)
+            x = build.ensure_extract(self.c, game, build.selected_packages(game), {"S2A_ROMFS_IMAGE": "0"}, logs)
         self.assertEqual([c[4:6] for c in calls if "--npdm-isa" not in c], [["--to-extract", str(src)]])
         self.assertTrue(calls[0][3].endswith("pack/ns2_nup.py") and calls[0][6] == str(x), calls[0])
         self.assertFalse(any(str(self.c.keys) in c for c in calls), "NUP 不调读取器解密")
@@ -631,7 +644,7 @@ class JobsTests(unittest.TestCase):
         self.assertEqual(r["buildId"], "abc-123")
         image = gdir / "image" / "ios"
         self.assertEqual((r["ipa"], r["outputPath"]), ("", str(image)))   # 不再交付单款 ipa：装机时现组容器
-        self.assertTrue((image / "kit" / "main.npdm").is_file()); self.assertTrue((image / ".pack" / "manifest.json").is_file())
+        self.assertTrue((layout.ios_kit(self.c, "0100000000000000") / "main.npdm").is_file()); self.assertTrue((image / ".pack" / "manifest.json").is_file())
         self.assertFalse((gdir / "build" / "ios" / "x.ipa").exists())
         man = json.loads((image / ".pack" / "manifest.json").read_text())   # 交付转成单一 IMG 形态：game.json 记的资源包号 = 新清单的
         self.assertEqual((man["format"], man["imgFile"], (image / ".pack" / "game.img").is_file()), ("img", "game.img", True))
@@ -1088,6 +1101,36 @@ class JobsTests(unittest.TestCase):
             self.assertEqual(archive.read(f"pso/{A}.tsv"), b"S\t0123456789abcdef_b\t1\nC\t1111222233334444_b\n")
             self.assertIn(f"pso/{A}.tsv", json.loads(archive.read("manifest.json"))["files"])
 
+    def test_diagnostics_zip_budget_skips_optional_members_and_records_them(self):
+        # 整包预算（DIAGNOSTIC_ZIP_BUDGET，收件 30 MB 上限）：日志先放；放不下的可选成员（这里是管线记录）跳过、记进 manifest budget.skipped，
+        #   整包压缩后不超预算。预算临时压到 600 KB，三份各 400 KB 不可压缩的管线记录只放得下 1 份。期望按规则手写
+        import zipfile
+        from unittest import mock
+        games = ["0100AAAA00000000", "0100BBBB00000000", "0100CCCC00000000"]
+        atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=g, name=g) for g in games]))
+        for g in games:
+            f = self.c.library / "temp" / g / "wire" / g / "pso_user.tsv"; f.parent.mkdir(parents=True, exist_ok=True); f.write_bytes(os.urandom(400 << 10))
+        (self.c.logs / "budget-host.log").write_text("宿主日志 一行\n" * 50, encoding="utf-8")
+        destination = self.root / "diag-budget.zip"; destination.unlink(missing_ok=True); self.c.r["path"] = str(destination)
+        with mock.patch.object(library, "DIAGNOSTIC_ZIP_BUDGET", 600 << 10):
+            library.diagnostics(self.c)
+        self.assertLessEqual(destination.stat().st_size, (600 << 10) + (64 << 10))   # 预算 + manifest / zip 目录
+        with zipfile.ZipFile(destination) as archive:
+            pso = sorted(n for n in archive.namelist() if n.startswith("pso/"))
+            self.assertEqual(pso, [f"pso/{games[0]}.tsv"])
+            self.assertIn("logs/budget-host.log", archive.namelist())
+            manifest = json.loads(archive.read("manifest.json"))
+            self.assertEqual(manifest["budget"]["skipped"], [f"pso/{games[1]}.tsv", f"pso/{games[2]}.tsv"])
+            self.assertEqual(manifest["budget"]["limit"], 600 << 10)
+
+    def test_diagnostics_zip_budget_absent_when_everything_fits(self):
+        # 预算放得下时 manifest 不出现 budget（现有 manifest 形状不变）
+        import zipfile
+        destination = self.root / "diag-budget-fits.zip"; destination.unlink(missing_ok=True); self.c.r["path"] = str(destination)
+        library.diagnostics(self.c)
+        with zipfile.ZipFile(destination) as archive:
+            self.assertNotIn("budget", json.loads(archive.read("manifest.json")))
+
     def test_diagnostics_carries_shader_salvage(self):
         # 着色器补料（dsh_salvage.inc）：各款 temp/<号>/wire/<号>/shader_miss/ 的 index.tsv 与成对的 <键>.ctl / .code 原样进 shader_miss/<号>/；
         #   不认的文件名、缺 .code 的半对、链接不放；每款超上限时索引先放、成对放不下整对不放。期望按规则手写
@@ -1189,7 +1232,7 @@ class JobsTests(unittest.TestCase):
         du = collections.namedtuple("du", "total used free")
         d = self.root / "dc"; root, cache, out = d / "root", d / "cache", d / "out"
         for x in (root / "romfs", root / "exefs", root / "aoc", cache, out): x.mkdir(parents=True)
-        sizes = {str(root / "romfs"): int(2.5e9), str(root / "exefs"): int(0.4e9), str(root / "aoc"): int(0.2e9), str(cache): 0}   # 内容 3.1e9 → 大档
+        sizes = {str(root / "romfs"): int(2.5e9), str(root / "romfs.std"): 0, str(root / "exefs"): int(0.4e9), str(root / "aoc"): int(0.2e9), str(cache): 0}   # 内容 3.1e9 → 大档（romfs.std：镜像形态的 RomFS，这里是目录形态 = 0）
         with unittest.mock.patch("space_rule.tree_bytes", side_effect=lambda p: sizes[str(p)]):
             self.assertIsNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(15e9))))
             why = space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(15e9) - 1))
@@ -1222,7 +1265,7 @@ class JobsTests(unittest.TestCase):
             (root / "extract" / "split" / "shader_map.tsv").write_text("\n".join(rows) + "\n", encoding="utf-8")
             return root, cache, out
         root, cache, out = make("sb_big", 99084, 3)
-        sizes = {str(root / "romfs"): int(6.0e9), str(root / "exefs"): int(0.5e9), str(root / "aoc"): int(0.2e9), str(cache): 0}
+        sizes = {str(root / "romfs"): int(6.0e9), str(root / "romfs.std"): 0, str(root / "exefs"): int(0.5e9), str(root / "aoc"): int(0.2e9), str(cache): 0}
         self.assertEqual(space_rule.shader_count(root), 99084)
         with unittest.mock.patch("space_rule.tree_bytes", side_effect=lambda p: sizes[str(p)]):
             self.assertIsNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, 51948552192)))
@@ -1230,7 +1273,7 @@ class JobsTests(unittest.TestCase):
             self.assertIn("磁盘空间不足", why); self.assertIn("着色器 99084 个", why)
             self.assertIsNotNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(15e9))))   # 修前按原件那一档 15e9 就放行了
         root, cache, out = make("sb_small", 1000, 0)
-        sizes = {str(root / "romfs"): int(0.3e9), str(root / "exefs"): int(0.1e9), str(root / "aoc"): 0, str(cache): 0}
+        sizes = {str(root / "romfs"): int(0.3e9), str(root / "romfs.std"): 0, str(root / "exefs"): int(0.1e9), str(root / "aoc"): 0, str(cache): 0}
         with unittest.mock.patch("space_rule.tree_bytes", side_effect=lambda p: sizes[str(p)]):
             self.assertIsNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(5e9))))
             self.assertIsNotNone(space_rule.direct_check(root, cache, out, free=lambda v: du(0, 0, int(5e9) - 1)))
@@ -1454,6 +1497,15 @@ class JobsTests(unittest.TestCase):
         layout.save_device(self.c, "dev1", dict(games={on["id"].lower(): dict(pack="p")}))   # 记录里的游戏号大小写不一也认
         got = {g["id"]: g["onPhone"] for g in library.catalog(self.c)["games"]}
         self.assertEqual(got, {on["id"]: True, off["id"]: False})
+
+    def test_catalog_counts_phone_devices(self):
+        # 启动器更新弹窗按 phoneDevices 写成「更新启动器和 iPhone App」：设备记录里有款的才算；没装过 → 0，空记录 → 不算
+        g = self.game(tid="0100000000AA0000", packages=[self.package(tid="0100000000AA0000")])
+        self.catalogue([g])
+        self.assertEqual(library.catalog(self.c)["phoneDevices"], 0)
+        layout.save_device(self.c, "dev1", dict(games={g["id"]: dict(pack="p")}))
+        layout.save_device(self.c, "dev2", dict(games={}))
+        self.assertEqual(library.catalog(self.c)["phoneDevices"], 1)
 
     def test_catalogue_keeps_unsupported_and_unverified_distinct(self):
         game = self.game(packages=[self.package()])
@@ -1937,8 +1989,10 @@ class JobsTests(unittest.TestCase):
         library.prune_build(self.c, game["id"])
         self.assertEqual([f for f in keep + other if not f.exists()], [])
         self.assertEqual([f for f in gone if f.exists()], [])
-        # 有了容器件（image/ios/kit）：现行产物根也不用留，build/ 只剩出包日志 build/ios/logs
-        kit = layout.image_ios(self.c, game["id"]) / "kit" / "main.npdm"; kit.parent.mkdir(parents=True); kit.write_bytes(b"META")
+        # 有了容器件（程序缓存 cache/programs/<程序号>/kit，pack/jobs/programs.py）：现行产物根也不用留，build/ 只剩出包日志 build/ios/logs
+        import programs
+        kit = programs.cache(self.c, game["id"]) / "kit" / "main.npdm"; kit.parent.mkdir(parents=True); kit.write_bytes(b"META")
+        (kit.parent / "main.fixups.tsv").write_text("")
         library.prune_build(self.c, game["id"])
         build = layout.build_dir(self.c, game["id"], create=False)
         self.assertEqual(sorted(str(q.relative_to(build)) for q in build.rglob("*")), ["ios", "ios/logs", "ios/logs/a.log"])
@@ -1986,6 +2040,17 @@ class JobsTests(unittest.TestCase):
         self.assertEqual(save.read_text(), "keep")
         self.assertTrue((self.c.library / package["path"]).exists())
         self.assertTrue(all(f.exists() for f in other))
+
+    def test_delete_removes_the_program_store_too(self):
+        # 期望（手写）：「删除游戏」= 从库里删、也从手机记录摘掉，这款在游戏程序专用文件夹 .programs/<程序号>/ 的 kit / 原始程序 / 兼容记录一并删；别款的不动
+        package = self.package(); game = self.game(packages=[package]); self.catalogue([game])
+        mine, other = layout.program_store(self.c, game["id"], create=True), layout.program_store(self.c, "0100AAAA00000000", create=True)
+        for d in (mine, other):
+            (d / "kit").mkdir(); (d / "kit" / "main.npdm").write_bytes(b"n")
+        self.c.r["gameId"] = game["id"]
+        library.delete(self.c)
+        self.assertFalse(mine.exists())
+        self.assertTrue((other / "kit" / "main.npdm").is_file())
 
     def test_delete_retry_after_half_done_delete_removes_the_leftover_folder(self):
         # #433：上次删到一半（目录删不空、Errno 66）时 game.json 已被删掉，文件夹和出包中止留下的临时目录还在、索引还指着它。
@@ -2154,6 +2219,21 @@ class JobsTests(unittest.TestCase):
         finally:
             holder.stdin.write("release\n"); holder.stdin.flush()
             holder.communicate(timeout=5)
+
+    def test_proven_dead_lock_holder_uses_stuck_code(self):
+        import filelock
+        self.c.require_library()
+        self.c.lock_wait = 0
+        lockf = self.c.library / ".catalog.lock"
+        info = dict(taskId="old-task", operation="ipa", gameId="0100000000010000", pid=1,
+                    startedAt=1.0, host="this-host")
+        with filelock.held(lockf, holder=info), patch("filelock.holder_is_stale", return_value=True):
+            with self.assertRaises(Failure) as raised:
+                with self.c.lock():
+                    pass
+        self.assertEqual(raised.exception.code, "library_lock_stuck")
+        self.assertEqual(raised.exception.holder, info)
+        self.assertIn("不要手动删除锁文件", str(raised.exception))
 
     def test_direct_small_batch_progress_replaces_finished_translation(self):
         progress = self.root / "progress.tsv"
@@ -2744,7 +2824,7 @@ class JobsTests(unittest.TestCase):
         (out / "logs").mkdir(); (out / "logs" / "oneclick.log").write_text("出包日志")
         image = layout.image_ios(self.c, gid)   # 上一次成功出包的交付件
         if ipa: (image / ".pack").mkdir(parents=True); (image / ".pack" / "manifest.json").write_text('{"index_sha256": "p"}')
-        if kit: (image / "kit").mkdir(parents=True); (image / "kit" / "main.npdm").write_bytes(b"old")
+        if kit: (image / "kit").mkdir(parents=True); (image / "kit" / "main.npdm").write_bytes(b"old"); (image / "kit" / "main.fixups.tsv").write_text("")
         image = layout.path(self.c, gid, "image"); (image / "mac").mkdir(parents=True); (image / "mac.partial").mkdir()   # 出了一半的新镜像
         save = layout.path(self.c, gid, "saves") / "s.bin"; save.parent.mkdir(parents=True); save.write_bytes(b"save")
         return gid, out, save
@@ -2757,7 +2837,7 @@ class JobsTests(unittest.TestCase):
         c = self.stop_context(gid)
         library.clean_after_stop(c)
         image = layout.image_ios(self.c, gid)
-        self.assertEqual(sorted(p.name for p in image.iterdir()), [".pack", "kit"])
+        self.assertEqual(sorted(p.name for p in image.iterdir()), [".pack", "kit"])   # 旧位置的程序件：清理不碰，真用到时才搬进程序常驻（pack/jobs/programs.py adopt）
         self.assertEqual(sorted(p.name for p in layout.build_dir(self.c, gid).iterdir()), ["ios"])   # 只剩出包日志
         self.assertEqual(sorted(p.name for p in out.iterdir()), ["logs"])
         self.assertEqual((image / "kit" / "main.npdm").read_bytes(), b"old")
@@ -2896,10 +2976,10 @@ class JobsTests(unittest.TestCase):
         event = json.loads(result.stdout.splitlines()[-1])
         self.assertEqual(event["jobId"], "cli-test")
         self.assertEqual(event["state"], "failed")
-        p.chmod(0o644)
+        p.chmod(0o644)   # 11-16 不再自设权限：系统缺省权限的请求照常收（原先拒收、stdout 为空）
         result = subprocess.run([sys.executable, "-I", "-B", str(JOBS / "main.py"), "--request", str(p)], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(json.loads(result.stdout.splitlines()[-1])["state"], "failed")
 
     def test_invalid_keys_preserve_the_previous_player_key(self):
         self.c.keys.parent.mkdir(parents=True)

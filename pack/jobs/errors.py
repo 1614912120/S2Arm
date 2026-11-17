@@ -5,6 +5,7 @@ import errno
 import os
 import re
 from pathlib import Path
+import stat
 
 
 RECOVERY = {
@@ -64,6 +65,7 @@ RECOVERY = {
     "library_move_failed": "游戏库还在原来的位置，什么都没有丢：按上面的原因处理后再搬一次。",
     "batch_record_failed": "批次记录（数据目录下的 batch.json）写不进：检查数据目录所在磁盘的空间与权限，处理后在批量出包页点「继续」；已出好的包都在。",
     "library_busy": "等正在用游戏库的那个任务结束（或在任务列表里取消它）再重试；什么都没有改动。",
+    "library_lock_stuck": "原任务进程已不在，但游戏库的锁仍被占用。重新连接或重新挂载游戏库所在磁盘后再试；不要手动删除锁文件。本次没有改动游戏文件。",
     "downstream_ineligible": "这个下游方案只支持某一版更新（上面写了是哪一版）：导入那一版更新后再导出；不换更新就在确认页选「仍用原版方案」。",
     "downstream_export_unsupported": "这款选的下游方案是独立 App，资源要由电脑推进去：连上手机后点「装到 iPhone」；想导出自签包就在确认页改选「仍用原版方案」。",
     "download_failed": "检查这台电脑的网络（能打开 s2arm.com）后再点一次；下了一半的不会被当成好的用。",
@@ -112,7 +114,7 @@ RECOVERY = {
     "aoc_missing": "本体已出好，照常安装即可；没解出的追加内容不在包里，游戏里用不到那部分内容。请导出诊断反馈，解码支持后重新打包即可带上。",
     "direct_offline_empty": "游戏照常能玩，只是开头几次进新场景会卡一下（着色器现编，编过的会记住）。请导出诊断反馈给我们，修好后重新出包就能提前编好。",
     "sibling_clone_failed": "已改从解包目录准备，本次照常完成，只是多花一些时间；游戏库放在 APFS 格式的磁盘上（Mac 内置盘或格式化为 APFS 的外接盘）时，各平台导出可以共用已准备好的游戏数据。",
-    "iml_missing": "用 Xcode（免费 Apple ID 即可）或 AltStore Classic v2.3 重新签名安装这款游戏；SideStore 0.7.0 免费账号重签会丢这项权限。已装的也可以用 GetMoreRam 给 App ID 补上权限后重装。",
+    "iml_missing": "在电脑上的 S2Arm 点「装到 iPhone」重新安装（免费 Apple ID 也会带上这项权限）；自己签名的话用 Xcode 或 AltStore Classic v2.3，SideStore 0.7.0 重签会丢；已经装好的也可以用 GetMoreRam 给 App ID 补上权限后重装。",
     "export_dir_busy": "用新文件夹里的 S2Arm.ipa 和 .img 自签安装；关掉占用旧文件夹的程序后，可以把旧的那个删掉。",
     "manual_unpack_required": "资源包已经在手机上，不用重推：在 iPhone 上打开 S2Arm，选这款游戏，保持在前台别锁屏，等它导入完就能玩。",
     "usb_slow": "换一根支持 USB 3 的 USB-C 数据线，直接插 Mac 上的 USB-C / 雷雳口（不经扩展坞、集线器、显示器上的口），再装下一款；iPhone 15 Pro 及更新的 Pro 机型才支持 USB 3，其它机型只能 USB 2.0。",
@@ -121,6 +123,7 @@ RECOVERY = {
     "devcert_mismatch": "在开发者网站重新生成描述文件并勾上这张证书，下载后和证书一起重新导入。",   # 开发者证书签名（pack/jobs/devcert.py，v0.2.4）
     "devcert_missing": "在出包页「我的开发者证书」里重新导入证书和描述文件，或切回「Apple ID 签名」。",   # 开发者证书签名（pack/jobs/devcert.py，v0.2.4）
     "devcert_keychain": "解锁登录钥匙串并允许 S2Arm 访问后，重新导入证书。",   # 开发者证书签名（pack/jobs/devcert.py，v0.2.4）
+    "widget_skipped": "App 已装好、游戏照常玩。想要主屏小组件：用 Apple ID 签名（不是自己的开发者证书）再装一次；免费 Apple ID 包名额度满了就等几天再装。",   # 主屏小组件（install.widget_skip，11-16）
     "shell_sdk_old": "装好的包能用；要在 iPhone Duo 等新机型上铺满全屏，把 Xcode 更新到不低于这台 iPhone 系统大版本的版本（如 iOS 27 用 Xcode 27），在启动器里选它后重新打 iPhone 包再装。",
     'configuration_failed': '检查当前阶段的配置推导错误，保留原始游戏输入；更新完整引擎后重新准备，仍失败时反馈错误摘要。',
     'shader_extract_failed': '检查着色器抽取的具体错误；确认游戏输入完整且版本一致，重新准备后仍失败时反馈摘要。',
@@ -133,6 +136,7 @@ RECOVERY = {
     'developer_mode_required': '在 iPhone「设置 → 隐私与安全性 → 开发者模式」按系统提示开启开发者模式，再重新安装。',
     'device_pairing_required': '重新用数据线连接并解锁 iPhone，在手机上确认「信任此电脑」，然后重新检查设备并安装。',
     'free_team_capability': '免费个人开发者团队签不了这个 App 申请的某项权限（例如「扩展虚拟寻址」）；更新 S2Arm 后重新安装（新版对免费团队只申请能签的权限），或在 Xcode 改用付费开发者团队。',
+    'tvos_paid_team_required': 'Apple TV 版的两项权限（提高内存上限、扩展虚拟寻址）只有付费 Apple 开发者账号签得了：在 Xcode「设置 → 账户」登录付费开发者账号或选付费团队，再装到 Apple TV。',
     'provisioning_expired': '开发描述文件已过期；在 Xcode 重新登录签名账号、重新申请描述文件并签名安装，保留原 App 存档。',
     'compiler_cache_incomplete': '已完成的安装包可以保留；检查磁盘余量与缓存目录权限后再清理缓存，不要删除游戏或存档。',
     'stage_timeout': '当前阶段已超时；检查该阶段日志和设备连接，确认原因后重试，不要同时重复启动同一任务。',
@@ -211,17 +215,42 @@ class Failure(Exception):
         self.facts = facts     # 机读的失败事实（cause_facts：改写失败的模块 / 缺口数 / 缺口类别），前端按字段显示，不解析中文；没有为 None
 
 
+def library_lock_failure(holder, message, internal=""):
+    """Keep ordinary lock contention unchanged; specialize only a locally proven dead/reused owner."""
+    import filelock
+    if filelock.holder_is_stale(holder) is True:
+        return Failure("原任务进程已不在，但游戏库的锁仍被占用。重新连接或重新挂载游戏库所在磁盘后再试；不要手动删除锁文件。本次没有改动游戏文件。",
+                       code="library_lock_stuck", holder=holder, internal=internal)
+    return Failure(message, code="library_busy", holder=holder, internal=internal)
+
+
 def _under(path, roots):
-    # 两边都按真实路径比（macOS 的 /var 实为 /private/var、外接盘挂载点软链：请求里记的与报错带的写法可能不同；删掉的文件 realpath 照样解析父目录）
+    # 两边都安全解析后再比（macOS 的 /var 实为 /private/var、外接盘挂载点软链：请求里记的与报错带的写法可能不同）。
     try:
-        p = os.path.realpath(os.fspath(path))
-    except TypeError:
+        # core.resolve_path 已处理 Windows ERROR_UNRECOGNIZED_VOLUME：能安全解析时做真实路径比较；
+        # A 盘 / 网络卷不可识别时不让二次诊断覆盖原始 OSError。
+        from core import resolve_path
+        p = os.path.normcase(os.fspath(resolve_path(path)))
+    except (OSError, TypeError, ValueError):
         return False
     for r in roots:
-        r = os.path.realpath(os.fspath(r))
+        try:
+            r = os.path.normcase(os.fspath(resolve_path(r)))
+        except (OSError, TypeError, ValueError):
+            continue
         if p == r or p.startswith(r.rstrip(os.sep) + os.sep):
             return True
     return False
+
+
+def _is_directory(path):
+    """Return None when the volume cannot be checked; do not mistake I/O errors for a missing library."""
+    try:
+        return stat.S_ISDIR(os.stat(path).st_mode)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return None
 
 
 def explain(error, sources=(), library=None):
@@ -242,7 +271,8 @@ def explain(error, sources=(), library=None):
                 return Failure("文件或目录不可访问或不可写。", code="permission_denied", internal=internal)
             return Failure("本地任务失败：S2Arm 自己的文件读写不了，请导出诊断发给我们。", internal=internal)
         if error.errno == errno.ENOENT:
-            if any(_under(p, sources) for p in paths) or (library is not None and not os.path.isdir(library)):
+            library_is_dir = _is_directory(library) if library is not None else True
+            if any(_under(p, sources) for p in paths) or library_is_dir is False:
                 return Failure("任务所需的文件或目录不存在。", code="input_missing", internal=internal)
             return Failure("本地任务失败：S2Arm 自己的文件找不到了，请重试；还不行请导出诊断发给我们。", internal=internal)
         return Failure("本地任务失败，请检查日志和输入。", internal=internal)

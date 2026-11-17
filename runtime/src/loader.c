@@ -522,6 +522,11 @@ static void relocate(module_t *m) {
 #if !defined(__ANDROID__)   // 安卓没有直连 GL 层（s2a_direct_lookup 在 android/native 自给）
                 if (!v && !s2a_nro_defer_lookup(nm)) v = s2a_direct_stub(nm);   // 都没定义（romfs NRO 也没有）的 gl* 核心名：安全空实现，放最后免得顶掉游戏模块自己的定义（#601）
 #endif
+                if (!v && (s->st_info >> 4) == 2) {   // D-WSFE：按名记下来（含槽位偏移），崩在「往全局指针写」时能对上是哪个；游戏自带 NRO 定义的另报红（起局置 0、nn::ro 装进来后不补）
+                    const char *wnro = s2a_nro_defer_lookup(nm);
+                    if (wnro) LOG("【红】%s: 无定义弱符号 %s 置 0（槽 %s+%#llx、%s），但 romfs/nro/%s 定义了它：装进来后这里仍是 0", m->name, nm, m->name, (unsigned long long)((uint8_t *)where - (uint8_t *)m->base), type == R_AARCH64_JUMP_SLOT ? "函数" : "数据", wnro);
+                    else LOG("%s: 无定义弱符号 %s 置 0（槽 %s+%#llx、%s）", m->name, nm, m->name, (unsigned long long)((uint8_t *)where - (uint8_t *)m->base), type == R_AARCH64_JUMP_SLOT ? "函数" : "数据");
+                }
                 if (!v && (s->st_info >> 4) == 2) { nweak0++; *where = type == R_AARCH64_JUMP_SLOT ? 0 : (uint64_t)r->r_addend; cnt[type == R_AARCH64_JUMP_SLOT ? 2 : 1]++; continue; }   // 无定义弱符号 = 0（ELF / rtld 语义）
                 if (!v) {   // 游戏自带 NRO（romfs/nro）的导出：Horizon 上要等 nn::ro 装进来才解析，记普通日志不计红；桩不变，真被调到照旧报红中止
                     const char *nro = s2a_nro_defer_lookup(nm);
@@ -1252,13 +1257,13 @@ __attribute__((visibility("default"), used)) int s2a_nro_keep(const uint8_t sha[
     strlcat(dir, "/nro", sizeof dir); mkdir(dir, 0755);
     snprintf(p, sizeof p, "%s/%s.nro", dir, hex);
     struct stat st;
-    if (!stat(p, &st) && (uint64_t)st.st_size == size) { LOG("【红】nn::ro：NRO %.8s… 上次已存下（%s），这款还没重新准备，包里仍没有它", hex, p); return 2; }
+    if (!stat(p, &st) && (uint64_t)st.st_size == size) { LOG("【红】nn::ro：NRO %.8s… 上次已存下（%s），这款还没用 Mac 版启动器重新准备，包里仍没有它", hex, p); return 2; }
     snprintf(tmp, sizeof tmp, "%s.%d.tmp", p, (int)getpid());
     int fd = open(tmp, O_CREAT | O_TRUNC | O_WRONLY, 0644); if (fd < 0) { LOG("【红】nn::ro：存 NRO %.8s… 失败（%s：%s）", hex, tmp, strerror(errno)); return 1; }
     uint64_t at = 0; while (at < size) { ssize_t w = write(fd, data + at, (size_t)(size - at > (1u << 26) ? (1u << 26) : size - at)); if (w <= 0) break; at += (uint64_t)w; }
     int ok = at == size && !fsync(fd); close(fd);
     if (!ok || rename(tmp, p)) { unlink(tmp); LOG("【红】nn::ro：存 NRO %.8s… 失败（写了 %llu / %llu 字节）", hex, (unsigned long long)at, (unsigned long long)size); return 1; }
-    LOG("【红】nn::ro：包里没有 NRO %.8s…（%llu 字节），已把游戏解开的这份存到 %s：重新准备这款后就能装上", hex, (unsigned long long)size, p);
+    LOG("【红】nn::ro：包里没有 NRO %.8s…（%llu 字节），已把游戏解开的这份存到 %s：用 Mac 版启动器重新准备这款后就能装上（Windows 版启动器收不回它）", hex, (unsigned long long)size, p);
     return 0;
 }
 // The coordinator replaces guest pages before releasing loader registrations.
