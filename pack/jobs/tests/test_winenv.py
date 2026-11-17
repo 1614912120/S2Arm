@@ -2,6 +2,7 @@
 # Copyright 2026 S2Arm contributors
 """Independent Windows environment contracts; fake probes are not device proof."""
 import contextlib
+import jobcase  # noqa: E402（作业上下文替身统一工厂 jobcase.fake_context）
 import importlib.util
 import io
 import json
@@ -831,7 +832,7 @@ class EnvironmentTests(unittest.TestCase):
 
     def test_budget_mac_function_body_keeps_direct_result(self):
         self.budget_catalog()
-        context = types.SimpleNamespace(library=self.catalog_path.parent)
+        context = jobcase.fake_context(self.catalog_path.parent, library=self.catalog_path.parent)
         with patch("shutil.disk_usage", return_value=types.SimpleNamespace(free=40_000_000_000)):
             result = self.library_budget(context, self.budget_game)
         self.assertEqual(result["volumes"][0]["needBytes"], 26_770_000_000)   # Mac：解包一份 × 1.1 + 15 GB（单文件镜像不再存进库，#329）
@@ -844,7 +845,7 @@ class EnvironmentTests(unittest.TestCase):
         def shared(packages, **kw):
             calls.append(packages)
             return 12345
-        context = types.SimpleNamespace(library=self.catalog_path.parent)
+        context = jobcase.fake_context(self.catalog_path.parent, library=self.catalog_path.parent)
         with patch("shutil.disk_usage", return_value=types.SimpleNamespace(free=40000)):
             result = self.library_budget(context, self.budget_game, need=shared)
         self.assertEqual(result["volumes"][0]["needBytes"], 12345)

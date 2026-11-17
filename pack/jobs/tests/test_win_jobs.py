@@ -18,6 +18,7 @@ sys.path.insert(0, str(JOBS))
 import core
 import toolchain
 from jobcase import OsView, as_windows, ios_fixture
+import jobcase  # noqa: E402（作业上下文替身统一工厂 jobcase.fake_context）
 import layout
 
 
@@ -327,7 +328,7 @@ class WinInstall(unittest.TestCase):
         self.gid = "0100000000000047"
         self.progress_events = []   # 作业计数事件 (done, total, unit)
         emit = lambda *a, **k: self.progress_events.append((k.get("done"), k.get("total"), k.get("unit"))) if k.get("unit") else None
-        self.c = types.SimpleNamespace(r={"gameId": self.gid}, library=self.t / "lib", work_root=self.t / "work", private=self.t, logs=self.t / "logs", task="k", engine=self.t, emit=emit,
+        self.c = jobcase.fake_context(self.t, r={"gameId": self.gid}, library=self.t / "lib", work_root=self.t / "work", private=self.t, logs=self.t / "logs", task="k", engine=self.t, emit=emit,
                                        begin=lambda *a, **k: None, last_log=None, catalog=lambda: {"schema": 1, "games": []},
                                        lock=lambda *a, **k: contextlib.nullcontext())   # 装机类作业的手机锁 / 程序锁（ipa.phone_lock / program_locks）
         ios_fixture(self.c, self.gid)   # 出好的 iPhone 版：image/ios/kit + image/ios/pack
@@ -642,7 +643,7 @@ class WinPreflight(unittest.TestCase):
     # 环境检查在 Windows 上 = winenv（子进程、作业环境）：清单与 ready 原样转给启动器；winenv 没给 JSON → win_check_failed，不当成就绪
     def setUp(self):
         self.t = Path(tempfile.mkdtemp()); self.addCleanup(lambda: __import__("shutil").rmtree(self.t, ignore_errors=True))
-        self.c = types.SimpleNamespace(r={"resources": str(self.t)}, private=self.t, engine=ROOT, library=self.t / "lib",
+        self.c = jobcase.fake_context(self.t, r={"resources": str(self.t)}, private=self.t, engine=ROOT, library=self.t / "lib",
                                        env=lambda: {"PATH": "x"}, fonts_dir=lambda: self.t / "Fonts")
 
     def run_with(self, stdout):

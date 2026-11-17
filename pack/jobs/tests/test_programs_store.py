@@ -9,6 +9,7 @@
   ⑤ 没存原始程序的老款：整份 kit 进配方（推不出产物）
   ⑥ 释放空间：iPhone 包只列资源包；程序缓存列在「着色器与出包缓存」"""
 import io
+import jobcase  # noqa: E402（作业上下文替身统一工厂 jobcase.fake_context）
 import json
 import os
 from pathlib import Path
@@ -46,7 +47,7 @@ class ProgramStoreTests(unittest.TestCase):
         t = tempfile.TemporaryDirectory(prefix="s2arm programs ")
         self.addCleanup(t.cleanup)
         self.root = Path(t.name)
-        self.c = SimpleNamespace(library=self.root / "library", work_root=self.root / "work", engine=self.root, env=lambda: {})
+        self.c = jobcase.fake_context(self.root, library=self.root / "library", work_root=self.root / "work", engine=self.root, env=lambda: {})
         self.c.library.mkdir()
         self.store = self.c.library / ".programs" / GID
         self.cache = self.root / "work/cache/programs" / GID

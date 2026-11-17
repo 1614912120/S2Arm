@@ -35,7 +35,7 @@ class RewriteRefreshTests(unittest.TestCase):
         self.info = {}
         self.events = []
         self.sg_calls = []
-        self.c = types.SimpleNamespace(private=self.tmp, emit=lambda kind, text, **_: self.events.append(text), library=self.tmp / "library", work_root=self.tmp / "work",
+        self.c = jobcase.fake_context(self.tmp, private=self.tmp, emit=lambda kind, text, **_: self.events.append(text), library=self.tmp / "library", work_root=self.tmp / "work",
                                        catalog=lambda: {"games": [{"id": g} for g in ("0100A", "0100B")]})
 
     def kit(self, gid):
@@ -270,7 +270,7 @@ class KeptNroRefreshTests(unittest.TestCase):
         import hashlib
         self.tmp = Path(tempfile.mkdtemp())
         self.events = []
-        self.c = types.SimpleNamespace(private=self.tmp, engine=Path(__file__).resolve().parents[3], env=lambda: dict(os.environ), library=self.tmp / "library", work_root=self.tmp / "work",
+        self.c = jobcase.fake_context(self.tmp, private=self.tmp, engine=Path(__file__).resolve().parents[3], env=lambda: dict(os.environ), library=self.tmp / "library", work_root=self.tmp / "work",
                                        emit=lambda kind, text, **_: self.events.append(text), catalog=lambda: {"games": [{"id": "0100A"}]})
         self.kept = self.tmp / "kept"; self.kept.mkdir()
         self.nro = synthetic_nro(7); self.sha = hashlib.sha256(self.nro).hexdigest()
