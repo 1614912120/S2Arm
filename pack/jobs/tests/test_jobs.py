@@ -2961,10 +2961,10 @@ class JobsTests(unittest.TestCase):
         event = json.loads(result.stdout.splitlines()[-1])
         self.assertEqual(event["jobId"], "cli-test")
         self.assertEqual(event["state"], "failed")
-        p.chmod(0o644)
+        p.chmod(0o644)   # 11-16 不再自设权限：系统缺省权限的请求照常收（原先拒收、stdout 为空）
         result = subprocess.run([sys.executable, "-I", "-B", str(JOBS / "main.py"), "--request", str(p)], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(json.loads(result.stdout.splitlines()[-1])["state"], "failed")
 
     def test_invalid_keys_preserve_the_previous_player_key(self):
         self.c.keys.parent.mkdir(parents=True)
