@@ -11236,6 +11236,26 @@ static inline void p65_count(NvShader *sh, int st, int hit, int k, int reg, uint
 //   Audit #1646 P1-65: the table used to follow the binding alone, so with a shorter copy / shadow the shader's clamp let it read past it (11-07 census: 112921 widen-copy hits in one run)
 static inline uint32_t ubolen_vec4_cap(const p_bind_buf *u, uint64_t cap) { uint64_t v = u->addr ? (u->size + 15) / 16 : 0; if (v > 4096) v = 4096; if (v > cap / 16) v = cap / 16; return (uint32_t)v; }
 static inline uint32_t ubolen_vec4(const p_bind_buf *u) { return ubolen_vec4_cap(u, UINT64_MAX); }
+// Diagnostic readouts, behaviour unchanged (yellow lines, one per shader, at most 64 each in a run, each line carries the running count):
+//   ① a bound uniform buffer shorter (past its vec4 rounding) than the part of it the shader reads (cb_extent.tsv sh->cb_ext[slot]): constant-index reads within the declared range are not clamped, so the
+//     reads past the binding see whatever memory follows it (real hardware reads 0 there). Shader key, stage, slot, declared bytes, bound bytes.
+//   ② a fragment shader that reads the depth attachment of the open pass through a texture handle kept in a uniform buffer (TEXU): the same-pass depth read snapshot (fb_prepare)
+//     only covers a depth attachment bound in an ordinary texture slot, so such a read may see depth the pass is still writing, tile by tile
+static uint64_t g_ubos_n, g_dtu_n; static unsigned g_ubos_shown, g_dtu_shown;
+static __attribute__((noinline, cold)) void ubos_note(NvShader *sh, int st, int reg, uint64_t want, uint64_t have) {
+    g_ubos_n++; if (sh->logged & 0x200) return; sh->logged |= 0x200; if (g_ubos_shown >= 64) return; g_ubos_shown++;
+    MLOG("【黄】 uniform buffer shorter than the shader reads: shader %s stage %d slot %d can read up to %llu bytes, bound %llu bytes (reads past it see the memory that follows; %llu such bindings so far)",
+         sh->key, st, reg, (unsigned long long)want, (unsigned long long)have, (unsigned long long)g_ubos_n);
+}
+static __attribute__((noinline, cold)) void dtu_note(NvShader *sh, int st, int reg, int k, uint64_t ser) {
+    g_dtu_n++; if (sh->logged & 0x400) return; sh->logged |= 0x400; if (g_dtu_shown >= 64) return; g_dtu_shown++;
+    MLOG("【黄】 depth attachment read through a uniform-buffer texture handle in the open pass: shader %s stage %d uniform slot %d element %d, depth texture ser=%llu (not covered by the same-pass depth snapshot; %llu such reads so far)",
+         sh->key, st, reg, k, (unsigned long long)ser, (unsigned long long)g_dtu_n);
+}
+static inline void dtu_check(NvShader *sh, int st, int reg, int k, int tid) {
+    if (st != 1 || !g_enc || !R.has_rt || !R.rt.depth || tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) return;
+    if (__builtin_expect(g_treg[tid].t.serial == R.rt.depth->serial && R.rt.depth->serial, 0)) dtu_note(sh, st, reg, k, R.rt.depth->serial);
+}
 typedef struct { int stage; } sbsz_ctx;
 static uint32_t sbsz_bound(void *ctx, const nvn_rbind *b) {
     int nvn_stage = ((sbsz_ctx *)ctx)->stage;
@@ -11400,6 +11420,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             const p_bind_buf *u = reg < 16 ? &S.ubo[nvn_stage][reg] : NULL;
             void *mb; uint64_t mo, gpu, pav, ul; int pk;
             if (!cbuf_slot(sh, nvn_stage, reg, &mb, &mo, &gpu, &pav, &ul, &pk)) { slots[aid] = zero_bank_gpu(); USE(zero_bank(), MTLResourceUsageRead); continue; }
+            if (__builtin_expect(reg < 16 && u->size && sh->cb_ext[reg] > ((u->size + 15) & ~15ull), 0)) ubos_note(sh, nvn_stage, reg, sh->cb_ext[reg], u->size);   // readout ① (see ubos_note)
             if (reg < NVN_UBOLEN_N) { ubcap[reg] = pk ? pav : ul;   // pk 0: a deferred-update shadow covers exactly the read range ul
               if (pk) { uint64_t tb = (uint64_t)ubolen_vec4_cap(u, ubcap[reg]) * 16; if (__builtin_expect(tb > pav, 0)) { if (!p65_hit) { p65_k = pk; p65_reg = reg; p65_tb = tb; p65_av = pav; } p65_hit |= pk; } } }   // probe: the table actually written vs the bytes behind the pointer (0 once capped)   // the bounds table lets the shader read tb bytes
             if (bl) {
@@ -11426,6 +11447,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             uint64_t real = 0;                         // at byte 8k, the index the shader computes from the handle's offset (an NVN handle is 64-bit)
             for (int k = 0; k < b->n; k++) {
                 int tid = ubo_tex_id(ubo_handle(nvn_stage, reg, 8 * k)); if (tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) tid = -1;   // as for the samplers: other data, not a handle
+                dtu_check(sh, nvn_stage, reg, k, tid);   // readout ② (see dtu_note)
                 // not a handle (tid -1): the dummy below without a lookup. tex_by_id(-1) reported 「texture ID -1 not registered」 (#788: every run of such a shader), and that once-only red
                 //   (RED_ONCE 10) then hid the real unregistered IDs for the rest of the run
                 void *tv = NULL; uint64_t trid = tid >= 0 ? tex_fast_rid(tid, &tv) : 0; __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
@@ -11450,6 +11472,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                            (int)sp.ws, (int)sp.wt, (int)sp.wr, sp.border[0], sp.border[1], sp.border[2], sp.border[3], sp.lod_min, sp.lod_max, sp.lod_bias, sp.aniso, (int)sp.cmp_mode, (int)sp.cmp_func, ss ? "real" : "failed"); }
         } else if (b->kind == NVN_RB_TEX || b->kind == NVN_RB_TEXU) {
             int tid = b->kind == NVN_RB_TEXU ? ubo_tex_id(ubo_packed(nvn_stage, b)) : (int)(tex_slot_h(S.tex[nvn_stage], S.img[nvn_stage], reg) & 0xfffff);
+            if (b->kind == NVN_RB_TEXU) dtu_check(sh, nvn_stage, reg, 0, tid);   // readout ② (see dtu_note)
             if (b->unb && b->kind == NVN_RB_TEX) ub_note(ubw, b->unb - 1, tid);   // the texture registered at this ID, as the NVN driver writes its descriptor
             void *tv = NULL; uint64_t trid = tex_fast_rid(tid, &tv); __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
             if (tv) p20_check(sh, nvn_stage, b, tid, tv);   // audit #1534 P1-20 probe: declared type / class against the texture as registered (before any fitting below)
