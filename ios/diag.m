@@ -11,10 +11,13 @@
 //   交出（11-13 起）：入口②③④是「上传给开发者」——传到 diag.s2arm.com，玩家拿到短码、只复制短码；上传失败退回系统分享面板（AirDrop / 存到文件 / 微信）。
 //         入口①仍直接弹分享面板。包同时留在 Documents/diag/（只留最近 3 个，Mac 前端「拉回诊断」能拉到）。
 #import <UIKit/UIKit.h>
+#include "s2a_docs.h"   // s2a_container_docs：容器文档根（Apple TV 在 Library/Caches/S2Arm）
 #import "s2a_l10n.h"
 #import <MetricKit/MetricKit.h>
 #import <Metal/Metal.h>
+#if !TARGET_OS_TV   // 电视没有蜂窝网络
 #import <CoreTelephony/CTCellularData.h>   // 上传断网时认「无线数据」授权被拒（国行 iPhone）
+#endif
 #import "vpad.h"
 #import "app_settings.h"
 #include <sys/sysctl.h>
@@ -34,7 +37,7 @@ static NSDictionary *container_foreign(void) {
     uint64_t bytes = 0; char line[1600] = ""; unsigned n = s2a_foreign_scan(NSHomeDirectory().fileSystemRepresentation, &bytes, line, sizeof line);
     return @{@"count": @(n), @"bytes": @(bytes), @"summary": @(line)};
 }
-static NSString *docs(void) { return NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject; }
+static NSString *docs(void) { return ({ char _d[1024]; s2a_container_docs(_d, sizeof _d); @(_d); }); }
 // 资源包根：启动上下文给了本款资源包就读它（上下文文件 / 多款容器选了游戏：v0.3.0 起在 Library 下，s2a_docs.h s2a_pack_root）；
 //   单款兼容照旧 Documents/资源包（不随 S2A_GAME_DATA，同改造前）
 //   多款容器还没选游戏（游戏库里导出：多半是上一局崩了 App 重开）：按上次在库里选的款（app.m library_play 记的 S2ALastGameId）解析本款资源包，
@@ -258,10 +261,14 @@ static void build_failed(UIViewController *host, NSString *err) {
     [a addAction:[UIAlertAction actionWithTitle:S2AL(@"common.gotIt") style:UIAlertActionStyleCancel handler:nil]]; [top_of(host) presentViewController:a animated:YES completion:nil];
 }
 static void share_zip(UIViewController *host, NSURL *zip) {
+#if TARGET_OS_TV   // 电视没有分享面板：包留在文档根 diag/，电脑端启动器「从 Apple TV 拉诊断」取回再上传
+    (void)host; LOG("诊断包：已导出 %s（电视上没有分享面板，用电脑端启动器拉取）", zip.path.UTF8String);
+#else
     UIActivityViewController *av = [[UIActivityViewController alloc] initWithActivityItems:@[zip] applicationActivities:nil];
     av.popoverPresentationController.sourceView = host.view;   // iPad 要锚点
     av.popoverPresentationController.sourceRect = CGRectMake(CGRectGetMidX(host.view.bounds), CGRectGetMidY(host.view.bounds), 1, 1);
     present_over(host, av);
+#endif
 }
 // 导出并弹系统分享面板（主线程调）：上传失败时的退路，和系统设置里「打开 App 时导出诊断包」开关
 void s2a_diag_export(void) {
@@ -328,8 +335,12 @@ static void post_zip(NSURL *zip, int attempt, CFAbsoluteTime started, void (^don
         }
         // 给玩家的原因：服务端 message 是中文一句、可直接给玩家看（中文界面用它），英文界面按错误种类给本地一句
         NSString *msg = [d[@"message"] isKindOfClass:NSString.class] ? d[@"message"] : nil, *fail;
+#if TARGET_OS_TV
+        if (0) fail = nil;   // 电视没有「无线数据」授权这一说
+#else
         static CTCellularData *cell; static dispatch_once_t once; dispatch_once(&once, ^{ cell = [CTCellularData new]; });
         if (e && s2a_diag_net_denied((int)e.code, (int)cell.restrictedState)) fail = S2AL(@"diag.upload.fail.denied");
+#endif
         else if (e) fail = [NSString stringWithFormat:S2AL(@"diag.upload.fail.network"), e.localizedDescription];
         else if (status == 429) fail = S2AL(@"diag.upload.fail.busy");
         else if (status == 400 || status == 413) fail = s2a_l10n_zh() && msg.length ? msg : [NSString stringWithFormat:S2AL(@"diag.upload.fail.rejected"), why];
@@ -352,7 +363,9 @@ static void upload_zip(UIViewController *host, NSURL *zip) {
             UIAlertAction *post = [UIAlertAction actionWithTitle:S2AL(@"diag.upload.post") style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) { (void)x;
                 LOG("诊断包：打开 GitHub 发帖页（短码 %s）", code.UTF8String); [UIApplication.sharedApplication openURL:issue_url(code) options:@{} completionHandler:nil]; }];
             [a addAction:post]; a.preferredAction = post;   // 主按钮
+#if !TARGET_OS_TV   // 电视没有剪贴板：短码照样显示在提示里
             [a addAction:[UIAlertAction actionWithTitle:S2AL(@"diag.upload.copy") style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) { (void)x; UIPasteboard.generalPasteboard.string = code; LOG("诊断包：短码已复制"); }]];
+#endif
             // 诊断局（#438）从设置页挪到这里（11-14 重做）：报完问题顺手问一句，下一局多记一些再传一次；已开着就不问
             if (![s2a_ios_settings_defaults() boolForKey:@"S2ADiagRunNext"])
                 [a addAction:[UIAlertAction actionWithTitle:S2AL(@"diag.upload.runNext") style:UIAlertActionStyleDefault handler:^(UIAlertAction *x) { (void)x;
@@ -405,6 +418,7 @@ void s2a_report_gear_attach(UIView *page) {
 }
 // ---------- MetricKit：崩溃 / 卡顿诊断与退出原因计数（系统在下次启动或之后交来）原样存 Documents/metrickit/ ----------
 // 每类各留最近 20 份（按文件名后缀分：-exit.json 一类，崩溃 / 卡顿 / 其它诊断一类），退出计数不挤掉崩溃现场
+#if !TARGET_OS_TV   // tvOS 有 MetricKit 框架但这些类不可用（SDK 标 unavailable）：电视上只靠我们自己的崩溃处理与「本局在跑」标记
 static void mk_trim(NSString *dir, BOOL exits) {
     NSMutableArray *mine = [NSMutableArray array];
     for (NSString *f in [[NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil] sortedArrayUsingSelector:@selector(compare:)])
@@ -457,6 +471,7 @@ static NSString *mk_dir(void) {
 }
 @end
 static S2ADiagMK *g_mk;
+#endif
 
 // 崩溃恢复关掉了什么（金手指 / 补丁 / 60 帧的名字，app.m 游戏库容器或本文件单款壳记）：上次死在前台时和诊断询问并成一个提示说，不另弹横幅（11-13 维护者：两个弹层叠在一起）
 static NSString *g_crash_off;
@@ -475,7 +490,11 @@ void s2a_diag_prompt(NSString *why) {
     if (g_prompted || !g_vc) { crash_off_notice_only(); return; } g_prompted = YES;
     // 自动化 / 开发工具起的局（s2a_unattended.h）不问：日志由工具拉回，弹窗只会挡住整局
     if (s2a_unattended()) { LOG("诊断：%s；自动化局不问「把上次的诊断发给我们？」", why.UTF8String); crash_off_notice_only(); return; }
+#if TARGET_OS_TV
+    if (g_exporting) { crash_off_notice_only(); return; }
+#else
     if (g_exporting || [g_vc.presentedViewController isKindOfClass:UIActivityViewController.class]) { crash_off_notice_only(); return; }
+#endif
     NSString *off = g_crash_off; g_crash_off = nil;
     UIAlertController *a = [UIAlertController alertControllerWithTitle:off ? S2AL(@"crash.off.title") : S2AL(@"diag.prompt.title")
         message:off ? [NSString stringWithFormat:S2AL(@"crash.off.prompt"), off] : [NSString stringWithFormat:S2AL(@"diag.prompt.message"), why] preferredStyle:UIAlertControllerStyleAlert];
@@ -498,10 +517,12 @@ static void check_toggle(void) {
 
 // App 启动时调（didFinishLaunching）：订阅 MetricKit
 void s2a_diag_boot(void) {
+#if !TARGET_OS_TV
     g_mk = [S2ADiagMK new]; [MXMetricManager.sharedManager addSubscriber:g_mk];
     // 订阅之前交过、App 没接住的（上次在订阅前就崩了 / 被杀了）：启动时补读一次，文件名按载荷时刻，重复的覆盖
     { NSArray *pd = MXMetricManager.sharedManager.pastDiagnosticPayloads, *pm = MXMetricManager.sharedManager.pastPayloads;
       if (pd.count) [g_mk didReceiveDiagnosticPayloads:pd]; if (pm.count) [g_mk didReceiveMetricPayloads:pm]; }
+#endif
     // 设置页显示包号（Settings.bundle 的只读项读 UserDefaults 的 S2ABuildID；值来自 Info.plist，ipa.sh 写）
     NSString *bid = [NSBundle.mainBundle objectForInfoDictionaryKey:@"S2ABuildID"];
     [NSUserDefaults.standardUserDefaults setObject:bid.length ? bid : S2AL(@"about.unknown") forKey:@"S2ABuildID"];
@@ -549,9 +570,11 @@ void s2a_diag_attach(UIViewController *vc) {
     g_vc = vc;
     // 四指长按 1.5 秒（原生层线 10-23：三指会误触——两拇指压摇杆 + 再按住一个键正好三指；四指玩游戏时不会出现）。
     //   不吃游戏 / 虚拟手柄的触摸：cancelsTouchesInView / delaysTouchesBegan / delaysTouchesEnded 都关（delaysTouchesEnded 缺省 YES，会压住虚拟键「松开」）
+#if !TARGET_OS_TV   // 电视没有触屏：菜单走手柄长按 +（controller.m）
     UILongPressGestureRecognizer *lp = [[UILongPressGestureRecognizer alloc] initWithTarget:S2ADiagGesture.class action:@selector(fire:)];
     lp.numberOfTouchesRequired = 4; lp.minimumPressDuration = 1.5; lp.cancelsTouchesInView = NO; lp.delaysTouchesBegan = NO; lp.delaysTouchesEnded = NO;
     [vc.view addGestureRecognizer:lp];
+#endif
     // 测试开关（真机自动化打不出四指长按 / 手柄长按 +，集中回归 E6）：S2A_OPEN_SETTINGS=<秒> 起局后这么久直接开设置页（同菜单入口，已开着别的界面就不开）。
     //   两处来源：执行器起局时给的环境变量；主屏长按「设置」快捷操作冷启动时 app.m home_shortcut 进程内设的 2 秒
     { const char *e = getenv("S2A_OPEN_SETTINGS"); double sec = e ? atof(e) : 0;

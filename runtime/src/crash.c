@@ -1,4 +1,5 @@
 // 崩溃现场（旧库 crash.c 改后搬，只留信号处理本身）：出错地址、pc / lr 换成模块内偏移、寄存器、帧指针回溯、线程表。
+#include <errno.h>
 #include "native.h"
 #include "s2a_docs.h"   // 崩溃落点标记写在文档根（s2a_crash_install 时算好路径，信号里只 open / write）
 #include "../../platform/plat.h"
@@ -379,10 +380,12 @@ static void crash_where_note(uint64_t pc, uint64_t lr) {
     if (fd >= 0) { (void)!write(fd, w, strlen(w)); close(fd); }
 }
 __attribute__((weak)) void s2a_guest_run_mark_crash(void) {}   // runtime/src/vawin.c 强定义：「在跑」标记改写成 crash（闪退不算死于内存，#909）
-__attribute__((weak)) void s2a_pso_archive_crash_note(void);   // graphics/nvn pso_archive.h：崩溃线程正在写管线归档 → 记全机标记（#756）
+// graphics/nvn pso_archive.h：崩溃线程正在写管线归档 → 记全机标记（#756）。装信号时 dlsym 取一次（同 g_dsh_crash_dump；信号处理里不调 dlsym）：
+//   原先写成 __attribute__((weak)) 的未定义声明，Mach-O 静态链接时弱引用也要找得到定义，Mac 宿主不链图形层就报 Undefined symbols（11-16 合入后宿主构建红）
+static void (*g_pso_crash_note)(void);
 static void crash_reraise(int sig) {
     s2a_guest_run_mark_crash();
-    if (s2a_pso_archive_crash_note) s2a_pso_archive_crash_note();
+    if (g_pso_crash_note) g_pso_crash_note();
     if (g_crash_quiet) _exit(128 + sig);   // 辅助运行 / 静默起局：现场已写进日志，不按信号死（不弹系统「意外退出」框）
     signal(sig, SIG_DFL);
     sigset_t m; sigemptyset(&m); sigaddset(&m, sig); pthread_sigmask(SIG_UNBLOCK, &m, NULL);
@@ -544,12 +547,13 @@ void s2a_crash_thread_init(void) {
     // 缺页处模拟读的只读别名槽（alias.c，每线程 16 KB）
     s2a_alias_thread_init();
     int e = plat_fault_altstack_init();
-    if (e) LOG("【红】崩溃：备用栈安装失败 errno=%d", e);
+    if (e && e != ENOTSUP) LOG("【红】崩溃：备用栈安装失败 errno=%d", e);   // ENOTSUP = tvOS 没有备用栈（platform/apple/plat_apple.c），不算故障
 }
 void s2a_crash_install(void) {
     s2a_docs_path(g_where_path, sizeof g_where_path, "crash_where");
     int sigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE, SIGABRT};   // SIGABRT：die() 与 C# FailFast 都走 abort，要现场
     g_dsh_crash_dump = (void (*)(void))dlsym(RTLD_DEFAULT, "s2a_dsh_crash_dump");
+    g_pso_crash_note = (void (*)(void))dlsym(RTLD_DEFAULT, "s2a_pso_archive_crash_note");
     g_crash_quiet = s2a_crash_quiet();
     ww_start();
     for (size_t i = 0; i < sizeof sigs / sizeof *sigs; i++) {

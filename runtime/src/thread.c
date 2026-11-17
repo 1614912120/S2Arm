@@ -168,6 +168,9 @@ typedef struct thr {
 } thr_t;
 
 static pthread_mutex_t G = PTHREAD_MUTEX_INITIALIZER;
+#ifdef S2A_UNIT_TEST
+void s2a_test_glock_hold(int on) { if (on) pthread_mutex_lock(&G); else pthread_mutex_unlock(&G); }   // t_thread：ArbitrateLock 快路径（持着 G 也能回）
+#endif
 // 诊断：全局锁 G 的争用（S2A_DIAG_STAMP 设了才计；没设直接加锁，不多一次原子操作）。trylock 拿到不计时；拿不到就计等了多久，按量级计数
 static _Atomic uint64_t g_gl_try, g_gl_wait, g_gl_b[7], g_gl_max;
 static int lw_on(void) { static int v = -1; if (v < 0) v = getenv("S2A_DIAG_STAMP") != NULL; return v; }   // 诊断开关：没设不计数
@@ -2465,6 +2468,10 @@ static int svc_thread_impl(thr_t *me, int num, uint64_t *regs) {
         uint64_t addr = regs[1]; int64_t r = 0;
         if (addr & 3) { regs[0] = 0xCC01; return 1; }   // InvalidAddress：锁字要 4 字节对齐（Ryujinx IsAddressNotWordAligned）
         tag_check(me, (uint32_t)regs[2], "ArbitrateLock", addr);
+        // 快路径（11-16 能耗线，借同赛道 MIT 移植的做法）：锁字已不是「持有者 | 等待位」就直接回 0、不拿全局锁 G——同 Horizon，游戏回用户态重抢。
+        //   不拿锁读到旧值只等于一次本来就会发生的竞争（游戏照样重试）；宿主改锁字的 lock_handoff 都在 G 里，对得上时下面持 G 再核一遍。
+        //   G 每秒上万次加锁、5.5% 要等（大金刚 Mac 局 S2A_DIAG_STAMP 读数）
+        if (ld32(addr) != ((uint32_t)regs[0] | WAITERS_BIT)) { regs[0] = 0; return 1; }
         glock();
         if (ld32(addr) == ((uint32_t)regs[0] | WAITERS_BIT)) {
             if (!h_obj((uint32_t)regs[0], S2A_OBJ_THREAD)) r = R_BAD_HANDLE;   // 持有者句柄无效：照 Ryujinx ArbitrateLock 回 InvalidHandle（原先挂上去永远等不到交锁）

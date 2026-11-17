@@ -81,6 +81,10 @@ public class MainActivity extends Activity
     private final Runnable lifecycleSample = this::sampleLifecyclePresent;
     // 游玩时间（共用 runtime/src/playtime.c）：游戏在前台时每 10 秒落一次盘（同 iOS app.m 的 10 秒心跳），闪退 / 被杀最多丢这 10 秒；
     //   onPause 与收局前另各落一次。计时本身在原生上屏出口里，这里只管什么时候写文件
+    // 停帧看门的屏上提示（StallNotice 定显示哪条）：画面下方一条半透明字，不可点、不挡操作
+    private final StallNotice stallState = new StallNotice();
+    private TextView stallText;
+    private final Runnable stallRender = this::renderStallNotice;
     private final Runnable playtimeTick = new Runnable() {
         @Override public void run() {
             if (!resumed || !gameMode || !runtimeLoaded || gameStopping) return;
@@ -257,6 +261,16 @@ public class MainActivity extends Activity
             loadTouchLayout();
             frameRate = new FrameRateOverlay(this);
             root.addView(frameRate, fpsLayout);
+            stallText = new TextView(this);
+            stallText.setTextColor(0xFFFFFFFF); stallText.setTextSize(15); stallText.setBackgroundColor(0xCC000000);
+            stallText.setGravity(android.view.Gravity.CENTER); stallText.setClickable(false); stallText.setFocusable(false);
+            { int sp = Math.round(10 * getResources().getDisplayMetrics().density); stallText.setPadding(sp * 2, sp, sp * 2, sp); }
+            stallText.setVisibility(android.view.View.GONE);
+            FrameLayout.LayoutParams stallLayout = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.BOTTOM | android.view.Gravity.CENTER_HORIZONTAL);
+            stallLayout.bottomMargin = Math.round(32 * getResources().getDisplayMetrics().density);
+            root.addView(stallText, stallLayout);
             updateFrameRate(getIntent());
         }
         root.setOnApplyWindowInsetsListener((view, insets) -> {
@@ -1598,6 +1612,26 @@ public class MainActivity extends Activity
      * DguardNotice 弹页等到玩家选「仍然启动」。没有前台 Activity / 主线程被调时直接返回
      * ——同 iOS 提示出口拿不到窗口时记日志照走的口径（提示是提醒不是闸门）。
      */
+    /** 停帧看门的屏上提示（NativeBridge.stallNotice，看门线程上来）：派回主线程按 StallNotice 显示 / 收。 */
+    static void stallNotice(int kind, int seconds) {
+        final MainActivity activity = current;
+        if (activity == null) { Log.i("S2Arm", "stall notice " + kind + " dropped: no foreground activity"); return; }
+        Log.i("S2Arm", "stall notice " + kind + " (" + seconds + " s)");
+        activity.runOnUiThread(() -> { activity.stallState.on(kind, seconds, android.os.SystemClock.uptimeMillis()); activity.renderStallNotice(); });
+    }
+    private void renderStallNotice() {
+        if (stallText == null) return;
+        long now = android.os.SystemClock.uptimeMillis();
+        int kind = stallState.visible(now);
+        // 「约 30 秒」= 看门判停帧的窗口（ap_host.c 的 30 秒环、s2a_ap_crawl_due：30 秒里新上屏 ≤ 15 帧才救场）
+        if (kind == StallNotice.PATCH_OFF) stallText.setText(getString(R.string.stall_patch_off, 30));
+        else if (kind == StallNotice.WAIT) stallText.setText(R.string.stall_wait);
+        stallText.setVisibility(kind == StallNotice.NONE ? android.view.View.GONE : android.view.View.VISIBLE);
+        stallText.removeCallbacks(stallRender);
+        long next = stallState.changeIn(now);
+        if (next >= 0) stallText.postDelayed(stallRender, next + 50);
+    }
+
     static void dguardPrompt(String diag) {
         final MainActivity activity = current;
         if (activity == null || activity.dguardNotice == null) { Log.i("S2Arm", "dguard prompt dropped: no foreground activity"); return; }

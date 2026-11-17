@@ -79,6 +79,8 @@ public struct GameSummary: Identifiable, Equatable {
     public let iphoneFree: Bool
     /// 上次装的那台设备（设备记录键，UDID）：「续签」装回当初那台，不换别的（pack/jobs/layout.py install_record 的 deviceKey）
     public var iphoneInstallDevice: String? = nil
+    /// Apple TV 版已出好（catalog appleTvReady：image/tvos 的容器件 + 资源包都在）：出包页给「装到 Apple TV」
+    public var appleTvReady = false
     /// 「导出自签包」能直接导出：iPhone 包就绪且是单一 IMG 资源包（catalog iphoneExportable）；不能就先重出 iPhone 包再导出
     public var iphoneExportable = false
     /// 设备记录里装在某台手机上（catalog onPhone）：删除确认框多写一句「下次往这台手机装游戏时，手机上的这款会打不开」
@@ -123,6 +125,7 @@ public struct GameSummary: Identifiable, Equatable {
                   sizes: GameSizes(catalog: g["sizes"] as? [String: Any] ?? [:]))
         self.iphoneInstallDevice = (g["iphoneInstall"] as? [String: Any])?["deviceKey"] as? String
         self.iphoneExportable = g["iphoneExportable"] as? Bool ?? false
+        self.appleTvReady = g["appleTvReady"] as? Bool ?? false
         self.onPhone = g["onPhone"] as? Bool ?? false
         self.sgrade = g["sgrade"] as? Bool ?? false
         self.playtime = GamePlaytime(catalog: g["playtime"] as? [String: Any])

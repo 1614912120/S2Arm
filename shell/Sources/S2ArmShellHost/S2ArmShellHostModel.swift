@@ -80,7 +80,7 @@ public final class S2ArmShellHostModel {
                 installState: ((String) -> Int32)? = nil, installGame: ((String) -> Bool)? = nil, installProgress: ((String) -> (Int, Int)?)? = nil,
                 installPhase: ((String) -> (Int, Double?)?)? = nil, installFailure: ((String) -> String?)? = nil, installWait: (() -> Int32)? = nil,
                 now: @escaping () -> Date = Date.init, pickGameData: ((String) -> Void)? = nil, identityStore: GameIdentityStore = .live,
-                gamesRoot: URL = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents/games"), packGamesRoot: URL? = nil,
+                gamesRoot: URL = S2ArmContainer.gamesRoot(), packGamesRoot: URL? = nil,
                 imlNotice: (() -> String?)? = nil, installID: String = Bundle.main.bundlePath) {
         self.gamesRoot = gamesRoot
         self.packGamesRoot = packGamesRoot ?? Self.packGamesRoot(for: gamesRoot)
@@ -128,8 +128,12 @@ public final class S2ArmShellHostModel {
         //   S2A_SHELL_OPEN_LAYOUT_EDITOR=<游戏号> 起来直接盖上这款的「调整位置」编辑页
         //   S2A_SHELL_PLAY=<游戏号> 起来 2 秒后替人点这款的 Play（走同一条 requestPlay → C 出口；截图局别带 S2A_AUTOPLAY=1：没有视觉驾驶员时自动玩家判卡住、优雅退出）
         let env = ProcessInfo.processInfo.environment
+        #if os(tvOS)
+        guideOpen = false   // 三页引导讲的是 iPhone 上的触屏入口（右上齿轮、游戏里左上齿轮），电视上不弹
+        #else
         guideOpen = !stores.app.bool(forKey: Self.guideSeenKey) && env["S2A_SHELL_PLAY"] == nil && env["S2A_SHELL_OPEN_LAYOUT_EDITOR"] == nil
         if env["S2A_SHELL_GUIDE"] == "1" { guideOpen = true }   // 测试开关：看过也强制弹一次（真机截图验证排版用；同上，只有 devicectl / Xcode 起 App 能给）
+        #endif
         if let id = env["S2A_SHELL_OPEN_LAYOUT_EDITOR"], allGames.contains(where: { $0.id == id }) {
             editingLayout = id; NSLog("S2Arm 游戏库：S2A_SHELL_OPEN_LAYOUT_EDITOR 直接开 %@ 的调整位置页", id)
         }
@@ -177,6 +181,7 @@ public final class S2ArmShellHostModel {
             if ledgerChanged { saveLedger() }
             if missing != notOnDevice { notOnDevice = missing; NSLog("S2Arm 游戏库：这台设备上 %d / %d 款可显示", allGames.count - missing.count, allGames.count) }
             exportWidget()   // 主屏小组件的数据（WidgetExport.swift）：内容变了才写
+            refreshNROPending()
             startTicker()
         }
         for i in allGames.indices {
@@ -324,9 +329,14 @@ public final class S2ArmShellHostModel {
     }
     private func packDir(_ id: String) -> URL { Self.packDir(id, games: gamesRoot, packs: packGamesRoot) }
     /// 游戏根是 <家>/Documents/games（宿主的取法）→ <家>/Library/Application Support/S2Arm/games；别的根（单测换了根）→ nil
+    ///   tvOS：资源包就在游戏目录里（<文档根>/games/<程序号>/资源包，宿主 s2a_docs.h），没有另外的新位置 → nil
     nonisolated static func packGamesRoot(for gamesRoot: URL, home: URL = URL(fileURLWithPath: NSHomeDirectory())) -> URL? {
+        #if os(tvOS)
+        return nil
+        #else
         guard gamesRoot.standardizedFileURL.path == home.appendingPathComponent("Documents/games").standardizedFileURL.path else { return nil }
         return home.appendingPathComponent("Library/Application Support/S2Arm/games")
+        #endif
     }
 
     private func startTicker() {
@@ -366,7 +376,7 @@ public final class S2ArmShellHostModel {
 
     /// 库设置「云存档 → 选择文件夹…」（iCloud 存档同步，见 CloudSaves.swift）：iOS 弹系统文件夹选择器；Mac 上跑单测时没有界面
     static var pickCloudFolder: (() -> Void)? {
-        #if canImport(UIKit)
+        #if canImport(UIKit) && !os(tvOS)   // tvOS 没有文件夹选择器：nil = 库设置不出「云存档」这一组
         return { CloudFolderPicker.present() }
         #else
         return nil
@@ -517,6 +527,34 @@ public final class S2ArmShellHostModel {
         return IMLNotice(title: title, body: body)
     }
     public func closeIMLNotice() { stores.app.set(installID, forKey: Self.imlClosedKey); imlNotice = nil }
+
+    /// 待补文件（#8be819）：有的游戏把代码模块（NRO）藏在自有加密归档里，出包时取不到；第一次跑到那里宿主把游戏解开的整份存到
+    ///   <文档根>/games/<号>/wire/<号大写>/nro/<SHA-256>.nro（runtime/src/loader.c s2a_nro_keep），这一局随后闪退。
+    ///   手机连上电脑、启动器开着时，装机作业把它拉回、补进包，装好后删掉手机上这几份（pack/jobs/install.py pull_kept_nros）。
+    ///   所以「目录里还有这几份」= 还没补好：库顶提示一条（不拦开局；关了这次打开 App 内不再出，补好前下次打开还会出）
+    public private(set) var nroNotice: IMLNotice?
+    @ObservationIgnored private var nroPendingIDs: [String] = []
+    @ObservationIgnored private var nroNoticeClosed = false
+    nonisolated static func nroPending(gamesRoot: URL, ids: [String]) -> [String] {
+        let fm = FileManager.default
+        return ids.filter { id in
+            let dir = gamesRoot.appendingPathComponent(id, isDirectory: true).appendingPathComponent("wire/\(id.uppercased())/nro", isDirectory: true)
+            return ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).contains { $0.range(of: #"^[0-9a-f]{64}\.nro$"#, options: .regularExpression) != nil }
+        }
+    }
+    nonisolated static func nroNotice(names: [String]) -> IMLNotice? {
+        guard let first = names.first else { return nil }
+        let title = names.count == 1 ? String(format: shellText("%@ needs one more file"), first)
+                                     : String(format: shellText("%lld games need one more file: %@"), names.count, ListFormatter.localizedString(byJoining: names))
+        return IMLNotice(title: title, body: shellText("Connect your phone to your computer and open the S2Arm launcher. It adds the file automatically. Until then, the game will close again at the same point."))
+    }
+    private func refreshNROPending() {
+        let ids = Self.nroPending(gamesRoot: gamesRoot, ids: games.map(\.id))
+        guard ids != nroPendingIDs else { return }
+        nroPendingIDs = ids
+        nroNotice = nroNoticeClosed ? nil : Self.nroNotice(names: ids.map { identityName($0).isEmpty ? $0 : identityName($0) })
+    }
+    public func closeNRONotice() { nroNoticeClosed = true; nroNotice = nil }
 
     /// 删除进度与结果（宿主视图在库上方画一条提示）：正在删除 → 已删除（释放多少）/ 失败原因；结果停留 4 秒后自动收起
     public struct DeleteNotice: Equatable, Sendable {

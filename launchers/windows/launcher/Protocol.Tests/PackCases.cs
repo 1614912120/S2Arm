@@ -161,6 +161,18 @@ public static class PackCases
               (string?)ipa["shellDir"] == Path.GetFullPath(paths.Shell) && (int?)ipa["parentPid"] == Environment.ProcessId &&
               (string?)ipa["resources"] == Path.GetFullPath(AppContext.BaseDirectory),
             "request: ipa carries game, library id, bundled shell, bundled resources (fonts) and launcher pid");
+        // 界面语言照原样带（#502：法文界面原先不带 uiLanguage，作业层回落中文，自签导出文件夹与说明成了中文）
+        var langBefore = JobLanguage.Current;
+        try
+        {
+            foreach (var lang in new[] { "fr", "ja", "zh-Hant", "en", "zh-Hans" })
+            {
+                JobLanguage.Current = lang;
+                var p = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "install", "0100FD70134FA000"), "win-lang");
+                check(p.TryGetValue("uiLanguage", out var got) && (string?)got == lang, $"request: interface language {lang} is passed to the job layer as is");
+            }
+        }
+        finally { JobLanguage.Current = langBefore; }
         foreach (var op in new[] { "installCheck", "install", "installRemove", "installRestore" })
         {
             var r = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", op, "0100FD70134FA000"), "win-2");
@@ -183,6 +195,15 @@ public static class PackCases
             new Dictionary<string, object?> { ["acceptStale"] = true }), "win-6");
         check(update["acceptStale"] is true && !update.ContainsKey("gameId") && (string?)update["shellDir"] == Path.GetFullPath(paths.Shell) &&
               (string?)update["resources"] == Path.GetFullPath(AppContext.BaseDirectory), "request: installUpdate needs no game, carries acceptStale, shell and resources");
+        // 启动器升级顺带更新 iPhone（0.5.0）：2 分钟循环的 phoneKeptPull、新版首启的 installUpdatePrepare 都是 PackRequest(op, "")——
+        //   不带游戏号也要能发出去（原先这里抛 ArgumentException，被循环的 catch 吞掉，Windows 上一次都没发出去）
+        foreach (var op in new[] { "phoneKeptPull", "installUpdatePrepare" })
+        {
+            Dictionary<string, object?>? body = null; string why = "";
+            try { body = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", op, ""), "win-auto"); }
+            catch (ArgumentException e) { why = e.Message; }
+            check(body is not null && (string?)body["operation"] == op && !body.ContainsKey("gameId"), $"request: {op} needs no game and is sent ({why})");
+        }
         // 没有前端操作白名单（11-15）：引擎不认识的操作照样发出去，引擎回失败结果，界面拿到的是一条带文字的失败，不是异常（#1149 卡死的根）
         {
             var odd = PackJobClient.Payload(new(paths, Path.GetTempPath(), Path.GetTempPath(), "lib-id", "noSuchOperation", "G"), "win-8");

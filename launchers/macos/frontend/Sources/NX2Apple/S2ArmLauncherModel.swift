@@ -66,7 +66,7 @@ enum ExportBlocker: Equatable {
 /// 正在跑 / 刚结束的一个作业（一局、出包、准备运行、装到 iPhone、导入、一键处理环境、换游戏库）。同一时刻只有一个（同旧启动器「执行位」互斥）。
 struct JobSession: Equatable {
     enum Kind: String, CaseIterable { case play, export, prepare, install, installRemove, installRestore, installUpdate, importGames = "import", downloadMetal, downloadIosPlatform, installDotnet, setupLibrary = "setup",
-                        keys, delete, diagnostics, moveGame, clearCache }
+                        keys, delete, diagnostics, moveGame, clearCache, installTV = "tvInstall" }
     enum Phase: Equatable { case running, stopping, finished(JobOutcome.State) }
     let kind: Kind
     let gameID: String?
@@ -203,7 +203,7 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published private(set) var actionError: String?
     private(set) var actionErrorGameID: String?
     func actionError(for gameID: String?) -> String? { actionErrorGameID == nil || actionErrorGameID == gameID ? actionError : nil }
-    private func failAction(_ text: String?, game: String?) { actionErrorGameID = game; actionError = text }
+    func failAction(_ text: String?, game: String?) { actionErrorGameID = game; actionError = text }
     // 环境检查
     @Published private(set) var checks: [ToolCheck] = []
     @Published private(set) var checking = false
@@ -483,7 +483,7 @@ public final class S2ArmLauncherModel: ObservableObject {
                 self.games = games; self.libraryError = nil; self.showingSnapshot = false
                 self.phoneUpdates = self.provider.library.phoneUpdates
                 self.phoneDevices = self.provider.library.phoneDevices
-                if startup { self.sgradeMacInBackground(); self.keptModulesLoop(); self.preparePhoneUpdate() }
+                if startup { self.sgradeMacInBackground(); self.keptModulesLoop(); self.preparePhoneUpdate(); self.appleTVBackupLoop() }
                 if self.selectedID == nil || !games.contains(where: { $0.id == self.selectedID }) { self.selectedID = games.first?.id }
             case .failure(let error):
                 self.libraryError = error.message
@@ -1101,6 +1101,10 @@ public final class S2ArmLauncherModel: ObservableObject {
     var lastUpdateArgs: UpdateArgs?
     var sgradeMacFlag = false
     var keptLoopStarted = false, keptAutoTried: Set<String> = []   // keptModulesLoop（#8be819）
+    /// Apple TV（tvOS 版，S2ArmLauncherModel+AppleTV）：配对过的电视、出包页选的那台、存档自动备份循环起没起
+    @Published var appleTVs: [[String: Any]] = []
+    @Published var appleTVChoice: String?
+    var tvBackupStarted = false
     func retryPhoneUpdate() {
         guard let a = lastUpdateArgs else { return }
         updatePhone(acceptStale: a.acceptStale, repack: a.repack, language: a.language, device: a.device, accept: a.accept, mode: a.mode, sgradeUpgrade: a.sgradeUpgrade)   // 已确认过的照带

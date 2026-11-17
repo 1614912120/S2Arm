@@ -22,6 +22,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import zlib
 import uuid
 import zipfile
 from errors import explain
@@ -165,6 +166,11 @@ DIAG_PSO_FILE_LIMIT = 4 << 20   # 本机管线记录 pso_user.tsv 单份上限�
 DIAG_SALVAGE_GAME_LIMIT = (8 << 20) + (1 << 20)   # 着色器补料每款上限（运行时 S2A_SHADER_SALVAGE_MB 缺省 8 MB 的字节 + index.tsv 余量）
 DIAG_SALVAGE_TOTAL_LIMIT = 16 << 20   # 着色器补料整包上限（诊断包压缩后 ≤ 30 MB，给日志 / 截图留地方）
 DIAG_RUN_TOTAL_LIMIT = 40 << 20  # 诊断局 PNG：总量上限（#438 定）
+# 整包预算（11-16：Mac 诊断包压缩后超过收件上限整包被拒，#1308 玩家只能手删 pso / shader_miss / diagrun / phone 再传）：
+#   收件端 tools/diag_contract/diag_contract.json limits.zip_bytes = 30 MB；留 1 MB 给 manifest 与 zip 目录（tests/diag_contract_test.sh 核两者对得上）。
+#   日志与任务记录先写、优先；后面的可选成员（手机诊断、本机崩溃报告、诊断局截图、管线记录、着色器补料）放之前估压缩后大小，放不下就跳过，
+#   日志本身快到预算时余下的日志也跳过；跳过的都记进 manifest budget.skipped，不悄悄丢
+DIAGNOSTIC_ZIP_BUDGET = (30 << 20) - (1 << 20)
 # 本机（Mac）崩溃报告（11-14 诊断#43f7d3：宿主起局 1 秒内 SIGTRAP，没走到写日志，诊断包里一份现场都没有）：系统写在 ~/Library/Logs/DiagnosticReports，
 #   只收我们自己的进程（宿主 s2arm-host、启动器 S2Arm*）近 7 天的 .ips，最新的至多 10 份、单份至多 4 MB，按文本脱敏
 MAC_CRASH_DIR = Path.home() / "Library" / "Logs" / "DiagnosticReports"
@@ -1931,6 +1937,7 @@ def catalog(c):
         game["needsPreparation"] = not game["ready"] or manifest.get("inputIdentity") != input_identity(game)
         game["iphoneReady"] = iphone_ready(c, game["id"])
         game["iphoneExportable"] = game["iphoneReady"] and iphone_img(c, game["id"])   # 「导出自签包」能直接导出（单一 IMG 资源包）；旧格式要先重出
+        game["appleTvReady"] = tvos_ready(c, game["id"])   # Apple TV 版已出好（image/tvos 的容器件 + 资源包，pack/jobs/tvos.py）：出包页给「装到 Apple TV」
         game["downstream"] = downstream.describe(c, game)   # 下游深度方案（pack/downstream/schemes.json）：命中时启动器弹确认页
         game["sgrade"] = sgrade_badge(c, game["id"], image)   # 游戏库封面左上角金色 S（v0.4.0）
         game["iphoneRestorable"] = layout.phone_ipa(c, previous=True).is_file()   # 换壳后可装回上一版（install.restore_previous）
@@ -2155,7 +2162,8 @@ def _rmtree(p):
     def unlock(func, path, err):
         error = err[1] if isinstance(err, tuple) else err   # onerror 给 exc_info、onexc 给异常本身
         errno_ = getattr(error, "errno", None)
-        if func in (os.rmdir, os.unlink) and errno_ == errno.ENOENT:
+        if errno_ == errno.ENOENT:
+            # 删除期间目录可能被另一个清理者先移走；扫描阶段也按幂等删除处理。其他 I/O 错误仍需上报。
             return
         if func in (os.rmdir, os.unlink) and errno_ == errno.ENOTEMPTY:
             return _rmdir_past_os_junk(path, error)
@@ -2252,7 +2260,9 @@ def sgrade_badge(c, gid, image):
         return False
     # 只认真打进去了的（11-14：原先「补丁库里有这款的包」也亮，没出过包的款也亮了；发布说明写的是「亮起的已经带上了」）：
     #   Mac 运行版本 / iPhone 程序件里补丁表有条目，或带着随包金手指原文（多数金手指只改内存、不进补丁表）。Mac 老游戏启动器打开时会补上（sgradeMac），补完就亮
-    for d in (Path(image), layout.ios_kit(c, gid)):
+    for d in (Path(image), layout.ios_kit_present(c, gid)):   # 只读已有的：清单里不迁移、不现建（见 layout.ios_kit_present）
+        if d is None:
+            continue
         try:
             # 维护者 11-15「两者合成一套」：没补丁、但本包在宽屏已验证名单（我方通用满屏缺省开，产物根 widen_verified.tsv）也算带上了 S 级优化的满屏
             if table_rows(d / "cpatch.tsv") or any(d.glob("cheat-src.*")) or (d / "widen_verified.tsv").is_file():
@@ -2283,7 +2293,9 @@ def save_container_kit(c, gid, root, dest=None):
     def copy_files(source, dest):
         dest.mkdir(parents=True, exist_ok=True)
         for p in source.iterdir():
-            if p.is_file() and not p.name.startswith(".") and p.suffix != ".log":
+            # 产物根顶层的 RomFS 镜像 romfs.std（RomFS 直出，原先是 romfs/ 目录、不在顶层普通文件里）是游戏资源，不是程序件：
+            #   不跳过就整份进程序缓存和常驻配方（11-16 Windows 端到端实测：小款配方 315 MB，组装容器本来也不读它）
+            if p.is_file() and not p.name.startswith(".") and p.suffix != ".log" and p.name != "romfs.std":
                 shutil.copyfile(p, dest / p.name)
     copy_files(root, temporary)
     if (root / "ctl/control.nacp").is_file():
@@ -2631,6 +2643,11 @@ SPACE_PARTS = (
 SPACE_KEPT = ("saves", "logs")
 
 
+def tvos_ready(c, gid):
+    import tvos
+    return tvos.tv_ready(c, gid)
+
+
 def iphone_ready(c, gid):
     """这款的 iPhone 版能不能装（catalog 每款都问，只看几个文件，不逐文件读）：容器件主程序表 main.npdm 在且非空、有改写产物，资源包清单在。
     审计 P2-212：原先只看「有 ipa + 有资源包目录」，容器件缺 main.npdm 也报就绪，点装机才报错；逐文件完整核对仍在装机组装时（pack/ship_ext.py check_root / place_game）"""
@@ -2943,6 +2960,16 @@ def diagnostics(c):
         with os.fdopen(fd, "w+b") as output:
             created = os.fstat(output.fileno())
             with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+                def fits(member, estimate):
+                    # 整包预算：已写进 zip 的字节（顺序写，output.tell() 即压缩后已用）+ 这份的压缩后估算放得下才放；放不下记一笔
+                    if output.tell() + estimate + 512 > DIAGNOSTIC_ZIP_BUDGET:
+                        budget_skipped.append(member)
+                        return False
+                    return True
+
+                def packed(data):
+                    return len(zlib.compress(data, 6))   # 同 ZIP_DEFLATED 缺省级别：估压缩后大小
+
                 def write_file(parent_fd, name, member, job=False):
                     # #917：在跑的作业（含这次导出自己）一直原子替换自己的任务记录，查名字到打开之间换了一份（inode 变）很常见；
                     #   原先整包报「发生变化，请重试」不生成，重试照样撞上。改为重查名字再开，三次都在换就跳过这一份、记进 manifest changed
@@ -2983,6 +3010,8 @@ def diagnostics(c):
                         while public_member in archive.namelist() or public_member == "manifest.json":
                             n += 1
                             public_member = f"{public_stem} ({n}){suffix}"
+                        if not fits(public_member, min(opened.st_size, DIAGNOSTIC_JOB_LIMIT if job else DIAGNOSTIC_LOG_LIMIT) // 4):
+                            return   # 文本按 1/4 估（实测日志压缩约 1/10，留余量）
                         if job:
                             # 超过单份上限的任务记录（长局 / AI 连续操作攒下的事件）：留前 4 MiB、记进 manifest truncated，不再整包拒绝（#917）
                             limit = DIAGNOSTIC_JOB_LIMIT
@@ -3018,6 +3047,7 @@ def diagnostics(c):
                 step = "读日志与任务记录"
                 truncated = []
                 changed = []   # 导出期间一直在换、跳过的（#917）
+                budget_skipped = []   # 整包预算放不下、跳过的成员（DIAGNOSTIC_ZIP_BUDGET）
                 # 只带最近 DIAG_JOBS 个任务（按记录改动时间）+ 还没结束的：任务记录 / 各任务日志原先整目录收，用久了上万个文件，
                 #   超过上传服务 1000 个文件上限（「文件数超过 1000 个」）、打包也慢（11-13 维护者机器 703 个任务 + 12296 个任务日志）
                 picked, job_total, included = set(), 0, 0
@@ -3108,7 +3138,10 @@ def diagnostics(c):
                             elif name.lower().endswith(".png") and 0 < info.st_size <= DIAG_RUN_FILE_LIMIT:
                                 with (winproc.open_file(name, directory_fd) if os.name == "nt"
                                       else os.fdopen(os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd), "rb")) as f:
-                                    archive.writestr("phone/" + "/".join(redact_member_component(x) for x in member.split("/")), f.read())
+                                    data, png = f.read(), "phone/" + "/".join(redact_member_component(x) for x in member.split("/"))
+                                if not fits(png, packed(data)):
+                                    continue
+                                archive.writestr(png, data)
                                 phone["files"] += 1
                             else:
                                 phone["skipped"].append(member)
@@ -3130,7 +3163,10 @@ def diagnostics(c):
                         if size > MAC_CRASH_FILE_LIMIT:
                             mac_crash["skipped"].append(f.name)
                             continue
-                        archive.writestr("mac_crash/" + f.name, redact(f.read_text(encoding="utf-8", errors="replace")).encode())
+                        data = redact(f.read_text(encoding="utf-8", errors="replace")).encode()
+                        if not fits("mac_crash/" + f.name, packed(data)):
+                            continue
+                        archive.writestr("mac_crash/" + f.name, data)
                         mac_crash["files"] += 1
                 # 诊断局（#438，community.diag_run_env）的读数：各款游戏文件夹 diagrun/ 里的 PNG（出图画面与颜色目标，渲染出来的图、不含游戏数据），
                 #   原样放 diagrun/<游戏号>_<原名>。单张超过 4 MB 跳过、总量至多 40 MB；链接不跟（不越出游戏文件夹）
@@ -3148,7 +3184,10 @@ def diagnostics(c):
                         n = f.stat().st_size
                         if not n or n > DIAG_RUN_FILE_LIMIT or used + n > DIAG_RUN_TOTAL_LIMIT:
                             continue
-                        archive.writestr(f"diagrun/{g['id']}_{f.name}", f.read_bytes())
+                        data = f.read_bytes()
+                        if not fits(f"diagrun/{g['id']}_{f.name}", packed(data)):
+                            continue
+                        archive.writestr(f"diagrun/{g['id']}_{f.name}", data)
                         used += n
                 # 本机管线记录（11-13 维护者：玩家上传的诊断收进随包种子，取件按程序号收进众包 zc_crowd.tsv）：各款文档目录 temp/<号>/wire/<号>/pso_user.tsv
                 #   （build.runtime_env 的 S2A_DOCS，宿主 nvn_mtl.m pso_user_path），原样放 pso/<号>.tsv。只有着色器键与管线状态的十六进制，不含个人信息、不过脱敏；
@@ -3162,7 +3201,9 @@ def diagnostics(c):
                     f = c.library / "temp" / gid / "wire" / gid / "pso_user.tsv"
                     if f.is_symlink() or not f.is_file() or not 0 < f.stat().st_size <= DIAG_PSO_FILE_LIMIT:
                         continue
-                    archive.writestr(f"pso/{gid}.tsv", f.read_bytes())
+                    data = f.read_bytes()
+                    if fits(f"pso/{gid}.tsv", packed(data)):
+                        archive.writestr(f"pso/{gid}.tsv", data)
                 # 着色器补料（graphics/nvn/host/dsh_salvage.inc）：各款 temp/<号>/wire/<号>/shader_miss/ 里库里没有 / 现编失败的着色器（<键>.ctl / .code + index.tsv），
                 #   每款打成一个 tar 放 shader_miss/<号>.tar（诊断包成员数有上限：tools/diagnostic_report.py MAX_FILES 1000，一款就可能上千个文件）；
                 #   取件按程序号归档进管线种子目录 rt_shaders/，出包编进那款的直连库。只有游戏着色器字节与键，不含个人信息、不过脱敏（index.tsv 的失败原文是翻译器 rc，不含路径）。
@@ -3194,6 +3235,8 @@ def diagnostics(c):
                         for f in picked:
                             data = f.read_bytes(); ti = tarfile.TarInfo(f.name); ti.size = len(data); ti.mtime = 0; ti.mode = 0o644
                             t.addfile(ti, io.BytesIO(data))
+                    if not fits(f"shader_miss/{gid}.tar", packed(buf.getvalue())):
+                        continue
                     archive.writestr(f"shader_miss/{gid}.tar", buf.getvalue())
                     salvage_used += game_used
                 manifest = dict(schema=1,   # 诊断上传服务收件要它（维护方方案「上传协议」：没有 schema 判 not_diag 拒收）；iOS ios/diag.m 同字段
@@ -3235,6 +3278,8 @@ def diagnostics(c):
                 # These names have already been sanitized; redacting them again
                 # would hide task UUIDs and break the archive index.
                 manifest["files"] = sorted(archive.namelist() + ["manifest.json"])
+                if budget_skipped:   # 整包预算放不下跳过的成员（有才写，免得改动现有 manifest 形状）
+                    manifest["budget"] = dict(limit=DIAGNOSTIC_ZIP_BUDGET, skipped=budget_skipped)
                 manifest["truncated"] = truncated   # 超过单份上限被截的日志 / 任务记录：原长、留下、截掉的字节（空 = 全部整份）
                 manifest["changed"] = changed   # 导出期间一直在被替换、没收进来的（#917；空 = 全收到）
                 manifest["jobs"] = dict(total=job_total, included=included, limit=DIAG_JOBS, omittedLogs=skipped_logs[0])   # 任务记录共几个、收了几个（含没结束的）、省掉的任务日志数

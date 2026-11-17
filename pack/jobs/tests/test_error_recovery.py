@@ -217,6 +217,42 @@ raise SystemExit(main.main())
         self.assertEqual(explain(Failure("No space left on device")).code, "job_failed")
         self.assertEqual(explain(ValueError("Check keys")).code, "job_failed")
 
+    def test_unrecognized_volume_during_classification_does_not_mask_original_error(self):
+        lib = self.root / "classify-volume-lib"
+        src = self.root / "classify-volume-src"
+        lib.mkdir(); src.mkdir()
+        missing_cache = lib / "games" / "Absolum" / "build" / "extract"
+        original = FileNotFoundError(errno.ENOENT, "synthetic missing cache", str(missing_cache))
+
+        def unrecognized_volume(*args, **kwargs):
+            error = OSError(errno.EIO, "synthetic unrecognized volume")
+            error.winerror = 1005
+            raise error
+
+        with patch("errors.os.path.realpath", side_effect=unrecognized_volume):
+            got = explain(original, sources=[src], library=lib)
+        self.assertEqual(got.code, "job_failed")
+        self.assertIn(str(missing_cache), got.internal)
+
+    def test_unrecognized_volume_check_does_not_mark_library_as_missing(self):
+        lib = self.root / "classify-stat-lib"
+        src = self.root / "classify-stat-src"
+        lib.mkdir(); src.mkdir()
+        original_stat = os.stat
+
+        def stat_with_unrecognized_volume(path, *args, **kwargs):
+            if os.fspath(path) == str(lib):
+                error = OSError(errno.EIO, "synthetic unrecognized volume", str(lib))
+                error.winerror = 1005
+                raise error
+            return original_stat(path, *args, **kwargs)
+
+        missing_cache = lib / "games" / "fixture" / "build" / "extract"
+        original = FileNotFoundError(errno.ENOENT, "synthetic missing cache", str(missing_cache))
+        with patch("errors.os.stat", side_effect=stat_with_unrecognized_volume):
+            got = explain(original, sources=[src], library=lib)
+        self.assertEqual(got.code, "job_failed")
+
     def test_non_os_error_keeps_type_message_and_location(self):
         # #372 / #854（Windows 0.3.9 报修打包 AttributeError）：不是 OSError 的异常原先连原文一起丢，玩家复制的摘要里只剩「本地任务失败」。
         #   期望手写：上屏原句不变、码 job_failed；internal 带「AttributeError: <原文>」和抛出处（本测试文件:那一行 in 函数名）

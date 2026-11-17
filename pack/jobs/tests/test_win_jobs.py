@@ -133,7 +133,10 @@ class RuntimeEnv(unittest.TestCase):
             self.assertEqual(ow.metal_exe(dict(stale, S2A_METAL_PICKED=str(Path(d, "手选后删了"))), reg=([str(fresh.parent)], [])), fresh)   # 选过的被删了：照常往下找
             rows = ow.metal_search(stale, reg=([], [str(Path(d, "没装"))]))
             self.assertEqual([r[0] for r in rows], ["启动器启动时的 PATH", "注册表里现在的 PATH", "官方安装器登记的安装目录", "官方安装器登记的安装目录", "官方默认目录", "官方默认目录"])
-            self.assertFalse(any(ok for _, _, ok in rows))
+            # 最后那条写死的 C:\Program Files\Metal Developer Tools 查的是这台机器真的系统目录：装了 Metal 工具的 Windows 上会找到（11-16 原生 Windows 上红），
+            #   不算在「夹具里各处都没有」里
+            sysdef = r"c:\program files\metal developer tools"
+            self.assertFalse(any(ok for _, path, ok in rows if not str(path).lower().startswith(sysdef)))
             text = ow.metal_search_text(rows)
             self.assertIn("启动器启动时的 PATH：里面没有 metal.exe", text)
             self.assertIn(str(Path(d, "没装", "ios", "bin", "metal.exe")) + " → 没有", text)
@@ -498,8 +501,11 @@ class WinInstall(unittest.TestCase):
             seen["push"] = (udid, bid, Path(pack).name, devpush, full)
             progress(4 << 30, 8 << 30, 4, 8)   # Windows 推送进度回调 → 作业字节计数（#266 / #308）
             return (0, 0)
+        # 玩家 Impactor 里选中的团队（impactor.selected_team，读真机 %APPDATA% 的 Impactor 账号存储）：登录过 Impactor 的 Windows 上能读到，
+        #   装机就会带 --custom-identifier <容器包名>（install_win.sign_install 的设计）。这里按 11-06 那次「没读到团队」的期望测，带包名的另有用例
         with patch.object(W, "plumesign_path", return_value="C:/Impactor/plumesign.exe"), \
              patch.object(W, "mux_devices", return_value=[("U1", "Network", 9), ("U1", "USB", 7)]), \
+             patch.object(W.impactor, "selected_team", lambda *a, **k: None), \
              patch.object(W.subprocess, "run", fake_run), patch.object(W, "push_pack", fake_push):
             res = self.go(W)
         cmd = seen["cmd"]
@@ -530,7 +536,8 @@ class WinInstall(unittest.TestCase):
         login = r["items"][2]
         self.assertEqual((login["ok"], login["action"], login["url"]), (False, "openImpactor", None)); self.assertTrue(r["ready"])
         (d / impactor.PLUMESIGN_EXE).unlink()
-        with patch.object(self.m, "win_install_mod", return_value=w):
+        # 随包不全时会接着找玩家自己装的 Impactor（卸载登记、桌面 / 下载）：真装了 Impactor 的 Windows 上会找到，这里按「没装」测
+        with patch.object(self.m, "win_install_mod", return_value=w), patch.object(impactor, "candidates", lambda: iter(())):
             r = self.m.readiness_windows(self.c, self.gid)
         imp = r["items"][1]
         self.assertFalse(imp["ok"]); self.assertTrue(r["ready"])   # 随包不全就接着认玩家自己装的；认不出也只提示

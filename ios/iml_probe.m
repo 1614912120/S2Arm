@@ -8,6 +8,7 @@
 //   结果写 Documents/diag/iml_probe.json（Mac 前端「拉回诊断」读 has_iml_ent，见 pack/jobs/diag.py）；丢了打日志一行【红】，游戏照常进（不中止）。
 //   调用点：app.m s2a_front_run → s2a_iml_probe_check()（启动后立刻，不等进游戏）。
 #import <Foundation/Foundation.h>
+#include "s2a_docs.h"   // s2a_container_docs：容器文档根（Apple TV 在 Library/Caches/S2Arm）
 #import "s2a_l10n.h"
 #include <mach-o/ldsyms.h>
 #include "native.h"
@@ -51,7 +52,7 @@ char *s2a_shell_iml_notice(void) {
 }
 
 static void _write_result(int ent, uint64_t fit, uint64_t top, int jumbo) {
-    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    NSString *docs = ({ char _d[1024]; s2a_container_docs(_d, sizeof _d); @(_d); });
     NSString *dir = [docs stringByAppendingPathComponent:@"diag"];
     [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
     NSDictionary *rec = @{
