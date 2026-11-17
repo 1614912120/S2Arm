@@ -266,7 +266,8 @@ src=("$repo/android/tests/vk/t_backend_vk.c"
      "$repo/graphics/nvn/gfx/nvn/nvn_fmt_expand.c"
      "$repo/android/native/nvn/nvn_vk_bcdec.c"
      "$repo/android/native/nvn/nvn_vk_driver_cache.c"
-     "$repo/android/native/direct/sha256.c")
+     "$repo/android/native/direct/sha256.c"
+     "$repo/graphics/nvn/replay/nvn_unimpl.c")
 bc_src=("$repo/android/tests/vk/t_bc_decode.c"
      "$repo/android/native/nvn/nvn_vk_bcdec.c"
      "$repo/android/native/direct/vk_device.c"
@@ -278,7 +279,7 @@ case "$mode" in
     --tsan) cflags+=(-fsanitize=thread) ;;
     --asan) cflags+=(-fsanitize=address,undefined -fno-omit-frame-pointer) ;;
     --shown-only) cflags+=(-DS2A_C883_TEST=1) ;;
-    ""|--msaa-only|--msaa-neg-pick|--msaa-neg-pipe|--msaa-neg-sampled|--msaa-neg-attachment|--present-only|--present-upscale|--separate-core|--separate-neg-sampler|--tbuf-core|--tbuf-compiler-core|--tbuf-neg-resolve|--tbuf-neg-format|--tbuf-neg-elements|--gs-only|--gs-compiler|--gs-core|--gs-no-cap|--gs-neg-stage|--gs-neg-flags|--gs-neg-cap) ;;
+    ""|--sampler-minmax-only|--msaa-only|--msaa-neg-pick|--msaa-neg-pipe|--msaa-neg-sampled|--msaa-neg-attachment|--present-only|--present-upscale|--separate-core|--separate-neg-sampler|--tbuf-core|--tbuf-compiler-core|--tbuf-neg-resolve|--tbuf-neg-format|--tbuf-neg-elements|--gs-only|--gs-compiler|--gs-core|--gs-no-cap|--gs-neg-stage|--gs-neg-flags|--gs-neg-cap) ;;
     *) echo "未知参数：${mode}（可用 --tsan / --asan）" >&2; exit 64 ;;
 esac
 # 撤改只写入临时源码副本；逐项必须红在指定行为断言。
@@ -496,6 +497,18 @@ if [ -z "$mode" ]; then
        grep -qE 'Validation Error|VUID-|SYNC-HAZARD-' "$out/msaa-default-log"; then
         echo "【红】MSAA 降档专项失败或 validation 报错（rc=${rc}）" >&2; exit 1
     fi
+fi
+
+
+if [ "$mode" = "--sampler-minmax-only" ]; then
+    set +e
+    timeout 120 "$out/t_backend_vk" "$out/shaders" --sampler-minmax-only 2>&1 | tee "$out/sampler-minmax-log"
+    rc=${PIPESTATUS[0]}
+    set -e
+    if [ "$rc" -ne 0 ] || grep -qE 'Validation Error|VUID-|SYNC-HAZARD-' "$out/sampler-minmax-log"; then
+        echo "【红】sampler minmax: rc=$rc or Vulkan validation error" >&2; exit 1
+    fi
+    exit 0
 fi
 
 if [ "$mode" = "--present-only" ]; then
