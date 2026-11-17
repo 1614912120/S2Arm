@@ -71,12 +71,13 @@ public sealed partial class EnvironmentWindow
 
     private async void CloseLibraryAsync(object? sender, WindowClosingEventArgs args)
     {
-        if (!libraryBusy) return;
+        if (!libraryBusy || closeAnyway) return;
         args.Cancel = true;
-        if (closingLibrary) return;
+        if (closingLibrary) return;   // 第一次进来的那份在等，等完它自己再关
         closingLibrary = true;
-        CancelJob(JobKind.Library);
-        if (libraryOperation is { } operation) await operation;
+        CloseLog("关窗口：游戏库作业在跑，先取消、等它收尾再关");
+        await WaitJobsEndAsync(JobKind.Library);
+        closingLibrary = false;
         Close();
     }
 

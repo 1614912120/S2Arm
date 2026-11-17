@@ -1948,11 +1948,11 @@ public sealed partial class EnvironmentWindow
     /// <summary>Closing while a pack runs: cancel through the job control plane first, then close.</summary>
     private async void ClosePackAsync(object? sender, WindowClosingEventArgs args)
     {
-        if (!packRunning) return;
+        if (!packRunning || closeAnyway) return;
         args.Cancel = true;
         batchRunning = false;   // 关窗口不算取消整批：批次里这款留着「正在出」，下次打开 recover 记成被打断、重新排队（同 Mac）
-        packJob?.Cancellation.Cancel();
-        if (packOperation is { } operation) await operation;
+        CloseLog("关窗口：出包在跑，先取消、等它收尾再关");
+        await WaitJobsEndAsync(JobKind.Pack);
         await Dispatcher.UIThread.InvokeAsync(() => { }, DispatcherPriority.Background);
         Close();
     }
