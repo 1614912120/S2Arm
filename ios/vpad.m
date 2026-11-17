@@ -590,7 +590,8 @@ static NSString *vp_running_gid(void) { const char *g = getenv("S2A_LAUNCH_GAME_
     [items addObject:vp_sub(S2AL(@"vpad.menu.pad"), @"scope", @[
         [self live:@"vp.pad.ns2pro" title:S2AL(@"vpad.menu.ns2pro") note:nil on:^BOOL{ return [d boolForKey:@"S2ANS2ProAdapterEnabled"]; } disabled:nil
                run:^{ [d setBool:![d boolForKey:@"S2ANS2ProAdapterEnabled"] forKey:@"S2ANS2ProAdapterEnabled"]; }],
-        [self live:@"vp.pad.gyro" title:S2AL(@"vpad.menu.gyro") note:nil on:gyro disabled:nil run:^{ [d setBool:!gyro() forKey:@"S2APhoneGyro"]; }],
+        // 说明一句第三方手柄（八位堂、盖世小鸡等 Xbox 外形）切到 Switch 模式才有体感（11-16，手柄左右马达 + 第三方体感同版）
+        [self live:@"vp.pad.gyro" title:S2AL(@"vpad.menu.gyro") note:S2AL(@"vpad.menu.gyro.note") on:gyro disabled:nil run:^{ [d setBool:!gyro() forKey:@"S2APhoneGyro"]; }],
         // 手柄按键布局（定义表 game_settings.v1.json 的 padFace，所有游戏共用）：controller.m 监听偏好变化转给 pad.c，下一次按键即按新布局；
         //   勾选看 pad.c 解析后的值（旧值 letter / position 也落到对应一项）
         vp_inline(@[[self live:@"vp.pad.face.auto" title:S2AL(@"vpad.menu.face.auto") note:S2AL(@"vpad.menu.face.auto.note")

@@ -617,8 +617,11 @@ class ScanTests(unittest.TestCase):
         self.commit({'docs/clean.md': 'still clean\n'})
         p, r = self.scan('--base', base)
         self.assertEqual(p.returncode, 0)
-        self.assertEqual(len(r['findings']), 1)
-        self.assertEqual(r['findings'][0]['status'], 'existing')
+        # 增量模式（11-16 起）：没改的 docs/old.md 不读——存量命中不阻挡、也不再列出；覆盖统计记 unchanged_not_read
+        self.assertEqual(r['findings'], [])
+        self.assertGreater(r['coverage'].get('unchanged_not_read', 0), 0)
+        p, r = self.scan()
+        self.assertEqual([f['status'] for f in r['findings']], ['existing'], '不给 --base 的全量清单照旧列出存量')
         self.commit({'docs/old.md': '/Users/fixtureperson/old\nunrelated edit\n'})
         p, r = self.scan('--base', base)
         self.assertEqual(p.returncode, 0)
@@ -879,7 +882,7 @@ class ScanTests(unittest.TestCase):
         self.assertNotIn('fixtureperson', red.stdout + red.stderr)
         report = json.loads((self.root / 'build/public_repo_scan.json').read_text())
         self.assertGreater(report['blocking_count'], 0)
-        self.assertTrue(any(f['status'] == 'existing' for f in report['findings']))
+        self.assertGreater(report['coverage'].get('unchanged_not_read', 0), 0)   # 存量文件没改：增量模式不读（11-16 起）
 
     def test_contrib_doc_executes_scan_and_red_takes_priority(self):
         base = self.install_gate_fixture()

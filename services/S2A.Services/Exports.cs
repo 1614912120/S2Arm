@@ -244,7 +244,9 @@ namespace S2A.Services
                 if (!System.IO.File.Exists(System.IO.Path.Combine(configuration.GameDirectory, "exefs", "main.npdm")) ||
                     !System.IO.File.Exists(System.IO.Path.Combine(configuration.GameDirectory, "ctl", "control.nacp")) ||
                     !(System.IO.Directory.Exists(System.IO.Path.Combine(configuration.GameDirectory, "romfs")) ||
-                      System.IO.File.Exists(System.IO.Path.Combine(configuration.GameDirectory, RomFsIndex.ImageName))))
+                      System.IO.File.Exists(System.IO.Path.Combine(configuration.GameDirectory, RomFsIndex.ImageName)) ||
+                      // 标准 RomFS 镜像 romfs.std（出包缺省不落散文件，8fe66d7fe；安卓包整份带它，Application.cs 起局按 StdOf 读）
+                      RomFsIndex.StdOf(System.IO.Path.Combine(configuration.GameDirectory, "romfs")) != null))
                     throw new InvalidOperationException("Validated game data requires NPDM, complete NACP and RomFS");
                 // Revision files may be content-pool symlinks. Validate the opened
                 // content, not FileInfo.Length (the symlink text length on Unix).

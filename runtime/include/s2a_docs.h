@@ -15,12 +15,19 @@
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #endif
+// 容器文档根相对 HOME 的位置（11-15 Apple TV 版）：iOS / Mac = Documents；tvOS 不让 App 写 Documents、大文件只能放 Caches（系统空间紧时可清），
+//   电视上用 Library/Caches/S2Arm：多款容器 games/<游戏号>、资源包 games/<游戏号>/资源包 都在它下面（资源包被清后电脑端「装到 Apple TV」重推）
+#if defined(__APPLE__) && TARGET_OS_TV
+#define S2A_CONTAINER_DOCS_REL "Library/Caches/S2Arm"
+#else
+#define S2A_CONTAINER_DOCS_REL "Documents"
+#endif
 
 // 文档根写进 out；返回 snprintf 的长度（截断时 ≥ n）
 static inline int s2a_docs_root(char *out, size_t n) {
     const char *d = getenv("S2A_DOCS"), *h = getenv("HOME");
     if (d && *d) return snprintf(out, n, "%s", d);
-    return snprintf(out, n, "%s/Documents", h && *h ? h : ".");
+    return snprintf(out, n, "%s/" S2A_CONTAINER_DOCS_REL, h && *h ? h : ".");
 }
 
 // <文档根>/<按 fmt 拼的相对路径> 写进 out（fmt 为 NULL / 空 = 文档根本身）；返回总长度（截断时 ≥ n）
@@ -77,6 +84,6 @@ static inline int s2a_pack_base_alt(char *out, size_t n, const char *proc_docs) 
 //   只在 iOS 编出来：Mac 代码调不到它，不会再落到用户文稿夹
 static inline int s2a_container_docs(char *out, size_t n) {
     const char *h = getenv("HOME");
-    return snprintf(out, n, "%s/Documents", h && *h ? h : ".");
+    return snprintf(out, n, "%s/" S2A_CONTAINER_DOCS_REL, h && *h ? h : ".");
 }
 #endif

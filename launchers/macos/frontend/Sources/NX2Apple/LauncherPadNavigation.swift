@@ -144,8 +144,10 @@ enum LauncherPadSpatial {
         if previousScope == scope, let id = previousID, !id.hasPrefix("card.") {
             let selected = all.first { $0.id == id }
             let complete = selected.map { ($0.clippingFrame ?? window.frame).insetBy(dx: -1, dy: -1).contains($0.unclippedFrame ?? $0.frame) } ?? false
-            if !complete {
-                let scroll = controls.values.first { $0.id == id && $0.view.window === window }?.view.enclosingScrollView
+            let scroll = controls.values.first { $0.id == id && $0.view.window === window }?.view.enclosingScrollView
+            // 只有滚动区里的控件被滚出视野才换到附近的完整控件。不在滚动区里的控件（顶栏搜索框）被裁只是展开 / 收起动画的一瞬，
+            // 这时换走焦点就再也回不来：手柄关屏幕键盘后焦点跳到「刷新」「清空」
+            if !complete, scroll != nil {
                 let completeTargets = all.filter { ($0.clippingFrame ?? window.frame).insetBy(dx: -1, dy: -1).contains($0.unclippedFrame ?? $0.frame) }
                 let nearby = completeTargets.filter { ($0.element as? NSView)?.enclosingScrollView === scroll }
                 let candidates = nearby.isEmpty ? completeTargets : nearby
