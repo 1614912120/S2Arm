@@ -1600,10 +1600,15 @@ def ipa_strip_widget(src, dst):
 
 
 def widget_mod(c):
-    """pack/widget_ext.py（出壳 / 组装 / 装机同一份包名与去扩展规则）：按作业层自己所在的引擎树导入（同 core 取 tools 的做法）"""
-    root = str(Path(__file__).resolve().parents[2])
-    if root not in sys.path:
-        sys.path.insert(0, root)
+    """pack/widget_ext.py（出壳 / 组装 / 装机同一份包名与去扩展规则）：按请求给的引擎树（c.engine，同本文件取 tools / pack/orch）导入。
+    原先按本文件位置往上两级找：源码树里是仓库根，对；Mac App 里作业层在 Contents/Resources/Jobs、引擎在 Resources/Engine，
+    往上两级是 Contents、没有 pack，装到 iPhone 一律 ModuleNotFoundError（0.5.0 正式候选 667ccdb92，11-16 维护者）。
+    引擎树里没有这份时（单测给的空引擎）才退回本文件所在的源码树"""
+    root = Path(c.engine)
+    if not (root / "pack" / "widget_ext.py").is_file():
+        root = Path(__file__).resolve().parents[2]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
     from pack import widget_ext
     return widget_ext
 
