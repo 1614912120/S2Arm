@@ -214,6 +214,7 @@ public static class PackCases
                 "phone auto tick: finds updates and refreshes the library, never starts an iPhone install (manual update)");
             // 只按真冲突互斥：别的作业在跑照样收（升级首启迁移时原先整轮跳过，拉回拖到第 360 秒）；手机在用由作业层的手机锁判
             check(tickAt >= 0 && !body.Contains("ControlBusy"), "phone auto tick: not skipped just because another job is running");
+            check(tickAt >= 0 && body.Contains("NotePhoneTick(skip)"), "phone auto tick: every skip reason is written to phone-auto-update.log");
         }
         // 关窗口让位给安装程序（11-16 第 2 份候选手动更新：安装程序等旧进程 90 秒没等到）：两个关闭处理都按作业登记处等收尾、有上限，
         //   不再等某个任务变量（它可能被立刻返回的任务盖掉，等完作业其实还在，重入时被取消关闭、再也没人关）
