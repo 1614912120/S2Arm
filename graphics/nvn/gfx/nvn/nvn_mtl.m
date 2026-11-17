@@ -11256,6 +11256,31 @@ static inline void dtu_check(NvShader *sh, int st, int reg, int k, int tid) {
     if (st != 1 || !g_enc || !R.has_rt || !R.rt.depth || tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) return;
     if (__builtin_expect(g_treg[tid].t.serial == R.rt.depth->serial && R.rt.depth->serial, 0)) dtu_note(sh, st, reg, k, R.rt.depth->serial);
 }
+// Diagnostic readout ③, behaviour unchanged: attachments whose last pass ended without writing back (the store lookahead proved the next use clears them, or the xv trial
+//   dropped it), so their memory holds stale or undefined content until that clear. The lookahead only sees textures bound in texture / image slots; a texture reached through a
+//   handle kept in a uniform buffer (TEXU, any stage, e.g. a GPU culling dispatch reading the scene depth) is not seen, and would read that memory. One yellow line per texture
+//   (at most 64), with the shader, stage and slot that read it. The set is small and open-addressed by serial; a full set just stops recording
+enum { NST_N = 512 };
+static uint64_t g_nst[NST_N]; static int g_nst_n; static uint64_t g_nst_hits; static unsigned g_nst_shown; static uint64_t g_nst_logged[64];
+static int nst_slot(uint64_t ser) { uint32_t h = (uint32_t)(ser * 0x9E3779B97F4A7C15ull >> 55); for (int k = 0; k < NST_N; k++) { int i = (h + k) & (NST_N - 1); if (g_nst[i] == ser || !g_nst[i]) return i; } return -1; }
+static void nst_put(uint64_t ser) { if (!ser || g_nst_n >= NST_N * 3 / 4) return; int i = nst_slot(ser); if (i >= 0 && !g_nst[i]) { g_nst[i] = ser; g_nst_n++; } }
+static void nst_del(uint64_t ser) {   // backward-shift delete keeps the probe chains intact
+    if (!ser || !g_nst_n) return; int i = nst_slot(ser); if (i < 0 || g_nst[i] != ser) return;
+    g_nst[i] = 0; g_nst_n--;
+    for (int j = (i + 1) & (NST_N - 1); g_nst[j]; j = (j + 1) & (NST_N - 1)) { uint64_t s = g_nst[j]; g_nst[j] = 0; g_nst_n--; nst_put(s); }
+}
+static __attribute__((noinline, cold)) void nst_note(NvShader *sh, int st, int reg, uint64_t ser) {
+    g_nst_hits++;
+    for (unsigned k = 0; k < g_nst_shown; k++) if (g_nst_logged[k] == ser) return;
+    if (g_nst_shown >= 64) return; g_nst_logged[g_nst_shown++] = ser;
+    MLOG("【黄】 a texture whose last pass did not write it back is read through a uniform-buffer handle: texture ser=%llu, shader %s stage %d uniform slot %d (its memory holds stale content until the clear the store lookahead expected; %llu such reads so far)",
+         (unsigned long long)ser, sh->key, st, reg, (unsigned long long)g_nst_hits);
+}
+static inline void nst_check(NvShader *sh, int st, int reg, int tid) {
+    if (!g_nst_n || tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) return;
+    uint64_t ser = g_treg[tid].t.serial; int i = nst_slot(ser);
+    if (__builtin_expect(i >= 0 && g_nst[i] == ser && ser, 0)) nst_note(sh, st, reg, ser);
+}
 typedef struct { int stage; } sbsz_ctx;
 static uint32_t sbsz_bound(void *ctx, const nvn_rbind *b) {
     int nvn_stage = ((sbsz_ctx *)ctx)->stage;
@@ -11447,6 +11472,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
             uint64_t real = 0;                         // at byte 8k, the index the shader computes from the handle's offset (an NVN handle is 64-bit)
             for (int k = 0; k < b->n; k++) {
                 int tid = ubo_tex_id(ubo_handle(nvn_stage, reg, 8 * k)); if (tid < 0 || tid >= g_ntreg || !g_treg[tid].ok) tid = -1;   // as for the samplers: other data, not a handle
+                nst_check(sh, nvn_stage, reg, tid);   // readout ③ (see nst_note)
                 dtu_check(sh, nvn_stage, reg, k, tid);   // readout ② (see dtu_note)
                 // not a handle (tid -1): the dummy below without a lookup. tex_by_id(-1) reported 「texture ID -1 not registered」 (#788: every run of such a shader), and that once-only red
                 //   (RED_ONCE 10) then hid the real unregistered IDs for the rest of the run
@@ -11472,6 +11498,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                            (int)sp.ws, (int)sp.wt, (int)sp.wr, sp.border[0], sp.border[1], sp.border[2], sp.border[3], sp.lod_min, sp.lod_max, sp.lod_bias, sp.aniso, (int)sp.cmp_mode, (int)sp.cmp_func, ss ? "real" : "failed"); }
         } else if (b->kind == NVN_RB_TEX || b->kind == NVN_RB_TEXU) {
             int tid = b->kind == NVN_RB_TEXU ? ubo_tex_id(ubo_packed(nvn_stage, b)) : (int)(tex_slot_h(S.tex[nvn_stage], S.img[nvn_stage], reg) & 0xfffff);
+            if (b->kind == NVN_RB_TEXU) nst_check(sh, nvn_stage, reg, tid);   // readout ③ (see nst_note)
             if (b->kind == NVN_RB_TEXU) dtu_check(sh, nvn_stage, reg, 0, tid);   // readout ② (see dtu_note)
             if (b->unb && b->kind == NVN_RB_TEX) ub_note(ubw, b->unb - 1, tid);   // the texture registered at this ID, as the NVN driver writes its descriptor
             void *tv = NULL; uint64_t trid = tex_fast_rid(tid, &tv); __unsafe_unretained id<MTLTexture> t = (__bridge id<MTLTexture>)tv;
@@ -11980,6 +12007,7 @@ static void sd_finish(void) {
                     (unsigned long long)t->ser, (unsigned long long)g_stat_pass, (unsigned long long)g_noload_wrong, w->wwhy, w->prec, (unsigned long long)w->pass, (unsigned long long)w->draw, w->vs, w->fs, w->gs, w->geo, w->run, w->wd, w->wdm, g_pass_geo);
                 else if (!(g_noload_wrong & (g_noload_wrong - 1))) MLOG("【红】 color attachments not loaded but written (lookahead wrong): %llu so far", (unsigned long long)g_noload_wrong); }
             if (t->depth == 1) [g_enc setDepthStoreAction:sa]; else if (t->depth == 2) [g_enc setStencilStoreAction:sa]; else [g_enc setColorStoreAction:sa atIndex:(NSUInteger)t->idx];
+            nst_del(t->ser);   // readout ③: memory holds this pass's content (stored, or never changed)
             g_sd_n_all++; if (dead) { g_sd_n_dead++; g_sd_dead_bytes += t->bytes; g_bw_store -= t->bytes; g_udc_saved_bytes += t->bytes; }
             PD("Z %llu %s ser=%llu lv%u sl%u %s load=%d wrote=%d wwhy=%d (TBDR set off)", g_stat_pass, t->depth == 1 ? "d" : t->depth == 2 ? "s" : "c", (unsigned long long)t->ser, t->lv, t->sl, dead ? "dontcare" : "store", t->load, t->wrote, t->wwhy); }
         g_nsd = 0; return; }
@@ -11999,6 +12027,7 @@ static void sd_finish(void) {
         if (xvcand && !xvdead) xv_set(t->ser, t->lv, t->sl, XV_PROBE, xtag);   // Trial period: write back as usual, only track the next touch
         int dead = t->state == 2 || udc_dead || xvdead; MTLStoreAction sa = dead ? MTLStoreActionDontCare : MTLStoreActionStore;
         if (xvdead) { xv_set(t->ser, t->lv, t->sl, XV_INVALID, xtag); g_xv_dc++; }
+        if ((t->state == 2 && !udc_dead) || xvdead) nst_put(t->ser); else nst_del(t->ser);   // readout ③ (see nst_note)
         if (t->depth == 1) [g_enc setDepthStoreAction:sa]; else if (t->depth == 2) [g_enc setStencilStoreAction:sa]; else [g_enc setColorStoreAction:sa atIndex:(NSUInteger)t->idx];
         g_sd_n_all++; if (dead) { g_sd_n_dead++; g_sd_dead_bytes += t->bytes; g_bw_store -= t->bytes; if (udc_dead) g_udc_saved_bytes += t->bytes; }
         if (!t->state) t->why = 5;
