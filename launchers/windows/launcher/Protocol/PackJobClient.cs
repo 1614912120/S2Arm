@@ -86,7 +86,9 @@ public static class PackJobClient
     {
         // The developer certificate and the install mode belong to this computer, installUpdate to the phone (install.update_phone): no game.
         // export 的游戏在计划里（plan.items，ExportStream），信封上不带
-        var perGame = request.Operation is not ("devCert" or "installMode" or "installUpdate" or "export" or "sgradeScan");
+        // phoneKeptPull / installUpdatePrepare（启动器升级顺带更新 iPhone：2 分钟循环、新版首启准备）属于这台电脑与连着的手机，也不带游戏号——
+        //   原先不在这里，空游戏号在这一步抛 ArgumentException、被循环的 catch 吞掉，Windows 上自动更新与首启准备一次都没发出去（0.5.0 候选验收）
+        var perGame = request.Operation is not ("devCert" or "installMode" or "installUpdate" or "installUpdatePrepare" or "phoneKeptPull" or "export" or "sgradeScan");
         if (perGame && string.IsNullOrWhiteSpace(request.GameId)) throw new ArgumentException("A game is required.", nameof(request));
         var payload = new Dictionary<string, object?>
         {
