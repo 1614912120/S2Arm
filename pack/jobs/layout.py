@@ -1070,7 +1070,7 @@ def _relocate_lock(private):
                                        startedAt=round(time.time(), 3))):
             yield
     except filelock.Busy as busy:
-        detail = f"等了 {RELOCATE_LOCK_WAIT} 秒，旧默认游戏库搬家锁仍被占（{busy.holder}）"
+        detail = f"等了 {RELOCATE_LOCK_WAIT} 秒，旧默认游戏库搬家锁仍被占（{busy.holder}）"  # 非玩家句
         raise library_lock_failure(busy.holder, "另一个任务正在使用游戏库，请稍后重试。", detail) from None  # 非玩家句
 
 
