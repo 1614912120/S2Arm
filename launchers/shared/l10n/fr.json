@@ -496,6 +496,7 @@
   "private_root.owner": "Le dossier de données privées de S2Arm {0} appartient à un autre compte Windows et ce compte ne peut pas le récupérer. S2Arm fonctionne normalement, mais ce compte peut voir les fichiers qu'il contient ; pour le verrouiller, supprimez le dossier et rouvrez S2Arm (il sera recréé ; votre bibliothèque de jeux et vos sauvegardes n'y sont pas, mais les clés importées devront être réimportées), ou ouvrez S2Arm une fois avec ce compte.",
   "private_root.others": "Le dossier de données privées de S2Arm {0} donne toujours accès à un autre compte et ce compte ne peut pas supprimer cet accès. S2Arm fonctionne normalement, mais ce compte peut voir les fichiers qu'il contient ; pour le verrouiller, supprimez le dossier et rouvrez S2Arm (il sera recréé ; votre bibliothèque de jeux et vos sauvegardes n'y sont pas, mais les clés importées devront être réimportées).",
   "welcome.sheet.libraryFailed": "La bibliothèque de jeux n'est pas configurée ({0}) : {1}",
+  "library.no_write": "Impossible d'écrire à cet emplacement : {0}. S2Arm a peut-être déjà été lancé en tant qu'administrateur, le dossier est peut-être sur un lecteur en lecture seule ou bloqué par l'antivirus. Choisissez un autre emplacement ou donnez à votre compte l'autorisation d'écriture sur ce dossier, puis réessayez.",
   "welcome.sheet.libraryRetry": "Réessayer",
   "welcome.sheet.libraryChange": "Choisir un autre dossier",
   "welcome.sheet.dropBusy": "Une autre tâche est en cours. Ajoutez ceci une fois qu'elle sera terminée.",

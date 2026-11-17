@@ -44,6 +44,27 @@ internal static class WindowsLibraryCases
                 check(File.Exists(healedWeak.FilePath), "private root granting Everyone is healed and accepts a request");
             check(!new DirectoryInfo(weak).GetAccessControl().GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>()
                 .Any(r => r.IdentityReference.Equals(everyone)), "healed private root no longer grants Everyone");
+            // 11-16：目录由别的进程先建、本人的写权限只靠「Authenticated Users 修改」这条（没有本人自己的规则）。自愈删掉「其他账户」后
+            //   必须给本人留一条显式、可继承的完全控制——原先只剩 SYSTEM / Administrators，提权时还能写、普通运行就拒绝访问。
+            //   按权限表断言（提权会话里靠 Administrators 照样写得进，单看能不能写测不出）
+            var groupOnly = Path.Combine(root, "GroupOnly");
+            var g = new DirectorySecurity();
+            g.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            foreach (var who in new[] { WellKnownSidType.LocalSystemSid, WellKnownSidType.BuiltinAdministratorsSid })
+                g.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(who, null), FileSystemRights.FullControl,
+                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+            var authUsers = new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null);
+            g.AddAccessRule(new FileSystemAccessRule(authUsers, FileSystemRights.Modify,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Allow));
+            new DirectoryInfo(groupOnly).Create(g);
+            using (var healedGroup = PrivateJobRequest.Create(groupOnly, "{}"))
+                check(File.Exists(healedGroup.FilePath), "private root reachable only through Authenticated Users is healed and accepts a request");
+            var groupRules = new DirectoryInfo(groupOnly).GetAccessControl().GetAccessRules(true, true, typeof(SecurityIdentifier)).Cast<FileSystemAccessRule>().ToList();
+            check(groupRules.Any(r => r.IdentityReference.Equals(sid) && r.AccessControlType == AccessControlType.Allow
+                    && (r.FileSystemRights & FileSystemRights.FullControl) == FileSystemRights.FullControl
+                    && r.InheritanceFlags.HasFlag(InheritanceFlags.ContainerInherit) && r.InheritanceFlags.HasFlag(InheritanceFlags.ObjectInherit)),
+                "healed private root keeps an explicit inheritable full-control rule for the current user (works without elevation)");
+            check(!groupRules.Any(r => r.IdentityReference.Equals(authUsers)), "healed private root no longer grants Authenticated Users");
             // #672：属主是别的身份（玩家曾以管理员身份运行 → 属主 Administrators 组）。夹具要能把属主设成 Administrators：只有管理员会话做得到，普通会话跳过并写明
             var foreign = Path.Combine(root, "Foreign");
             Directory.CreateDirectory(foreign);
