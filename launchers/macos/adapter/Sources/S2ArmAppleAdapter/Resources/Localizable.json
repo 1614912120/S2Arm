@@ -7876,6 +7876,10 @@
   "en": "Choose a dedicated folder for the library, not a whole drive or your user folder."
  },
  {
+  "source": "选的密钥文件找不到了（可能被移动、删除，或还在 iCloud 里没下载到本机）：请重新选择 prod.keys。",
+  "en": "The key file you chose can't be found (it may have been moved or deleted, or it's still in iCloud and not downloaded). Choose prod.keys again."
+ },
+ {
   "source": "密钥文件过大。",
   "en": "The key file is too large."
  },
