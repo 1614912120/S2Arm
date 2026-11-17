@@ -743,3 +743,15 @@ class SealedRomfsPrune(unittest.TestCase):
                 self.skipTest("当前令牌不受拒写 ACL 约束（提权管理员），封存复现不了；用普通令牌跑")
             library._rmtree(Path(d, "work"))
             self.assertFalse(Path(d, "work").exists())
+
+    def test_rmtree_removes_readonly_attribute_files(self):
+        # 11-16 维护者：只读位（别的来源放进来的只读文件）os.unlink 不认、报 WinError 5；library._rmtree 要去掉只读位后删干净。期望手写：整棵删掉
+        import stat
+        import library
+        with tempfile.TemporaryDirectory() as d:
+            sub = Path(d, "work", "sub"); sub.mkdir(parents=True); (sub / "a.bin").write_bytes(b"a")
+            os.chmod(sub / "a.bin", stat.S_IREAD)
+            with self.assertRaises(PermissionError):
+                os.unlink(sub / "a.bin")
+            library._rmtree(Path(d, "work"))
+            self.assertFalse(Path(d, "work").exists())

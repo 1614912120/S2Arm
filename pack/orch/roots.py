@@ -354,6 +354,12 @@ def remove_owned(path):
                 time.sleep(0.2 * (attempt + 1))
     elif path.exists():
         if os.name == 'nt':
+            # 封存（拒写项，seal）不拒删：先直接删。共用数据树的文件是各版本共用的硬链接，解封会连带解掉别的版本（访问控制项挂在文件本身上）
+            try:
+                path.unlink()
+                return
+            except PermissionError:
+                pass
             _win_acl(path, False)
         path.chmod(stat.S_IMODE(path.stat().st_mode) | stat.S_IWUSR)
         path.unlink()
@@ -880,6 +886,19 @@ class Transaction:
         """本阶段把共用数据树 name 整目录换掉了（只有 aoc 阶段这么做）：提交时不再核它（见 commit 开头的守护）"""
         self.shared.pop(name, None)
 
+    def _seal_shared(self):
+        """开发 / 门禁机（sealing()）上把共用数据树封成只读：之后任何阶段原地写它，在写的第一下就失败，不等提交守护（_check_shared）。
+        Windows 上它们是各版本共用的硬链接，原地写会连带改坏别的版本；玩家机不封（玩家看得见的游戏库不用权限做保护，同 sealing），靠提交守护兜底。
+        Windows 的封存是拒写的访问控制项：不挡建硬链接、不挡删（remove_owned 删它不用先解封）"""
+        if not sealing():
+            return
+        for name in SHARED_TREES:
+            tree = self.path / name
+            if tree.is_dir() and not is_link(tree):
+                for p in plain_entries(tree):
+                    if not p.is_dir():
+                        seal(p)
+
     def _check_shared(self):
         """守护「共用数据树只许整目录替换、不许原地改」（硬链接的前提，11-16）：begin 记的指纹（shared_print）与现在比，没声明换掉（replaced）却变了 = 原地改了，报冲突不提交。
         在提交一开始、重放之前核：只核本阶段自己做的事（重放会合法地换成新现行的那份）。
@@ -915,6 +934,7 @@ class Transaction:
                     self._replay(current, tuple(replay))
                 roots._validate(self.path, self.game)
                 roots._intern(self.path, self.game)
+                self._seal_shared()
                 if roots.plain:
                     final = self._activate_plain(current)
                 else:
